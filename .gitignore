@@ -12,6 +12,7 @@ out
 .stela.sqlite-*
 .stela/secrets/
 .stela/history/*.local.jsonl
+examples/demo-vault/.stela/plugins/
 
 # Local analysis / agent artifacts
 .understand-anything/
