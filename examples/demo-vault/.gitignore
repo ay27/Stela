@@ -1,0 +1,5 @@
+.env
+.stela/secrets/
+.stela/history/
+.stela.sqlite
+.stela.sqlite-*

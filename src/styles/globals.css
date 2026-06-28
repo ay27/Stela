@@ -1,0 +1,209 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222 15% 15%;
+
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 8% 46%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 15% 15%;
+
+    --accent: 220 14% 96%;
+    --accent-foreground: 222 15% 15%;
+
+    --primary: 214 100% 52%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 222 15% 15%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 214 100% 52%;
+
+    --sidebar: 220 16% 98%;
+    --sidebar-foreground: 222 15% 20%;
+    --sidebar-hover: 220 14% 92%;
+
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 222 18% 11%;
+    --foreground: 220 14% 92%;
+
+    --muted: 222 16% 16%;
+    --muted-foreground: 220 9% 65%;
+
+    --popover: 222 18% 13%;
+    --popover-foreground: 220 14% 92%;
+
+    --accent: 222 16% 18%;
+    --accent-foreground: 220 14% 92%;
+
+    --primary: 210 100% 60%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 222 16% 16%;
+    --secondary-foreground: 220 14% 92%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 222 15% 22%;
+    --input: 222 15% 22%;
+    --ring: 210 100% 60%;
+
+    --sidebar: 222 18% 9%;
+    --sidebar-foreground: 220 14% 88%;
+    --sidebar-hover: 222 16% 18%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  html {
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    overflow: hidden;
+  }
+
+  /*
+   * Radix Dialog / Select 打开时 react-remove-scroll 会给 body 写入
+   *   body[data-scroll-locked] { margin-right: 16px !important }
+   * 来"补偿"隐藏滚动条。我们的 AppShell 整个是 overflow:hidden，根本没
+   * 滚动条可隐藏；保留这个补偿会让 Settings 里的 Select / runsql block
+   * 里的分页 Select 一开菜单就把主窗口内容整体左推 16px，肉眼可见抖动。
+   * 直接用同等特异性 + !important 归零，彻底消除。
+   * （之前试过覆盖 --removed-body-scroll-bar-size 变量没用——react-remove-scroll
+   *  v2+ 把 gap 的值直接硬编码进注入样式，不走变量。）
+   */
+  body[data-scroll-locked] {
+    margin-right: 0 !important;
+    padding-right: 0 !important;
+  }
+
+  /*
+   * 侧栏拖拽期间：
+   *  - 整窗光标锁成 ew-resize，防止快速拖动时鼠标移出 4px 手柄区看到光标
+   *    抖回默认箭头；
+   *  - user-select:none 避免拖动过程中把 FileTree / 标题文本选中；
+   *  - 顺带禁用 aside 的 width transition（AppShell 给 aside 挂了
+   *    transition-[width]，拖拽时会让宽度追着鼠标一帧一帧 ease，视觉上
+   *    明显粘滞）。
+   */
+  body[data-sidebar-resizing] {
+    cursor: ew-resize !important;
+    user-select: none;
+  }
+  body[data-sidebar-resizing] aside[data-sidebar-aside] {
+    transition: none !important;
+  }
+
+  /*
+   * 滚动条统一外观：
+   *  - thumb 颜色用 muted-foreground，亮/暗主题下都比 border 显著得多；
+   *    之前用 var(--border) 在亮色下接近背景色，肉眼几乎看不到。
+   *  - Firefox 走 scrollbar-color；Chromium 走 ::-webkit-scrollbar。
+   *  - 注意：macOS WKWebView 对 ::-webkit-scrollbar 自定义支持极差，
+   *    editor 主滚动容器（.stela-milkdown-host）已改为隐藏原生条 + DIY
+   *    React overlay（见 MilkdownEditor.tsx 内的 HostScrollbar），此处
+   *    全局规则仅覆盖 FileTree / SearchPanel / Settings 等次要容器。
+   */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.35) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.3);
+    border-radius: 10px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.55);
+    background-clip: content-box;
+    border: 2px solid transparent;
+  }
+
+  /*
+   * TabBar 横向滚动专用：隐藏可见滚动条但保留滚动能力。
+   * TabBar 高度仅 h-9（36px），10px 滚动条放进去会吃掉近 1/3 高度。
+   * 同 VSCode / Chrome 行为——靠 wheel/touch/drag 滚，不画条。
+   */
+  .stela-tabbar-scroll {
+    scrollbar-width: none;
+  }
+  .stela-tabbar-scroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  /*
+   * Frameless 窗口拖拽区。
+   *
+   * Electron `titleBarStyle: "hidden"` 移除系统标题栏后，整窗默认不可拖。
+   * 我们靠 -webkit-app-region 把 Sidebar header / TabBar 标记成 drag region：
+   *   - .stela-app-drag：鼠标按住拖动 = 拖窗 / 双击 = 最大化
+   *   - .stela-app-no-drag：恢复正常点击/选择行为
+   * 规则：drag region 内部所有可交互元素（button / input / a / 文件树节点 /
+   * tab item）都必须加 .stela-app-no-drag，否则点击会被系统当成"拖窗起手"。
+   *
+   * 已知坑：drag region 内 user-select 默认会被禁掉，里面的文本（如 vault
+   * 名）选不中，是浏览器侧硬规则——可以接受，与 macOS 原生标题栏一致。
+   */
+  .stela-app-drag {
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+  .stela-app-no-drag {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+
+  /*
+   * macOS 红绿灯安全区：trafficLightPosition x≈14、按钮组宽约 60px，
+   * 总占用 ~78px。给 Sidebar header 加这个左 padding，红绿灯就视觉上
+   * "藏"进 vault 标题条最左侧；图标/标题接在它们右边自然衔接。
+   * Win/Linux 没有红绿灯，留 0。
+   */
+  :root[data-platform="mac"] .stela-titlebar-safe-left {
+    padding-left: 78px;
+  }
+
+  /*
+   * Windows / Linux 的 titleBarOverlay 占据右上角约 138px×36px。给 TabBar
+   * 末尾留出这块"系统按钮安全区"，避免最后一个 tab、▾ overflow 按钮被
+   * 系统按钮盖住而点不到。macOS 上 0，因为红绿灯在左侧。
+   */
+  :root[data-platform="win"] .stela-titlebar-safe-right,
+  :root[data-platform="linux"] .stela-titlebar-safe-right {
+    padding-right: 138px;
+  }
+}

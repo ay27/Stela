@@ -1,0 +1,190 @@
+{
+  "name": "stela",
+  "private": true,
+  "version": "0.6.0",
+  "type": "module",
+  "main": "out/main/index.js",
+  "description": "Stela — desktop SQL data notes (Electron + React + Milkdown)",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/ay27/Stela.git"
+  },
+  "scripts": {
+    "predev": "npm run rebuild && npm run build:plugins",
+    "dev": "electron-vite dev",
+    "dev:fast": "electron-vite dev",
+    "build:plugins": "node scripts/build-plugins.mjs",
+    "build": "tsc --noEmit && npm run build:plugins && electron-vite build",
+    "check:release": "node scripts/check-public-release.mjs",
+    "preview": "electron-vite preview",
+    "start": "electron-vite preview",
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "package": "npm run build && electron-builder --dir",
+    "make": "npm run build && electron-builder",
+    "make:mac": "npm run build && electron-builder --mac",
+    "make:win": "npm run build && electron-builder --win",
+    "make:linux": "npm run build && electron-builder --linux",
+    "test": "tsx scripts/roundtrip-check.ts && tsx src/i18n/i18n-keys.test.ts && tsx src/services/schema-dump.test.ts && tsx electron/services/vault-fs.test.ts && tsx electron/services/connections-store.test.ts && tsx electron/services/auto-updater.test.ts && tsx electron/services/connectors/module-loader.test.ts && tsx src/editor/image-assets/file-name.test.ts && tsx src/editor/image-assets/path-resolver.test.ts && tsx src/editor/search/source-map.test.ts && tsx src/editor/search/locator.test.ts && tsx src/editor/find-in-file/find-controller.test.ts && tsx src/editor/runsql/sql-scope.test.ts && tsx src/services/result-diff.test.ts && tsx src/services/export-note.test.ts && tsx src/services/result-loader.test.ts && tsx electron/services/knowledge/chunker.test.ts && tsx electron/services/knowledge/retriever.test.ts && tsx electron/services/mcp/tools.test.ts && npm run test:store",
+    "test:store": "ELECTRON_RUN_AS_NODE=1 electron --import tsx electron/services/result-store.test.ts && ELECTRON_RUN_AS_NODE=1 electron --import tsx electron/services/history-journal.test.ts",
+    "test:connectors": "node scripts/test-connectors.mjs"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.20.1",
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/lang-sql": "^6.10.0",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.41.1",
+    "@fsegurai/codemirror-theme-vscode-dark": "^6.2.6",
+    "@fsegurai/codemirror-theme-vscode-light": "^6.2.6",
+    "@milkdown/core": "^7.20.0",
+    "@milkdown/crepe": "^7.20.0",
+    "@milkdown/kit": "^7.20.0",
+    "@milkdown/plugin-listener": "^7.20.0",
+    "@milkdown/preset-commonmark": "^7.20.0",
+    "@milkdown/preset-gfm": "^7.20.0",
+    "@milkdown/prose": "^7.20.0",
+    "@milkdown/react": "^7.20.0",
+    "@milkdown/transformer": "^7.20.0",
+    "@milkdown/utils": "^7.20.0",
+    "@radix-ui/react-context-menu": "^2.2.16",
+    "@radix-ui/react-dialog": "^1.1.2",
+    "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-scroll-area": "^1.2.1",
+    "@radix-ui/react-select": "^2.2.6",
+    "@radix-ui/react-separator": "^1.1.0",
+    "@radix-ui/react-slot": "^1.1.0",
+    "@radix-ui/react-tabs": "^1.1.1",
+    "@radix-ui/react-tooltip": "^1.1.4",
+    "@tanstack/react-table": "^8.21.3",
+    "@tanstack/react-virtual": "^3.13.24",
+    "@types/mdast": "^4.0.4",
+    "app-builder-bin": "^5.0.0-alpha.10",
+    "better-sqlite3": "^12.9.0",
+    "chokidar": "^5.0.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
+    "codemirror": "^6.0.2",
+    "electron-updater": "^6.8.9",
+    "i18next": "^26.3.3",
+    "lucide-react": "^0.453.0",
+    "mermaid": "^11.14.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-i18next": "^17.0.8",
+    "sql-formatter": "^15.7.3",
+    "tailwind-merge": "^2.5.4",
+    "tailwindcss-animate": "^1.0.7",
+    "unified": "^11.0.5",
+    "unist-util-visit": "^5.1.0",
+    "zod": "^3.23.0",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/better-sqlite3": "^7.6.8",
+    "@types/node": "^22.9.0",
+    "@types/pg": "^8.20.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "@xenova/transformers": "^2.17.2",
+    "autoprefixer": "^10.4.20",
+    "electron": "^41.5.0",
+    "electron-builder": "^25.0.0",
+    "electron-vite": "^5.0.0",
+    "esbuild": "^0.24.0",
+    "mysql2": "^3.10.0",
+    "pg": "^8.22.0",
+    "postcss": "^8.4.49",
+    "sqlite-vec": "^0.1.9",
+    "tailwindcss": "^3.4.15",
+    "tsx": "^4.21.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  },
+  "build": {
+    "appId": "com.stela.app",
+    "productName": "Stela",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "build-resources"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "ay27",
+        "repo": "Stela",
+        "channel": "latest"
+      }
+    ],
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "plugins/connector-mysql",
+        "to": "plugins/connector-mysql",
+        "filter": [
+          "plugin.json",
+          "dist/**"
+        ]
+      },
+      {
+        "from": "plugins/connector-postgresql",
+        "to": "plugins/connector-postgresql",
+        "filter": [
+          "plugin.json",
+          "dist/**"
+        ]
+      },
+      {
+        "from": "plugins/connector-http-sample",
+        "to": "plugins/connector-http-sample",
+        "filter": [
+          "plugin.json",
+          "dist/**"
+        ]
+      }
+    ],
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ]
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development"
+    }
+  }
+}

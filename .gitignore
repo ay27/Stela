@@ -1,0 +1,36 @@
+node_modules
+dist
+.stela-vault
+.stela-release-tmp
+release
+
+# Electron build outputs
+out
+
+# Stela local runtime data
+.stela.sqlite
+.stela.sqlite-*
+.stela/secrets/
+.stela/history/*.local.jsonl
+
+# Local analysis / agent artifacts
+.understand-anything/
+.worktrees/
+worktrees/
+
+# env
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.development
+.env.test
+.env.production
+
+# Local release scripts may contain signing / publishing secrets
+scripts/local-macos-package.sh
+
+# OS / editor
+.DS_Store
+*.log

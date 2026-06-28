@@ -1,0 +1,8 @@
+{
+  "name": "connector-http-sample",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  }
+}

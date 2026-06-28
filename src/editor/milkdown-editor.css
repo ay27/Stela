@@ -1,0 +1,1975 @@
+/* Stela 自有 Milkdown / Crepe 主题层。
+ *
+ * 选择不引 @milkdown/crepe/theme/frame.css，原因：frame.css 把 --crepe-color-* 全部
+ * 硬编码写到 .milkdown 上（白底 / 黑灰文字 / Noto Serif），特异性高于外层 host，会反向
+ * 覆盖任何 shadcn token 映射。这里我们直接把 14 个 Crepe token 挂到 .milkdown，并对
+ * common/* 的结构性默认（字号、边距、链接色、blockquote、inline code、浮层圆角阴影
+ * ……）做一次贴 shadcn 的 override。
+ *
+ * 一条规则：所有覆写都用 `.milkdown` 前缀（与 common/* 选择器同级或更具体），不要再用
+ * 外层 `.stela-milkdown-host`，否则会输给 common/* 的 `.milkdown xxx`。
+ */
+
+/* ============================================================================
+ * 1) 主题变量绑定
+ * ========================================================================== */
+
+.milkdown {
+  /* 基础语义色 */
+  --crepe-color-background: hsl(var(--background));
+  --crepe-color-on-background: hsl(var(--foreground));
+
+  /* 浮层卡片：surface = 项目的 popover */
+  --crepe-color-surface: hsl(var(--popover));
+  --crepe-color-on-surface: hsl(var(--popover-foreground));
+  --crepe-color-surface-low: hsl(var(--muted));
+  --crepe-color-on-surface-variant: hsl(var(--muted-foreground));
+
+  /* 边线 */
+  --crepe-color-outline: hsl(var(--border));
+
+  /* 重要：Crepe 的 "primary" 是文字/图标主色（接近 on-background），不是品牌主色。
+     直接套 hsl(var(--primary)) 会把 toolbar 激活态、链接、行内强调全染成蓝色。 */
+  --crepe-color-primary: hsl(var(--foreground));
+
+  --crepe-color-secondary: hsl(var(--secondary));
+  --crepe-color-on-secondary: hsl(var(--secondary-foreground));
+  --crepe-color-inverse: hsl(var(--foreground));
+  --crepe-color-on-inverse: hsl(var(--background));
+
+  /* 行内 code：用 muted 底色 + 默认前景，不再警告红 */
+  --crepe-color-inline-code: hsl(var(--foreground));
+  --crepe-color-inline-area: hsl(var(--muted));
+
+  --crepe-color-error: hsl(var(--destructive));
+
+  /* 交互态 */
+  --crepe-color-hover: hsl(var(--accent));
+  --crepe-color-selected: hsl(var(--accent));
+
+  /* 阴影：贴 shadcn shadow-md / shadow-lg 的味道 */
+  --crepe-shadow-1:
+    0 4px 6px -1px hsl(var(--foreground) / 0.10),
+    0 2px 4px -2px hsl(var(--foreground) / 0.08);
+  --crepe-shadow-2:
+    0 10px 15px -3px hsl(var(--foreground) / 0.10),
+    0 4px 6px -4px hsl(var(--foreground) / 0.08);
+
+  /* 字体：统一 sans / mono，丢掉 Noto Serif 标题 */
+  --crepe-font-default:
+    ui-sans-serif,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei",
+    sans-serif;
+  --crepe-font-title: var(--crepe-font-default);
+  --crepe-font-code:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+}
+
+/* 外壳容器（承担布局/滚动）。
+ *
+ * 用 position:absolute + inset:0 而不是 height:100%：之前依赖 flex 祖先链传递高度，
+ * macOS WKWebView 实测下 host 并没有拿到父的可用高度。绝对定位直接铺满已
+ * position:relative 的父（见 EditorView），不依赖 height 继承链。
+ *
+ * 原生滚动条视觉隐藏：macOS WKWebView 对 ::-webkit-scrollbar 自定义支持极差，
+ * "始终"模式下会渲染成透明条（用户视觉上以为没有滚动条）；"自动" / "滚动时"
+ * 又全靠系统 overlay 淡入淡出，停下就消失。我们把原生条彻底隐藏，改用
+ * HostScrollbar React 组件画一个自定义 overlay thumb（见
+ * [MilkdownEditor.tsx](./MilkdownEditor.tsx) 内的 HostScrollbar）。
+ */
+/* 编辑器顶层布局：横向 flex 行。左主列（滚动 host + overlay）+ 右侧停靠目录栏。 */
+.stela-editor-layout {
+  display: flex;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+}
+
+/* 主列：相对定位父，承载 absolute 的 host / scrollbar / findbar / image overlay。
+ * min-width:0 让它在目录栏展开挤占宽度时能正常收缩。 */
+.stela-editor-main {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+}
+
+.stela-milkdown-host {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  /* 隐藏原生滚动条（保留滚动能力） */
+  scrollbar-width: none; /* Firefox */
+}
+
+.stela-milkdown-host::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+/* 自定义滚动条 overlay（右侧 10px），由 HostScrollbar 组件挂载 */
+.stela-host-scrollbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.stela-host-scrollbar__thumb {
+  position: absolute;
+  right: 2px;
+  width: 6px;
+  border-radius: 999px;
+  background: hsl(var(--muted-foreground) / 0.35);
+  pointer-events: auto;
+  cursor: default;
+  transition:
+    background 120ms,
+    width 120ms;
+}
+
+.stela-host-scrollbar__thumb:hover,
+.stela-host-scrollbar__thumb[data-dragging="true"] {
+  background: hsl(var(--muted-foreground) / 0.65);
+  width: 8px;
+  right: 1px;
+}
+
+/* ============================================================================
+ * 2) 正文排版覆写（紧凑 / shadcn 节奏）
+ * ========================================================================== */
+
+.milkdown {
+  font-family: var(--crepe-font-default);
+  font-size: 14px;
+  line-height: 1.65;
+  color: hsl(var(--foreground));
+  background: transparent;
+}
+
+.milkdown .ProseMirror {
+  padding: 28px 56px 96px;
+  max-width: 920px;
+  margin: 0 auto;
+  outline: none;
+  min-height: 100%;
+}
+
+/*
+ * 「Wide」宽度模式：占满整个 host，max-width 撤掉。
+ *
+ * 选择器挂在 host 的 data-attr 上而不是 .milkdown，是因为 common/*.css 的
+ * 主题规则特异性会压过单 class；`.stela-milkdown-host[data-editor-width="wide"]
+ * .milkdown .ProseMirror` 特异性等于 0,2,2，能稳压 common frame。
+ *
+ * 左右 padding 在 wide 模式下加到 88px（narrow 是 56px）：
+ *   - milkdown-block-handle 是 absolute 定位，参照 ProseMirror 节点左边再向左
+ *     偏 ~32px。narrow 模式下节点本身居中，handle 离 host 左侧很远（host 中心
+ *     往左 460-32 ≈ 428px），不会贴边
+ *   - wide 模式下节点占满 host，handle 直接挨到 host 左边，56px padding 给它
+ *     的活动区只剩 ~24px，会与左侧 sidebar / 正文之间的视觉边界混在一起，
+ *     甚至遮挡内容边缘。88px 让 handle 离 host 左侧仍有 ~56px 空间
+ *
+ * 底部 padding 保留 96px，最后一段有呼吸空间。
+ */
+.stela-milkdown-host[data-editor-width="wide"] .milkdown .ProseMirror {
+  max-width: none;
+  padding-left: 88px;
+  padding-right: 88px;
+}
+
+.milkdown .ProseMirror h1,
+.milkdown .ProseMirror h2,
+.milkdown .ProseMirror h3,
+.milkdown .ProseMirror h4,
+.milkdown .ProseMirror h5,
+.milkdown .ProseMirror h6 {
+  font-family: var(--crepe-font-default);
+  font-weight: 600;
+  padding: 0;
+}
+
+.milkdown .ProseMirror h1 {
+  font-size: 28px;
+  line-height: 36px;
+  letter-spacing: -0.02em;
+  margin-top: 24px;
+  margin-bottom: 12px;
+}
+
+.milkdown .ProseMirror h2 {
+  font-size: 22px;
+  line-height: 30px;
+  letter-spacing: -0.015em;
+  margin-top: 20px;
+  margin-bottom: 10px;
+}
+
+.milkdown .ProseMirror h3 {
+  font-size: 18px;
+  line-height: 26px;
+  margin-top: 16px;
+  margin-bottom: 8px;
+}
+
+.milkdown .ProseMirror h4 {
+  font-size: 16px;
+  line-height: 24px;
+  margin-top: 14px;
+  margin-bottom: 8px;
+}
+
+.milkdown .ProseMirror h5,
+.milkdown .ProseMirror h6 {
+  font-size: 14px;
+  line-height: 22px;
+  margin-top: 12px;
+  margin-bottom: 6px;
+}
+
+.milkdown .ProseMirror p {
+  font-size: 14px;
+  line-height: 1.65;
+  padding: 2px 0;
+}
+
+.milkdown .ProseMirror a {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+
+.milkdown .ProseMirror code {
+  color: hsl(var(--foreground));
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  font-family: var(--crepe-font-code);
+  font-size: 12.5px;
+  padding: 0 4px;
+  border-radius: calc(var(--radius) - 2px);
+}
+
+.milkdown .ProseMirror pre {
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+
+.milkdown .ProseMirror pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.milkdown .ProseMirror blockquote {
+  position: relative;
+  padding-left: 14px;
+  margin: 6px 0;
+  color: hsl(var(--muted-foreground));
+}
+
+.milkdown .ProseMirror blockquote::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 2px;
+  background: hsl(var(--border));
+}
+
+.milkdown .ProseMirror hr {
+  border: none;
+  background: hsl(var(--border));
+  background-clip: content-box;
+  height: 1px;
+  padding: 0;
+  margin: 18px 0;
+}
+
+.milkdown .ProseMirror hr.ProseMirror-selectednode {
+  background: hsl(var(--primary) / 0.5);
+  background-clip: content-box;
+}
+
+.milkdown .crepe-placeholder::before {
+  color: hsl(var(--muted-foreground));
+  opacity: 0.7;
+}
+
+/* ---- 列表标记 ----
+ * Crepe list-item 默认：标记色 = outline(border)、label 区固定 32px 高 → 序号偏低、与正文不协调。
+ * 这里对齐正文 p：14px / line-height 1.65 / padding 2px 0，标记色与字重与正文一致。 */
+.milkdown .milkdown-list-item-block > .list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.milkdown .milkdown-list-item-block li .label-wrapper {
+  height: auto;
+  width: auto;
+  min-width: 1.5em;
+  padding: 2px 0;
+  flex-shrink: 0;
+  align-items: flex-start;
+  justify-content: flex-end;
+  color: hsl(var(--foreground));
+}
+
+.milkdown .milkdown-list-item-block li .label-wrapper .label,
+.milkdown .milkdown-list-item-block li .label-wrapper .milkdown-icon {
+  height: auto;
+  width: auto;
+  min-width: 1.25em;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1.65;
+  font-weight: 400;
+  text-align: right;
+  color: hsl(var(--foreground));
+}
+
+/* 无序列表圆点 */
+.milkdown .milkdown-list-item-block li .label-wrapper:has(.bullet) {
+  justify-content: center;
+  align-items: center;
+  min-width: 1.25em;
+}
+
+.milkdown .milkdown-list-item-block li .label-wrapper .label.bullet {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25em;
+  min-width: 1.25em;
+  height: calc(14px * 1.65);
+  padding: 0;
+  line-height: 0;
+  color: hsl(var(--foreground));
+}
+
+.milkdown .milkdown-list-item-block li .label-wrapper .label.bullet svg {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+}
+
+/* 任务列表：stroke/fill 走 currentColor，由父级 color 控制 */
+.milkdown .milkdown-list-item-block li .label-wrapper .label.checked,
+.milkdown .milkdown-list-item-block li .label-wrapper .label.unchecked {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25em;
+  min-width: 1.25em;
+  height: calc(14px * 1.65);
+  padding: 0;
+  line-height: 0;
+  cursor: pointer;
+}
+
+.milkdown .milkdown-list-item-block li .label-wrapper .label.unchecked {
+  color: hsl(var(--muted-foreground) / 0.45);
+}
+
+.milkdown .milkdown-list-item-block li .label-wrapper .label.checked {
+  color: hsl(var(--primary));
+}
+
+.milkdown .milkdown-list-item-block li .label-wrapper .label.checked svg,
+.milkdown .milkdown-list-item-block li .label-wrapper .label.unchecked svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* 选中态：用 accent，不再走 Crepe 的 selected 灰块 */
+.milkdown .ProseMirror *::selection {
+  background: hsl(var(--primary) / 0.18);
+}
+.milkdown .ProseMirror .ProseMirror-selectednode {
+  background: hsl(var(--accent));
+  outline: none;
+}
+
+/* ---- 表格 ----
+ * Crepe common/table.css 的默认值有两个问题：
+ *   1. 边框用 color-mix(--crepe-color-outline, transparent 80%)，再淡化 80% 后
+ *      在亮色主题下几乎不可见；
+ *   2. prosemirror-tables 默认 table-layout:fixed + width:100%，无 colwidth 时
+ *      各列等分整表宽度，不会随内容自适应。
+ * 这里全部用 .milkdown 前缀压过 common 规则，把边框对齐 hsl(var(--border))，
+ * 列宽改为按内容 auto-fit。 */
+.milkdown .milkdown-table-block .table-wrapper {
+  overflow-x: auto;
+  margin: 8px 0;
+  border-radius: var(--radius);
+}
+
+.milkdown .milkdown-table-block table {
+  table-layout: auto;
+  width: max-content;
+  min-width: 100%;
+  max-width: 100%;
+}
+
+.milkdown .milkdown-table-block th,
+.milkdown .milkdown-table-block td {
+  border: 1px solid hsl(var(--border));
+  padding: 6px 12px;
+  vertical-align: top;
+  white-space: normal;
+  word-break: break-word;
+  max-width: 360px;
+}
+
+.milkdown .milkdown-table-block th {
+  background: hsl(var(--muted));
+  font-weight: 600;
+  font-size: 13px;
+  color: hsl(var(--muted-foreground));
+  border-bottom-width: 2px;
+}
+
+.milkdown .milkdown-table-block .selectedCell::after {
+  background: hsl(var(--primary) / 0.12);
+  opacity: 1;
+}
+
+/* ============================================================================
+ * 3) 浮层 UI（slash menu / bubble toolbar / link tooltip / block handle）
+ *    全部对齐 shadcn dropdown / popover 视觉。
+ * ========================================================================== */
+
+/* ---- bubble toolbar ---- */
+
+.milkdown .milkdown-toolbar {
+  background: hsl(var(--popover));
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) - 2px);
+  box-shadow: var(--crepe-shadow-1);
+  padding: 2px;
+  overflow: hidden;
+}
+
+.milkdown .milkdown-toolbar .toolbar-item {
+  width: 28px;
+  height: 28px;
+  margin: 2px;
+  padding: 0;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.milkdown .milkdown-toolbar .toolbar-item:hover {
+  background: hsl(var(--accent));
+}
+
+.milkdown .milkdown-toolbar .toolbar-item:active,
+.milkdown .milkdown-toolbar .toolbar-item.active {
+  background: hsl(var(--accent));
+}
+
+.milkdown .milkdown-toolbar .toolbar-item svg {
+  width: 16px;
+  height: 16px;
+  color: hsl(var(--muted-foreground));
+  fill: currentColor;
+}
+
+.milkdown .milkdown-toolbar .toolbar-item.active svg {
+  color: hsl(var(--foreground));
+  fill: currentColor;
+}
+
+.milkdown .milkdown-toolbar .divider {
+  width: 1px;
+  height: 18px;
+  margin: 6px 4px;
+  background: hsl(var(--border));
+}
+
+/* ---- slash menu ---- */
+
+.milkdown .milkdown-slash-menu {
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  box-shadow: var(--crepe-shadow-2);
+  padding: 4px;
+  font-family: var(--crepe-font-default);
+  min-width: 240px;
+}
+
+.milkdown .milkdown-slash-menu .tab-group {
+  border-bottom: 1px solid hsl(var(--border));
+  padding: 4px 4px 0;
+}
+
+.milkdown .milkdown-slash-menu .tab-group ul {
+  padding: 0;
+  display: flex;
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+
+.milkdown .milkdown-slash-menu .tab-group ul li {
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  border-radius: 4px;
+  color: hsl(var(--muted-foreground));
+}
+
+.milkdown .milkdown-slash-menu .tab-group ul li:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+.milkdown .milkdown-slash-menu .tab-group ul li.selected {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+.milkdown .milkdown-slash-menu .menu-groups {
+  padding: 4px 0 0;
+  max-height: 360px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.milkdown .milkdown-slash-menu .menu-groups .menu-group h6 {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  padding: 8px 8px 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: hsl(var(--muted-foreground));
+}
+
+.milkdown .milkdown-slash-menu .menu-groups .menu-group li {
+  min-width: 220px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: hsl(var(--popover-foreground));
+}
+
+.milkdown .milkdown-slash-menu .menu-groups .menu-group li.hover,
+.milkdown .milkdown-slash-menu .menu-groups .menu-group li.active,
+.milkdown .milkdown-slash-menu .menu-groups .menu-group li:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+.milkdown .milkdown-slash-menu .menu-groups .menu-group li svg {
+  width: 16px;
+  height: 16px;
+  color: hsl(var(--muted-foreground));
+  fill: currentColor;
+}
+
+.milkdown .milkdown-slash-menu .menu-groups .menu-group li > span {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.milkdown .milkdown-slash-menu .menu-groups .menu-group + .menu-group::before {
+  content: "";
+  display: block;
+  height: 1px;
+  background: hsl(var(--border));
+  margin: 4px 6px;
+}
+
+/* ---- link preview / edit ---- */
+
+.milkdown .milkdown-link-preview > .link-preview,
+.milkdown .milkdown-link-edit > .link-edit {
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) - 2px);
+  box-shadow: var(--crepe-shadow-1);
+  height: 32px;
+  padding: 0 8px;
+  gap: 6px;
+}
+
+.milkdown .milkdown-link-preview > .link-preview > .link-display {
+  font-size: 13px;
+  line-height: 32px;
+}
+
+.milkdown .milkdown-link-preview > .link-preview > .link-icon,
+.milkdown .milkdown-link-preview > .link-preview > .button,
+.milkdown .milkdown-link-edit > .link-edit > .button {
+  border-radius: 4px;
+  padding: 4px;
+}
+
+.milkdown .milkdown-link-preview > .link-preview > .link-icon:hover,
+.milkdown .milkdown-link-preview > .link-preview > .button:hover,
+.milkdown .milkdown-link-edit > .link-edit > .button:hover {
+  background: hsl(var(--accent));
+}
+
+.milkdown .milkdown-link-preview > .link-preview > .link-icon svg,
+.milkdown .milkdown-link-preview > .link-preview > .button svg,
+.milkdown .milkdown-link-edit > .link-edit > .button svg {
+  width: 14px;
+  height: 14px;
+  color: hsl(var(--muted-foreground));
+  fill: currentColor;
+}
+
+.milkdown .milkdown-link-edit > .link-edit > .input-area {
+  font-size: 13px;
+  color: hsl(var(--foreground));
+  background: transparent;
+  width: 220px;
+}
+
+/* ---- block handle (左侧拖把) ---- */
+
+.milkdown .milkdown-block-handle .operation-item {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.milkdown .milkdown-block-handle .operation-item:hover {
+  background: hsl(var(--accent));
+}
+
+.milkdown .milkdown-block-handle .operation-item svg {
+  width: 16px;
+  height: 16px;
+  color: hsl(var(--muted-foreground));
+  fill: currentColor;
+}
+
+/* ============================================================================
+ * 4) RunSQL / 通用 code block NodeView
+ *    （主体在 codeblock-nodeview.ts 里给的 class，沿用，仅改圆角和 hover 色）
+ * ========================================================================== */
+
+.stela-cb {
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin: 10px 0;
+  background: hsl(var(--muted) / 0.45);
+}
+
+/* 所有 code block（runsql / mermaid / plain）共用同一条紧凑 header：
+   垂直 padding 收到 3px，按钮也压扁，整条高度 ~24px，统一且省空间。 */
+.stela-cb__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 3px 10px;
+  font-size: 11px;
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--muted) / 0.85);
+  border-bottom: 1px solid hsl(var(--border));
+  user-select: none;
+}
+
+.stela-cb__lang {
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+}
+
+.stela-cb__icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.stela-cb__title {
+  font-weight: 600;
+  color: hsl(var(--foreground));
+  letter-spacing: 0.02em;
+}
+
+.stela-cb__id {
+  font-family: var(--crepe-font-code, ui-monospace, monospace);
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+}
+
+/* 贴 shadcn `outline` variant：中性底 + 边框，hover 进 accent；图标继承前景色。
+   `.milkdown` 前缀拉高特异性，防 common/* 里出现通用 button 规则。 */
+.milkdown .stela-cb__run,
+.stela-cb__run {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 2px 8px;
+  border-radius: 5px;
+  border: 1px solid hsl(var(--border));
+  background-color: hsl(var(--background));
+  background-image: none;
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.stela-cb__run .stela-cb__run-glyph {
+  flex: 0 0 auto;
+  /* play triangle 视觉重心偏左，轻微右挪让图形+文本看起来是一个整体 */
+  transform: translateX(0.5px);
+  fill: currentColor;
+  color: hsl(var(--primary));
+}
+
+.milkdown .stela-cb__run:hover:not([disabled]):not([data-state="running"]),
+.stela-cb__run:hover:not([disabled]):not([data-state="running"]) {
+  background-color: hsl(var(--accent));
+  border-color: hsl(var(--border));
+  color: hsl(var(--accent-foreground));
+}
+
+.milkdown .stela-cb__run:active:not([disabled]):not([data-state="running"]),
+.stela-cb__run:active:not([disabled]):not([data-state="running"]) {
+  background-color: hsl(var(--accent) / 0.7);
+}
+
+.milkdown .stela-cb__run[data-state="running"],
+.milkdown .stela-cb__run[disabled],
+.stela-cb__run[data-state="running"],
+.stela-cb__run[disabled] {
+  cursor: progress;
+  background-color: hsl(var(--muted));
+  border-color: hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+}
+
+.stela-cb__run[data-state="running"] .stela-cb__run-glyph,
+.stela-cb__run[disabled] .stela-cb__run-glyph {
+  color: hsl(var(--muted-foreground));
+}
+
+.stela-cb__run .stela-cb__run-kbd {
+  margin-left: 6px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.stela-cb__run[data-state="running"] .stela-cb__run-kbd,
+.stela-cb__run[disabled] .stela-cb__run-kbd {
+  display: none;
+}
+
+/* Format 按钮：贴 Run 的 outline 风格，但更克制——纯图标 + 灰色 kbd hint，
+   主色仅在 hover 时点亮。
+   定位：Format 吃掉左侧剩余空间（margin-left: auto），紧接其后的 Run 把自己的
+   auto 抹平为 0（见下方 `.stela-cb__format + .stela-cb__run`），这样两个按钮
+   就贴在一起、整体被推到右侧；不写 + 选择器的话 flexbox 会把 auto 空间在两个
+   兄弟之间均分，中间会冒出一大段空白。 */
+.milkdown .stela-cb__format,
+.stela-cb__format {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 2px 7px;
+  border-radius: 5px;
+  border: 1px solid hsl(var(--border));
+  background-color: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  user-select: none;
+}
+
+/* 紧跟 Format 之后的 Run：抹掉 Run 自己的 margin-left: auto，
+   交给 header 的 gap=8 自然产生间距。 */
+.milkdown .stela-cb__format + .stela-cb__run,
+.stela-cb__format + .stela-cb__run {
+  margin-left: 0;
+}
+
+.milkdown .stela-cb__format:hover,
+.stela-cb__format:hover {
+  background-color: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+.milkdown .stela-cb__format:active,
+.stela-cb__format:active {
+  background-color: hsl(var(--accent) / 0.7);
+}
+
+.stela-cb__format .stela-cb__format-glyph {
+  flex: 0 0 auto;
+}
+
+.stela-cb__format .stela-cb__format-kbd {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10px;
+  opacity: 0.55;
+}
+
+.stela-cb__cm {
+  background: hsl(var(--background));
+}
+
+/* CodeMirror 默认 focus 时会给 .cm-editor 加一道虚线 outline，放在 runsql 块里很丑；
+   直接抹掉，我们整体 block 已经有 border 指示选中状态了。 */
+.stela-cb__cm .cm-editor.cm-focused {
+  outline: none;
+}
+
+.stela-cb__sep {
+  opacity: 0.4;
+}
+
+/* Mermaid block ---------------------------------------------------------- */
+/*
+ * 结构：.stela-cb.stela-cb--mermaid[data-preview="true"|"false"]
+ *         ├── .stela-cb__header   ← language label + 切换按钮
+ *         ├── .stela-cb__cm       ← CM 源码（仅源码态可见）
+ *         └── .stela-cb__preview-host ← 渲染 SVG（仅预览态可见）
+ *
+ * 切换纯靠 data-preview 属性控制 display，不拆 DOM，这样切回源码态 CM 实例还在，
+ * 不用重新 init + 恢复光标。
+ */
+
+.stela-cb--mermaid[data-preview="true"] .stela-cb__cm {
+  display: none;
+}
+.stela-cb--mermaid[data-preview="false"] .stela-cb__preview-host {
+  display: none;
+}
+
+.stela-cb__preview-host {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 16px;
+  background: hsl(var(--background));
+  min-height: 60px;
+  overflow: auto;
+}
+
+.stela-cb__preview-host svg {
+  max-width: 100%;
+  height: auto;
+  background: transparent;
+}
+
+.stela-cb__mermaid-empty,
+.stela-cb__mermaid-loading {
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+  padding: 8px 12px;
+}
+
+.stela-cb__mermaid-error {
+  width: 100%;
+  font-size: 11.5px;
+  font-family: var(--crepe-font-code, ui-monospace, monospace);
+  white-space: pre-wrap;
+  color: hsl(var(--destructive-foreground, 0 0% 98%));
+  background: hsl(var(--destructive) / 0.85);
+  padding: 6px 10px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+/* 贴 stela-cb__run 的风格，做成中性 outline 按钮 */
+.milkdown .stela-cb__mermaid-toggle,
+.stela-cb__mermaid-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 2px 8px;
+  border-radius: 5px;
+  border: 1px solid hsl(var(--border));
+  background-color: hsl(var(--background));
+  background-image: none;
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.milkdown .stela-cb__mermaid-toggle:hover,
+.stela-cb__mermaid-toggle:hover {
+  background-color: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+/* RunSQL block 内嵌结果区域 ----------------------------------------------- */
+
+.stela-cb__result-host {
+  border-top: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+}
+
+.stela-cb__result-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px 2px 4px;
+  font-size: 11px;
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--muted) / 0.6);
+  user-select: none;
+  flex: 0 0 auto;
+}
+
+.stela-cb__result-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: hsl(var(--muted-foreground));
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.stela-cb__result-toggle:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+.stela-cb__result-summary {
+  /* 不再 flex-grow：让左侧翻页组紧贴 toggle，summary 靠 margin-left:auto 推到右端 */
+  min-width: 0;
+  max-width: 60%;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stela-cb__result-summary.is-running {
+  color: hsl(var(--foreground));
+  font-style: italic;
+}
+
+.stela-cb__result-summary.is-error {
+  color: hsl(var(--destructive));
+}
+
+.stela-cb__result-summary.is-empty {
+  font-style: italic;
+}
+
+.stela-cb__result-panel {
+  /* 表格 + 底部版本栏统一容器，便于 active tab 与表格背景衔接 */
+}
+
+.stela-cb__result-body {
+  border-top: 1px solid hsl(var(--border));
+  /* ResultTable 自己控制 max-height + overflow，这里只起视觉分隔作用 */
+}
+
+/* 底部版本栏：倒置 TabBar —— active tab 顶边与上方表格同色衔接 */
+.stela-cb__run-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  min-height: 26px;
+  border-top: 1px solid hsl(var(--border));
+  background: hsl(var(--muted) / 0.5);
+  font-size: 11px;
+  user-select: none;
+}
+
+/* 对比按钮：默认紧凑控件；激活时融入版本栏，与选中 tab 同款底条提示 */
+.stela-cb__run-tabs .stela-cb__run-tabs-compare {
+  flex: 0 0 auto;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.stela-cb__run-tabs .stela-cb__run-tabs-compare:not(.stela-cb__run-tabs-compare--active) {
+  align-self: center;
+  margin: 0 6px;
+}
+
+.stela-cb__run-tabs .stela-cb__run-tabs-compare--active {
+  position: relative;
+  align-self: stretch;
+  margin-top: -1px;
+  padding: 0 10px;
+  border: none;
+  border-right: 1px solid hsl(var(--border));
+  border-top: 1px solid hsl(var(--background));
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-weight: 500;
+}
+
+.stela-cb__run-tabs .stela-cb__run-tabs-compare--active::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 2px;
+  background: hsl(var(--primary));
+}
+
+.stela-cb__run-tabs .stela-cb__run-tabs-compare--active:hover:enabled {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+.stela-cb__run-tabs-list {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 0;
+}
+
+.stela-cb__run-tabs .stela-cb__run-tab {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 6px;
+  border: none;
+  border-left: 1px solid hsl(var(--border));
+  border-radius: 0;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+
+.stela-cb__run-tabs .stela-cb__run-tab:hover:enabled {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+.stela-cb__run-tabs .stela-cb__run-tab:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 选中态：与表格同色背景 + 底部主色指示条（无浅蓝底） */
+.stela-cb__run-tabs .stela-cb__run-tab--active,
+.stela-cb__run-tabs .stela-cb__run-tab--selected {
+  margin-top: -1px;
+  border-top: 1px solid hsl(var(--background));
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+.stela-cb__run-tabs .stela-cb__run-tab--active::after,
+.stela-cb__run-tabs .stela-cb__run-tab--selected::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 2px;
+  background: hsl(var(--primary));
+}
+
+.stela-cb__run-tabs .stela-cb__run-tab--active:hover:enabled,
+.stela-cb__run-tabs .stela-cb__run-tab--selected:hover:enabled {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+.stela-cb__run-tabs .stela-cb__run-tab--err {
+  color: hsl(var(--destructive));
+}
+
+/* tab 内「最新」小标 */
+.stela-cb__run-tab-latest {
+  flex: 0 0 auto;
+  font-size: 9px;
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+}
+
+.stela-cb__run-tab-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border-radius: 3px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+}
+
+.stela-cb__run-tab-check--on {
+  border-color: hsl(var(--foreground) / 0.35);
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+.stela-cb__run-tabs-more {
+  flex: 0 0 auto;
+  align-self: stretch;
+  display: flex;
+  align-items: stretch;
+  border-left: 1px solid hsl(var(--border));
+}
+
+.stela-cb__run-tabs-more > button {
+  height: 100%;
+  min-height: 26px;
+  border-radius: 0;
+  border-top: none;
+  border-bottom: none;
+  border-right: none;
+}
+
+.stela-cb__result-hint {
+  padding: 10px 12px;
+  font-size: 11px;
+  color: hsl(var(--muted-foreground));
+  font-style: italic;
+  text-align: center;
+}
+
+.stela-cb__result-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: hsl(var(--destructive));
+  background: hsl(var(--destructive) / 0.08);
+  border-left: 3px solid hsl(var(--destructive));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  line-height: 1.5;
+}
+
+/* ---------- RunSQL 右键菜单 ---------- */
+.stela-cb__ctxmenu {
+  min-width: 180px;
+  padding: 4px;
+  border-radius: 6px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow:
+    0 4px 12px hsl(var(--foreground) / 0.1),
+    0 2px 4px hsl(var(--foreground) / 0.06);
+  font-size: 12px;
+  user-select: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.stela-cb__ctxmenu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  text-align: left;
+  cursor: default;
+  font: inherit;
+  line-height: 1.4;
+}
+.stela-cb__ctxmenu-item:hover:not(.stela-cb__ctxmenu-item--disabled) {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+.stela-cb__ctxmenu-item--danger {
+  color: hsl(var(--destructive));
+}
+.stela-cb__ctxmenu-item--danger:hover {
+  background: hsl(var(--destructive) / 0.1);
+  color: hsl(var(--destructive));
+}
+.stela-cb__ctxmenu-item--disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.stela-cb__ctxmenu-label {
+  flex: 1 1 auto;
+}
+.stela-cb__ctxmenu-shortcut {
+  flex: 0 0 auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  color: hsl(var(--muted-foreground));
+  opacity: 0.8;
+}
+.stela-cb__ctxmenu-separator {
+  height: 1px;
+  margin: 4px 2px;
+  background: hsl(var(--border));
+}
+
+/* ---------------------------------------------------------------------------
+ * 右侧文档目录停靠栏（DocumentTocRail）
+ *
+ * 形态：.stela-editor-layout 最右侧的常驻 flex 子项。
+ *   - 展开态：固定 260px 的目录列，挤占主列宽度（正文随之收窄居中）而非浮层遮挡；
+ *     与主列内 right:0 的滚动条物理分离、永不重叠。
+ *   - 收起态：折成 32px 窄条，只留一颗居中靠上的展开按钮（list 图标）。
+ * ------------------------------------------------------------------------- */
+.stela-toc-rail {
+  flex: 0 0 auto;
+  width: 260px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+}
+
+.stela-toc-rail[data-collapsed="true"] {
+  width: 32px;
+  align-items: center;
+}
+
+/* 收起态的展开按钮 */
+.stela-toc-rail__trigger {
+  margin-top: 8px;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition:
+    background-color 120ms,
+    color 120ms,
+    border-color 120ms;
+}
+
+.stela-toc-rail__trigger:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+/* 展开态目录面板：纵向 flex 占满停靠栏 */
+.stela-toc-rail__panel {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  color: hsl(var(--popover-foreground));
+}
+
+.stela-toc-rail__header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 6px 6px 12px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.stela-toc-rail__title {
+  flex: 1 1 auto;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground));
+  user-select: none;
+}
+
+.stela-toc-rail__collapse {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: background-color 120ms, color 120ms;
+}
+
+.stela-toc-rail__collapse:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+.stela-toc-rail__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  margin: 0;
+  padding: 4px 4px 6px;
+}
+
+.stela-toc-rail__item {
+  margin: 0;
+  padding: 0;
+}
+
+.stela-toc-rail__link {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: hsl(var(--muted-foreground));
+  padding: 4px 8px 4px calc(8px + var(--indent, 0) * 12px);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background-color 100ms, color 100ms;
+}
+
+.stela-toc-rail__link:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+.stela-toc-rail__item[data-level="0"] .stela-toc-rail__link {
+  --indent: 0;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+.stela-toc-rail__item[data-level="1"] .stela-toc-rail__link {
+  --indent: 1;
+}
+.stela-toc-rail__item[data-level="2"] .stela-toc-rail__link {
+  --indent: 2;
+}
+.stela-toc-rail__item[data-level="3"] .stela-toc-rail__link {
+  --indent: 3;
+}
+.stela-toc-rail__item[data-level="4"] .stela-toc-rail__link {
+  --indent: 4;
+}
+.stela-toc-rail__item[data-level="5"] .stela-toc-rail__link {
+  --indent: 5;
+}
+
+.stela-toc-rail__item[data-active="true"] .stela-toc-rail__link {
+  color: hsl(var(--primary));
+  background: hsl(var(--primary) / 0.08);
+  box-shadow: inset 2px 0 0 hsl(var(--primary));
+}
+
+.stela-toc-rail__item[data-active="true"] .stela-toc-rail__link:hover {
+  background: hsl(var(--primary) / 0.14);
+}
+
+/* ---------- 搜索跳转高亮 ---------- */
+/*
+ * 搜索结果点击后，目标 block 短暂高亮一下提示位置。
+ * 800ms 与 MilkdownEditor 里的 REVEAL_FLASH_MS 保持一致。
+ */
+@keyframes stela-reveal-flash-kf {
+  0% {
+    background-color: hsl(var(--primary) / 0.25);
+    box-shadow: 0 0 0 4px hsl(var(--primary) / 0.18);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 0 hsl(var(--primary) / 0);
+  }
+}
+.stela-reveal-flash {
+  animation: stela-reveal-flash-kf 800ms ease-out;
+  border-radius: 4px;
+}
+
+/* ---------- 搜索关键字命中词高亮（PM Decoration 版） ---------- */
+/*
+ * 由 [src/editor/search/search-highlight-plugin.ts](src/editor/search/search-highlight-plugin.ts)
+ * 通过 `Decoration.inline` 直接装饰文本节点，跟随 PM doc 自动重定位——
+ * 不再有 host 内绝对坐标 / rAF 等待 / getClientRects 反算，编辑/滚动期间不会漂。
+ *
+ * 三类样式：
+ *   - .stela-search-hit              所有同关键字命中（淡黄背景）
+ *   - .stela-search-hit--active      当前点击命中（背景加深 + outline）
+ *   - .stela-search-hit-block        无法精确到 inline 时（detail/RunSQL 兜底）
+ *                                    给整个顶层 block 描边
+ *
+ * 生命周期：MilkdownEditor 在 reveal effect 里派 setSearch 设入，SEARCH_HL_MS
+ * 超时后派 clearSearch 撤掉。Plugin docChanged 时跟着 mapping 自动迁移，无需手工清理。
+ */
+.milkdown .stela-search-hit,
+.stela-search-hit {
+  background: hsl(48 100% 67% / 0.45);
+  border-radius: 2px;
+  padding: 0 1px;
+  margin: 0 -1px;
+  animation: stela-search-hl-fade 3000ms ease-out forwards;
+}
+.milkdown .stela-search-hit--active,
+.stela-search-hit--active {
+  background: hsl(38 100% 60% / 0.75);
+  box-shadow: 0 0 0 1px hsl(38 95% 45% / 0.85);
+  animation:
+    stela-search-hl-active-pulse 800ms ease-out,
+    stela-search-hl-fade 3000ms ease-out forwards;
+}
+.milkdown .stela-search-hit-block,
+.stela-search-hit-block {
+  outline: 2px solid hsl(38 95% 50% / 0.7);
+  outline-offset: 2px;
+  border-radius: 4px;
+  animation: stela-search-hl-fade 3000ms ease-out forwards;
+}
+@keyframes stela-search-hl-fade {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.35;
+  }
+}
+@keyframes stela-search-hl-active-pulse {
+  0% {
+    box-shadow: 0 0 0 4px hsl(38 95% 50% / 0.55);
+  }
+  100% {
+    box-shadow: 0 0 0 1px hsl(38 95% 45% / 0.85);
+  }
+}
+
+/*
+ * CodeMirror 6 子编辑器（RunSQL / Mermaid 等 code_block NodeView 内嵌的 CM）的搜索高亮。
+ *
+ * 为什么需要单独一套：PM Decoration.inline 在没有 contentDOM 的 NodeView 内部完全无 DOM
+ * 可挂——视觉上一片空白。我们在 [src/editor/runsql/cm-search-highlight.ts](runsql/cm-search-highlight.ts)
+ * 提供了 CM 自家的 Decoration.mark，class 名为 .stela-cm-search-hit / --active。
+ *
+ * 视觉上与 PM 侧的 .stela-search-hit / --active 保持一致：同色系（amber），active 加深一档，
+ * 但选择器作用范围限定在 .stela-cb__cm 子树内，避免污染顶层 PM doc 的搜索装饰。
+ */
+.stela-cb__cm .cm-content .stela-cm-search-hit {
+  background: hsl(48 100% 67% / 0.45);
+  border-radius: 2px;
+  animation: stela-search-hl-fade 3000ms ease-out forwards;
+}
+.stela-cb__cm .cm-content .stela-cm-search-hit--active {
+  background: hsl(38 100% 60% / 0.85);
+  outline: 1px solid hsl(38 95% 45% / 0.85);
+  animation:
+    stela-search-hl-active-pulse 800ms ease-out,
+    stela-search-hl-fade 3000ms ease-out forwards;
+}
+
+/* ---------------------------------------------------------------------------
+ * Wiki link（v0.3 双链 M1）
+ * 显示为 inline 节点 [[target]] / [[target|alias]]，三态：
+ *   - resolved   候选文件存在 → 主色，hover 加深 + 下划线
+ *   - missing    候选文件不存在 → 暗红 + 虚线下划线
+ *   - unknown    刚渲染、还在异步探测 → 中性色（避免闪烁）
+ * 整体当 atom 节点处理，contenteditable=false，不进入光标。
+ * ------------------------------------------------------------------------- */
+.milkdown .stela-wiki,
+.stela-wiki {
+  display: inline;
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: 3px;
+  font-weight: 500;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  transition: background-color 120ms ease, color 120ms ease;
+  user-select: none;
+}
+.milkdown .stela-wiki--resolved,
+.stela-wiki--resolved {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+  text-decoration-color: hsl(var(--primary) / 0.45);
+}
+.milkdown .stela-wiki--resolved:hover,
+.stela-wiki--resolved:hover {
+  background-color: hsl(var(--primary) / 0.12);
+  text-decoration-color: hsl(var(--primary));
+}
+.milkdown .stela-wiki--missing,
+.stela-wiki--missing {
+  color: hsl(0 70% 55%);
+  text-decoration: underline dashed;
+  text-decoration-color: hsl(0 70% 55% / 0.6);
+  text-underline-offset: 3px;
+}
+.milkdown .stela-wiki--missing:hover,
+.stela-wiki--missing:hover {
+  background-color: hsl(0 70% 55% / 0.12);
+}
+.milkdown .stela-wiki--unknown,
+.stela-wiki--unknown {
+  color: hsl(var(--muted-foreground));
+  text-decoration: underline dotted;
+  text-decoration-color: hsl(var(--muted-foreground) / 0.5);
+}
+.milkdown .stela-wiki[data-stela-wiki]::before,
+.stela-wiki[data-stela-wiki]::before {
+  content: "[[";
+  opacity: 0.45;
+  margin-right: 1px;
+}
+.milkdown .stela-wiki[data-stela-wiki]::after,
+.stela-wiki[data-stela-wiki]::after {
+  content: "]]";
+  opacity: 0.45;
+  margin-left: 1px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Wiki autocomplete popover（v0.3 双链 M2）
+ * 用 position: fixed 挂在 document.body，跟随 PM 提供的光标坐标。
+ * 视觉上和 shadcn 的 popover 对齐（border + bg-popover + shadow）。
+ * ------------------------------------------------------------------------- */
+.stela-wiki-popover {
+  position: fixed;
+  z-index: 60;
+  min-width: 240px;
+  max-width: 360px;
+  max-height: 280px;
+  display: flex;
+  flex-direction: column;
+  background-color: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  box-shadow: 0 8px 24px -8px hsl(var(--foreground) / 0.18);
+  overflow: hidden;
+  font-size: 12.5px;
+}
+.stela-wiki-popover__list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 4px;
+}
+.stela-wiki-popover__row {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.stela-wiki-popover__row:hover {
+  background-color: hsl(var(--accent));
+}
+.stela-wiki-popover__row.is-selected {
+  background-color: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+.stela-wiki-popover__kind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background-color: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+  font-weight: 600;
+}
+.stela-wiki-popover__row.is-selected .stela-wiki-popover__kind {
+  background-color: hsl(var(--background) / 0.4);
+}
+.stela-wiki-popover__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+.stela-wiki-popover__detail {
+  font-size: 11px;
+  color: hsl(var(--muted-foreground));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+.stela-wiki-popover__row.is-selected .stela-wiki-popover__detail {
+  color: hsl(var(--accent-foreground) / 0.75);
+}
+.stela-wiki-popover__empty {
+  padding: 10px 12px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  text-align: center;
+}
+.stela-wiki-popover__hint {
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  border-top: 1px solid hsl(var(--border));
+  background-color: hsl(var(--muted) / 0.4);
+  color: hsl(var(--muted-foreground));
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+}
+
+/* ---- Image preview overlay (双击图片放大查看) -------------------------------
+ * 全屏遮罩 + 居中图片 + 底部相对路径提示。
+ * Portal 到 body，z-index 比所有 popover/menu 都高一点。
+ */
+.stela-image-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background-color: rgba(0, 0, 0, 0.78);
+  cursor: zoom-out;
+  animation: stela-image-preview-fade 120ms ease-out;
+}
+@keyframes stela-image-preview-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.stela-image-preview__stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 100%;
+  max-height: 100%;
+  cursor: default;
+}
+.stela-image-preview__img {
+  max-width: 100%;
+  max-height: calc(100vh - 120px);
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.45);
+  user-select: none;
+  /* zoom + pan 走 transform，translate 是 px 量纲、scale 由 wheel/键盘控制；
+     transform-origin 用 center 是为了让"以鼠标点为锚"的偏移补偿计算成立。 */
+  transform-origin: 50% 50%;
+  transition: none;
+  /* will-change 让浏览器在合成线程提前申请图层，pinch / wheel 高频更新更顺滑 */
+  will-change: transform;
+  touch-action: none;
+}
+.stela-image-preview__toolbar {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 999px;
+  background-color: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  user-select: none;
+  z-index: 1;
+}
+.stela-image-preview__tool-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background-color: transparent;
+  color: hsl(0 0% 96%);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 100ms ease;
+}
+.stela-image-preview__tool-btn:hover {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+.stela-image-preview__tool-btn:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+.stela-image-preview__tool-zoom {
+  min-width: 56px;
+  height: 28px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 14px;
+  background-color: transparent;
+  color: hsl(0 0% 96%);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background-color 100ms ease;
+}
+.stela-image-preview__tool-zoom:hover {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+.stela-image-preview__tool-zoom:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+.stela-image-preview__caption {
+  max-width: 90vw;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background-color: rgba(0, 0, 0, 0.45);
+  color: hsl(0 0% 96%);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-align: center;
+  word-break: break-all;
+  user-select: text;
+}
+.stela-image-preview__close {
+  position: absolute;
+  top: 18px;
+  right: 22px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background-color: rgba(0, 0, 0, 0.4);
+  color: hsl(0 0% 96%);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.stela-image-preview__close:hover {
+  background-color: rgba(0, 0, 0, 0.65);
+}
+.stela-image-preview__close:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Find-in-file bar（Cmd+F / Cmd+Alt+F）
+ *
+ * 浮在 .stela-milkdown-host 右上角。结构：
+ *   .stela-find-bar
+ *     .stela-find-bar__row             第一行 keyword + 计数 + nav
+ *     .stela-find-bar__row--replace    第二行 replacement + Replace/Replace All
+ *
+ * 紧凑约束：第一行 28px 高度；replace 模式总高 ~62px。
+ * 颜色全部走 CSS 变量，跟随主题切换；阴影 / 描边参考 SearchPanel 的视觉。
+ * ------------------------------------------------------------------------- */
+.stela-find-bar {
+  position: absolute;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  border: 1px solid hsl(var(--border));
+  box-shadow:
+    0 1px 2px hsl(0 0% 0% / 0.08),
+    0 4px 12px hsl(0 0% 0% / 0.12);
+  font-size: 12px;
+  line-height: 1;
+  /* 用户输入 IME 候选框需要从 input 弹出，bar 自身别拦事件 */
+  pointer-events: auto;
+}
+
+.stela-find-bar__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+}
+
+.stela-find-bar__row--replace {
+  border-top: 1px dashed hsl(var(--border));
+  padding-top: 4px;
+  /* 与第一行对齐：让 replacement input 跟 keyword input 左缘平齐——
+     第一行最左是个 22px 折叠箭头按钮 + 4px gap = 26px 缩进。 */
+  padding-left: 26px;
+}
+
+.stela-find-bar__btn--toggle {
+  /* 折叠箭头：与 .stela-find-bar__btn 通用风格保持一致，悬停带主色提示。 */
+  color: hsl(var(--foreground));
+}
+
+.stela-find-bar__input {
+  flex: 1 1 200px;
+  min-width: 160px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-size: 12px;
+  outline: none;
+}
+
+.stela-find-bar__input:focus {
+  border-color: hsl(var(--primary) / 0.55);
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.18);
+}
+
+.stela-find-bar__input::placeholder {
+  color: hsl(var(--muted-foreground));
+}
+
+.stela-find-bar__counter {
+  min-width: 56px;
+  padding: 0 4px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.stela-find-bar__counter--empty {
+  color: hsl(0 70% 50%);
+}
+
+.stela-find-bar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.stela-find-bar__btn:hover:not(:disabled) {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+.stela-find-bar__btn:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
+}
+
+.stela-find-bar__btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.stela-find-bar__btn--active {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+.stela-find-bar__btn--close {
+  margin-left: 2px;
+  color: hsl(var(--muted-foreground));
+}
+
+/*
+ * Find bar 打开期间禁用 .stela-search-hit / .stela-cm-search-hit 的 fade-out 动画——
+ * 用户随时可能 next/prev，高亮必须一直持续；fade 动画会让命中越来越淡，体验割裂。
+ * MilkdownEditor 在 host 上挂 data-find-bar-open="true" 即生效。
+ */
+.stela-milkdown-host[data-find-bar-open="true"] .stela-search-hit,
+.stela-milkdown-host[data-find-bar-open="true"] .stela-search-hit--active,
+.stela-milkdown-host[data-find-bar-open="true"] .stela-search-hit-block,
+.stela-milkdown-host[data-find-bar-open="true"] .stela-cm-search-hit,
+.stela-milkdown-host[data-find-bar-open="true"] .stela-cm-search-hit--active {
+  animation: none !important;
+  opacity: 1 !important;
+}

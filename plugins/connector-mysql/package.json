@@ -1,0 +1,10 @@
+{
+  "name": "stela-connector-mysql",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Official Stela MySQL connector plugin (in-process module)",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  }
+}

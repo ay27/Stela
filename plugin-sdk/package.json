@@ -1,0 +1,12 @@
+{
+  "name": "@stela/connector-plugin-sdk",
+  "version": "0.1.0",
+  "description": "Type contract + helpers for authoring Stela in-process connector plugins",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "files": [
+    "src"
+  ]
+}
