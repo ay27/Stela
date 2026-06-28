@@ -11,6 +11,7 @@ import { useTabSwitcher } from "@/state/tab-switcher";
 import { ConnectionsDialog } from "@/components/connections-dialog";
 import { ExportNoteDialog } from "@/components/export-note-dialog";
 import { SettingsDialog } from "@/components/settings-dialog";
+import { AiModal } from "@/components/ai/ai-modal";
 import { TabSwitcher } from "@/components/tab-switcher";
 import {
   CommandPalette,
@@ -299,6 +300,7 @@ export function AppShell() {
         onClose={closeExportNote}
       />
       <TabSwitcher />
+      <AiModal />
     </div>
   );
 }

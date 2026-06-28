@@ -179,14 +179,26 @@ export interface UISettings {
  * 关闭时：
  *   - main 进程的 indexer / embedder / vault-watcher 钩子都不启动
  *   - retriever.search 直接返回空，UI 通过 status.enabled=false 显示禁用 banner
- *   - 已有的 `{vault}/.stela-knowledge.sqlite` 不被删除（开回来可继续用旧索引）
- *   - MCP child 进程也按这一项决定是否 start indexer
+ *   - provider API key 不进入 settings；由 main 端 safeStorage 包裹后按设备保存
+ *   - result samples 只按上限截取，完整结果集不会进入 prompt
  *
  * 默认 `false`：v0.4 初版 RAG 在 macOS arm64 上跑大 vault 时观察到 onnxruntime
  * BFCArena 偶发 native abort，先让用户主动开启，避免影响其他基础功能。
  */
-export interface KnowledgeSettings {
-  enabled: boolean;
+export type AiProviderMode = "disabled" | "openai-compatible" | "cloud";
+
+export interface AiSettings {
+  providerMode: AiProviderMode;
+  /** OpenAI-compatible endpoint. Empty means use the provider default. */
+  baseUrl: string;
+  /** Model name passed to the provider. */
+  model: string;
+  /** Whether this vault has a device-local API key saved via safeStorage. */
+  hasApiKey: boolean;
+  /** Allow sampled result rows to be sent to the provider. Full result sets are never sent. */
+  sendResultSamples: boolean;
+  /** Per-request row sample cap. */
+  maxSampleRows: number;
 }
 
 /**
@@ -222,8 +234,8 @@ export interface AppSettings {
   ui: UISettings;
   /** Git 版本控制配置（替代 v0.2 的 COS 对象存储同步）。 */
   git: GitSettings;
-  /** v0.4 引入的知识库（RAG）开关，默认 false。详见 {@link KnowledgeSettings}。 */
-  knowledge: KnowledgeSettings;
+  /** Search-first AI provider configuration. Secrets are stored separately per device. */
+  ai: AiSettings;
 }
 
 /**
@@ -294,6 +306,106 @@ export interface CredentialStorageStatus {
   platform: NodeJS.Platform;
 }
 
+// ---------- Search-first AI ----------
+
+export type AiActionKind =
+  | "rewrite-sql"
+  | "ask-sql"
+  | "generate-sql"
+  | "explain-sql"
+  | "optimize-sql"
+  | "debug-query"
+  | "explain-result"
+  | "summarize-diff"
+  | "find-anomalies"
+  | "write-analysis"
+  | "rewrite-selection"
+  | "add-limitations"
+  | "explain-table"
+  | "suggest-joins"
+  | "generate-data-dictionary"
+  | "find-related-queries";
+
+export type AiContextSource = "runsql" | "result" | "editor" | "schema";
+
+export interface AiSchemaColumnContext {
+  name: string;
+  typeName: string;
+}
+
+export interface AiSchemaTargetContext {
+  connectionName?: string | null;
+  database?: string | null;
+  table?: string | null;
+  columns?: AiSchemaColumnContext[];
+  ddlSnippet?: string | null;
+  source?: "explicit-sql" | "schema-dir" | "connector" | "manual";
+  matchReason?: string | null;
+  score?: number;
+}
+
+export type AiPromptLocale = "zh" | "en";
+
+export interface AiConnectorContext {
+  kind: string;
+  displayName: string;
+  dialect: string;
+}
+
+export interface AiResultContext {
+  runId?: string | null;
+  blockId?: string | null;
+  rowCount?: number | null;
+  columns?: AiSchemaColumnContext[];
+  rows?: unknown[][];
+  diffSummary?: {
+    addedRows: number;
+    removedRows: number;
+    changedRows: number;
+    schemaChanged: boolean;
+  } | null;
+}
+
+export interface AiRequestContext {
+  source: AiContextSource;
+  notePath?: string | null;
+  noteTitle?: string | null;
+  noteMarkdown?: string | null;
+  headingPath?: string[];
+  connectionName?: string | null;
+  connector?: AiConnectorContext | null;
+  sql?: string | null;
+  selectedText?: string | null;
+  errorMessage?: string | null;
+  result?: AiResultContext | null;
+  schema?: AiSchemaTargetContext | null;
+  schemas?: AiSchemaTargetContext[];
+  userInstruction?: string | null;
+}
+
+export interface AiCompleteRequest {
+  action: AiActionKind;
+  locale?: AiPromptLocale;
+  context: AiRequestContext;
+}
+
+export interface AiCompleteResponse {
+  action: AiActionKind;
+  text: string;
+  sql: string | null;
+  warnings: string[];
+  contextSummary: string[];
+}
+
+export interface AiProviderStatus {
+  enabled: boolean;
+  providerMode: AiProviderMode;
+  model: string;
+  baseUrl: string;
+  hasApiKey: boolean;
+  credentialBackend: "safeStorage" | "plain";
+}
+
 // ---------- Wiki / Vault index（v0.3 双链 M2/M3） ----------
 
 /**
@@ -332,115 +444,6 @@ export interface IndexEntrySummary {
   title: string;
   headings: { id: string; text: string; level: number }[];
   outgoingCount: number;
-}
-
-// ---------- Knowledge base（语义检索，v0.4 RAG/MCP 底座） ----------
-
-/**
- * Chunk 的来源类型。
- *   - `note`：vault 内的 markdown 笔记正文
- *   - `runsql`：runsql 代码块派生的"数据描述"chunk（含 SQL 文本 + schema + first row + stats）
- */
-export type KnowledgeChunkSourceKind = "note" | "runsql";
-
-/** 检索模式。`hybrid` = dense + BM25 + RRF；`dense` / `keyword` 单独走单边，便于诊断与降级。 */
-export type KnowledgeSearchMode = "hybrid" | "dense" | "keyword";
-
-/**
- * 单个检索结果。`score` 经 RRF 归一化（小数，越大越相关）。
- * `snippet` 已含两侧省略号，UI 可直接渲染。
- */
-export interface KnowledgeSearchHit {
-  /** 全局唯一 chunk id（hash 派生，跨重建幂等） */
-  chunkId: string;
-  /** vault 内绝对路径（点击跳转用） */
-  sourcePath: string;
-  /** vault 根相对 POSIX 路径 */
-  relPath: string;
-  /** 笔记 title（缺省用 basename） */
-  title: string;
-  /** chunk 所在 heading 的 slug；无 heading 时为 null */
-  headingSlug: string | null;
-  /** heading 文本；无 heading 时为 null */
-  headingText: string | null;
-  sourceKind: KnowledgeChunkSourceKind;
-  /** runsql chunk 对应的 blockId；note chunk 为 null */
-  blockId: string | null;
-  snippet: string;
-  /** RRF 融合分；hybrid 模式下取 dense / keyword 两路 reciprocal rank 之和 */
-  score: number;
-  /** dense 余弦距离（越小越近，0 表示完全匹配）；keyword-only 时为 null */
-  distance: number | null;
-  /** FTS5 bm25 分数（越小越相关）；dense-only 时为 null */
-  bm25: number | null;
-}
-
-export interface KnowledgeSearchOptions {
-  /** 默认 hybrid */
-  mode?: KnowledgeSearchMode;
-  /** 默认 20；上限 100 */
-  topK?: number;
-}
-
-/** 索引覆盖率与状态。UI Settings → Knowledge tab 顶部展示。 */
-export interface KnowledgeStatus {
-  /** Settings → Knowledge 里的开关。false 时下面所有字段（除 dbPath）都是冷数据。 */
-  enabled: boolean;
-  /** 当前 vault 是否已加载知识库（vault 切换中 / 启动早期为 false） */
-  ready: boolean;
-  /** vault-knowledge sqlite 路径；vault 未打开时 null */
-  dbPath: string | null;
-  /** 当前模型 id（如 `Xenova/multilingual-e5-small`）；嵌入降级时 null */
-  modelId: string | null;
-  /** 嵌入维度；嵌入降级时 0 */
-  embeddingDim: number;
-  /** 嵌入可用性。`onnxruntime-node` / 模型缺失 / 加载失败时 false，UI 显示 banner，
-   *  此时检索自动退化为纯 FTS5。 */
-  embeddingsAvailable: boolean;
-  /** 索引中的 chunk 总数 */
-  totalChunks: number;
-  /** 已收录的源文件总数（含 runsql 派生计入笔记一次） */
-  totalSources: number;
-  /** 当前是否有索引任务在跑（首次构建 / 增量）；UI 可显示进度条 */
-  indexing: boolean;
-  /** 增量队列里待处理的源文件数；indexing=false 时通常为 0 */
-  pendingSources: number;
-  /** 最近一次错误；recovered 之后 null */
-  lastError: string | null;
-}
-
-// ---------- MCP server（v0.4 暴露 Stela 工具给外部 LLM） ----------
-
-/** MCP server 当前生命周期状态。 */
-export type McpServerState =
-  | "stopped"
-  | "starting"
-  | "running"
-  | "stopping"
-  | "errored";
-
-export interface McpStatus {
-  state: McpServerState;
-  /** 用户在 Settings 中的开关偏好（与实际 state 解耦，比如 starting 失败时偏好仍为 true） */
-  enabled: boolean;
-  /** child PID；非 running 状态为 null */
-  pid: number | null;
-  /** 启动以来的毫秒数；非 running 时 null */
-  uptimeMs: number | null;
-  /** 最近一次崩溃 / 启动错误信息；recovered 之后 null */
-  lastError: string | null;
-  /** 暴露的工具数量（启动后由 child 在 hello 帧上报，否则 0） */
-  toolCount: number;
-}
-
-/** Claude Desktop / Cursor 的 mcp config 片段（用户复制粘贴入 config）。 */
-export interface McpConfigSnippet {
-  /** JSON 字符串：`{ "mcpServers": { "stela": { "command": "...", "args": [...] } } }` */
-  json: string;
-  /** 单独把 command + args 拎出来给"已经在 config 里加了别的 server"的用户参考 */
-  command: string;
-  args: string[];
-  env: Record<string, string>;
 }
 
 // ---------- Auto update（macOS first） ----------

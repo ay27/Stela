@@ -25,15 +25,6 @@ export default defineConfig({
         external: [
           // native 模块：electron-vite 默认会 detect，这里显式列出避免被打包
           "better-sqlite3",
-          "sqlite-vec",
-          "sqlite-vec-darwin-arm64",
-          "sqlite-vec-darwin-x64",
-          "sqlite-vec-linux-x64",
-          "sqlite-vec-linux-arm64",
-          "sqlite-vec-windows-x64",
-          "@xenova/transformers",
-          "onnxruntime-node",
-          "@modelcontextprotocol/sdk",
         ],
       },
     },

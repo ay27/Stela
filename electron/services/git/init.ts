@@ -19,7 +19,7 @@ const log = getLogger("git");
  * Stela 默认 `.gitignore`。
  *
  * - `.stela.sqlite*`：本机查询缓存（可从 JSONL 重建），不同步。
- * - `.stela-knowledge.sqlite`：派生 RAG 索引，各机自建。
+ * - `.stela-knowledge.sqlite`：旧版本地派生产物，保留 ignore 避免老 vault 误提交。
  * - `.stela/connections.json`：**不** ignore —— 拆分后只含非敏感连接配置（无 secret），跨设备同步。
  * - `.stela/secrets/secrets_*.json`：**不** ignore —— 每设备 safeStorage 包裹的 secret 分片；
  *   随 Git 同步，但只有对应设备能解密自己的那份（同 history JSONL 的写隔离思路）。

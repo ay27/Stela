@@ -15,6 +15,10 @@ import { BrowserWindow, app, dialog } from "electron";
 
 import { IPC } from "@shared/ipc-channels";
 import type {
+  AiCompleteRequest,
+  AiCompleteResponse,
+  AiProviderStatus,
+  AiSettings,
   AppSettings,
   ColumnDef,
   ConnectionEntry,
@@ -76,6 +80,7 @@ import * as deviceProfile from "../services/device-profile";
 import * as syncOrchestrator from "../services/sync-orchestrator";
 import * as vaultIndex from "../services/vault-index";
 import * as autoUpdate from "../services/auto-updater";
+import * as ai from "../services/ai";
 
 /** 共用：所有 vault-级 handler 的入口拿当前 vault；没有时按 IPC 错误返回。 */
 function requireVault(): string {
@@ -411,6 +416,40 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
   registerHandler<Record<string, never>, CredentialStorageStatus>(
     IPC.PRIVACY_GET_STATUS,
     () => secrets.getStatus(),
+  );
+
+  // ---------- AI ----------
+  registerHandler<Record<string, never>, AiProviderStatus>(
+    IPC.AI_GET_STATUS,
+    () => ai.getStatus(requireVault()),
+  );
+  registerHandler<
+    {
+      settings: Partial<Omit<AiSettings, "hasApiKey">>;
+      apiKey?: string | null;
+    },
+    AiProviderStatus
+  >(IPC.AI_CONFIGURE, async ({ settings, apiKey }) =>
+    ai.configure(
+      requireVault(),
+      (await deviceProfile.loadDeviceProfile()).slug,
+      settings,
+      apiKey,
+    ),
+  );
+  registerHandler<Record<string, never>, AiProviderStatus>(
+    IPC.AI_CLEAR_API_KEY,
+    async () =>
+      ai.clearSecret(requireVault(), (await deviceProfile.loadDeviceProfile()).slug),
+  );
+  registerHandler<{ request: AiCompleteRequest }, AiCompleteResponse>(
+    IPC.AI_COMPLETE,
+    async ({ request }) =>
+      ai.complete(
+        requireVault(),
+        (await deviceProfile.loadDeviceProfile()).slug,
+        request,
+      ),
   );
 
   // ---------- Git 版本控制 ----------

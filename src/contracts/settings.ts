@@ -71,12 +71,15 @@ export interface GitSettings {
   autoPullIntervalMs: number;
 }
 
-/**
- * 知识库（RAG）开关。详见
- * [electron/shared/types.ts](../../electron/shared/types.ts) 的 KnowledgeSettings。
- */
-export interface KnowledgeSettings {
-  enabled: boolean;
+export type AiProviderMode = "disabled" | "openai-compatible" | "cloud";
+
+export interface AiSettings {
+  providerMode: AiProviderMode;
+  baseUrl: string;
+  model: string;
+  hasApiKey: boolean;
+  sendResultSamples: boolean;
+  maxSampleRows: number;
 }
 
 export interface AppSettings {
@@ -86,7 +89,7 @@ export interface AppSettings {
   persistence: PersistenceSettings;
   ui: UISettings;
   git: GitSettings;
-  knowledge: KnowledgeSettings;
+  ai: AiSettings;
 }
 
 /**
@@ -115,7 +118,14 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     autoPull: false,
     autoPullIntervalMs: 300_000,
   },
-  knowledge: { enabled: false },
+  ai: {
+    providerMode: "disabled",
+    baseUrl: "https://api.openai.com/v1",
+    model: "gpt-4o-mini",
+    hasApiKey: false,
+    sendResultSamples: true,
+    maxSampleRows: 20,
+  },
 };
 
 export const CLEANUP_MONTH_OPTIONS: { value: number; label: string }[] = [

@@ -1,0 +1,344 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
+
+import type {
+  AiCompleteRequest,
+  AiSchemaColumnContext,
+  AiSchemaTargetContext,
+  ConnectionEntry,
+  QueryResult,
+} from "@shared/types";
+
+import type { SqlSymbols } from "./sql-symbols";
+
+const MAX_SCHEMA_TARGETS = 5;
+const MAX_DDL_CHARS = 4_000;
+const MAX_SCHEMA_FILES = 500;
+const TOKEN_MIN_LENGTH = 2;
+const QUERY_STOPWORDS = new Set([
+  "as",
+  "by",
+  "do",
+  "from",
+  "group",
+  "having",
+  "in",
+  "into",
+  "is",
+  "join",
+  "limit",
+  "not",
+  "on",
+  "or",
+  "order",
+  "select",
+  "sql",
+  "table",
+  "the",
+  "to",
+  "where",
+  "with",
+]);
+
+interface SchemaCatalogEntry {
+  connectionName: string;
+  database: string | null;
+  table: string;
+  qualifiedName: string;
+  columns: AiSchemaColumnContext[];
+  ddlSnippet: string | null;
+  source: "schema-dir" | "connector";
+}
+
+interface RankedSchemaEntry extends SchemaCatalogEntry {
+  score: number;
+  reasons: string[];
+}
+
+export interface SchemaResolverDeps {
+  readDir?: typeof fs.readdir;
+  readFile?: typeof fs.readFile;
+  listDatabases?: (kind: string, config: unknown) => Promise<string[]>;
+  listTables?: (kind: string, config: unknown, db?: string | null) => Promise<string[]>;
+  execute?: (kind: string, config: unknown, sql: string) => Promise<QueryResult>;
+}
+
+export interface ResolveSchemaContextOptions {
+  request: AiCompleteRequest;
+  symbols: SqlSymbols;
+  connectionName: string;
+  connection: ConnectionEntry;
+  deps?: SchemaResolverDeps;
+}
+
+function truncate(value: string, max: number): string {
+  return value.length <= max ? value : `${value.slice(0, max)}\n[truncated ${value.length - max} chars]`;
+}
+
+function cleanIdentifier(value: string): string {
+  return value.replace(/^[`"[]|[`"\]]$/g, "").trim();
+}
+
+function normalizeName(value: string): string {
+  return cleanIdentifier(value).toLowerCase();
+}
+
+function splitQualifiedName(value: string): { database: string | null; table: string } {
+  const cleaned = cleanIdentifier(value);
+  const parts = cleaned.split(".").map(cleanIdentifier).filter(Boolean);
+  if (parts.length >= 2) {
+    return { database: parts.slice(0, -1).join("."), table: parts[parts.length - 1] ?? cleaned };
+  }
+  return { database: null, table: parts[0] ?? cleaned };
+}
+
+function qualifiedName(database: string | null, table: string): string {
+  return database ? `${database}.${table}` : table;
+}
+
+function tokenize(
+  values: Array<string | null | undefined>,
+  options?: { filterStopwords?: boolean },
+): string[] {
+  const tokens = new Set<string>();
+  const filterStopwords = options?.filterStopwords ?? false;
+  for (const value of values) {
+    if (!value) continue;
+    const matches = value
+      .toLowerCase()
+      .match(/[\p{L}\p{N}_]+/gu);
+    for (const token of matches ?? []) {
+      if (token.length >= TOKEN_MIN_LENGTH && (!filterStopwords || !QUERY_STOPWORDS.has(token))) {
+        tokens.add(token);
+      }
+    }
+  }
+  return Array.from(tokens);
+}
+
+function parseSchemaFileName(fileName: string): { database: string | null; table: string } | null {
+  if (!fileName.endsWith(".md")) return null;
+  const stem = fileName.slice(0, -3);
+  const parts = stem.split(".");
+  if (parts.length >= 2) {
+    const table = parts.pop();
+    if (!table) return null;
+    return { database: parts.join("."), table };
+  }
+  if (!stem) return null;
+  return { database: null, table: stem };
+}
+
+function extractDdl(markdown: string): string | null {
+  const fenced = /```sql\s*([\s\S]*?)```/i.exec(markdown)?.[1]?.trim();
+  if (fenced) return fenced;
+  return markdown.trim() || null;
+}
+
+export function parseColumnsFromDdl(ddl: string): AiSchemaColumnContext[] {
+  const columns: AiSchemaColumnContext[] = [];
+  const seen = new Set<string>();
+  for (const rawLine of ddl.split(/\r?\n/)) {
+    const line = rawLine.trim().replace(/,$/, "");
+    if (/^create\s+table\b/i.test(line) || line === "(" || line === ")") continue;
+    const match = /^[`"]?([A-Za-z_][\w$]*)[`"]?\s+([A-Za-z][\w() ,]*)/i.exec(line);
+    if (!match) continue;
+    const name = match[1] ?? "";
+    const typeName = (match[2] ?? "").trim();
+    const lowerName = name.toLowerCase();
+    if (!name || seen.has(lowerName)) continue;
+    if (["primary", "unique", "key", "constraint", "index"].includes(lowerName)) continue;
+    seen.add(lowerName);
+    columns.push({ name, typeName });
+    if (columns.length >= 80) break;
+  }
+  return columns;
+}
+
+async function loadSchemaDirCatalog(
+  connectionName: string,
+  schemaDir: string | undefined,
+  deps: Required<Pick<SchemaResolverDeps, "readDir" | "readFile">>,
+): Promise<SchemaCatalogEntry[]> {
+  if (!schemaDir) return [];
+  let files: string[];
+  try {
+    files = await deps.readDir(schemaDir);
+  } catch {
+    return [];
+  }
+  const out: SchemaCatalogEntry[] = [];
+  for (const fileName of files.filter((file) => file.endsWith(".md")).slice(0, MAX_SCHEMA_FILES)) {
+    const parsed = parseSchemaFileName(fileName);
+    if (!parsed) continue;
+    let markdown: string;
+    try {
+      markdown = await deps.readFile(path.join(schemaDir, fileName), "utf-8");
+    } catch {
+      continue;
+    }
+    const ddl = extractDdl(markdown);
+    out.push({
+      connectionName,
+      database: parsed.database,
+      table: parsed.table,
+      qualifiedName: qualifiedName(parsed.database, parsed.table),
+      columns: ddl ? parseColumnsFromDdl(ddl) : [],
+      ddlSnippet: ddl ? truncate(ddl, MAX_DDL_CHARS) : null,
+      source: "schema-dir",
+    });
+  }
+  return out;
+}
+
+async function loadConnectorCatalog(
+  connectionName: string,
+  connection: ConnectionEntry,
+  deps: SchemaResolverDeps,
+): Promise<SchemaCatalogEntry[]> {
+  if (!deps.listTables) return [];
+  const listDatabases = deps.listDatabases ?? (async () => [] as string[]);
+  const dbs = await listDatabases(connection.kind, connection.config).catch(() => [] as string[]);
+  const fallbackDbs = dbs.length > 0 ? dbs : [null];
+  const entries: SchemaCatalogEntry[] = [];
+  for (const db of fallbackDbs.slice(0, 30)) {
+    const tables = await deps.listTables(connection.kind, connection.config, db).catch(() => [] as string[]);
+    for (const table of tables.slice(0, 200)) {
+      entries.push({
+        connectionName,
+        database: db,
+        table,
+        qualifiedName: qualifiedName(db, table),
+        columns: [],
+        ddlSnippet: null,
+        source: "connector",
+      });
+    }
+  }
+  return entries;
+}
+
+function explicitTableSet(symbols: SqlSymbols): Set<string> {
+  const set = new Set<string>();
+  for (const table of symbols.tables) {
+    const parsed = splitQualifiedName(table);
+    set.add(normalizeName(parsed.table));
+    set.add(normalizeName(qualifiedName(parsed.database, parsed.table)));
+  }
+  return set;
+}
+
+function rankCatalog(
+  catalog: SchemaCatalogEntry[],
+  request: AiCompleteRequest,
+  symbols: SqlSymbols,
+): RankedSchemaEntry[] {
+  const explicit = explicitTableSet(symbols);
+  const terms = [
+    ...tokenize([request.context.sql], { filterStopwords: true }),
+    ...tokenize([request.context.userInstruction, request.context.selectedText]),
+  ];
+  return catalog
+    .map((entry) => {
+      let score = 0;
+      const reasons: string[] = [];
+      const tableName = normalizeName(entry.table);
+      const qName = normalizeName(entry.qualifiedName);
+      if (explicit.has(tableName) || explicit.has(qName)) {
+        score += 100;
+        reasons.push("explicit SQL table");
+      }
+      for (const term of terms) {
+        if (tableName.includes(term) || qName.includes(term)) {
+          score += 16;
+          reasons.push(`table match:${term}`);
+        }
+        if (entry.columns.some((column) => normalizeName(column.name).includes(term))) {
+          score += 8;
+          reasons.push(`column match:${term}`);
+        }
+        if (entry.ddlSnippet?.toLowerCase().includes(term)) {
+          score += 3;
+          reasons.push(`ddl match:${term}`);
+        }
+      }
+      return { ...entry, score, reasons };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        a.qualifiedName.localeCompare(b.qualifiedName),
+    );
+}
+
+function quoteIdent(value: string, dialect: string | undefined): string {
+  const quote = dialect?.toLowerCase().includes("postgres") ? `"` : "`";
+  return `${quote}${value.replaceAll(quote, `${quote}${quote}`)}${quote}`;
+}
+
+async function probeColumns(
+  ranked: RankedSchemaEntry[],
+  connection: ConnectionEntry,
+  request: AiCompleteRequest,
+  deps: SchemaResolverDeps,
+): Promise<RankedSchemaEntry[]> {
+  if (!deps.execute) return ranked;
+  const dialect = request.context.connector?.dialect;
+  return Promise.all(
+    ranked.map(async (entry, idx) => {
+      if (entry.columns.length > 0 || idx >= MAX_SCHEMA_TARGETS) return entry;
+      const tableRef = entry.database
+        ? `${quoteIdent(entry.database, dialect)}.${quoteIdent(entry.table, dialect)}`
+        : quoteIdent(entry.table, dialect);
+      try {
+        const result = await deps.execute!(connection.kind, connection.config, `SELECT * FROM ${tableRef} LIMIT 0`);
+        if (result.kind !== "query") return entry;
+        return {
+          ...entry,
+          columns: result.columns.map((column) => ({
+            name: column.name,
+            typeName: column.typeName,
+          })),
+        };
+      } catch {
+        return entry;
+      }
+    }),
+  );
+}
+
+export async function resolveSchemaContext(
+  options: ResolveSchemaContextOptions,
+): Promise<AiSchemaTargetContext[]> {
+  const deps = {
+    readDir: fs.readdir,
+    readFile: fs.readFile,
+    ...options.deps,
+  };
+  const fromSchemaDir = await loadSchemaDirCatalog(
+    options.connectionName,
+    options.connection.schemaDir,
+    deps,
+  );
+  const catalog =
+    fromSchemaDir.length > 0
+      ? fromSchemaDir
+      : await loadConnectorCatalog(options.connectionName, options.connection, deps);
+  const ranked = await probeColumns(
+    rankCatalog(catalog, options.request, options.symbols),
+    options.connection,
+    options.request,
+    deps,
+  );
+  return ranked.slice(0, MAX_SCHEMA_TARGETS).map((entry) => ({
+    connectionName: entry.connectionName,
+    database: entry.database,
+    table: entry.table,
+    columns: entry.columns,
+    ddlSnippet: entry.ddlSnippet,
+    source: entry.source === "schema-dir" ? "schema-dir" : "connector",
+    matchReason: Array.from(new Set(entry.reasons)).slice(0, 4).join(", "),
+    score: entry.score,
+  }));
+}

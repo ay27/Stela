@@ -13,7 +13,7 @@
 
 import { create } from "zustand";
 
-export type SidebarMode = "files" | "search" | "semantic" | "schema" | "runs";
+export type SidebarMode = "files" | "search" | "schema" | "runs";
 
 /** 侧栏宽度限制（px）。min 受限于 FileTree 文件名最短可读宽度，max 防止吞掉主区。 */
 export const SIDEBAR_MIN_WIDTH = 180;
@@ -54,8 +54,6 @@ interface LayoutState {
   sidebarMode: SidebarMode;
   /** 每次递增都会触发 SearchPanel 重新聚焦输入框 */
   searchFocusToken: number;
-  /** 保留给未编译进 UI 入口的 SemanticSearchPanel 源码类型检查。 */
-  semanticFocusToken: number;
   /** 侧栏像素宽度。通过拖拽手柄调整，localStorage 持久化。 */
   sidebarWidth: number;
 
@@ -63,8 +61,6 @@ interface LayoutState {
   setSidebarMode: (mode: SidebarMode) => void;
   /** 把 sidebar 切到 search 并请求 input 聚焦——如果 sidebar 已折叠，先展开。 */
   focusSearch: () => void;
-  /** 保留给语义检索源码；公开构建没有 UI/快捷键入口调用它。 */
-  focusSemantic: () => void;
   /** 把 sidebar 切到 files 模式并展开（如果折叠了的话）。供"定位当前文件"用。 */
   focusFiles: () => void;
   /** 更新侧栏宽度（自动 clamp 到 [MIN, MAX]）。 */
@@ -75,7 +71,6 @@ export const useLayout = create<LayoutState>((set, get) => ({
   sidebarCollapsed: false,
   sidebarMode: "files",
   searchFocusToken: 0,
-  semanticFocusToken: 0,
   sidebarWidth: loadInitialWidth(),
 
   toggleSidebar: () => set({ sidebarCollapsed: !get().sidebarCollapsed }),
@@ -85,13 +80,6 @@ export const useLayout = create<LayoutState>((set, get) => ({
       sidebarCollapsed: false,
       sidebarMode: "search",
       searchFocusToken: s.searchFocusToken + 1,
-    }));
-  },
-  focusSemantic: () => {
-    set((s) => ({
-      sidebarCollapsed: false,
-      sidebarMode: "semantic",
-      semanticFocusToken: s.semanticFocusToken + 1,
     }));
   },
   focusFiles: () => {

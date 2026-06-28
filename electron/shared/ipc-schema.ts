@@ -80,9 +80,14 @@ const partialSettingsSchema = z
       })
       .partial()
       .optional(),
-    knowledge: z
+    ai: z
       .object({
-        enabled: z.boolean(),
+        providerMode: z.enum(["disabled", "openai-compatible", "cloud"]),
+        baseUrl: z.string().max(2048),
+        model: z.string().max(256),
+        hasApiKey: z.boolean(),
+        sendResultSamples: z.boolean(),
+        maxSampleRows: z.number().int().min(0).max(100),
       })
       .partial()
       .optional(),
@@ -261,6 +266,119 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
 
   [IPC.PRIVACY_GET_STATUS]: z.object({}).strict(),
 
+  [IPC.AI_GET_STATUS]: z.object({}).strict(),
+  [IPC.AI_CONFIGURE]: z
+    .object({
+      settings: z
+        .object({
+          providerMode: z.enum(["disabled", "openai-compatible", "cloud"]).optional(),
+          baseUrl: z.string().max(2048).optional(),
+          model: z.string().max(256).optional(),
+          sendResultSamples: z.boolean().optional(),
+          maxSampleRows: z.number().int().min(0).max(100).optional(),
+        })
+        .strict(),
+      apiKey: z.string().max(8192).nullable().optional(),
+    })
+    .strict(),
+  [IPC.AI_CLEAR_API_KEY]: z.object({}).strict(),
+  [IPC.AI_COMPLETE]: z
+    .object({
+      request: z.object({
+        action: z.enum([
+          "rewrite-sql",
+          "ask-sql",
+          "generate-sql",
+          "explain-sql",
+          "optimize-sql",
+          "debug-query",
+          "explain-result",
+          "summarize-diff",
+          "find-anomalies",
+          "write-analysis",
+          "rewrite-selection",
+          "add-limitations",
+          "explain-table",
+          "suggest-joins",
+          "generate-data-dictionary",
+          "find-related-queries",
+        ]),
+        locale: z.enum(["zh", "en"]).optional(),
+        context: z.object({
+          source: z.enum(["runsql", "result", "editor", "schema"]),
+          notePath: z.string().max(8192).nullable().optional(),
+          noteTitle: z.string().max(512).nullable().optional(),
+          noteMarkdown: z.string().max(80_000).nullable().optional(),
+          headingPath: z.array(z.string().max(256)).max(16).optional(),
+          connectionName: z.string().max(256).nullable().optional(),
+          connector: z
+            .object({
+              kind: z.string().max(128),
+              displayName: z.string().max(256),
+              dialect: z.string().max(128),
+            })
+            .nullable()
+            .optional(),
+          sql: z.string().max(80_000).nullable().optional(),
+          selectedText: z.string().max(80_000).nullable().optional(),
+          errorMessage: z.string().max(20_000).nullable().optional(),
+          result: z
+            .object({
+              runId: z.string().max(256).nullable().optional(),
+              blockId: z.string().max(256).nullable().optional(),
+              rowCount: z.number().int().nonnegative().nullable().optional(),
+              columns: z.array(columnDefSchema).max(500).optional(),
+              rows: z.array(z.array(z.unknown())).max(100).optional(),
+              diffSummary: z
+                .object({
+                  addedRows: z.number().int().nonnegative(),
+                  removedRows: z.number().int().nonnegative(),
+                  changedRows: z.number().int().nonnegative(),
+                  schemaChanged: z.boolean(),
+                })
+                .nullable()
+                .optional(),
+            })
+            .nullable()
+            .optional(),
+          schema: z
+            .object({
+              connectionName: z.string().max(256).nullable().optional(),
+              database: z.string().max(512).nullable().optional(),
+              table: z.string().max(512).nullable().optional(),
+              columns: z.array(columnDefSchema).max(500).optional(),
+              ddlSnippet: z.string().max(20_000).nullable().optional(),
+              source: z
+                .enum(["explicit-sql", "schema-dir", "connector", "manual"])
+                .optional(),
+              matchReason: z.string().max(512).nullable().optional(),
+              score: z.number().optional(),
+            })
+            .nullable()
+            .optional(),
+          schemas: z
+            .array(
+              z.object({
+                connectionName: z.string().max(256).nullable().optional(),
+                database: z.string().max(512).nullable().optional(),
+                table: z.string().max(512).nullable().optional(),
+                columns: z.array(columnDefSchema).max(500).optional(),
+                ddlSnippet: z.string().max(20_000).nullable().optional(),
+                source: z
+                  .enum(["explicit-sql", "schema-dir", "connector", "manual"])
+                  .optional(),
+                matchReason: z.string().max(512).nullable().optional(),
+                score: z.number().optional(),
+              }),
+            )
+            .max(8)
+            .optional(),
+          userInstruction: z.string().max(20_000).nullable().optional(),
+        }),
+      }),
+    })
+    .strict(),
+
   // Git 版本控制
   [IPC.GIT_IS_REPO]: z.object({}).strict(),
   [IPC.GIT_INIT_REPO]: z.object({}).strict(),
@@ -374,23 +492,6 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
     })
     .strict(),
 
-  [IPC.KNOWLEDGE_SEARCH]: z.object({
-    query: z.string().min(1).max(2000),
-    topK: z.number().int().min(1).max(100).optional(),
-    mode: z.enum(["hybrid", "dense", "keyword"]).optional(),
-  }),
-  [IPC.KNOWLEDGE_GET_STATUS]: z.object({}).strict(),
-  [IPC.KNOWLEDGE_REBUILD]: z.object({}).strict(),
-  [IPC.KNOWLEDGE_PURGE]: z.object({}).strict(),
-
-  [IPC.MCP_GET_STATUS]: z.object({}).strict(),
-  [IPC.MCP_START]: z.object({}).strict(),
-  [IPC.MCP_STOP]: z.object({}).strict(),
-  [IPC.MCP_GET_LOGS]: z.object({
-    limit: z.number().int().min(1).max(2000).optional(),
-  }),
-  [IPC.MCP_CLEAR_LOGS]: z.object({}).strict(),
-  [IPC.MCP_GET_CONFIG_SNIPPET]: z.object({}).strict(),
 };
 
 export class IpcValidationError extends Error {

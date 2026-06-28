@@ -58,14 +58,14 @@ function mergeSettings(
     execution: { ...base.execution, ...(partial.execution ?? {}) },
     persistence: { ...base.persistence, ...(partial.persistence ?? {}) },
     ui: { ...base.ui, ...(partial.ui ?? {}) },
-    // base.git / base.knowledge 兜底：dev 阶段 main 老 / renderer 新边界时 base 可能没这组
+    // base.git / base.ai 兜底：dev 阶段 main 老 / renderer 新边界时 base 可能没这组
     git: {
       ...(base.git ?? DEFAULT_APP_SETTINGS.git),
       ...(partial.git ?? {}),
     },
-    knowledge: {
-      ...(base.knowledge ?? DEFAULT_APP_SETTINGS.knowledge),
-      ...(partial.knowledge ?? {}),
+    ai: {
+      ...(base.ai ?? DEFAULT_APP_SETTINGS.ai),
+      ...(partial.ai ?? {}),
     },
   };
 }

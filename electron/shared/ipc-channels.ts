@@ -80,6 +80,12 @@ export const IPC = {
   // Privacy / credential storage status
   PRIVACY_GET_STATUS: "privacy:get-status",
 
+  // Search-first AI（provider secrets stay in main）
+  AI_GET_STATUS: "ai:get-status",
+  AI_CONFIGURE: "ai:configure",
+  AI_CLEAR_API_KEY: "ai:clear-api-key",
+  AI_COMPLETE: "ai:complete",
+
   // Git 版本控制（替代 COS 同步；笔记 + JSONL 历史走 git remote）
   GIT_IS_REPO: "git:is-repo",
   GIT_INIT_REPO: "git:init-repo",
@@ -145,19 +151,6 @@ export const IPC = {
   // Export
   EXPORT_SAVE_MARKDOWN: "export:save-markdown",
 
-  // Knowledge base (语义检索 + 本地 embedding；底层 sqlite-vec + FTS5)
-  KNOWLEDGE_SEARCH: "knowledge:search",
-  KNOWLEDGE_GET_STATUS: "knowledge:get-status",
-  KNOWLEDGE_REBUILD: "knowledge:rebuild",
-  KNOWLEDGE_PURGE: "knowledge:purge",
-
-  // MCP server（暴露 Stela 工具给外部 LLM，默认关闭，stdio 子进程）
-  MCP_GET_STATUS: "mcp:get-status",
-  MCP_START: "mcp:start",
-  MCP_STOP: "mcp:stop",
-  MCP_GET_LOGS: "mcp:get-logs",
-  MCP_CLEAR_LOGS: "mcp:clear-logs",
-  MCP_GET_CONFIG_SNIPPET: "mcp:get-config-snippet",
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

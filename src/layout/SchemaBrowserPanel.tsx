@@ -26,6 +26,7 @@ import {
   FileCode,
   Loader2,
   RefreshCw,
+  Sparkles,
   Table as TableIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -38,6 +39,8 @@ import { useWorkspace } from "@/state/workspace";
 import { getRunContext } from "@/editor/runsql/run-context";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
+import type { AiActionKind } from "@shared/types";
+import { openAiModal } from "@/state/ai-modal";
 
 interface SchemaState {
   loading: boolean;
@@ -201,6 +204,31 @@ export function SchemaBrowserPanel() {
     }
   };
 
+  const onAi = async (
+    action: Extract<
+      AiActionKind,
+      "explain-table" | "suggest-joins" | "generate-data-dictionary" | "find-related-queries"
+    >,
+    qualified: string,
+    columns: ColumnDef[] | null,
+  ) => {
+    const title = t(`ai.action.${action}`);
+    const [database, table] = qualified.includes(".")
+      ? qualified.split(/\.(.+)/).slice(0, 2)
+      : [null, qualified];
+    openAiModal({
+      title,
+      request: {
+        action,
+        context: {
+          source: "schema",
+          connectionName: selected,
+          schema: { connectionName: selected, database, table, columns: columns ?? [] },
+        },
+      },
+    });
+  };
+
   const totalTables = state.groups.reduce((n, g) => n + g.tables.length, 0);
 
   return (
@@ -305,6 +333,7 @@ export function SchemaBrowserPanel() {
                         flash={flash}
                         onToggle={() => toggleTable(group.db, table)}
                         onCopy={onCopy}
+                        onAi={onAi}
                         t={t}
                       />
                     );
@@ -326,6 +355,7 @@ function TableRow({
   flash,
   onToggle,
   onCopy,
+  onAi,
   t,
 }: {
   tableName: string;
@@ -335,6 +365,14 @@ function TableRow({
   flash: string | null;
   onToggle: () => void;
   onCopy: (label: string, text: string) => void | Promise<void>;
+  onAi: (
+    action: Extract<
+      AiActionKind,
+      "explain-table" | "suggest-joins" | "generate-data-dictionary" | "find-related-queries"
+    >,
+    qualified: string,
+    columns: ColumnDef[] | null,
+  ) => void | Promise<void>;
   t: ReturnType<typeof useT>;
 }) {
   const copyNameKey = `name:${qualified}`;
@@ -404,6 +442,15 @@ function TableRow({
             >
               <FileCode className="h-3 w-3" />
               {flash === copySelectKey ? t("common.copied") : t("schema.copySelect")}
+            </button>
+            <button
+              type="button"
+              onClick={() => void onAi("explain-table", qualified, colState.columns)}
+              className="inline-flex items-center gap-1 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] hover:bg-accent"
+              title={t("ai.action.explainTable")}
+            >
+              <Sparkles className="h-3 w-3" />
+              AI
             </button>
           </div>
         </div>

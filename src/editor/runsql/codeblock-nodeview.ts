@@ -14,12 +14,20 @@
 
 import {
   EditorView as CMView,
+  Decoration,
+  WidgetType,
   keymap as cmKeymap,
   highlightActiveLine,
   lineNumbers,
   drawSelection,
 } from "@codemirror/view";
-import { EditorState as CMState, Compartment, Prec } from "@codemirror/state";
+import {
+  EditorState as CMState,
+  Compartment,
+  Prec,
+  type Extension,
+  type Range,
+} from "@codemirror/state";
 import {
   defaultKeymap,
   history,
@@ -57,6 +65,7 @@ import { formatSqlCommand } from "./sql-format";
 import { formatHotkey } from "@/lib/hotkeys";
 import type { DetailMeta } from "@/core/types";
 import { renderMermaid } from "@/editor/mermaid/render";
+import { i18n } from "@/i18n";
 
 export const RUNSQL_LANGUAGE = "runsql";
 export const MERMAID_LANGUAGE = "mermaid";
@@ -80,6 +89,14 @@ const EYE_ICON_HTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height
 const CODE_ICON_HTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>`;
 // "wand-sparkles" 简化版：用于 runsql 顶栏的格式化按钮（与 lucide-react WandSparkles 视觉同款）
 const FORMAT_ICON_HTML = `<svg class="stela-cb__format-glyph" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/><path d="M10 2v2"/><path d="M7 8H3"/><path d="M21 16h-4"/><path d="M11 3H9"/></svg>`;
+const AI_ICON_HTML = `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>`;
+
+type AiQuickEditMode = "rewrite" | "ask";
+
+interface PendingAiRewrite {
+  originalSql: string;
+  proposedSql: string;
+}
 
 const activeRunsqlViews = new Set<CodeBlockNodeView>();
 
@@ -100,11 +117,16 @@ export class CodeBlockNodeView implements NodeView {
   private readonly languageCompartment = new Compartment();
   /** 主题（vscode-light / vscode-dark）的 Compartment，运行时切换 light/dark 不重建 CM。 */
   private readonly themeCompartment = new Compartment();
+  private readonly aiDiffCompartment = new Compartment();
   /** subscribeCmTheme 的取消订阅；destroy 必须调，否则 listener 泄漏。 */
   private themeUnsub: (() => void) | null = null;
   private headerEl!: HTMLElement;
   private resultHostEl: HTMLElement | null = null;
   private resultRoot: Root | null = null;
+  private aiComposerEl: HTMLElement | null = null;
+  private aiReviewEl: HTMLElement | null = null;
+  private pendingAiRewrite: PendingAiRewrite | null = null;
+  private aiComposerGlobalCleanup: (() => void) | null = null;
   private resultExpanded = true;
   private lastErrorMessage: string | null = null;
   /** 仅 NodeView 内部递增；给 BlockResult 做强制重拉触发，不参与 markdown 序列化 */
@@ -267,7 +289,7 @@ export class CodeBlockNodeView implements NodeView {
 
     const newText = node.textContent;
     const curText = this.cm.state.doc.toString();
-    if (newText !== curText) {
+    if (newText !== curText && !this.pendingAiRewrite) {
       let start = 0;
       let curEnd = curText.length;
       let newEnd = newText.length;
@@ -385,6 +407,8 @@ export class CodeBlockNodeView implements NodeView {
     if (!target) return false;
     if (this.cm.dom.contains(target)) return true;
     if (this.headerEl.contains(target)) return true;
+    if (this.aiComposerEl && this.aiComposerEl.contains(target)) return true;
+    if (this.aiReviewEl && this.aiReviewEl.contains(target)) return true;
     if (this.resultHostEl && this.resultHostEl.contains(target)) return true;
     if (this.previewHostEl && this.previewHostEl.contains(target)) return true;
     return false;
@@ -398,6 +422,8 @@ export class CodeBlockNodeView implements NodeView {
     this.destroyed = true;
     activeRunsqlViews.delete(this);
     this.dom.removeEventListener("contextmenu", this.onContextMenu);
+    this.closeAiComposer();
+    this.clearAiRewritePreview();
     if (this.themeUnsub) {
       this.themeUnsub();
       this.themeUnsub = null;
@@ -417,6 +443,8 @@ export class CodeBlockNodeView implements NodeView {
       this.previewHostEl.remove();
       this.previewHostEl = null;
     }
+    this.aiReviewEl?.remove();
+    this.aiReviewEl = null;
   }
 
   // ----- 内部：CM 扩展 ------------------------------------------------------
@@ -449,6 +477,7 @@ export class CodeBlockNodeView implements NodeView {
         ...this.bridgeKeymapLow(),
       ]),
       this.languageCompartment.of(this.languageExtension(language)),
+      this.aiDiffCompartment.of([]),
       CMView.updateListener.of((update) => {
         if (this.updating) return;
         if (update.docChanged) this.forwardUpdate(update);
@@ -619,6 +648,7 @@ export class CodeBlockNodeView implements NodeView {
   flushCmToPm(): void {
     if (this.destroyed) return;
     if ((this.node.attrs.language as string) !== RUNSQL_LANGUAGE) return;
+    if (this.pendingAiRewrite) return;
     const pos = this.getPos();
     if (pos === undefined) return;
 
@@ -637,9 +667,167 @@ export class CodeBlockNodeView implements NodeView {
     this.updating = false;
   }
 
+  private replaceSql(sql: string): void {
+    const pos = this.getPos();
+    if (pos === undefined) return;
+    const pmNode = this.view.state.doc.nodeAt(pos);
+    if (!pmNode) return;
+    const start = pos + 1;
+    const end = pos + pmNode.nodeSize - 1;
+    const content = sql ? [this.view.state.schema.text(sql)] : [];
+    this.updating = true;
+    this.cm.dispatch({
+      changes: { from: 0, to: this.cm.state.doc.length, insert: sql },
+    });
+    this.view.dispatch(this.view.state.tr.replaceWith(start, end, content));
+    this.updating = false;
+  }
+
+  private previewAiRewrite(originalSql: string, proposedSql: string): void {
+    this.pendingAiRewrite = { originalSql, proposedSql };
+    this.updating = true;
+    this.cm.dispatch({
+      changes: { from: 0, to: this.cm.state.doc.length, insert: proposedSql },
+      effects: this.aiDiffCompartment.reconfigure(
+        buildAiRewriteDiffExtension(originalSql, proposedSql),
+      ),
+    });
+    this.updating = false;
+  }
+
+  private acceptAiRewrite(): void {
+    const pending = this.pendingAiRewrite;
+    if (!pending) return;
+    const proposedSql = pending.proposedSql;
+    this.pendingAiRewrite = null;
+    this.cm.dispatch({
+      effects: this.aiDiffCompartment.reconfigure([]),
+    });
+    this.replaceSql(proposedSql);
+    this.closeAiReview();
+  }
+
+  private discardAiRewrite(): void {
+    const pending = this.pendingAiRewrite;
+    if (!pending) return;
+    this.pendingAiRewrite = null;
+    this.updating = true;
+    this.cm.dispatch({
+      changes: {
+        from: 0,
+        to: this.cm.state.doc.length,
+        insert: pending.originalSql,
+      },
+      effects: this.aiDiffCompartment.reconfigure([]),
+    });
+    this.updating = false;
+    this.closeAiReview();
+  }
+
+  private clearAiRewritePreview(): void {
+    if (!this.pendingAiRewrite) return;
+    this.pendingAiRewrite = null;
+    this.cm.dispatch({
+      effects: this.aiDiffCompartment.reconfigure([]),
+    });
+  }
+
+  private selectedSqlText(): string {
+    const { main } = this.cm.state.selection;
+    if (main.empty) return "";
+    return this.cm.state.doc.sliceString(main.from, main.to);
+  }
+
+  private insertAiAuxElement(el: HTMLElement): void {
+    const anchor = this.resultHostEl ?? null;
+    this.dom.insertBefore(el, anchor);
+    this.installShield(el);
+  }
+
+  private insertAiFloatingReview(el: HTMLElement): void {
+    document.body.appendChild(el);
+    this.installShield(el);
+    this.positionAiFloatingReview(el);
+  }
+
+  private positionAiFloatingReview(el: HTMLElement): void {
+    const rect = this.cm.dom.getBoundingClientRect();
+    const width = 260;
+    const left = Math.min(
+      Math.max(12, rect.right - width - 12),
+      window.innerWidth - width - 12,
+    );
+    const top = Math.min(
+      Math.max(12, rect.bottom - 44),
+      window.innerHeight - 56,
+    );
+    el.style.width = `${width}px`;
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }
+
+  private insertAiFloatingComposer(el: HTMLElement, anchor: HTMLElement): void {
+    document.body.appendChild(el);
+    this.installShield(el);
+    this.positionAiFloatingComposer(el, anchor);
+    this.installAiComposerGlobalHandlers();
+  }
+
+  private positionAiFloatingComposer(el: HTMLElement, anchor: HTMLElement): void {
+    const rect = anchor.getBoundingClientRect();
+    const width = Math.min(420, Math.max(320, window.innerWidth - 24));
+    const gap = 8;
+    const horizontalOffset = 8;
+    const left = Math.min(
+      Math.max(12, rect.left + horizontalOffset),
+      window.innerWidth - width - 12,
+    );
+    const top = Math.min(rect.bottom + gap, window.innerHeight - 160);
+    el.style.width = `${width}px`;
+    el.style.left = `${left}px`;
+    el.style.top = `${Math.max(12, top)}px`;
+  }
+
+  private closeAiComposer(): void {
+    this.aiComposerGlobalCleanup?.();
+    this.aiComposerGlobalCleanup = null;
+    this.aiComposerEl?.remove();
+    this.aiComposerEl = null;
+  }
+
+  private installAiComposerGlobalHandlers(): void {
+    this.aiComposerGlobalCleanup?.();
+    const onPointerDown = (ev: PointerEvent) => {
+      const target = ev.target as Node | null;
+      if (!target) return;
+      if (this.aiComposerEl?.contains(target)) return;
+      if (this.headerEl.contains(target)) return;
+      if (this.aiReviewEl?.contains(target)) return;
+      if (this.resultHostEl?.contains(target)) return;
+      this.closeAiComposer();
+    };
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      this.closeAiComposer();
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    this.aiComposerGlobalCleanup = () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }
+
+  private closeAiReview(): void {
+    this.aiReviewEl?.remove();
+    this.aiReviewEl = null;
+  }
+
   private forwardUpdate(
     update: import("@codemirror/view").ViewUpdate,
   ) {
+    if (this.pendingAiRewrite) return;
     if (!this.cm.hasFocus) return;
     const start = (this.getPos() ?? 0) + 1;
     const { main } = update.state.selection;
@@ -717,9 +905,28 @@ export class CodeBlockNodeView implements NodeView {
         <span class="stela-cb__icon">${DATABASE_ICON_HTML}</span>
         <span class="stela-cb__title">Run SQL</span>
         ${attrs.blockId ? `<span class="stela-cb__id">${escapeHtml(attrs.blockId)}</span>` : ""}
+        <button type="button" class="stela-cb__ai stela-cb__ai-rewrite" title="${escapeHtml(i18n.t("ai.runsql.rewriteSql"))}">${AI_ICON_HTML}${escapeHtml(i18n.t("ai.runsql.rewriteShort"))}</button>
+        <button type="button" class="stela-cb__ai stela-cb__ai-ask" title="${escapeHtml(i18n.t("ai.runsql.askSql"))}">${AI_ICON_HTML}${escapeHtml(i18n.t("ai.runsql.askShort"))}</button>
         <button type="button" class="stela-cb__format" title="格式化 SQL (${escapeHtml(formatHint)})" aria-label="格式化 SQL">${FORMAT_ICON_HTML}<span class="stela-cb__format-kbd" aria-hidden="true">${escapeHtml(formatHint)}</span></button>
         <button type="button" class="stela-cb__run" data-state="${runState}" ${running ? "disabled" : ""} title="执行 SQL (${formatHotkey("Mod+Enter")})">${PLAY_ICON_HTML}${escapeHtml(label)}<span class="stela-cb__run-kbd" aria-hidden="true">${escapeHtml(formatHotkey("Mod+Enter"))}</span></button>
       `;
+      const aiButtons: Array<[string, AiQuickEditMode]> = [
+        ["button.stela-cb__ai-rewrite", "rewrite"],
+        ["button.stela-cb__ai-ask", "ask"],
+      ];
+      for (const [selector, mode] of aiButtons) {
+        const aiBtn = this.headerEl.querySelector<HTMLButtonElement>(selector);
+        if (!aiBtn) continue;
+        aiBtn.addEventListener("pointerdown", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+        });
+        aiBtn.addEventListener("mousedown", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+        });
+        aiBtn.addEventListener("click", (ev) => this.onAiButtonClick(ev, mode));
+      }
       const btn = this.headerEl.querySelector<HTMLButtonElement>(
         "button.stela-cb__run",
       );
@@ -785,6 +992,231 @@ export class CodeBlockNodeView implements NodeView {
     ev.stopPropagation();
     this.triggerRun();
   };
+
+  private onAiButtonClick = (ev: MouseEvent, mode: AiQuickEditMode) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    this.showAiComposer(mode, ev.currentTarget as HTMLElement);
+  };
+
+  private showAiComposer(mode: AiQuickEditMode, anchor: HTMLElement): void {
+    this.closeAiComposer();
+    this.discardAiRewrite();
+    this.closeAiReview();
+    const selectedText = this.selectedSqlText();
+    const el = document.createElement("div");
+    el.className = "stela-cb__ai-quickedit";
+    el.setAttribute("contenteditable", "false");
+    const title =
+      mode === "rewrite"
+        ? i18n.t("ai.runsql.rewriteSql")
+        : i18n.t("ai.runsql.askSql");
+    const placeholder =
+      mode === "rewrite"
+        ? i18n.t("ai.runsql.rewritePlaceholder")
+        : i18n.t("ai.runsql.askPlaceholder");
+    const primary = i18n.t("common.send");
+    el.innerHTML = `
+      <div class="stela-cb__ai-quickedit-row">
+        <span class="stela-cb__ai-quickedit-title">${escapeHtml(title)}</span>
+        <input class="stela-cb__ai-input" type="text" placeholder="${escapeHtml(placeholder)}" value="${mode === "ask" ? escapeHtml(selectedText) : ""}" />
+      </div>
+      <div class="stela-cb__ai-quickedit-status" aria-live="polite"></div>
+      <div class="stela-cb__ai-result" hidden></div>
+      <div class="stela-cb__ai-quickedit-actions">
+        <span class="stela-cb__ai-hint">${escapeHtml(
+          mode === "rewrite"
+            ? i18n.t("ai.runsql.rewriteHint")
+            : i18n.t("ai.runsql.askHint"),
+        )}</span>
+        <button type="button" class="stela-cb__ai-secondary">${escapeHtml(i18n.t("common.cancel"))}</button>
+        <button type="button" class="stela-cb__ai-primary">${escapeHtml(primary)}</button>
+      </div>
+    `;
+    const input = el.querySelector<HTMLInputElement>("input");
+    const primaryBtn = el.querySelector<HTMLButtonElement>(".stela-cb__ai-primary");
+    const cancelBtn = el.querySelector<HTMLButtonElement>(".stela-cb__ai-secondary");
+    const statusEl = el.querySelector<HTMLElement>(".stela-cb__ai-quickedit-status");
+    const resultEl = el.querySelector<HTMLElement>(".stela-cb__ai-result");
+    let composing = false;
+    const syncDisabled = () => {
+      if (primaryBtn && mode === "ask") {
+        primaryBtn.disabled = (input?.value.trim().length ?? 0) === 0;
+      }
+    };
+    const setLoading = (loading: boolean, message: string) => {
+      el.classList.toggle("stela-cb__ai-quickedit--loading", loading);
+      if (input) input.disabled = loading;
+      if (primaryBtn) primaryBtn.disabled = loading;
+      if (cancelBtn) cancelBtn.disabled = loading;
+      if (statusEl) statusEl.textContent = message;
+    };
+    const submit = async () => {
+      const userInstruction = input?.value.trim() ?? "";
+      if (mode === "ask" && userInstruction.length === 0) return;
+      if (mode === "rewrite") {
+        setLoading(true, i18n.t("ai.runsql.rewriting"));
+        await this.runSqlRewrite(userInstruction, selectedText);
+        return;
+      }
+      setLoading(true, i18n.t("ai.runsql.asking"));
+      await this.runSqlAsk(userInstruction, selectedText, resultEl, setLoading);
+    };
+    input?.addEventListener("input", syncDisabled);
+    input?.addEventListener("compositionstart", () => {
+      composing = true;
+    });
+    input?.addEventListener("compositionend", () => {
+      composing = false;
+    });
+    input?.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" && !composing && !ev.isComposing) {
+        ev.preventDefault();
+        void submit();
+      } else if (ev.key === "Escape") {
+        ev.preventDefault();
+        this.closeAiComposer();
+      }
+    });
+    syncDisabled();
+    cancelBtn?.addEventListener("click", () => this.closeAiComposer());
+    primaryBtn?.addEventListener("click", () => void submit());
+    this.aiComposerEl = el;
+    this.insertAiFloatingComposer(el, anchor);
+    queueMicrotask(() => {
+      input?.focus({ preventScroll: true });
+      input?.setSelectionRange(input.value.length, input.value.length);
+    });
+  }
+
+  private async runSqlRewrite(
+    userInstruction: string,
+    selectedText: string,
+  ): Promise<void> {
+    this.flushCmToPm();
+    const ctx = getRunContext();
+    const sql = this.cm.state.doc.toString();
+    try {
+      const response = await window.stela.ai.complete({
+        action: "rewrite-sql",
+        locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
+        context: {
+          source: "runsql",
+          connectionName: ctx?.connectionName ?? null,
+          sql,
+          selectedText: selectedText || null,
+          errorMessage: this.lastErrorMessage,
+          userInstruction: userInstruction || null,
+        },
+      });
+      if (!response.sql) {
+        this.closeAiComposer();
+        this.showAiReview({
+          state: "error",
+          message: response.text || i18n.t("ai.runsql.noSqlReturned"),
+        });
+        return;
+      }
+      this.previewAiRewrite(sql, response.sql);
+      this.closeAiComposer();
+      this.showAiReview({
+        state: "ready",
+        message: i18n.t("ai.runsql.rewriteReady"),
+      });
+    } catch (err) {
+      this.closeAiComposer();
+      this.showAiReview({
+        state: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private async runSqlAsk(
+    userInstruction: string,
+    selectedText: string,
+    resultEl: HTMLElement | null,
+    setLoading: (loading: boolean, message: string) => void,
+  ): Promise<void> {
+    this.flushCmToPm();
+    const ctx = getRunContext();
+    const sql = this.cm.state.doc.toString();
+    try {
+      const response = await window.stela.ai.complete({
+        action: "ask-sql",
+        locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
+        context: {
+          source: "runsql",
+          connectionName: ctx?.connectionName ?? null,
+          sql,
+          selectedText: selectedText || null,
+          userInstruction,
+        },
+      });
+      setLoading(false, i18n.t("ai.runsql.askReady"));
+      if (resultEl) {
+        renderMarkdownInto(resultEl, response.text);
+        resultEl.hidden = false;
+      }
+    } catch (err) {
+      setLoading(false, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private showAiReview({
+    state,
+    message,
+  }: {
+    state: "loading" | "ready" | "error";
+    message: string;
+  }): void {
+    this.closeAiReview();
+    const el = document.createElement("div");
+    el.className = `stela-cb__ai-review stela-cb__ai-review--${state}`;
+    el.setAttribute("contenteditable", "false");
+    const keep = i18n.t("ai.runsql.keepRewrite");
+    const discard = i18n.t("ai.runsql.discardRewrite");
+    const close = i18n.t("ai.panel.close");
+    el.innerHTML = `
+      <div class="stela-cb__ai-review-top">
+        <div class="stela-cb__ai-review-main">
+          <span class="stela-cb__ai-review-dot"></span>
+          <span class="stela-cb__ai-review-message">${escapeHtml(message)}</span>
+        </div>
+        <div class="stela-cb__ai-review-actions">
+          ${
+            state === "ready"
+              ? `<button type="button" class="stela-cb__ai-primary">${escapeHtml(keep)}</button>
+                 <button type="button" class="stela-cb__ai-secondary">${escapeHtml(discard)}</button>`
+              : `<button type="button" class="stela-cb__ai-secondary">${escapeHtml(close)}</button>`
+          }
+        </div>
+      </div>
+    `;
+    const primary = el.querySelector<HTMLButtonElement>(".stela-cb__ai-primary");
+    const secondary = el.querySelector<HTMLButtonElement>(".stela-cb__ai-secondary");
+    primary?.addEventListener("click", () => {
+      if (state === "ready") {
+        this.acceptAiRewrite();
+        return;
+      }
+      this.closeAiReview();
+    });
+    secondary?.addEventListener("click", () => {
+      if (state === "ready") {
+        this.discardAiRewrite();
+        return;
+      }
+      this.closeAiReview();
+    });
+    this.aiReviewEl = el;
+    if (state === "ready") {
+      el.classList.add("stela-cb__ai-review--floating");
+      this.insertAiFloatingReview(el);
+    } else {
+      this.insertAiAuxElement(el);
+    }
+  }
 
   private onFormatClick = (ev: MouseEvent) => {
     ev.preventDefault();
@@ -1023,6 +1455,220 @@ export class CodeBlockNodeView implements NodeView {
       });
     }
   };
+}
+
+function renderMarkdownInto(container: HTMLElement, markdown: string): void {
+  container.replaceChildren();
+  const lines = markdown.split(/\r?\n/);
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i] ?? "";
+    const fence = /^```(\w*)\s*$/.exec(line);
+    if (fence) {
+      const pre = document.createElement("pre");
+      pre.className = "stela-cb__ai-md-code";
+      const code = document.createElement("code");
+      const buf: string[] = [];
+      i += 1;
+      while (i < lines.length && !/^```\s*$/.test(lines[i] ?? "")) {
+        buf.push(lines[i] ?? "");
+        i += 1;
+      }
+      i += 1;
+      code.textContent = buf.join("\n");
+      pre.append(code);
+      container.append(pre);
+      continue;
+    }
+    if (!line.trim()) {
+      i += 1;
+      continue;
+    }
+    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (heading) {
+      const el = document.createElement("div");
+      el.className = `stela-cb__ai-md-heading stela-cb__ai-md-heading--${heading[1]!.length}`;
+      el.textContent = heading[2] ?? "";
+      container.append(el);
+      i += 1;
+      continue;
+    }
+    if (/^[-*]\s+/.test(line)) {
+      const ul = document.createElement("ul");
+      ul.className = "stela-cb__ai-md-list";
+      while (i < lines.length && /^[-*]\s+/.test(lines[i] ?? "")) {
+        const li = document.createElement("li");
+        li.textContent = (lines[i] ?? "").replace(/^[-*]\s+/, "");
+        ul.append(li);
+        i += 1;
+      }
+      container.append(ul);
+      continue;
+    }
+    const para: string[] = [line];
+    i += 1;
+    while (
+      i < lines.length &&
+      (lines[i] ?? "").trim() &&
+      !/^```/.test(lines[i] ?? "") &&
+      !/^(#{1,3})\s+/.test(lines[i] ?? "") &&
+      !/^[-*]\s+/.test(lines[i] ?? "")
+    ) {
+      para.push(lines[i] ?? "");
+      i += 1;
+    }
+    const p = document.createElement("p");
+    p.textContent = para.join(" ");
+    container.append(p);
+  }
+}
+
+type SqlDiffOp =
+  | { kind: "equal"; line: string }
+  | { kind: "removed"; line: string }
+  | { kind: "added"; line: string };
+
+class RemovedSqlLineWidget extends WidgetType {
+  constructor(private readonly line: string) {
+    super();
+  }
+
+  override eq(other: RemovedSqlLineWidget): boolean {
+    return other.line === this.line;
+  }
+
+  override toDOM(): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "cm-stela-ai-removed-widget";
+    const marker = document.createElement("span");
+    marker.className = "cm-stela-ai-line-marker";
+    marker.textContent = "-";
+    const code = document.createElement("code");
+    code.textContent = this.line || " ";
+    row.append(marker, code);
+    return row;
+  }
+}
+
+function buildAiRewriteDiffExtension(
+  originalSql: string,
+  proposedSql: string,
+): Extension {
+  const ranges: Range<Decoration>[] = [];
+  const proposedDoc = CMState.create({ doc: proposedSql }).doc;
+  const ops = diffSqlLines(
+    originalSql.split(/\r?\n/),
+    proposedSql.split(/\r?\n/),
+  );
+  let proposedLine = 1;
+  for (const op of ops) {
+    if (op.kind === "equal") {
+      proposedLine += 1;
+      continue;
+    }
+    if (op.kind === "added") {
+      const line = proposedDoc.line(Math.min(proposedLine, proposedDoc.lines));
+      ranges.push(
+        Decoration.line({ class: "cm-stela-ai-added-line" }).range(line.from),
+      );
+      proposedLine += 1;
+      continue;
+    }
+    const anchor =
+      proposedLine <= proposedDoc.lines
+        ? proposedDoc.line(proposedLine).from
+        : proposedDoc.length;
+    ranges.push(
+      Decoration.widget({
+        widget: new RemovedSqlLineWidget(op.line),
+        block: true,
+        side: -1,
+      }).range(anchor),
+    );
+  }
+
+  return [
+    CMState.readOnly.of(true),
+    CMView.editable.of(false),
+    CMView.decorations.of(Decoration.set(ranges, true)),
+  ];
+}
+
+function diffSqlLines(original: string[], proposed: string[]): SqlDiffOp[] {
+  if (original.length * proposed.length > 40_000) {
+    return diffSqlLinesByPrefixSuffix(original, proposed);
+  }
+  const rows = original.length + 1;
+  const cols = proposed.length + 1;
+  const dp = Array.from({ length: rows }, () => new Array<number>(cols).fill(0));
+  for (let i = original.length - 1; i >= 0; i -= 1) {
+    for (let j = proposed.length - 1; j >= 0; j -= 1) {
+      dp[i]![j] =
+        original[i] === proposed[j]
+          ? dp[i + 1]![j + 1]! + 1
+          : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!);
+    }
+  }
+  const ops: SqlDiffOp[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < original.length && j < proposed.length) {
+    if (original[i] === proposed[j]) {
+      ops.push({ kind: "equal", line: original[i]! });
+      i += 1;
+      j += 1;
+    } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) {
+      ops.push({ kind: "removed", line: original[i]! });
+      i += 1;
+    } else {
+      ops.push({ kind: "added", line: proposed[j]! });
+      j += 1;
+    }
+  }
+  while (i < original.length) {
+    ops.push({ kind: "removed", line: original[i]! });
+    i += 1;
+  }
+  while (j < proposed.length) {
+    ops.push({ kind: "added", line: proposed[j]! });
+    j += 1;
+  }
+  return ops;
+}
+
+function diffSqlLinesByPrefixSuffix(
+  original: string[],
+  proposed: string[],
+): SqlDiffOp[] {
+  let prefix = 0;
+  while (
+    prefix < original.length &&
+    prefix < proposed.length &&
+    original[prefix] === proposed[prefix]
+  ) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    suffix < original.length - prefix &&
+    suffix < proposed.length - prefix &&
+    original[original.length - 1 - suffix] ===
+      proposed[proposed.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+  return [
+    ...original.slice(0, prefix).map<SqlDiffOp>((line) => ({ kind: "equal", line })),
+    ...original
+      .slice(prefix, original.length - suffix)
+      .map<SqlDiffOp>((line) => ({ kind: "removed", line })),
+    ...proposed
+      .slice(prefix, proposed.length - suffix)
+      .map<SqlDiffOp>((line) => ({ kind: "added", line })),
+    ...original
+      .slice(original.length - suffix)
+      .map<SqlDiffOp>((line) => ({ kind: "equal", line })),
+  ];
 }
 
 function escapeHtml(s: string): string {

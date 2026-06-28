@@ -7,7 +7,8 @@
         "port": 3306,
         "user": "demo",
         "database": "stela_demo"
-      }
+      },
+      "schemaDir": "/Users/jinmianye/work/stela-opensource/examples/demo-vault/tables"
     },
     "local-postgresql": {
       "kind": "postgresql",

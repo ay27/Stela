@@ -18,6 +18,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import * as Tabs from "@radix-ui/react-tabs";
 import {
   Database,
+  Bot,
   Folder,
   GitBranch,
   Keyboard,
@@ -35,6 +36,7 @@ import { cn } from "@/lib/utils";
 import { useT } from "@/i18n/use-t";
 
 import { AppearanceTab } from "./settings/appearance-tab";
+import { AiTab } from "./settings/ai-tab";
 import { ConnectionsTab } from "./settings/connections-tab";
 import { ExecutionTab } from "./settings/execution-tab";
 import { PersistenceTab } from "./settings/persistence-tab";
@@ -61,6 +63,7 @@ const TABS: TabSpec[] = [
   { id: "connections", labelKey: "settings.tabs.connections", icon: Database, render: () => <ConnectionsTab /> },
   { id: "plugins", labelKey: "settings.tabs.plugins", icon: Plug, render: () => <PluginsTab /> },
   { id: "git", labelKey: "settings.tabs.git", icon: GitBranch, render: () => <GitTab /> },
+  { id: "ai", labelKey: "settings.tabs.ai", icon: Bot, render: () => <AiTab /> },
   { id: "execution", labelKey: "settings.tabs.execution", icon: Play, render: () => <ExecutionTab /> },
   { id: "persistence", labelKey: "settings.tabs.persistence", icon: Folder, render: () => <PersistenceTab /> },
   { id: "security", labelKey: "settings.tabs.security", icon: ShieldAlert, render: () => <SecurityTab /> },

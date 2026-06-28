@@ -7,6 +7,10 @@
  */
 
 import type {
+  AiCompleteRequest,
+  AiCompleteResponse,
+  AiProviderStatus,
+  AiSettings,
   AppSettings,
   BundledPluginInfo,
   ColumnDef,
@@ -18,11 +22,6 @@ import type {
   IndexBacklinkEntry,
   IndexCandidate,
   IndexEntrySummary,
-  KnowledgeSearchHit,
-  KnowledgeSearchMode,
-  KnowledgeStatus,
-  McpConfigSnippet,
-  McpStatus,
   ModulePluginInstallInput,
   PartialAppSettings,
   PartialUserCache,
@@ -189,6 +188,15 @@ interface StelaBridge {
   privacy: {
     getStatus: () => Promise<CredentialStorageStatus>;
   };
+  ai: {
+    getStatus: () => Promise<AiProviderStatus>;
+    configure: (
+      settings: Partial<Omit<AiSettings, "hasApiKey">>,
+      apiKey?: string | null,
+    ) => Promise<AiProviderStatus>;
+    clearApiKey: () => Promise<AiProviderStatus>;
+    complete: (request: AiCompleteRequest) => Promise<AiCompleteResponse>;
+  };
   git: {
     isRepo: () => Promise<boolean>;
     initRepo: () => Promise<void>;
@@ -267,26 +275,6 @@ interface StelaBridge {
     getEntry: (path: string) => Promise<IndexEntrySummary | null>;
     /** 订阅 main 推送的 INDEX_CHANGED；返回 unsubscribe（v0.3 双链 M2） */
     onChanged: (callback: () => void) => () => void;
-  };
-  knowledge: {
-    /**
-     * 语义检索。`opts.mode` 缺省 `hybrid`；embedder 不可用时自动降级 `keyword`。
-     */
-    search: (
-      query: string,
-      opts?: { topK?: number; mode?: KnowledgeSearchMode },
-    ) => Promise<KnowledgeSearchHit[]>;
-    getStatus: () => Promise<KnowledgeStatus>;
-    rebuild: () => Promise<void>;
-    purge: () => Promise<void>;
-  };
-  mcp: {
-    getStatus: () => Promise<McpStatus>;
-    start: () => Promise<void>;
-    stop: () => Promise<void>;
-    getLogs: (limit?: number) => Promise<string[]>;
-    clearLogs: () => Promise<void>;
-    getConfigSnippet: () => Promise<McpConfigSnippet>;
   };
 }
 

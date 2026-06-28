@@ -15,9 +15,9 @@ import { promises as fs } from "node:fs";
 
 import { AppError } from "@shared/errors";
 import type {
+  AiSettings,
   AppSettings,
   GitSettings,
-  KnowledgeSettings,
   PartialAppSettings,
   RecentFileEntry,
   ThemeMode,
@@ -44,8 +44,13 @@ const GIT_DEFAULT: GitSettings = {
   autoPullIntervalMs: AUTO_PULL_DEFAULT_MS,
 };
 
-const KNOWLEDGE_DEFAULT: KnowledgeSettings = {
-  enabled: false,
+const AI_DEFAULT: AiSettings = {
+  providerMode: "disabled",
+  baseUrl: "https://api.openai.com/v1",
+  model: "gpt-4o-mini",
+  hasApiKey: false,
+  sendResultSamples: true,
+  maxSampleRows: 20,
 };
 
 const DEFAULTS: AppSettings = {
@@ -55,7 +60,7 @@ const DEFAULTS: AppSettings = {
   persistence: { cleanupMonths: 12 },
   ui: { defaultPageSize: 200, editorWidth: "narrow" },
   git: { ...GIT_DEFAULT },
-  knowledge: { ...KNOWLEDGE_DEFAULT },
+  ai: { ...AI_DEFAULT },
 };
 
 interface RawSettings {
@@ -67,14 +72,32 @@ interface RawSettings {
   persistence?: { cleanupMonths?: number };
   ui?: { defaultPageSize?: number; editorWidth?: EditorWidth };
   git?: Partial<GitSettings>;
-  knowledge?: Partial<KnowledgeSettings>;
+  ai?: Partial<AiSettings>;
 }
 
-function sanitizeKnowledge(input: unknown): KnowledgeSettings {
-  if (!input || typeof input !== "object") return { ...KNOWLEDGE_DEFAULT };
+function sanitizeAi(input: unknown): AiSettings {
+  if (!input || typeof input !== "object") return { ...AI_DEFAULT };
   const r = input as Record<string, unknown>;
+  const providerMode =
+    r.providerMode === "openai-compatible" || r.providerMode === "cloud"
+      ? r.providerMode
+      : "disabled";
+  const baseUrl = typeof r.baseUrl === "string" ? r.baseUrl.trim() : "";
+  const model = typeof r.model === "string" ? r.model.trim() : "";
+  const maxSampleRows =
+    typeof r.maxSampleRows === "number" && Number.isFinite(r.maxSampleRows)
+      ? Math.min(100, Math.max(0, Math.floor(r.maxSampleRows)))
+      : AI_DEFAULT.maxSampleRows;
   return {
-    enabled: r.enabled === true,
+    providerMode,
+    baseUrl: baseUrl || AI_DEFAULT.baseUrl,
+    model: model || AI_DEFAULT.model,
+    hasApiKey: r.hasApiKey === true,
+    sendResultSamples:
+      r.sendResultSamples === undefined
+        ? AI_DEFAULT.sendResultSamples
+        : r.sendResultSamples === true,
+    maxSampleRows,
   };
 }
 
@@ -161,7 +184,7 @@ export async function loadAppSettings(
       editorWidth: raw.ui?.editorWidth ?? DEFAULTS.ui.editorWidth,
     },
     git: sanitizeGit(raw.git),
-    knowledge: sanitizeKnowledge(raw.knowledge),
+    ai: sanitizeAi(raw.ai),
   };
 }
 
@@ -193,10 +216,10 @@ export async function patchAppSettings(
   if (partial.git !== undefined) {
     next.git = sanitizeGit({ ...raw.git, ...partial.git });
   }
-  if (partial.knowledge !== undefined) {
-    next.knowledge = sanitizeKnowledge({
-      ...raw.knowledge,
-      ...partial.knowledge,
+  if (partial.ai !== undefined) {
+    next.ai = sanitizeAi({
+      ...raw.ai,
+      ...partial.ai,
     });
   }
   await writeRaw(vaultPath, next);

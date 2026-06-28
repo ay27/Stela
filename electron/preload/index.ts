@@ -19,6 +19,10 @@ import {
   type VaultExternalChangePayload,
 } from "@shared/ipc-events";
 import type {
+  AiCompleteRequest,
+  AiCompleteResponse,
+  AiProviderStatus,
+  AiSettings,
   AppSettings,
   ColumnDef,
   ConnectionEntry,
@@ -29,12 +33,7 @@ import type {
   IndexBacklinkEntry,
   IndexCandidate,
   IndexEntrySummary,
-  KnowledgeSearchHit,
-  KnowledgeSearchMode,
-  KnowledgeStatus,
   BundledPluginInfo,
-  McpConfigSnippet,
-  McpStatus,
   ModulePluginInstallInput,
   PartialAppSettings,
   PartialUserCache,
@@ -276,6 +275,17 @@ const stela = {
     getStatus: () => call<CredentialStorageStatus>(IPC.PRIVACY_GET_STATUS, {}),
   },
 
+  ai: {
+    getStatus: () => call<AiProviderStatus>(IPC.AI_GET_STATUS, {}),
+    configure: (
+      settings: Partial<Omit<AiSettings, "hasApiKey">>,
+      apiKey?: string | null,
+    ) => call<AiProviderStatus>(IPC.AI_CONFIGURE, { settings, apiKey }),
+    clearApiKey: () => call<AiProviderStatus>(IPC.AI_CLEAR_API_KEY, {}),
+    complete: (request: AiCompleteRequest) =>
+      call<AiCompleteResponse>(IPC.AI_COMPLETE, { request }),
+  },
+
   git: {
     isRepo: () => call<boolean>(IPC.GIT_IS_REPO, {}),
     initRepo: () => call<void>(IPC.GIT_INIT_REPO, {}),
@@ -396,34 +406,6 @@ const stela = {
       ),
   },
 
-  knowledge: {
-    /**
-     * 语义检索当前 vault。返回的 hits 已按 RRF 融合分降序，
-     * `distance` / `bm25` 任一为 null 表示该路未参与（降级或单边模式）。
-     */
-    search: (
-      query: string,
-      opts: { topK?: number; mode?: KnowledgeSearchMode } = {},
-    ) =>
-      call<KnowledgeSearchHit[]>(IPC.KNOWLEDGE_SEARCH, {
-        query,
-        topK: opts.topK,
-        mode: opts.mode,
-      }),
-    getStatus: () => call<KnowledgeStatus>(IPC.KNOWLEDGE_GET_STATUS, {}),
-    rebuild: () => call<void>(IPC.KNOWLEDGE_REBUILD, {}),
-    purge: () => call<void>(IPC.KNOWLEDGE_PURGE, {}),
-  },
-
-  mcp: {
-    getStatus: () => call<McpStatus>(IPC.MCP_GET_STATUS, {}),
-    start: () => call<void>(IPC.MCP_START, {}),
-    stop: () => call<void>(IPC.MCP_STOP, {}),
-    getLogs: (limit?: number) => call<string[]>(IPC.MCP_GET_LOGS, { limit }),
-    clearLogs: () => call<void>(IPC.MCP_CLEAR_LOGS, {}),
-    getConfigSnippet: () =>
-      call<McpConfigSnippet>(IPC.MCP_GET_CONFIG_SNIPPET, {}),
-  },
 };
 
 export type StelaBridge = typeof stela;

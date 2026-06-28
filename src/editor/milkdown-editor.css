@@ -859,6 +859,316 @@
   background: hsl(var(--background));
 }
 
+.milkdown .stela-cb__ai,
+.stela-cb__ai {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 2px 7px;
+  border-radius: 5px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+
+.milkdown .stela-cb__ai:hover,
+.stela-cb__ai:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+.stela-cb__ai-quickedit {
+  position: fixed;
+  z-index: 220;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--background));
+  padding: 8px;
+  font-size: 12px;
+  user-select: text;
+  box-shadow:
+    0 18px 42px hsl(var(--foreground) / 0.16),
+    0 2px 8px hsl(var(--foreground) / 0.08);
+}
+
+.stela-cb__ai-review {
+  border-top: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.stela-cb__ai-quickedit-row,
+.stela-cb__ai-quickedit-actions,
+.stela-cb__ai-review-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stela-cb__ai-quickedit-row {
+  min-width: 0;
+}
+
+.stela-cb__ai-quickedit-title {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+
+.stela-cb__ai-input {
+  flex: 1 1 auto;
+  min-width: 120px;
+  height: 28px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 5px;
+  background: hsl(var(--muted) / 0.35);
+  color: hsl(var(--foreground));
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 28px;
+  outline: none;
+  caret-color: hsl(var(--foreground));
+}
+
+.stela-cb__ai-input:disabled {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+.stela-cb__ai-input:focus {
+  border-color: hsl(var(--primary) / 0.55);
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.12);
+}
+
+.stela-cb__ai-quickedit-actions {
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.stela-cb__ai-quickedit-status {
+  min-height: 16px;
+  margin-top: 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.stela-cb__ai-quickedit--loading .stela-cb__ai-quickedit-status::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 999px;
+  background: hsl(var(--primary));
+  animation: stela-ai-pulse 1s ease-in-out infinite;
+}
+
+.stela-cb__ai-hint {
+  margin-right: auto;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.stela-cb__ai-primary,
+.stela-cb__ai-secondary,
+.stela-cb__ai-close {
+  border-radius: 5px;
+  border: 1px solid hsl(var(--border));
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+.stela-cb__ai-primary {
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  border-color: hsl(var(--primary));
+}
+
+.stela-cb__ai-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.stela-cb__ai-secondary,
+.stela-cb__ai-close {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+.stela-cb__ai-close {
+  padding: 2px 6px;
+  color: hsl(var(--muted-foreground));
+}
+
+.stela-cb__ai-secondary:hover,
+.stela-cb__ai-close:hover {
+  background: hsl(var(--accent));
+}
+
+.stela-cb__ai-result {
+  max-height: 280px;
+  overflow: auto;
+  margin-top: 8px;
+  border-top: 1px solid hsl(var(--border));
+  padding-top: 8px;
+  color: hsl(var(--foreground));
+  line-height: 1.55;
+}
+
+.stela-cb__ai-result p {
+  margin: 6px 0;
+}
+
+.stela-cb__ai-md-heading {
+  margin: 8px 0 4px;
+  font-weight: 600;
+}
+
+.stela-cb__ai-md-heading--1 {
+  font-size: 14px;
+}
+
+.stela-cb__ai-md-heading--2,
+.stela-cb__ai-md-heading--3 {
+  font-size: 13px;
+}
+
+.stela-cb__ai-md-list {
+  margin: 6px 0;
+  padding-left: 18px;
+  list-style: disc;
+}
+
+.stela-cb__ai-md-code {
+  overflow: auto;
+  margin: 6px 0;
+  border-radius: calc(var(--radius) - 2px);
+  background: hsl(var(--muted) / 0.65);
+  padding: 8px;
+  font-family: var(--crepe-font-code);
+  font-size: 11.5px;
+}
+
+.stela-cb__ai-review {
+  background: hsl(var(--muted) / 0.28);
+}
+
+.stela-cb__ai-review--floating {
+  position: fixed;
+  z-index: 230;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--background));
+  padding: 6px 7px 6px 9px;
+  box-shadow:
+    0 12px 28px hsl(var(--foreground) / 0.14),
+    0 2px 8px hsl(var(--foreground) / 0.08);
+}
+
+.stela-cb__ai-review-top {
+  justify-content: space-between;
+}
+
+.stela-cb__ai-review--floating .stela-cb__ai-review-top {
+  gap: 10px;
+}
+
+.stela-cb__ai-review--floating .stela-cb__ai-review-main {
+  min-width: 0;
+}
+
+.stela-cb__ai-review--floating .stela-cb__ai-review-message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stela-cb__ai-review-main,
+.stela-cb__ai-review-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stela-cb__ai-review-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: hsl(var(--primary));
+}
+
+.stela-cb__ai-review--loading .stela-cb__ai-review-dot {
+  animation: stela-ai-pulse 1s ease-in-out infinite;
+}
+
+.stela-cb__ai-review--error .stela-cb__ai-review-dot {
+  background: hsl(var(--destructive));
+}
+
+.stela-cb__ai-review-message {
+  color: hsl(var(--foreground));
+}
+
+.stela-cb__ai-review--floating .stela-cb__ai-primary,
+.stela-cb__ai-review--floating .stela-cb__ai-secondary {
+  padding: 4px 7px;
+}
+
+.stela-cb__cm .cm-stela-ai-added-line {
+  background: hsl(var(--primary) / 0.09);
+}
+
+.stela-cb__cm .cm-stela-ai-added-line::before {
+  content: "+";
+  display: inline-block;
+  width: 18px;
+  margin-left: -18px;
+  color: hsl(var(--primary));
+  text-align: center;
+  user-select: none;
+}
+
+.stela-cb__cm .cm-stela-ai-removed-widget {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  min-height: 18px;
+  background: hsl(var(--destructive) / 0.08);
+  color: hsl(var(--destructive));
+  font-family: var(--crepe-font-code);
+  font-size: 12.5px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.stela-cb__cm .cm-stela-ai-removed-widget code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: inherit;
+}
+
+.stela-cb__cm .cm-stela-ai-line-marker {
+  color: hsl(var(--destructive));
+  text-align: center;
+  user-select: none;
+}
+
+@keyframes stela-ai-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 /* CodeMirror 默认 focus 时会给 .cm-editor 加一道虚线 outline，放在 runsql 块里很丑；
    直接抹掉，我们整体 block 已经有 border 指示选中状态了。 */
 .stela-cb__cm .cm-editor.cm-focused {

@@ -27,9 +27,9 @@ function isNoVault(err: unknown): boolean {
  * 把 main 端返回的 settings 与 `DEFAULT_APP_SETTINGS` 做一次 group 级补齐。
  *
  * 主要目的：处理 dev 阶段 main / preload / renderer 不同步重启的边界——
- *   - 用户 HMR 拿到新 renderer（新 AppSettings 字段，如 `knowledge`），
+ *   - 用户 HMR 拿到新 renderer（新 AppSettings 字段，如 `ai`），
  *   - 但 main 进程还没重启 → IPC 返回的 settings 缺新 group
- * 不兜底就直接 `settings.knowledge.enabled` undefined 崩 UI。
+ * 不兜底就直接 `settings.ai.providerMode` undefined 崩 UI。
  *
  * 注意：仅做"顶层 group 缺失则填默认值"，不深合并字段——main 端就是字段的
  * 权威来源，已经 patch 过的字段不应被 renderer 默认值覆盖。
@@ -43,7 +43,7 @@ function normalizeSettings(s: AppSettings | undefined | null): AppSettings {
     persistence: s.persistence ?? DEFAULT_APP_SETTINGS.persistence,
     ui: s.ui ?? DEFAULT_APP_SETTINGS.ui,
     git: s.git ?? DEFAULT_APP_SETTINGS.git,
-    knowledge: s.knowledge ?? DEFAULT_APP_SETTINGS.knowledge,
+    ai: s.ai ?? DEFAULT_APP_SETTINGS.ai,
   };
 }
 

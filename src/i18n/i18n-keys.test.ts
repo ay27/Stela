@@ -13,6 +13,7 @@ interface Check {
 const UI_FILES_WITHOUT_HARDCODED_CHINESE = [
   "src/components/backlinks-panel.tsx",
   "src/components/block-run-tabs.tsx",
+  "src/components/ai/ai-modal.tsx",
   "src/components/command-palette.tsx",
   "src/components/connection-picker.tsx",
   "src/layout/SchemaBrowserPanel.tsx",
@@ -25,8 +26,7 @@ const UI_FILES_WITHOUT_HARDCODED_CHINESE = [
   "src/components/settings/connections-tab.tsx",
   "src/components/settings/execution-tab.tsx",
   "src/components/settings/git-tab.tsx",
-  "src/components/settings/knowledge-tab.tsx",
-  "src/components/settings/mcp-tab.tsx",
+  "src/components/settings/ai-tab.tsx",
   "src/components/settings/persistence-tab.tsx",
   "src/components/settings/plugins-tab.tsx",
   "src/components/settings/security-tab.tsx",

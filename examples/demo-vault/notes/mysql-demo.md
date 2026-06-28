@@ -9,16 +9,15 @@ Run this block after starting the demo database. The `local-mysql` connection
 is already defined in `.stela/connections.json`.
 
 ```runsql
-SELECT id, name, status, owner
-FROM demo_tasks
-ORDER BY id limit 2
+SELECT COUNT(*) AS total_count
+FROM stela_demo.demo_tasks;
 ```
 
 <detail>
    <block-id>blk_mqxjiktk_l11ttzkm</block-id>
-   <run-date>2026-06-28 18:04:34</run-date>
-   <elapsed>4ms</elapsed>
+   <run-date>2026-06-28 22:29:18</run-date>
+   <elapsed>13ms</elapsed>
    <row-count>2</row-count>
-   <first-row>{"id":1,"name":"Prepare open-source release","status":"open","owner":"data-team"}</first-row>
-   <result-ref-id>cf982f52-71f8-4aa6-8ced-15e57d61c45f</result-ref-id>
+   <first-row>{"status":"done","count":"1"}</first-row>
+   <result-ref-id>5f63a2e6-808d-45f9-9fd6-de730b550399</result-ref-id>
 </detail>
