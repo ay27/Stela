@@ -14,6 +14,16 @@ out
 .stela/history/*.local.jsonl
 examples/demo-vault/.stela/plugins/
 
+# Non-public connector plugins (allowlist below)
+plugins/*
+!plugins/connector-mysql/
+!plugins/connector-postgresql/
+!plugins/connector-http-sample/
+
+# Internal-only tooling / release gate extensions (never commit)
+scripts/internal/
+scripts/local-macos-package.sh
+
 # Local analysis / agent artifacts
 .understand-anything/
 .worktrees/
@@ -28,9 +38,6 @@ worktrees/
 .env.development
 .env.test
 .env.production
-
-# Local release scripts may contain signing / publishing secrets
-scripts/local-macos-package.sh
 
 # OS / editor
 .DS_Store
