@@ -106,6 +106,12 @@ export function ensureAutocompleteFor(name: string): Promise<string[]> {
     .ensure(name, () => fetchTableNamesForConnection(name));
 }
 
+/** 同步读取已缓存的表名；无缓存时返回空数组，不阻塞 UI。 */
+export function peekAutocompleteFor(name: string): string[] {
+  const status = useAutocompleteCache.getState().getStatus(name);
+  return status.kind === "ready" ? status.tableNames : [];
+}
+
 /**
  * "刷新"按钮专用：丢掉当前缓存 + 立刻重拉，返回新的表名列表。
  * 不吞 promise——调用方通常 `void` 忽略，UI 通过订阅 `useAutocompleteCache` 看状态。

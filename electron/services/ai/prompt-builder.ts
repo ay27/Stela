@@ -5,13 +5,21 @@ import type { AiContextBundle } from "./context-builder";
 function schemaTargetsForPrompt(
   targets: AiSchemaTargetContext[],
 ): Array<Pick<AiSchemaTargetContext, "connectionName" | "database" | "table" | "columns" | "ddlSnippet">> {
-  return targets.map(({ connectionName, database, table, columns, ddlSnippet }) => ({
-    connectionName,
-    database,
-    table,
-    columns,
-    ddlSnippet,
-  }));
+  return targets.map(({ connectionName, database, table, columns, ddlSnippet }) => {
+    const base = { connectionName, database, table };
+    if (ddlSnippet?.trim()) {
+      return { ...base, ddlSnippet };
+    }
+    if (columns && columns.length > 0) {
+      return { ...base, columns };
+    }
+    return base;
+  });
+}
+
+function stripMentionSyntax(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return value.replace(/@([\w.]+)/g, "$1").replace(/\s+/g, " ").trim() || null;
 }
 
 function instructionFor(action: AiActionKind): string {
@@ -109,7 +117,24 @@ function requestContextForPrompt(bundle: AiContextBundle) {
       sql: ctx.sql,
       selectedText: ctx.selectedText,
       errorMessage: ctx.errorMessage,
-      userInstruction: ctx.userInstruction,
+      userInstruction: stripMentionSyntax(ctx.userInstruction),
+      mentionedTables:
+        ctx.mentionedTables && ctx.mentionedTables.length > 0
+          ? ctx.mentionedTables
+          : undefined,
+    };
+  }
+  if (bundle.request.action === "ask-sql") {
+    return {
+      source: ctx.source,
+      connectionName: ctx.connectionName,
+      sql: ctx.sql,
+      selectedText: ctx.selectedText,
+      userInstruction: stripMentionSyntax(ctx.userInstruction),
+      mentionedTables:
+        ctx.mentionedTables && ctx.mentionedTables.length > 0
+          ? ctx.mentionedTables
+          : undefined,
     };
   }
   const {
@@ -119,6 +144,20 @@ function requestContextForPrompt(bundle: AiContextBundle) {
     ...rest
   } = ctx;
   return rest;
+}
+
+function shouldIncludeSqlSymbols(bundle: AiContextBundle): boolean {
+  if (bundle.request.action === "ask-sql" || bundle.request.action === "rewrite-sql") {
+    return (bundle.request.context.mentionedTables?.length ?? 0) === 0;
+  }
+  return true;
+}
+
+function shouldIncludeRelatedRuns(bundle: AiContextBundle): boolean {
+  if (bundle.request.action === "ask-sql" || bundle.request.action === "rewrite-sql") {
+    return false;
+  }
+  return true;
 }
 
 export function buildPrompt(bundle: AiContextBundle): { system: string; user: string } {
@@ -144,16 +183,14 @@ export function buildPrompt(bundle: AiContextBundle): { system: string; user: st
         action,
         locale: bundle.request.locale ?? "en",
         connector,
-        contextSummary: bundle.summary,
-        sqlSymbols: bundle.symbols,
+        ...(shouldIncludeSqlSymbols(bundle) ? { sqlSymbols: bundle.symbols } : {}),
         ...(bundle.schemaTargets.length > 0
           ? { schemaTargets: schemaTargetsForPrompt(bundle.schemaTargets) }
           : {}),
         requestContext: requestContextForPrompt(bundle),
-        relatedRuns:
-          action === "rewrite-sql"
-            ? []
-            : bundle.relatedRuns.map((run) => ({
+        ...(shouldIncludeRelatedRuns(bundle)
+          ? {
+              relatedRuns: bundle.relatedRuns.map((run) => ({
                 runId: run.runId,
                 status: run.status,
                 connectionName: run.connectionName,
@@ -162,6 +199,8 @@ export function buildPrompt(bundle: AiContextBundle): { system: string; user: st
                 message: run.message,
                 sql: run.sql,
               })),
+            }
+          : {}),
       },
       null,
       2,

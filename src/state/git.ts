@@ -42,7 +42,7 @@ interface GitState {
   conflictMode: GitConflictMode;
 
   refresh: () => Promise<void>;
-  syncPush: (message?: string) => Promise<GitSyncPushResult | null>;
+  syncPush: (message?: string, options?: { push?: boolean }) => Promise<GitSyncPushResult | null>;
   syncPull: () => Promise<GitSyncPullResult | null>;
   clearConflict: () => void;
 }
@@ -82,10 +82,10 @@ export const useGitStore = create<GitState>((set, get) => ({
     }
   },
 
-  async syncPush(message) {
+  async syncPush(message, options) {
     set({ phase: "busy", lastError: null });
     try {
-      const r = await window.stela.git.syncPush(message);
+      const r = await window.stela.git.syncPush(message, options);
       set({ phase: "idle", lastMessage: r.message });
       await get().refresh();
       return r;

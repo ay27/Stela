@@ -126,7 +126,7 @@ function isSubsequence(query: string, target: string): boolean {
  * 表名匹配评分（越小越靠前；null 表示完全不命中）。
  * 对齐 legacy：prefix(0) > substring(1) > subsequence(2)；带 "." 时只走 prefix。
  */
-function tableScore(query: string, name: string): number | null {
+export function tableScore(query: string, name: string): number | null {
   const q = query.trim();
   if (!q) return 0;
   const lq = q.toLowerCase();
@@ -137,6 +137,23 @@ function tableScore(query: string, name: string): number | null {
   if (isSubsequence(normalizeForFuzzyMatch(q), normalizeForFuzzyMatch(name)))
     return 2;
   return null;
+}
+
+/** 按 SQL 补全同款评分过滤表名，供 AI @ 引用等场景复用。 */
+export function filterTableNames(
+  prefix: string,
+  tableNames: readonly string[],
+  limit = 12,
+): string[] {
+  return tableNames
+    .map((name, idx) => ({ name, idx, score: tableScore(prefix, name) }))
+    .filter(
+      (entry): entry is { name: string; idx: number; score: number } =>
+        entry.score !== null,
+    )
+    .sort((a, b) => a.score - b.score || a.idx - b.idx)
+    .slice(0, limit)
+    .map((entry) => entry.name);
 }
 
 /** 抽取同文档其它 runsql block 里的 word 做 word-based 补全候选。 */

@@ -373,6 +373,7 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
             )
             .max(8)
             .optional(),
+          mentionedTables: z.array(z.string().max(512)).max(8).optional(),
           userInstruction: z.string().max(20_000).nullable().optional(),
         }),
       }),
@@ -426,6 +427,7 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
   }),
   [IPC.GIT_SYNC_PUSH]: z.object({
     message: z.string().max(4096).optional(),
+    push: z.boolean().optional(),
   }),
   [IPC.GIT_SYNC_PULL]: z.object({}).strict(),
 

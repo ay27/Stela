@@ -319,8 +319,8 @@ const stela = {
     authorIdentity: () => call<GitAuthorIdentity>(IPC.GIT_AUTHOR_IDENTITY, {}),
     setAuthorIdentity: (name: string, email: string) =>
       call<void>(IPC.GIT_SET_AUTHOR_IDENTITY, { name, email }),
-    syncPush: (message?: string) =>
-      call<GitSyncPushResult>(IPC.GIT_SYNC_PUSH, { message }),
+    syncPush: (message?: string, options?: { push?: boolean }) =>
+      call<GitSyncPushResult>(IPC.GIT_SYNC_PUSH, { message, ...options }),
     syncPull: () => call<GitSyncPullResult>(IPC.GIT_SYNC_PULL, {}),
   },
 

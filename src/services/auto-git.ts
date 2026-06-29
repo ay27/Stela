@@ -62,21 +62,30 @@ function clearSuccessTimer(): void {
   }
 }
 
-/**
- * AutoGit commit 是否就绪：启用 Git + autoCommit + 当前 vault 是 git repo +
- * 没有任何 dirty tab。
- *
- * 最后一条是关键安全闸门（借鉴 tolaria ADR-0067）：编辑器自动保存是 800ms 防抖，
- * 若 commit 在某个 tab 还有未 flush 改动时触发，会把半截 / 旧内容 commit 进 git。
- * 全局 dirty 拦截避免这点；正常情况下自动保存会很快清掉 dirty 并 reschedule，
- * 不会长期阻塞 checkpoint。
- */
-function isAutoCommitReady(): boolean {
+/** 自动提交功能是否开启（不含 dirty / 落盘闸门）。 */
+function isAutoCommitEnabled(): boolean {
   const git = useSettings.getState().settings.git;
   if (!git.enabled || !git.autoCommit) return false;
   if (!useGitStore.getState().status.isRepo) return false;
-  const hasDirty = useWorkspace.getState().tabs.some((t) => t.dirty);
-  return !hasDirty;
+  return true;
+}
+
+/**
+ * 是否可安全 commit：没有任何 dirty tab。
+ *
+ * 编辑器自动保存是 800ms 防抖；`writeFile` 成功时 tab 往往仍标记 dirty
+ * （`onPersist` 的 `.then` 才清掉），因此 dirty 检查只放在 flush 阶段，
+ * 不能挡 schedule——否则自动提交永远不会被调度。
+ */
+function isSafeToCommit(): boolean {
+  return !useWorkspace.getState().tabs.some((t) => t.dirty);
+}
+
+function armFlushTimer(flush: () => Promise<void>): void {
+  scheduleTimer = setTimeout(() => {
+    scheduleTimer = null;
+    void flush();
+  }, DEBOUNCE_MS);
 }
 
 export const useAutoGit = create<AutoGitState>((set, get) => ({
@@ -85,20 +94,22 @@ export const useAutoGit = create<AutoGitState>((set, get) => ({
   lastError: null,
 
   schedule(_reason) {
-    if (!isAutoCommitReady()) return;
+    if (!isAutoCommitEnabled()) return;
     clearScheduleTimer();
     clearSuccessTimer();
     set({ phase: "pending" });
-    scheduleTimer = setTimeout(() => {
-      scheduleTimer = null;
-      void get().flush();
-    }, DEBOUNCE_MS);
+    armFlushTimer(() => get().flush());
   },
 
   async flush() {
     clearScheduleTimer();
-    if (!isAutoCommitReady()) {
+    if (!isAutoCommitEnabled()) {
       set({ phase: "idle" });
+      return;
+    }
+    if (!isSafeToCommit()) {
+      set({ phase: "pending" });
+      armFlushTimer(() => get().flush());
       return;
     }
     if (inflight) return inflight;
@@ -106,13 +117,11 @@ export const useAutoGit = create<AutoGitState>((set, get) => ({
       set({ phase: "committing" });
       try {
         const autoPush = useSettings.getState().settings.git.autoPush;
-        const r = await useGitStore.getState().syncPush();
+        const r = await useGitStore.getState().syncPush(undefined, { push: autoPush });
         if (!r) {
           set({ phase: "error", lastError: "auto commit failed" });
           return;
         }
-        // autoPush 关闭时 syncPush 仍会 commit，push 由 orchestrator 按是否有
-        // remote 决定；这里仅根据 autoPush 决定是否把 push 失败视为错误。
         if (autoPush && !r.pushed && r.pullRequired) {
           set({
             phase: "error",

@@ -380,6 +380,8 @@ export interface AiRequestContext {
   result?: AiResultContext | null;
   schema?: AiSchemaTargetContext | null;
   schemas?: AiSchemaTargetContext[];
+  /** 用户在 AI 输入框里通过 @ 显式引用的表名（`db.table` 或 `table`）。 */
+  mentionedTables?: string[];
   userInstruction?: string | null;
 }
 

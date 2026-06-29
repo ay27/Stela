@@ -59,7 +59,12 @@ import {
   type BlockResultViewState,
 } from "@/components/block-result";
 import type { ColumnDef } from "@/contracts";
-import { ensureAutocompleteFor } from "./fetch-schema";
+import { ensureAutocompleteFor, peekAutocompleteFor } from "./fetch-schema";
+import {
+  createTableMentionInput,
+  type TableMentionInputHandle,
+} from "./ai-mention-input";
+import { renderMarkdownIntoDom } from "./render-markdown-dom";
 import { useColumnCache } from "./column-cache";
 import { formatSqlCommand } from "./sql-format";
 import { formatHotkey } from "@/lib/hotkeys";
@@ -124,6 +129,7 @@ export class CodeBlockNodeView implements NodeView {
   private resultHostEl: HTMLElement | null = null;
   private resultRoot: Root | null = null;
   private aiComposerEl: HTMLElement | null = null;
+  private aiMentionHandle: TableMentionInputHandle | null = null;
   private aiReviewEl: HTMLElement | null = null;
   private pendingAiRewrite: PendingAiRewrite | null = null;
   private aiComposerGlobalCleanup: (() => void) | null = null;
@@ -357,7 +363,19 @@ export class CodeBlockNodeView implements NodeView {
    * 可以抢"，结果还是把视口拽回去。时间戳判断把"用户意图"固化下来，
    * PM 同步 selectionchange 时能正确地忍住 focus。
    */
+  private isAiComposerFocused(): boolean {
+    if (!this.aiComposerEl) return false;
+    const active = document.activeElement;
+    if (!active) return false;
+    if (this.aiComposerEl.contains(active)) return true;
+    if (active instanceof Element && active.closest(".stela-cb__ai-mention-menu")) {
+      return true;
+    }
+    return false;
+  }
+
   private shouldStealFocus(): boolean {
+    if (this.isAiComposerFocused()) return false;
     if (Date.now() - this.lastNonCmInteractionAt < 300) return false;
     return true;
   }
@@ -380,7 +398,13 @@ export class CodeBlockNodeView implements NodeView {
       "pointerup",
     ];
     const handler = (ev: Event) => {
+      const target = ev.target as Node | null;
+      const editable =
+        target instanceof Element &&
+        (target.closest(".stela-cb__ai-mention-input") !== null ||
+          target.closest(".stela-cb__ai-mention-menu") !== null);
       this.lastNonCmInteractionAt = Date.now();
+      if (editable) return;
       ev.stopPropagation();
     };
     for (const t of types) {
@@ -791,6 +815,8 @@ export class CodeBlockNodeView implements NodeView {
   private closeAiComposer(): void {
     this.aiComposerGlobalCleanup?.();
     this.aiComposerGlobalCleanup = null;
+    this.aiMentionHandle?.destroy();
+    this.aiMentionHandle = null;
     this.aiComposerEl?.remove();
     this.aiComposerEl = null;
   }
@@ -801,6 +827,7 @@ export class CodeBlockNodeView implements NodeView {
       const target = ev.target as Node | null;
       if (!target) return;
       if (this.aiComposerEl?.contains(target)) return;
+      if (target instanceof Element && target.closest(".stela-cb__ai-mention-menu")) return;
       if (this.headerEl.contains(target)) return;
       if (this.aiReviewEl?.contains(target)) return;
       if (this.resultHostEl?.contains(target)) return;
@@ -808,6 +835,7 @@ export class CodeBlockNodeView implements NodeView {
     };
     const onKeyDown = (ev: KeyboardEvent) => {
       if (ev.key !== "Escape") return;
+      if (this.aiMentionHandle?.isOpen()) return;
       ev.preventDefault();
       this.closeAiComposer();
     };
@@ -1016,82 +1044,115 @@ export class CodeBlockNodeView implements NodeView {
         ? i18n.t("ai.runsql.rewritePlaceholder")
         : i18n.t("ai.runsql.askPlaceholder");
     const primary = i18n.t("common.send");
+    const defaultHint =
+      mode === "rewrite"
+        ? i18n.t("ai.runsql.rewriteHint")
+        : i18n.t("ai.runsql.askHint");
     el.innerHTML = `
-      <div class="stela-cb__ai-quickedit-row">
-        <span class="stela-cb__ai-quickedit-title">${escapeHtml(title)}</span>
-        <input class="stela-cb__ai-input" type="text" placeholder="${escapeHtml(placeholder)}" value="${mode === "ask" ? escapeHtml(selectedText) : ""}" />
+      <div class="stela-cb__ai-quickedit-compose">
+        <div class="stela-cb__ai-quickedit-row">
+          <span class="stela-cb__ai-quickedit-title">${escapeHtml(title)}</span>
+          <div class="stela-cb__ai-input-host"></div>
+        </div>
+        <div class="stela-cb__ai-quickedit-actions">
+          <span class="stela-cb__ai-hint">${escapeHtml(defaultHint)}</span>
+          <button type="button" class="stela-cb__ai-secondary">${escapeHtml(i18n.t("common.cancel"))}</button>
+          <button type="button" class="stela-cb__ai-primary">${escapeHtml(primary)}</button>
+        </div>
       </div>
-      <div class="stela-cb__ai-quickedit-status" aria-live="polite"></div>
       <div class="stela-cb__ai-result" hidden></div>
-      <div class="stela-cb__ai-quickedit-actions">
-        <span class="stela-cb__ai-hint">${escapeHtml(
-          mode === "rewrite"
-            ? i18n.t("ai.runsql.rewriteHint")
-            : i18n.t("ai.runsql.askHint"),
-        )}</span>
-        <button type="button" class="stela-cb__ai-secondary">${escapeHtml(i18n.t("common.cancel"))}</button>
-        <button type="button" class="stela-cb__ai-primary">${escapeHtml(primary)}</button>
-      </div>
     `;
-    const input = el.querySelector<HTMLInputElement>("input");
+    const inputHost = el.querySelector<HTMLElement>(".stela-cb__ai-input-host");
     const primaryBtn = el.querySelector<HTMLButtonElement>(".stela-cb__ai-primary");
     const cancelBtn = el.querySelector<HTMLButtonElement>(".stela-cb__ai-secondary");
-    const statusEl = el.querySelector<HTMLElement>(".stela-cb__ai-quickedit-status");
+    const hintEl = el.querySelector<HTMLElement>(".stela-cb__ai-hint");
     const resultEl = el.querySelector<HTMLElement>(".stela-cb__ai-result");
-    let composing = false;
+    const ctx = getRunContext();
+    const connectionName = ctx?.connectionName;
+    let mentionInput: TableMentionInputHandle | null = null;
     const syncDisabled = () => {
       if (primaryBtn && mode === "ask") {
-        primaryBtn.disabled = (input?.value.trim().length ?? 0) === 0;
+        primaryBtn.disabled = mentionInput?.isEmpty() ?? true;
       }
     };
+    if (inputHost) {
+      mentionInput = createTableMentionInput({
+        placeholder,
+        initialValue: mode === "ask" ? selectedText : undefined,
+        getTableNamesCached: () =>
+          connectionName ? peekAutocompleteFor(connectionName) : [],
+        getTableNames: () =>
+          connectionName ? ensureAutocompleteFor(connectionName) : Promise.resolve([]),
+        onChange: syncDisabled,
+      });
+      inputHost.append(mentionInput.el);
+      this.aiMentionHandle = mentionInput;
+    }
+    let composing = false;
     const setLoading = (loading: boolean, message: string) => {
       el.classList.toggle("stela-cb__ai-quickedit--loading", loading);
-      if (input) input.disabled = loading;
-      if (primaryBtn) primaryBtn.disabled = loading;
+      mentionInput?.setDisabled(loading);
       if (cancelBtn) cancelBtn.disabled = loading;
-      if (statusEl) statusEl.textContent = message;
+      if (primaryBtn) {
+        primaryBtn.disabled = loading ? true : (mode === "ask" ? (mentionInput?.isEmpty() ?? true) : false);
+      }
+      if (hintEl) {
+        hintEl.textContent = message || defaultHint;
+        hintEl.setAttribute("aria-live", loading ? "polite" : "off");
+      }
     };
     const submit = async () => {
-      const userInstruction = input?.value.trim() ?? "";
+      const userInstruction = mentionInput?.getValue() ?? "";
+      const mentionedTables = mentionInput?.getMentionedTables() ?? [];
       if (mode === "ask" && userInstruction.length === 0) return;
+      if (mode === "ask" && resultEl) {
+        resultEl.hidden = true;
+        resultEl.replaceChildren();
+      }
       if (mode === "rewrite") {
         setLoading(true, i18n.t("ai.runsql.rewriting"));
-        await this.runSqlRewrite(userInstruction, selectedText);
+        await this.runSqlRewrite(userInstruction, selectedText, mentionedTables);
         return;
       }
       setLoading(true, i18n.t("ai.runsql.asking"));
-      await this.runSqlAsk(userInstruction, selectedText, resultEl, setLoading);
+      await this.runSqlAsk(userInstruction, selectedText, resultEl, setLoading, mentionedTables);
     };
-    input?.addEventListener("input", syncDisabled);
-    input?.addEventListener("compositionstart", () => {
+    mentionInput?.el.addEventListener("input", syncDisabled);
+    mentionInput?.el.addEventListener("compositionstart", () => {
       composing = true;
     });
-    input?.addEventListener("compositionend", () => {
+    mentionInput?.el.addEventListener("compositionend", () => {
       composing = false;
     });
-    input?.addEventListener("keydown", (ev) => {
+    mentionInput?.el.addEventListener("keydown", (ev) => {
+      if (mentionInput?.handleKeyDown(ev)) {
+        ev.stopPropagation();
+        return;
+      }
       if (ev.key === "Enter" && !composing && !ev.isComposing) {
         ev.preventDefault();
+        ev.stopPropagation();
         void submit();
       } else if (ev.key === "Escape") {
         ev.preventDefault();
+        ev.stopPropagation();
         this.closeAiComposer();
       }
-    });
+    }, true);
     syncDisabled();
     cancelBtn?.addEventListener("click", () => this.closeAiComposer());
     primaryBtn?.addEventListener("click", () => void submit());
     this.aiComposerEl = el;
     this.insertAiFloatingComposer(el, anchor);
     queueMicrotask(() => {
-      input?.focus({ preventScroll: true });
-      input?.setSelectionRange(input.value.length, input.value.length);
+      mentionInput?.focus();
     });
   }
 
   private async runSqlRewrite(
     userInstruction: string,
     selectedText: string,
+    mentionedTables: string[],
   ): Promise<void> {
     this.flushCmToPm();
     const ctx = getRunContext();
@@ -1107,6 +1168,7 @@ export class CodeBlockNodeView implements NodeView {
           selectedText: selectedText || null,
           errorMessage: this.lastErrorMessage,
           userInstruction: userInstruction || null,
+          mentionedTables: mentionedTables.length > 0 ? mentionedTables : undefined,
         },
       });
       if (!response.sql) {
@@ -1137,6 +1199,7 @@ export class CodeBlockNodeView implements NodeView {
     selectedText: string,
     resultEl: HTMLElement | null,
     setLoading: (loading: boolean, message: string) => void,
+    mentionedTables: string[],
   ): Promise<void> {
     this.flushCmToPm();
     const ctx = getRunContext();
@@ -1151,11 +1214,12 @@ export class CodeBlockNodeView implements NodeView {
           sql,
           selectedText: selectedText || null,
           userInstruction,
+          mentionedTables: mentionedTables.length > 0 ? mentionedTables : undefined,
         },
       });
       setLoading(false, i18n.t("ai.runsql.askReady"));
       if (resultEl) {
-        renderMarkdownInto(resultEl, response.text);
+        renderMarkdownIntoDom(resultEl, response.text);
         resultEl.hidden = false;
       }
     } catch (err) {
@@ -1455,72 +1519,6 @@ export class CodeBlockNodeView implements NodeView {
       });
     }
   };
-}
-
-function renderMarkdownInto(container: HTMLElement, markdown: string): void {
-  container.replaceChildren();
-  const lines = markdown.split(/\r?\n/);
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i] ?? "";
-    const fence = /^```(\w*)\s*$/.exec(line);
-    if (fence) {
-      const pre = document.createElement("pre");
-      pre.className = "stela-cb__ai-md-code";
-      const code = document.createElement("code");
-      const buf: string[] = [];
-      i += 1;
-      while (i < lines.length && !/^```\s*$/.test(lines[i] ?? "")) {
-        buf.push(lines[i] ?? "");
-        i += 1;
-      }
-      i += 1;
-      code.textContent = buf.join("\n");
-      pre.append(code);
-      container.append(pre);
-      continue;
-    }
-    if (!line.trim()) {
-      i += 1;
-      continue;
-    }
-    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
-    if (heading) {
-      const el = document.createElement("div");
-      el.className = `stela-cb__ai-md-heading stela-cb__ai-md-heading--${heading[1]!.length}`;
-      el.textContent = heading[2] ?? "";
-      container.append(el);
-      i += 1;
-      continue;
-    }
-    if (/^[-*]\s+/.test(line)) {
-      const ul = document.createElement("ul");
-      ul.className = "stela-cb__ai-md-list";
-      while (i < lines.length && /^[-*]\s+/.test(lines[i] ?? "")) {
-        const li = document.createElement("li");
-        li.textContent = (lines[i] ?? "").replace(/^[-*]\s+/, "");
-        ul.append(li);
-        i += 1;
-      }
-      container.append(ul);
-      continue;
-    }
-    const para: string[] = [line];
-    i += 1;
-    while (
-      i < lines.length &&
-      (lines[i] ?? "").trim() &&
-      !/^```/.test(lines[i] ?? "") &&
-      !/^(#{1,3})\s+/.test(lines[i] ?? "") &&
-      !/^[-*]\s+/.test(lines[i] ?? "")
-    ) {
-      para.push(lines[i] ?? "");
-      i += 1;
-    }
-    const p = document.createElement("p");
-    p.textContent = para.join(" ");
-    container.append(p);
-  }
 }
 
 type SqlDiffOp =

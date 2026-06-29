@@ -118,5 +118,51 @@ const deduped = JSON.parse(rewriteWithSchemas.user) as {
 assert.equal(deduped.schemaTargets?.length, 1);
 assert.equal(deduped.requestContext.schemas, undefined);
 
+const askBundle = {
+  ...bundle,
+  request: {
+    action: "ask-sql",
+    locale: "zh",
+    context: {
+      source: "runsql",
+      connectionName: "prod",
+      connector: bundle.request.context.connector,
+      sql: "select 1",
+      userInstruction: "@threed.users 解释一下这个表",
+      mentionedTables: ["threed.users"],
+    },
+  },
+  relatedRuns: [
+    {
+      runId: "r1",
+      status: "ok",
+      connectionName: "prod",
+      notePath: "note.md",
+      rowCount: 1,
+      message: null,
+      sql: "select 1",
+      startedAt: Date.now(),
+      endedAt: Date.now(),
+      blockId: null,
+    },
+  ],
+} satisfies AiContextBundle;
+const askPrompt = buildPrompt(askBundle);
+const askUser = JSON.parse(askPrompt.user) as {
+  sqlSymbols?: unknown;
+  relatedRuns?: unknown[];
+  schemaTargets?: Array<Record<string, unknown>>;
+  requestContext: {
+    userInstruction?: string | null;
+    mentionedTables?: string[];
+  };
+};
+assert.equal(askUser.sqlSymbols, undefined);
+assert.equal(askUser.relatedRuns, undefined);
+assert.equal(askUser.requestContext.userInstruction, "threed.users 解释一下这个表");
+assert.deepEqual(askUser.requestContext.mentionedTables, ["threed.users"]);
+assert.equal(askUser.schemaTargets?.[0]?.columns, undefined);
+assert.ok(askUser.schemaTargets?.[0]?.ddlSnippet);
+
 console.log("ai prompt-builder tests passed.");
 

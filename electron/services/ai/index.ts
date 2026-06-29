@@ -12,7 +12,7 @@ import { getLogger } from "../logger";
 import { buildAiContext } from "./context-builder";
 import { buildPrompt } from "./prompt-builder";
 import { formatPromptDebugLog } from "./prompt-logging";
-import { resolveSchemaContext } from "./schema-context";
+import { mergeSchemaTargets, resolveMentionedSchemaContext, resolveSchemaContext } from "./schema-context";
 import {
   callChatCompletions,
   clearApiKey,
@@ -86,17 +86,30 @@ async function enrichSchemaContext(
     const connections = await connectionsStore.loadConnections(vaultPath, slug);
     const connection = connections[connectionName];
     if (!connection) return request;
-    const schemas = await resolveSchemaContext({
+    const deps = {
+      listDatabases: connectorRegistry.listDatabases,
+      listTables: connectorRegistry.listTables,
+      execute: connectorRegistry.execute,
+    };
+    const mentionedTables = request.context.mentionedTables ?? [];
+    const mentionedSchemas =
+      mentionedTables.length > 0
+        ? await resolveMentionedSchemaContext({
+            mentionedTables,
+            connectionName,
+            connection,
+            request,
+            deps,
+          })
+        : [];
+    const sqlSchemas = await resolveSchemaContext({
       request,
       symbols: initialBundle.symbols,
       connectionName,
       connection,
-      deps: {
-        listDatabases: connectorRegistry.listDatabases,
-        listTables: connectorRegistry.listTables,
-        execute: connectorRegistry.execute,
-      },
+      deps,
     });
+    const schemas = mergeSchemaTargets(mentionedSchemas, sqlSchemas, 8);
     if (schemas.length === 0) return request;
     return {
       ...request,

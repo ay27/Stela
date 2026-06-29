@@ -65,6 +65,7 @@ async function autoMessage(vaultPath: string): Promise<string> {
 export async function syncPush(
   vaultPath: string,
   message?: string,
+  options?: { push?: boolean },
 ): Promise<GitSyncPushResult> {
   if (!(await git.isRepo(vaultPath))) {
     return {
@@ -97,6 +98,15 @@ export async function syncPush(
       pushed: false,
       pullRequired: false,
       message: committed ? "committed (no remote)" : "nothing to commit",
+    };
+  }
+  if (options?.push === false) {
+    return {
+      committed,
+      commitHash,
+      pushed: false,
+      pullRequired: false,
+      message: committed ? "committed" : "nothing to commit",
     };
   }
   const pushed = await git.push(vaultPath);

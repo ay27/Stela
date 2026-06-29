@@ -223,7 +223,10 @@ interface StelaBridge {
     discardFile: (relPath: string) => Promise<void>;
     authorIdentity: () => Promise<GitAuthorIdentity>;
     setAuthorIdentity: (name: string, email: string) => Promise<void>;
-    syncPush: (message?: string) => Promise<GitSyncPushResult>;
+    syncPush: (
+      message?: string,
+      options?: { push?: boolean },
+    ) => Promise<GitSyncPushResult>;
     syncPull: () => Promise<GitSyncPullResult>;
   };
   journal: {

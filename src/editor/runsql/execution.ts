@@ -25,6 +25,7 @@ import type { EditorView as PMView } from "@milkdown/prose/view";
 import type { ColumnDef, QueryResult, RunRecord } from "@/contracts";
 import { generateBlockId, type DetailMeta } from "@/core/types";
 import { electronConnectorRegistry } from "@/services/connectors/electron-connector";
+import { scheduleAutoGit } from "@/services/auto-git";
 import { electronStorage } from "@/services/storage/electron-storage";
 import { useConnections } from "@/state/connections";
 import {
@@ -347,6 +348,7 @@ async function persistFailedRun(
 async function appendRunToJournal(runId: string): Promise<void> {
   try {
     await window.stela.journal.appendRun(runId);
+    scheduleAutoGit("runsql-journal");
   } catch (err) {
     console.error("[stela] journal append failed", err);
   }

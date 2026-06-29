@@ -539,9 +539,10 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
     IPC.GIT_SET_AUTHOR_IDENTITY,
     ({ name, email }) => git.setAuthorIdentity(requireVault(), { name, email }),
   );
-  registerHandler<{ message?: string }, GitSyncPushResult>(
+  registerHandler<{ message?: string; push?: boolean }, GitSyncPushResult>(
     IPC.GIT_SYNC_PUSH,
-    ({ message }) => syncOrchestrator.syncPush(requireVault(), message),
+    ({ message, push }) =>
+      syncOrchestrator.syncPush(requireVault(), message, { push }),
   );
   registerHandler<Record<string, never>, GitSyncPullResult>(
     IPC.GIT_SYNC_PULL,

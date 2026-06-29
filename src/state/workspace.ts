@@ -5,7 +5,7 @@ import { loadUserCache, patchUserCache } from "@/services/user-cache";
 import { useSettings } from "@/state/settings";
 import { useConnections } from "@/state/connections";
 import { usePluginsStore } from "@/services/plugins";
-import { resetAutoGit, startAutoPull } from "@/services/auto-git";
+import { resetAutoGit, scheduleAutoGit, startAutoPull } from "@/services/auto-git";
 import { refreshGitStatus } from "@/state/git";
 import type { VaultFsEvent } from "@shared/ipc-events";
 
@@ -680,7 +680,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       if (wantPromote) updated.ephemeral = false;
       return updated;
     });
-    if (changed) set({ tabs: next });
+    if (changed) {
+      set({ tabs: next });
+      if (!dirty) scheduleAutoGit("tab-clean");
+    }
   },
 
   setPinned: (id, pinned) => {

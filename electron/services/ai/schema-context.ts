@@ -141,6 +141,12 @@ export function parseColumnsFromDdl(ddl: string): AiSchemaColumnContext[] {
   for (const rawLine of ddl.split(/\r?\n/)) {
     const line = rawLine.trim().replace(/,$/, "");
     if (/^create\s+table\b/i.test(line) || line === "(" || line === ")") continue;
+    if (/^\)/.test(line)) continue;
+    if (/^(primary|unique|foreign)\s+key\b/i.test(line)) continue;
+    if (/^(key|index|constraint)\b/i.test(line)) continue;
+    if (/^engine\s*=/i.test(line)) continue;
+    if (/^distributed\b/i.test(line)) continue;
+    if (/^properties\s*\(/i.test(line)) continue;
     const match = /^[`"]?([A-Za-z_][\w$]*)[`"]?\s+([A-Za-z][\w() ,]*)/i.exec(line);
     if (!match) continue;
     const name = match[1] ?? "";
@@ -234,10 +240,16 @@ function rankCatalog(
   symbols: SqlSymbols,
 ): RankedSchemaEntry[] {
   const explicit = explicitTableSet(symbols);
-  const terms = [
-    ...tokenize([request.context.sql], { filterStopwords: true }),
-    ...tokenize([request.context.userInstruction, request.context.selectedText]),
-  ];
+  const terms =
+    explicit.size > 0
+      ? []
+      : [
+          ...tokenize([request.context.sql], { filterStopwords: true }),
+          ...tokenize([
+            request.context.userInstruction,
+            request.context.selectedText,
+          ]),
+        ];
   return catalog
     .map((entry) => {
       let score = 0;
@@ -247,6 +259,9 @@ function rankCatalog(
       if (explicit.has(tableName) || explicit.has(qName)) {
         score += 100;
         reasons.push("explicit SQL table");
+      }
+      if (explicit.size > 0) {
+        return { ...entry, score, reasons };
       }
       for (const term of terms) {
         if (tableName.includes(term) || qName.includes(term)) {
@@ -308,9 +323,222 @@ async function probeColumns(
   );
 }
 
+async function fetchTableSchemaFromConnector(
+  connection: ConnectionEntry,
+  database: string | null,
+  table: string,
+  dialect: string | undefined,
+  deps: SchemaResolverDeps,
+): Promise<{ columns: AiSchemaColumnContext[]; ddlSnippet: string | null }> {
+  if (!deps.execute) return { columns: [], ddlSnippet: null };
+  const tableRef = database
+    ? `${quoteIdent(database, dialect)}.${quoteIdent(table, dialect)}`
+    : quoteIdent(table, dialect);
+
+  try {
+    const result = await deps.execute(
+      connection.kind,
+      connection.config,
+      `SHOW CREATE TABLE ${tableRef}`,
+    );
+    if (result.kind === "query" && result.rows.length > 0) {
+      const firstRow = result.rows[0] ?? [];
+      let idx = result.columns.findIndex((column) => /create/i.test(column.name));
+      if (idx < 0) idx = firstRow.length - 1;
+      const ddl = firstRow[idx];
+      if (typeof ddl === "string" && ddl.trim()) {
+        return {
+          ddlSnippet: truncate(ddl.trim(), MAX_DDL_CHARS),
+          columns: parseColumnsFromDdl(ddl),
+        };
+      }
+    }
+  } catch {
+    // fall through to LIMIT 0 probe
+  }
+
+  try {
+    const result = await deps.execute(
+      connection.kind,
+      connection.config,
+      `SELECT * FROM ${tableRef} LIMIT 0`,
+    );
+    if (result.kind === "query") {
+      return {
+        columns: result.columns.map((column) => ({
+          name: column.name,
+          typeName: column.typeName,
+        })),
+        ddlSnippet: null,
+      };
+    }
+  } catch {
+    // ignore
+  }
+
+  return { columns: [], ddlSnippet: null };
+}
+
+function findCatalogEntry(
+  catalog: SchemaCatalogEntry[],
+  mention: string,
+): SchemaCatalogEntry | null {
+  const parsed = splitQualifiedName(mention);
+  const mentionQName = normalizeName(qualifiedName(parsed.database, parsed.table));
+  const mentionTable = normalizeName(parsed.table);
+
+  const exact = catalog.find(
+    (entry) => normalizeName(entry.qualifiedName) === mentionQName,
+  );
+  if (exact) return exact;
+
+  const byTable = catalog.filter(
+    (entry) => normalizeName(entry.table) === mentionTable,
+  );
+  if (byTable.length === 1) return byTable[0] ?? null;
+  return null;
+}
+
+function isSchemaEntryValid(entry: SchemaCatalogEntry): boolean {
+  return Boolean(
+    (entry.ddlSnippet && entry.ddlSnippet.trim()) ||
+      (entry.columns && entry.columns.length > 0),
+  );
+}
+
+function mergeSchemaTargets(
+  primary: AiSchemaTargetContext[],
+  secondary: AiSchemaTargetContext[],
+  limit: number,
+): AiSchemaTargetContext[] {
+  const seen = new Set<string>();
+  const out: AiSchemaTargetContext[] = [];
+  for (const entry of [...primary, ...secondary]) {
+    const key = normalizeName(
+      qualifiedName(entry.database ?? null, entry.table ?? ""),
+    );
+    if (!entry.table || seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+export interface ResolveNamedTableSchemasOptions {
+  tableNames: string[];
+  connectionName: string;
+  connection: ConnectionEntry;
+  request: AiCompleteRequest;
+  matchReason: string;
+  score?: number;
+  deps?: SchemaResolverDeps;
+}
+
+export async function resolveNamedTableSchemas(
+  options: ResolveNamedTableSchemasOptions,
+): Promise<AiSchemaTargetContext[]> {
+  const uniqueNames = Array.from(
+    new Set(options.tableNames.map((name) => name.trim()).filter(Boolean)),
+  ).slice(0, MAX_SCHEMA_TARGETS);
+  if (uniqueNames.length === 0) return [];
+
+  const deps = {
+    readDir: fs.readdir,
+    readFile: fs.readFile,
+    ...options.deps,
+  };
+  const dialect = options.request.context.connector?.dialect;
+  const schemaDirCatalog = await loadSchemaDirCatalog(
+    options.connectionName,
+    options.connection.schemaDir,
+    deps,
+  );
+  const connectorCatalog =
+    schemaDirCatalog.length > 0
+      ? schemaDirCatalog
+      : await loadConnectorCatalog(options.connectionName, options.connection, deps);
+
+  const out: AiSchemaTargetContext[] = [];
+  for (const name of uniqueNames) {
+    const parsed = splitQualifiedName(name);
+    const entry = findCatalogEntry(schemaDirCatalog, name);
+    let source: AiSchemaTargetContext["source"] = "schema-dir";
+    let columns = entry?.columns ?? [];
+    let ddlSnippet = entry?.ddlSnippet ?? null;
+    let database = entry?.database ?? parsed.database;
+    let table = entry?.table ?? parsed.table;
+
+    if (!entry || !isSchemaEntryValid(entry)) {
+      const connectorEntry = findCatalogEntry(connectorCatalog, name);
+      if (connectorEntry) {
+        database = connectorEntry.database ?? parsed.database;
+        table = connectorEntry.table;
+      }
+      const fetched = await fetchTableSchemaFromConnector(
+        options.connection,
+        database,
+        table,
+        dialect,
+        deps,
+      );
+      columns = fetched.columns.length > 0 ? fetched.columns : columns;
+      ddlSnippet = fetched.ddlSnippet ?? ddlSnippet;
+      source = "connector";
+    }
+
+    out.push({
+      connectionName: options.connectionName,
+      database,
+      table,
+      columns,
+      ddlSnippet,
+      source: entry && isSchemaEntryValid(entry) ? "schema-dir" : source,
+      matchReason: options.matchReason,
+      score: options.score ?? 100,
+    });
+  }
+  return out;
+}
+
+export interface ResolveMentionedSchemaContextOptions {
+  mentionedTables: string[];
+  connectionName: string;
+  connection: ConnectionEntry;
+  request: AiCompleteRequest;
+  deps?: SchemaResolverDeps;
+}
+
+export async function resolveMentionedSchemaContext(
+  options: ResolveMentionedSchemaContextOptions,
+): Promise<AiSchemaTargetContext[]> {
+  return resolveNamedTableSchemas({
+    tableNames: options.mentionedTables,
+    connectionName: options.connectionName,
+    connection: options.connection,
+    request: options.request,
+    matchReason: "user @mention",
+    score: 1_000,
+    deps: options.deps,
+  });
+}
+
+export { mergeSchemaTargets };
+
 export async function resolveSchemaContext(
   options: ResolveSchemaContextOptions,
 ): Promise<AiSchemaTargetContext[]> {
+  if (options.symbols.tables.length > 0) {
+    return resolveNamedTableSchemas({
+      tableNames: options.symbols.tables,
+      connectionName: options.connectionName,
+      connection: options.connection,
+      request: options.request,
+      matchReason: "explicit SQL table",
+      deps: options.deps,
+    });
+  }
+
   const deps = {
     readDir: fs.readdir,
     readFile: fs.readFile,
