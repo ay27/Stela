@@ -51,7 +51,7 @@ import { sqlExtensions } from "./sql-language";
 import { currentCmTheme, subscribeCmTheme } from "./cm-theme";
 import { cmSearchHighlightExtension } from "./cm-search-highlight";
 import { runBlock } from "./execution";
-import { getRunContext } from "./run-context";
+import { getRunContext, getRunNoteContext } from "./run-context";
 import { showContextMenu, type MenuEntry } from "./context-menu";
 import {
   BlockResult,
@@ -628,6 +628,22 @@ export class CodeBlockNodeView implements NodeView {
         },
       },
       {
+        key: "Mod-i",
+        run: () => {
+          if (this.node.attrs.language !== RUNSQL_LANGUAGE) return false;
+          this.openAiComposer("rewrite");
+          return true;
+        },
+      },
+      {
+        key: "Mod-Shift-i",
+        run: () => {
+          if (this.node.attrs.language !== RUNSQL_LANGUAGE) return false;
+          this.openAiComposer("ask");
+          return true;
+        },
+      },
+      {
         // SQL 格式化（v0.2 #3）：仅 runsql 块。其它语言代码块（含 mermaid）不做
         // 格式化——避免把 mermaid 源码或随手写的 plain code 也给改了。
         // 快捷键沿用 JetBrains 系列肌肉记忆：macOS ⌥⌘L、Win/Linux Ctrl+Alt+L。
@@ -929,12 +945,14 @@ export class CodeBlockNodeView implements NodeView {
       const running = runState === "running";
       const label = running ? "Running…" : "Run";
       const formatHint = formatHotkey("Mod+Alt+L");
+      const rewriteHint = formatHotkey("Mod+I");
+      const askHint = formatHotkey("Mod+Shift+I");
       this.headerEl.innerHTML = `
         <span class="stela-cb__icon">${DATABASE_ICON_HTML}</span>
         <span class="stela-cb__title">Run SQL</span>
         ${attrs.blockId ? `<span class="stela-cb__id">${escapeHtml(attrs.blockId)}</span>` : ""}
-        <button type="button" class="stela-cb__ai stela-cb__ai-rewrite" title="${escapeHtml(i18n.t("ai.runsql.rewriteSql"))}">${AI_ICON_HTML}${escapeHtml(i18n.t("ai.runsql.rewriteShort"))}</button>
-        <button type="button" class="stela-cb__ai stela-cb__ai-ask" title="${escapeHtml(i18n.t("ai.runsql.askSql"))}">${AI_ICON_HTML}${escapeHtml(i18n.t("ai.runsql.askShort"))}</button>
+        <button type="button" class="stela-cb__ai stela-cb__ai-rewrite" title="${escapeHtml(i18n.t("ai.runsql.rewriteSql"))}">${AI_ICON_HTML}${escapeHtml(i18n.t("ai.runsql.rewriteShort"))}<span class="stela-cb__ai-kbd" aria-hidden="true">${escapeHtml(rewriteHint)}</span></button>
+        <button type="button" class="stela-cb__ai stela-cb__ai-ask" title="${escapeHtml(i18n.t("ai.runsql.askSql"))}">${AI_ICON_HTML}${escapeHtml(i18n.t("ai.runsql.askShort"))}<span class="stela-cb__ai-kbd" aria-hidden="true">${escapeHtml(askHint)}</span></button>
         <button type="button" class="stela-cb__format" title="格式化 SQL (${escapeHtml(formatHint)})" aria-label="格式化 SQL">${FORMAT_ICON_HTML}<span class="stela-cb__format-kbd" aria-hidden="true">${escapeHtml(formatHint)}</span></button>
         <button type="button" class="stela-cb__run" data-state="${runState}" ${running ? "disabled" : ""} title="执行 SQL (${formatHotkey("Mod+Enter")})">${PLAY_ICON_HTML}${escapeHtml(label)}<span class="stela-cb__run-kbd" aria-hidden="true">${escapeHtml(formatHotkey("Mod+Enter"))}</span></button>
       `;
@@ -1026,6 +1044,26 @@ export class CodeBlockNodeView implements NodeView {
     ev.stopPropagation();
     this.showAiComposer(mode, ev.currentTarget as HTMLElement);
   };
+
+  private openAiComposer(mode: AiQuickEditMode): void {
+    const selector =
+      mode === "rewrite" ? ".stela-cb__ai-rewrite" : ".stela-cb__ai-ask";
+    const anchor = this.headerEl.querySelector<HTMLElement>(selector) ?? this.headerEl;
+    this.showAiComposer(mode, anchor);
+  }
+
+  /** 执行失败后从 result-bar 一键发起 AI 改写（错误信息已在 lastErrorMessage 中）。 */
+  private triggerAiFixRewrite(): void {
+    this.closeAiComposer();
+    this.discardAiRewrite();
+    this.closeAiReview();
+    this.showAiReview({
+      state: "loading",
+      message: i18n.t("ai.runsql.rewriting"),
+    });
+    const selectedText = this.selectedSqlText();
+    void this.runSqlRewrite("", selectedText, []);
+  }
 
   private showAiComposer(mode: AiQuickEditMode, anchor: HTMLElement): void {
     this.closeAiComposer();
@@ -1129,7 +1167,7 @@ export class CodeBlockNodeView implements NodeView {
         ev.stopPropagation();
         return;
       }
-      if (ev.key === "Enter" && !composing && !ev.isComposing) {
+      if (ev.key === "Enter" && !ev.shiftKey && !composing && !ev.isComposing) {
         ev.preventDefault();
         ev.stopPropagation();
         void submit();
@@ -1156,6 +1194,7 @@ export class CodeBlockNodeView implements NodeView {
   ): Promise<void> {
     this.flushCmToPm();
     const ctx = getRunContext();
+    const noteContext = getRunNoteContext();
     const sql = this.cm.state.doc.toString();
     try {
       const response = await window.stela.ai.complete({
@@ -1166,6 +1205,7 @@ export class CodeBlockNodeView implements NodeView {
           connectionName: ctx?.connectionName ?? null,
           sql,
           selectedText: selectedText || null,
+          ...(noteContext ?? {}),
           errorMessage: this.lastErrorMessage,
           userInstruction: userInstruction || null,
           mentionedTables: mentionedTables.length > 0 ? mentionedTables : undefined,
@@ -1203,6 +1243,7 @@ export class CodeBlockNodeView implements NodeView {
   ): Promise<void> {
     this.flushCmToPm();
     const ctx = getRunContext();
+    const noteContext = getRunNoteContext();
     const sql = this.cm.state.doc.toString();
     try {
       const response = await window.stela.ai.complete({
@@ -1213,6 +1254,7 @@ export class CodeBlockNodeView implements NodeView {
           connectionName: ctx?.connectionName ?? null,
           sql,
           selectedText: selectedText || null,
+          ...(noteContext ?? {}),
           userInstruction,
           mentionedTables: mentionedTables.length > 0 ? mentionedTables : undefined,
         },
@@ -1324,6 +1366,16 @@ export class CodeBlockNodeView implements NodeView {
           onSelect: () => this.refreshResult(),
           disabled: !this.node.attrs.detail,
         },
+        {
+          label: i18n.t("ai.runsql.rewriteSql"),
+          shortcut: formatHotkey("Mod+I"),
+          onSelect: () => this.openAiComposer("rewrite"),
+        },
+        {
+          label: i18n.t("ai.runsql.askSql"),
+          shortcut: formatHotkey("Mod+Shift+I"),
+          onSelect: () => this.openAiComposer("ask"),
+        },
         { kind: "separator" },
         {
           label: "复制 SQL",
@@ -1421,6 +1473,10 @@ export class CodeBlockNodeView implements NodeView {
           this.resultExpanded = !this.resultExpanded;
           this.renderResult(this.node);
         },
+        onAiFix:
+          runState === "error" && this.lastErrorMessage
+            ? () => this.triggerAiFixRewrite()
+            : undefined,
       }),
     );
   }

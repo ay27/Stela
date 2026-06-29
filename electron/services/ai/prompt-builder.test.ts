@@ -62,7 +62,9 @@ const rewriteBundle = {
       connector: bundle.request.context.connector,
       sql: "select * from users where",
       userInstruction: "fix syntax",
-      noteMarkdown: "this note must not be included for rewrite",
+      notePath: "/vault/analysis.md",
+      noteTitle: "analysis.md",
+      noteMarkdown: "this note provides analysis context for rewrite",
       result: {
         rowCount: 1,
         rows: [[1]],
@@ -82,18 +84,27 @@ const rewriteUser = JSON.parse(rewritePrompt.user) as {
     sql?: string | null;
     userInstruction?: string | null;
     noteMarkdown?: string | null;
+    notePath?: string | null;
+    noteTitle?: string | null;
     result?: unknown;
     schemas?: unknown;
   };
 };
-assert.match(rewritePrompt.system, /Use only the current RunSQL block/);
+assert.match(rewritePrompt.system, /current note Markdown as context/i);
 assert.match(rewritePrompt.system, /Return only the rewritten SQL/);
+assert.match(rewritePrompt.system, /unchanged lines byte-for-byte/i);
+assert.match(rewritePrompt.system, /brief SQL comment/i);
 assert.equal(rewriteUser.outputRules, undefined);
 assert.equal(rewriteUser.sqlDialect, undefined);
 assert.equal(rewriteUser.requestContext.connector, undefined);
 assert.equal(rewriteUser.requestContext.sql, "select * from users where");
 assert.equal(rewriteUser.requestContext.userInstruction, "fix syntax");
-assert.equal(rewriteUser.requestContext.noteMarkdown, undefined);
+assert.equal(rewriteUser.requestContext.notePath, "/vault/analysis.md");
+assert.equal(rewriteUser.requestContext.noteTitle, "analysis.md");
+assert.equal(
+  rewriteUser.requestContext.noteMarkdown,
+  "this note provides analysis context for rewrite",
+);
 assert.equal(rewriteUser.requestContext.result, undefined);
 assert.equal(rewriteUser.requestContext.schemas, undefined);
 assert.equal(rewriteUser.schemaTargets?.length, 1);
@@ -130,6 +141,9 @@ const askBundle = {
       sql: "select 1",
       userInstruction: "@threed.users 解释一下这个表",
       mentionedTables: ["threed.users"],
+      notePath: "/vault/analysis.md",
+      noteTitle: "analysis.md",
+      noteMarkdown: "# Analysis\n\nThe users table tracks signup cohorts.",
     },
   },
   relatedRuns: [
@@ -155,12 +169,21 @@ const askUser = JSON.parse(askPrompt.user) as {
   requestContext: {
     userInstruction?: string | null;
     mentionedTables?: string[];
+    notePath?: string | null;
+    noteTitle?: string | null;
+    noteMarkdown?: string | null;
   };
 };
 assert.equal(askUser.sqlSymbols, undefined);
 assert.equal(askUser.relatedRuns, undefined);
 assert.equal(askUser.requestContext.userInstruction, "threed.users 解释一下这个表");
 assert.deepEqual(askUser.requestContext.mentionedTables, ["threed.users"]);
+assert.equal(askUser.requestContext.notePath, "/vault/analysis.md");
+assert.equal(askUser.requestContext.noteTitle, "analysis.md");
+assert.equal(
+  askUser.requestContext.noteMarkdown,
+  "# Analysis\n\nThe users table tracks signup cohorts.",
+);
 assert.equal(askUser.schemaTargets?.[0]?.columns, undefined);
 assert.ok(askUser.schemaTargets?.[0]?.ddlSnippet);
 

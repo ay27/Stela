@@ -73,8 +73,11 @@ function outputRulesFor(action: AiActionKind): string[] {
   ];
   if (action === "rewrite-sql") {
     return [
-      "Use only the current RunSQL block, the user's rewrite instruction, the SQL dialect, the provided schema targets, and the error message if provided.",
-      "Do not use note Markdown, result rows, result metadata, or unrelated run history for this rewrite.",
+      "Use the current RunSQL block, user instruction, SQL dialect, schema targets, error message, and current note Markdown as context.",
+      "Only rewrite the SQL block. Do not output note Markdown or unrelated sections.",
+      "Do not use result rows, result metadata, or unrelated run history for this rewrite.",
+      "If only part of the SQL needs changes, keep unchanged lines byte-for-byte—including indentation, spaces, and line breaks—so the diff stays minimal and readable.",
+      "On every line or block you change, add a brief SQL comment (dialect comment syntax) explaining why in one short sentence.",
       "Return only the rewritten SQL in one fenced sql block.",
       "Do not include prose unless the SQL cannot be rewritten.",
     ];
@@ -116,6 +119,9 @@ function requestContextForPrompt(bundle: AiContextBundle) {
       connectionName: ctx.connectionName,
       sql: ctx.sql,
       selectedText: ctx.selectedText,
+      notePath: ctx.notePath,
+      noteTitle: ctx.noteTitle,
+      noteMarkdown: ctx.noteMarkdown,
       errorMessage: ctx.errorMessage,
       userInstruction: stripMentionSyntax(ctx.userInstruction),
       mentionedTables:
@@ -130,6 +136,9 @@ function requestContextForPrompt(bundle: AiContextBundle) {
       connectionName: ctx.connectionName,
       sql: ctx.sql,
       selectedText: ctx.selectedText,
+      notePath: ctx.notePath,
+      noteTitle: ctx.noteTitle,
+      noteMarkdown: ctx.noteMarkdown,
       userInstruction: stripMentionSyntax(ctx.userInstruction),
       mentionedTables:
         ctx.mentionedTables && ctx.mentionedTables.length > 0

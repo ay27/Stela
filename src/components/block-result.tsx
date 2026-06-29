@@ -17,6 +17,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Download,
+  Sparkles,
 } from "lucide-react";
 
 import type { ColumnDef, RunRecord } from "@/contracts";
@@ -92,6 +93,8 @@ export interface BlockResultProps {
   viewState?: BlockResultViewState;
   onViewStateChange?: (next: BlockResultViewState) => void;
   onToggle: () => void;
+  /** 执行失败时从 result-bar 发起 AI 改写 */
+  onAiFix?: () => void;
 }
 
 interface FetchedState {
@@ -126,6 +129,7 @@ export function BlockResult({
   viewState = DEFAULT_VIEW_STATE,
   onViewStateChange,
   onToggle,
+  onAiFix,
 }: BlockResultProps) {
   const t = useT();
   const [state, setState] = useState<FetchedState | null>(null);
@@ -350,7 +354,7 @@ export function BlockResult({
     detail,
     runId: effectiveRunId,
     state,
-    errorMessage,
+    failedLabel: t("runTabs.failed"),
     activeRun: viewingHistory ? activeRun : null,
   });
 
@@ -566,9 +570,23 @@ export function BlockResult({
             ) : null}
           </div>
         ) : null}
+        {runState === "error" && errorMessage && onAiFix ? (
+          <button
+            type="button"
+            className="stela-cb__result-fix"
+            onClick={onAiFix}
+            title={t("ai.runsql.fixTitle")}
+          >
+            <Sparkles className="h-3 w-3" aria-hidden="true" />
+            <span>{t("ai.runsql.fix")}</span>
+          </button>
+        ) : null}
         <span
           className={cn("stela-cb__result-summary", summary.tone)}
-          style={{ marginLeft: "auto" }}
+          style={{
+            marginLeft:
+              runState === "error" && errorMessage && onAiFix ? undefined : "auto",
+          }}
         >
           {summary.icon}
           {inCompare ? renderDiffSummaryText(diffState, t) : summary.text}
@@ -821,7 +839,7 @@ interface SummaryArgs {
   detail: DetailMeta | null;
   runId: string | null;
   state: FetchedState | null;
-  errorMessage?: string | null;
+  failedLabel?: string;
   /** 浏览历史 run 时传入对应 RunRecord；非 null 即在摘要前加「历史 ·」前缀 */
   activeRun?: RunRecord | null;
 }
@@ -837,7 +855,7 @@ function renderSummary({
   detail,
   runId,
   state,
-  errorMessage,
+  failedLabel,
   activeRun,
 }: SummaryArgs): { text: string; tone: string; icon: React.ReactNode } {
   if (runState === "running") {
@@ -845,7 +863,7 @@ function renderSummary({
   }
   if (runState === "error") {
     return {
-      text: errorMessage ?? "执行失败",
+      text: failedLabel ?? "执行失败",
       tone: "is-error",
       icon: <AlertCircle className="h-3 w-3" />,
     };

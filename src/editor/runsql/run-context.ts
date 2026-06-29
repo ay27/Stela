@@ -14,12 +14,30 @@ export interface RunContext {
   path: string;
   /** frontmatter.connection_name；可能为 null（未配置） */
   connectionName: string | null;
+  /** 当前文件名，作为 AI noteTitle 上下文。 */
+  noteTitle?: string | null;
+  /** 当前 Markdown 全文（含 frontmatter），优先使用 live buffer 而不是磁盘。 */
+  noteMarkdown?: string | null;
+}
+
+export interface RunNoteContext {
+  notePath: string;
+  noteTitle: string;
+  noteMarkdown: string;
 }
 
 let current: RunContext | null = null;
 
+function noteTitleFromPath(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  return normalized.split("/").pop() || path;
+}
+
 export function setRunContext(ctx: RunContext): void {
-  current = ctx;
+  current = {
+    ...ctx,
+    noteTitle: ctx.noteTitle ?? noteTitleFromPath(ctx.path),
+  };
 }
 
 export function clearRunContext(path: string): void {
@@ -30,4 +48,22 @@ export function clearRunContext(path: string): void {
 
 export function getRunContext(): RunContext | null {
   return current;
+}
+
+export function updateRunContextNote(path: string, noteMarkdown: string): void {
+  if (current?.path !== path) return;
+  current = {
+    ...current,
+    noteTitle: current.noteTitle ?? noteTitleFromPath(path),
+    noteMarkdown,
+  };
+}
+
+export function getRunNoteContext(): RunNoteContext | null {
+  if (!current?.noteMarkdown) return null;
+  return {
+    notePath: current.path,
+    noteTitle: current.noteTitle ?? noteTitleFromPath(current.path),
+    noteMarkdown: current.noteMarkdown,
+  };
 }

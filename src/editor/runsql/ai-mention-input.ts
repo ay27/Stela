@@ -32,6 +32,19 @@ export interface TableMentionInputHandle {
   destroy: () => void;
 }
 
+export type MentionInputPart =
+  | { kind: "text"; value: string }
+  | { kind: "mention"; table: string };
+
+export function serializeMentionParts(parts: MentionInputPart[]): string {
+  return parts
+    .map((part) => {
+      if (part.kind === "text") return part.value;
+      return `@${part.table}`;
+    })
+    .join("");
+}
+
 /** 从纯文本里解析 `@db.table` / `@table` 引用。 */
 export function parseMentionedTables(text: string): string[] {
   const out = new Set<string>();
@@ -61,26 +74,54 @@ function createChip(tableName: string): HTMLSpanElement {
   return chip;
 }
 
-function createTextInput(placeholder: string): HTMLInputElement {
-  const input = document.createElement("input");
-  input.type = "text";
+type MentionTextControl = HTMLTextAreaElement;
+
+function isMentionTextControl(value: Element | null): value is MentionTextControl {
+  return value instanceof HTMLTextAreaElement && value.classList.contains(TEXT_INPUT_CLASS);
+}
+
+const MENTION_TEXTAREA_MIN_HEIGHT_PX = 20;
+const MENTION_TEXTAREA_MAX_HEIGHT_PX = 128;
+
+function autosizeMentionTextarea(input: HTMLTextAreaElement): void {
+  input.style.height = "0px";
+  const next = Math.min(
+    Math.max(input.scrollHeight, MENTION_TEXTAREA_MIN_HEIGHT_PX),
+    MENTION_TEXTAREA_MAX_HEIGHT_PX,
+  );
+  input.style.height = `${next}px`;
+  input.style.overflowY =
+    input.scrollHeight > MENTION_TEXTAREA_MAX_HEIGHT_PX ? "auto" : "hidden";
+}
+
+function syncMentionTextareaHeights(root: HTMLElement): void {
+  for (const child of Array.from(root.children)) {
+    if (isMentionTextControl(child)) {
+      autosizeMentionTextarea(child);
+    }
+  }
+}
+
+function createTextInput(placeholder: string): MentionTextControl {
+  const input = document.createElement("textarea");
   input.className = TEXT_INPUT_CLASS;
   input.placeholder = placeholder;
-  input.autocomplete = "off";
+  input.rows = 1;
+  input.setAttribute("autocomplete", "off");
   input.spellcheck = false;
   return input;
 }
 
 function serializeEditor(root: HTMLElement): string {
-  let out = "";
+  const parts: MentionInputPart[] = [];
   for (const child of Array.from(root.children)) {
-    if (child instanceof HTMLInputElement && child.classList.contains(TEXT_INPUT_CLASS)) {
-      out += child.value;
+    if (isMentionTextControl(child)) {
+      parts.push({ kind: "text", value: child.value });
     } else if (child instanceof HTMLElement && child.classList.contains(CHIP_CLASS)) {
-      out += `@${child.dataset.table ?? ""}`;
+      parts.push({ kind: "mention", table: child.dataset.table ?? "" });
     }
   }
-  return out;
+  return serializeMentionParts(parts);
 }
 
 function getMentionedTablesFromEditor(root: HTMLElement): string[] {
@@ -92,9 +133,9 @@ function getMentionedTablesFromEditor(root: HTMLElement): string[] {
   return Array.from(new Set(tables));
 }
 
-function getTrailingInput(root: HTMLElement): HTMLInputElement | null {
+function getTrailingInput(root: HTMLElement): MentionTextControl | null {
   const last = root.lastElementChild;
-  if (last instanceof HTMLInputElement && last.classList.contains(TEXT_INPUT_CLASS)) {
+  if (isMentionTextControl(last)) {
     return last;
   }
   return null;
@@ -117,8 +158,8 @@ export function createTableMentionInput(
   let activeIndex = 0;
   let open = false;
   let disposed = false;
-  let activeInput: HTMLInputElement | null = null;
-  const inputCleanups = new Map<HTMLInputElement, () => void>();
+  let activeInput: MentionTextControl | null = null;
+  const inputCleanups = new Map<MentionTextControl, () => void>();
 
   const syncPlaceholder = () => {
     const empty = Boolean(
@@ -231,6 +272,7 @@ export function createTableMentionInput(
     afterInput.setSelectionRange(caretPos, caretPos);
     closeMenu();
     syncPlaceholder();
+    syncMentionTextareaHeights(root);
     options.onChange?.();
   };
 
@@ -257,7 +299,7 @@ export function createTableMentionInput(
     refreshTableNamesInBackground();
   };
 
-  const removePreviousChip = (input: HTMLInputElement): boolean => {
+  const removePreviousChip = (input: MentionTextControl): boolean => {
     if ((input.selectionStart ?? 0) !== 0 || input.value.length > 0) return false;
     const prev = input.previousElementSibling;
     if (!(prev instanceof HTMLElement) || !prev.classList.contains(CHIP_CLASS)) {
@@ -265,7 +307,7 @@ export function createTableMentionInput(
     }
     prev.remove();
     const beforeInput = input.previousElementSibling;
-    if (beforeInput instanceof HTMLInputElement && beforeInput.classList.contains(TEXT_INPUT_CLASS)) {
+    if (isMentionTextControl(beforeInput)) {
       const merged = beforeInput.value + input.value;
       detachInput(input);
       input.remove();
@@ -276,6 +318,7 @@ export function createTableMentionInput(
       activeInput = beforeInput;
     }
     syncPlaceholder();
+    syncMentionTextareaHeights(root);
     options.onChange?.();
     return true;
   };
@@ -283,6 +326,7 @@ export function createTableMentionInput(
   const onInput = () => {
     activeIndex = 0;
     syncPlaceholder();
+    syncMentionTextareaHeights(root);
     refreshMenu();
     options.onChange?.();
   };
@@ -332,13 +376,13 @@ export function createTableMentionInput(
     return false;
   };
 
-  const detachInput = (input: HTMLInputElement) => {
+  const detachInput = (input: MentionTextControl) => {
     const cleanup = inputCleanups.get(input);
     cleanup?.();
     inputCleanups.delete(input);
   };
 
-  const wireInput = (input: HTMLInputElement) => {
+  const wireInput = (input: MentionTextControl) => {
     detachInput(input);
     const handleInput = () => onInput();
     const handleKeyDown = (ev: KeyboardEvent) => {
@@ -365,9 +409,10 @@ export function createTableMentionInput(
       input.removeEventListener("keyup", stopBubble);
       input.removeEventListener("keypress", stopBubble);
     });
+    autosizeMentionTextarea(input);
   };
 
-  const ensureTrailingInput = (): HTMLInputElement => {
+  const ensureTrailingInput = (): MentionTextControl => {
     const existing = getTrailingInput(root);
     if (existing) {
       activeInput = existing;
@@ -384,7 +429,7 @@ export function createTableMentionInput(
   const onRootClick = (ev: MouseEvent) => {
     const target = ev.target as HTMLElement | null;
     if (target?.classList.contains(CHIP_CLASS)) return;
-    if (target instanceof HTMLInputElement) return;
+    if (target instanceof HTMLTextAreaElement) return;
     ensureTrailingInput().focus();
   };
 
@@ -404,6 +449,7 @@ export function createTableMentionInput(
   const initial = ensureTrailingInput();
   if (options.initialValue) {
     initial.value = options.initialValue;
+    syncMentionTextareaHeights(root);
   }
   syncPlaceholder();
 
@@ -421,11 +467,12 @@ export function createTableMentionInput(
       input.focus({ preventScroll: true });
       const pos = input.value.length;
       input.setSelectionRange(pos, pos);
+      syncMentionTextareaHeights(root);
     },
     setDisabled: (disabled: boolean) => {
       root.classList.toggle("stela-cb__ai-mention-input--disabled", disabled);
       for (const child of Array.from(root.children)) {
-        if (child instanceof HTMLInputElement) {
+        if (child instanceof HTMLTextAreaElement) {
           child.disabled = disabled;
         }
       }

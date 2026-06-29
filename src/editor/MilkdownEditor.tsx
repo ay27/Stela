@@ -39,7 +39,11 @@ import {
   MERMAID_LANGUAGE,
   RUNSQL_LANGUAGE,
 } from "./runsql/codeblock-nodeview";
-import { clearRunContext, setRunContext } from "./runsql/run-context";
+import {
+  clearRunContext,
+  setRunContext,
+  updateRunContextNote,
+} from "./runsql/run-context";
 import { HEADING_SLUG_ATTR, headingAnchorPlugin } from "./heading-anchor";
 import { recallScroll, rememberScroll } from "./scroll-memory";
 import { wikiLinkPlugins } from "./wiki";
@@ -452,6 +456,8 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
 
     crepe.on((api) => {
       api.markdownUpdated((_ctx, markdown) => {
+        const nextRaw = joinFrontmatter(frontmatter, markdown);
+        updateRunContextNote(path, nextRaw);
         if (markdown === lastPersistedBodyRef.current) return;
         // 用户从未真正动过键盘/IME/粘贴 → 视为 mount 后的 programmatic
         // normalization（如 NodeView 装饰、CodeMirror 子编辑器初始化等）。
@@ -468,9 +474,8 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
         debounceTimerRef.current = setTimeout(() => {
           debounceTimerRef.current = null;
-          const next = joinFrontmatter(frontmatter, markdown);
           lastPersistedBodyRef.current = markdown;
-          void Promise.resolve(onPersistRef.current?.(next))
+          void Promise.resolve(onPersistRef.current?.(nextRaw))
             .then(() => {
               dirtyRef.current = false;
               onDirtyRef.current?.(false);
@@ -494,11 +499,11 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
   // 单例，供 NodeView runBlock 消费。不再在本组件内二次解析 frontmatter：兜底
   // 规则统一放在 EditorView，避免两处逻辑漂移。
   useEffect(() => {
-    setRunContext({ path, connectionName });
+    setRunContext({ path, connectionName, noteMarkdown: initialRaw });
     return () => {
       clearRunContext(path);
     };
-  }, [path, connectionName]);
+  }, [path, connectionName, initialRaw]);
 
 
   // 卸载时把未提交的 debounce 立即吐回，避免切 tab 丢字
