@@ -1,9 +1,12 @@
 import type {
   AiCompleteRequest,
   AiCompleteResponse,
+  AiFimCompleteRequest,
+  AiFimCompleteResponse,
   AiProviderStatus,
   AiSettings,
 } from "@shared/types";
+import { AppError } from "@shared/errors";
 
 import * as settingsStore from "../settings-store";
 import * as connectionsStore from "../connections-store";
@@ -14,6 +17,7 @@ import { buildPrompt } from "./prompt-builder";
 import { formatPromptDebugLog } from "./prompt-logging";
 import { mergeSchemaTargets, resolveMentionedSchemaContext, resolveSchemaContext } from "./schema-context";
 import {
+  callFimCompletions,
   callChatCompletions,
   clearApiKey,
   configureProvider,
@@ -172,5 +176,52 @@ export async function complete(
     warnings: bundle.summary,
     contextSummary: bundle.summary,
   };
+}
+
+async function resolveConnectionDialectHint(
+  vaultPath: string,
+  slug: string,
+  connectionName?: string | null,
+): Promise<string | null> {
+  if (!connectionName) return null;
+  try {
+    const connections = await connectionsStore.loadConnections(vaultPath, slug);
+    const entry = connections[connectionName];
+    if (!entry) return null;
+    const meta = connectorRegistry
+      .listKinds()
+      .find((item) => item.kind === entry.kind);
+    const displayName = meta?.displayName ?? entry.kind;
+    return dialectFromKind(entry.kind, displayName);
+  } catch {
+    return null;
+  }
+}
+
+export async function fimComplete(
+  vaultPath: string,
+  slug: string,
+  request: AiFimCompleteRequest,
+): Promise<AiFimCompleteResponse> {
+  const settings = await settingsStore.loadAppSettings(vaultPath);
+  if (!settings.ai.inlineCompletionEnabled) {
+    throw new AppError("ai_fim_disabled", "AI inline completion is disabled.");
+  }
+  const apiKey = await loadApiKey(vaultPath, slug);
+  const dialect = await resolveConnectionDialectHint(
+    vaultPath,
+    slug,
+    request.connectionName,
+  );
+  const prompt = dialect
+    ? `-- SQL dialect: ${dialect}\n${request.prompt}`
+    : request.prompt;
+  const text = await callFimCompletions({
+    settings: settings.ai,
+    apiKey,
+    prompt,
+    suffix: request.suffix,
+  });
+  return { text };
 }
 

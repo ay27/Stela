@@ -10,6 +10,7 @@
  */
 
 import { getLogger } from "../services/logger";
+import { ensureGitignore } from "../services/git/init";
 import { maybeSeedFromLegacy } from "../services/migrate-userdata-to-vault";
 import { setVault as registrySetVault } from "../services/connectors/registry";
 import { seedBundledPlugins } from "../services/connectors/bundled-plugins";
@@ -57,6 +58,12 @@ export async function setCurrentVault(
     // 保证旧 vault 里 kind:mysql 的连接在内置 connector 移除后仍开箱可用。
     await seedBundledPlugins(vaultPath).catch((err: unknown) => {
       log.error("seed bundled plugins failed", {
+        vaultPath,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+    await ensureGitignore(vaultPath).catch((err: unknown) => {
+      log.error("ensure gitignore failed", {
         vaultPath,
         err: err instanceof Error ? err.message : String(err),
       });

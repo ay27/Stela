@@ -31,19 +31,19 @@ function isNoVault(err: unknown): boolean {
  *   - 但 main 进程还没重启 → IPC 返回的 settings 缺新 group
  * 不兜底就直接 `settings.ai.providerMode` undefined 崩 UI。
  *
- * 注意：仅做"顶层 group 缺失则填默认值"，不深合并字段——main 端就是字段的
- * 权威来源，已经 patch 过的字段不应被 renderer 默认值覆盖。
+ * 注意：按 group 做浅合并，避免新增字段（例如 settings.ai 里的开关）在旧 settings
+ * 文件或 dev 阶段 main / renderer 不同步时变成 undefined。main 端返回的字段仍覆盖默认值。
  */
-function normalizeSettings(s: AppSettings | undefined | null): AppSettings {
+export function normalizeSettings(s: AppSettings | undefined | null): AppSettings {
   if (!s || typeof s !== "object") return DEFAULT_APP_SETTINGS;
   return {
-    vault: s.vault ?? DEFAULT_APP_SETTINGS.vault,
-    appearance: s.appearance ?? DEFAULT_APP_SETTINGS.appearance,
-    execution: s.execution ?? DEFAULT_APP_SETTINGS.execution,
-    persistence: s.persistence ?? DEFAULT_APP_SETTINGS.persistence,
-    ui: s.ui ?? DEFAULT_APP_SETTINGS.ui,
-    git: s.git ?? DEFAULT_APP_SETTINGS.git,
-    ai: s.ai ?? DEFAULT_APP_SETTINGS.ai,
+    vault: { ...DEFAULT_APP_SETTINGS.vault, ...(s.vault ?? {}) },
+    appearance: { ...DEFAULT_APP_SETTINGS.appearance, ...(s.appearance ?? {}) },
+    execution: { ...DEFAULT_APP_SETTINGS.execution, ...(s.execution ?? {}) },
+    persistence: { ...DEFAULT_APP_SETTINGS.persistence, ...(s.persistence ?? {}) },
+    ui: { ...DEFAULT_APP_SETTINGS.ui, ...(s.ui ?? {}) },
+    git: { ...DEFAULT_APP_SETTINGS.git, ...(s.git ?? {}) },
+    ai: { ...DEFAULT_APP_SETTINGS.ai, ...(s.ai ?? {}) },
   };
 }
 

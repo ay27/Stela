@@ -1,5 +1,6 @@
 .env
 .stela/secrets/
 .stela/history/
+.stela/recent-files.local.json
 .stela.sqlite
 .stela.sqlite-*

@@ -199,13 +199,17 @@ export interface AiSettings {
   sendResultSamples: boolean;
   /** Per-request row sample cap. */
   maxSampleRows: number;
+  /** Enable ghost-text SQL completion in RunSQL blocks. */
+  inlineCompletionEnabled: boolean;
+  /** FIM completions endpoint root. DeepSeek requires the /beta base URL. */
+  fimBaseUrl: string;
+  /** Model name passed to the FIM completions endpoint. */
+  fimModel: string;
 }
 
 /**
- * 最近打开的文件条目，存于 vault settings 内（隐含归属当前 vault）。
- *
- * 历史：v0.1 之前 recentFiles 在 user 级 settings 里、靠 vaultPath 字段做归属过滤。
- * vault 化重构后 settings 文件本身就在 vault 内，自然 per-vault，vaultPath 字段冗余。
+ * 最近打开的文件条目。持久化在 `{vault}/.stela/recent-files.local.json`（机器本地，
+ * 不进 Git）；仍通过 AppSettings.vault.recentFiles 暴露给 renderer。
  */
 export interface RecentFileEntry {
   path: string;
@@ -224,7 +228,8 @@ export interface VaultSettings {
  * v0.1 重构前 `vault.path` / `vault.recentPaths` / 跨 vault 偏好曾混在这里。
  * 现在跨 vault / 跨设置作用域：
  *   - "上次打开的 vault" + "最近 vault 列表"：由 [UserCache](#user-cache) 持久化在 userData
- *   - 其它字段（appearance / execution / persistence / ui / recentFiles）：per-vault
+ *   - recentFiles：per-vault 但机器本地（recent-files.local.json，不进 Git）
+ *   - 其它字段（appearance / execution / persistence / ui / git / ai）：per-vault，可 Git 同步
  */
 export interface AppSettings {
   vault: VaultSettings;
@@ -397,6 +402,16 @@ export interface AiCompleteResponse {
   sql: string | null;
   warnings: string[];
   contextSummary: string[];
+}
+
+export interface AiFimCompleteRequest {
+  prompt: string;
+  suffix: string;
+  connectionName?: string | null;
+}
+
+export interface AiFimCompleteResponse {
+  text: string;
 }
 
 export interface AiProviderStatus {

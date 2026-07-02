@@ -4,8 +4,7 @@
  * 文件位置：`{vault}/.stela/settings.json`
  *
  * 设计：
- *   - 内容契约见 [`AppSettings`](../shared/types.ts)。`vault.path` / `vault.recentPaths`
- *     已迁移到 [user-cache-store](./user-cache-store.ts)，这里只剩 per-vault 字段。
+ *   - `vault.recentFiles` 已迁到 `recent-files.local.json`（机器本地，不进 Git）。
  *   - 缺字段一律走 `DEFAULTS` 兜底；首次开 vault 没有 settings 文件时 `loadAppSettings`
  *     直接返回 defaults，不写盘——首次 patch 触发的 writeRaw 才会真正落文件。
  *   - 写策略：原子写（.tmp + rename）。
@@ -25,12 +24,14 @@ import type {
 } from "@shared/types";
 
 import { atomicWriteFile } from "./atomic-write";
+import {
+  loadRecentFiles,
+  migrateFromSettingsIfNeeded,
+  saveRecentFiles,
+} from "./recent-files-store";
 import { vaultFilePath } from "./vault-paths";
 
 const FILE_NAME = "settings.json";
-
-/** 最近文件列表的硬上限。超过的尾部会被截断。 */
-const RECENT_FILES_LIMIT = 24;
 
 /** 自动 pull 间隔下限 / 默认值（毫秒）。 */
 const AUTO_PULL_MIN_MS = 30_000;
@@ -51,6 +52,9 @@ const AI_DEFAULT: AiSettings = {
   hasApiKey: false,
   sendResultSamples: true,
   maxSampleRows: 20,
+  inlineCompletionEnabled: false,
+  fimBaseUrl: "https://api.deepseek.com/beta",
+  fimModel: "deepseek-v4-pro",
 };
 
 const DEFAULTS: AppSettings = {
@@ -64,9 +68,7 @@ const DEFAULTS: AppSettings = {
 };
 
 interface RawSettings {
-  vault?: {
-    recentFiles?: RecentFileEntry[];
-  };
+  vault?: Record<string, unknown>;
   appearance?: { theme?: ThemeMode };
   execution?: { onError?: "continue" | "stop" };
   persistence?: { cleanupMonths?: number };
@@ -84,6 +86,8 @@ function sanitizeAi(input: unknown): AiSettings {
       : "disabled";
   const baseUrl = typeof r.baseUrl === "string" ? r.baseUrl.trim() : "";
   const model = typeof r.model === "string" ? r.model.trim() : "";
+  const fimBaseUrl = typeof r.fimBaseUrl === "string" ? r.fimBaseUrl.trim() : "";
+  const fimModel = typeof r.fimModel === "string" ? r.fimModel.trim() : "";
   const maxSampleRows =
     typeof r.maxSampleRows === "number" && Number.isFinite(r.maxSampleRows)
       ? Math.min(100, Math.max(0, Math.floor(r.maxSampleRows)))
@@ -98,6 +102,9 @@ function sanitizeAi(input: unknown): AiSettings {
         ? AI_DEFAULT.sendResultSamples
         : r.sendResultSamples === true,
     maxSampleRows,
+    inlineCompletionEnabled: r.inlineCompletionEnabled === true,
+    fimBaseUrl: fimBaseUrl || AI_DEFAULT.fimBaseUrl,
+    fimModel: fimModel || AI_DEFAULT.fimModel,
   };
 }
 
@@ -118,23 +125,16 @@ function sanitizeGit(input: unknown): GitSettings {
   };
 }
 
-function sanitizeRecentFiles(input: unknown): RecentFileEntry[] {
-  if (!Array.isArray(input)) return [];
-  const out: RecentFileEntry[] = [];
-  const seen = new Set<string>();
-  for (const item of input) {
-    if (!item || typeof item !== "object") continue;
-    const r = item as Record<string, unknown>;
-    const p = r.path;
-    const ts = r.openedAt;
-    if (typeof p !== "string" || p.length === 0) continue;
-    if (typeof ts !== "number" || !Number.isFinite(ts)) continue;
-    if (seen.has(p)) continue;
-    seen.add(p);
-    out.push({ path: p, openedAt: ts });
-    if (out.length >= RECENT_FILES_LIMIT) break;
+function stripRecentFilesFromRaw(raw: RawSettings): RawSettings {
+  if (!raw.vault || !("recentFiles" in raw.vault)) return raw;
+  const { recentFiles: _removed, ...rest } = raw.vault;
+  const next: RawSettings = { ...raw };
+  if (Object.keys(rest).length > 0) {
+    next.vault = rest;
+  } else {
+    delete next.vault;
   }
-  return out;
+  return next;
 }
 
 function filePath(vaultPath: string): string {
@@ -156,7 +156,24 @@ async function readRaw(vaultPath: string): Promise<RawSettings> {
 }
 
 async function writeRaw(vaultPath: string, raw: RawSettings): Promise<void> {
-  await atomicWriteFile(filePath(vaultPath), JSON.stringify(raw, null, 2));
+  await atomicWriteFile(
+    filePath(vaultPath),
+    JSON.stringify(stripRecentFilesFromRaw(raw), null, 2),
+  );
+}
+
+async function resolveRecentFiles(
+  vaultPath: string,
+  raw: RawSettings,
+): Promise<RecentFileEntry[]> {
+  const legacy = raw.vault?.recentFiles;
+  if (legacy !== undefined) {
+    const migrated = await migrateFromSettingsIfNeeded(vaultPath, legacy);
+    if (migrated) {
+      await writeRaw(vaultPath, raw);
+    }
+  }
+  return loadRecentFiles(vaultPath);
 }
 
 /** IPC 入口：renderer 通过 `settings.load` 拿到的就是这个返回值。 */
@@ -164,10 +181,9 @@ export async function loadAppSettings(
   vaultPath: string,
 ): Promise<AppSettings> {
   const raw = await readRaw(vaultPath);
+  const recentFiles = await resolveRecentFiles(vaultPath, raw);
   return {
-    vault: {
-      recentFiles: sanitizeRecentFiles(raw.vault?.recentFiles),
-    },
+    vault: { recentFiles },
     appearance: {
       theme: raw.appearance?.theme ?? DEFAULTS.appearance.theme,
     },
@@ -194,12 +210,14 @@ export async function patchAppSettings(
 ): Promise<AppSettings> {
   const raw = await readRaw(vaultPath);
   const next: RawSettings = { ...raw };
+  if (partial.vault?.recentFiles !== undefined) {
+    await saveRecentFiles(vaultPath, partial.vault.recentFiles);
+  }
   if (partial.vault !== undefined) {
-    const merged = { ...raw.vault, ...partial.vault };
-    if (partial.vault.recentFiles !== undefined) {
-      merged.recentFiles = sanitizeRecentFiles(partial.vault.recentFiles);
+    const { recentFiles: _removed, ...vaultRest } = partial.vault;
+    if (Object.keys(vaultRest).length > 0) {
+      next.vault = { ...raw.vault, ...vaultRest };
     }
-    next.vault = merged;
   }
   if (partial.appearance !== undefined) {
     next.appearance = { ...raw.appearance, ...partial.appearance };

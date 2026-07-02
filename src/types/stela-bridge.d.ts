@@ -9,6 +9,8 @@
 import type {
   AiCompleteRequest,
   AiCompleteResponse,
+  AiFimCompleteRequest,
+  AiFimCompleteResponse,
   AiProviderStatus,
   AiSettings,
   AppSettings,
@@ -196,6 +198,7 @@ interface StelaBridge {
     ) => Promise<AiProviderStatus>;
     clearApiKey: () => Promise<AiProviderStatus>;
     complete: (request: AiCompleteRequest) => Promise<AiCompleteResponse>;
+    fimComplete: (request: AiFimCompleteRequest) => Promise<AiFimCompleteResponse>;
   };
   git: {
     isRepo: () => Promise<boolean>;

@@ -2,9 +2,9 @@
  * 应用层设置（与 [electron/services/settings-store.ts](../../electron/services/settings-store.ts) 对齐）。
  *
  * v0.1 vault 化重构后：
- *   - settings.json 落在 `{vault}/.stela/settings.json`，per-vault
+ *   - settings.json 落在 `{vault}/.stela/settings.json`，per-vault、可 Git 同步
+ *   - recentFiles 落在 `{vault}/.stela/recent-files.local.json`，机器本地
  *   - 跨 vault 的"上次 vault" / "最近 vault 列表" 走 [user-cache](../../electron/services/user-cache-store.ts)
- *   - 这里只剩 per-vault 的 appearance / execution / persistence / ui / vault.recentFiles
  */
 
 export type ThemeMode = "light" | "dark" | "system";
@@ -80,6 +80,9 @@ export interface AiSettings {
   hasApiKey: boolean;
   sendResultSamples: boolean;
   maxSampleRows: number;
+  inlineCompletionEnabled: boolean;
+  fimBaseUrl: string;
+  fimModel: string;
 }
 
 export interface AppSettings {
@@ -125,6 +128,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     hasApiKey: false,
     sendResultSamples: true,
     maxSampleRows: 20,
+    inlineCompletionEnabled: false,
+    fimBaseUrl: "https://api.deepseek.com/beta",
+    fimModel: "deepseek-v4-pro",
   },
 };
 

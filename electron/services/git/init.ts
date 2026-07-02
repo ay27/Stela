@@ -24,12 +24,14 @@ const log = getLogger("git");
  * - `.stela/secrets/secrets_*.json`：**不** ignore —— 每设备 safeStorage 包裹的 secret 分片；
  *   随 Git 同步，但只有对应设备能解密自己的那份（同 history JSONL 的写隔离思路）。
  * - `.stela/history/`：**不** ignore —— 这是执行历史真相源，靠 Git 同步。
+ * - `.stela/recent-files.local.json`：机器本地最近文件列表，不同步。
  */
 export const DEFAULT_GITIGNORE = `# Stela machine-local cache (never commit)
 .stela.sqlite
 .stela.sqlite-wal
 .stela.sqlite-shm
 .stela-knowledge.sqlite
+.stela/recent-files.local.json
 
 # NOTE: .stela/connections.json (non-secret config) and
 # .stela/secrets/secrets_*.json (per-device safeStorage-wrapped secrets) are
@@ -49,6 +51,9 @@ export const DEFAULT_GITIGNORE = `# Stela machine-local cache (never commit)
 *.swo
 `;
 
+/** 老 vault 的 .gitignore 可能缺这些行；打开 vault 时按需追加。 */
+const MACHINE_LOCAL_GITIGNORE_LINES = [".stela/recent-files.local.json"];
+
 /** vault 是否是 git 仓库（存在 `.git`）。 */
 export async function isRepo(vaultPath: string): Promise<boolean> {
   try {
@@ -62,16 +67,25 @@ export async function isRepo(vaultPath: string): Promise<boolean> {
   }
 }
 
-/** 仅当 `.gitignore` 不存在时写入默认规则（保留用户既有文件）。 */
+/** 仅当 `.gitignore` 不存在时写入默认规则；已存在则补齐缺失的机器本地行。 */
 export async function ensureGitignore(vaultPath: string): Promise<void> {
   const fp = path.join(vaultPath, ".gitignore");
+  let existing = "";
   try {
-    await fs.access(fp);
-    return;
+    existing = await fs.readFile(fp, "utf-8");
   } catch {
-    /* not exists → write default */
+    await fs.writeFile(fp, DEFAULT_GITIGNORE, "utf-8");
+    return;
   }
-  await fs.writeFile(fp, DEFAULT_GITIGNORE, "utf-8");
+  const missing = MACHINE_LOCAL_GITIGNORE_LINES.filter(
+    (line) => !existing.includes(line),
+  );
+  if (missing.length === 0) return;
+  await fs.writeFile(
+    fp,
+    `${existing.trimEnd()}\n\n# Stela machine-local (auto-added)\n${missing.join("\n")}\n`,
+    "utf-8",
+  );
 }
 
 /**

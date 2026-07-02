@@ -25,6 +25,7 @@ import {
   vaultConfigDir,
   vaultFilePath,
 } from "./vault-paths";
+import { saveRecentFiles, sanitizeRecentFiles } from "./recent-files-store";
 
 const log = getLogger("migrate-userdata-to-vault");
 
@@ -87,8 +88,7 @@ interface LegacySettingsShape {
  * 把老 settings.json 的字段拣选迁移到新 vault settings 形态。
  *
  * - vault.path / vault.recentPaths：丢弃（已搬到 user-cache）
- * - vault.recentFiles：保留为 raw（settings-store 的 sanitize 会做兼容；
- *   老条目带 vaultPath 字段，sanitize 会无视，仅取 path/openedAt）
+ * - vault.recentFiles：写入 recent-files.local.json（不进 Git），不落 settings.json
  * - 其它字段透传
  */
 function transformLegacySettings(legacy: LegacySettingsShape): unknown {
@@ -97,9 +97,6 @@ function transformLegacySettings(legacy: LegacySettingsShape): unknown {
   if (legacy.execution) out.execution = legacy.execution;
   if (legacy.persistence) out.persistence = legacy.persistence;
   if (legacy.ui) out.ui = legacy.ui;
-  if (legacy.vault?.recentFiles) {
-    out.vault = { recentFiles: legacy.vault.recentFiles };
-  }
   return out;
 }
 
@@ -128,6 +125,12 @@ export async function maybeSeedFromLegacy(vaultPath: string): Promise<void> {
           vaultFilePath(vaultPath, VAULT_SETTINGS),
           transformLegacySettings(legacy),
         );
+        if (legacy.vault?.recentFiles) {
+          await saveRecentFiles(
+            vaultPath,
+            sanitizeRecentFiles(legacy.vault.recentFiles),
+          );
+        }
         log.info("seeded settings.json", { vaultPath });
       } catch (err) {
         log.error("seed settings failed", {

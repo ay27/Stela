@@ -75,7 +75,7 @@ export function WelcomeView() {
   const setSettingsOpen = useDialogs((s) => s.setSettings);
   const togglePalette = useDialogs((s) => s.togglePalette);
 
-  // recentVaults / lastVault 走 user-cache（跨 vault）；recentFiles 走 vault settings
+  // recentVaults / lastVault 走 user-cache（跨 vault）；recentFiles 走 local 文件
   const recentVaultsAll = useSettings((s) => s.recentVaults);
   const recentFiles = useSettings((s) => s.settings.vault.recentFiles);
   const removeRecentVault = useSettings((s) => s.removeRecentVault);
@@ -86,7 +86,7 @@ export function WelcomeView() {
     [recentVaultsAll, vaultPath],
   );
 
-  // recentFiles 已隐含归属当前 vault（持久化在 {vault}/.stela/settings.json）
+  // recentFiles 已隐含归属当前 vault（持久化在 {vault}/.stela/recent-files.local.json）
   const recentFilesInVault = vaultPath ? recentFiles : [];
 
   const onOpenRecentFile = useCallback(

@@ -1,28 +1,4 @@
 {
-  "vault": {
-    "recentFiles": [
-      {
-        "path": "/Users/jinmianye/work/stela-opensource/examples/demo-vault/notes/mysql-demo.md",
-        "openedAt": 1782658384346
-      },
-      {
-        "path": "/Users/jinmianye/work/stela-opensource/examples/demo-vault/notes/postgres-demo.md",
-        "openedAt": 1782658029744
-      },
-      {
-        "path": "/Users/jinmianye/work/stela-opensource/examples/demo-vault/notes/markdown-syntax-showcase.md",
-        "openedAt": 1782658028670
-      },
-      {
-        "path": "/Users/jinmianye/work/stela-opensource/examples/demo-vault/tables/stela_demo.demo_tasks.md",
-        "openedAt": 1782657194528
-      },
-      {
-        "path": "/Users/jinmianye/work/stela-opensource/examples/demo-vault/README.md",
-        "openedAt": 1782654708677
-      }
-    ]
-  },
   "ui": {
     "editorWidth": "narrow"
   },

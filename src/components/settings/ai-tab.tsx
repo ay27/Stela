@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Bot, CheckCircle2, Loader2, ShieldAlert, Trash2 } from "lucide-react";
 
 import type { AiProviderMode, AiProviderStatus } from "@shared/types";
+import { SQL_FIM_ENABLED } from "@/editor/runsql/sql-fim-completion";
 import { useT } from "@/i18n/use-t";
 import { useSettings } from "@/state/settings";
 import { cn } from "@/lib/utils";
@@ -48,6 +49,9 @@ export function AiTab() {
           model: settings.model,
           sendResultSamples: settings.sendResultSamples,
           maxSampleRows: settings.maxSampleRows,
+          inlineCompletionEnabled: settings.inlineCompletionEnabled,
+          fimBaseUrl: settings.fimBaseUrl,
+          fimModel: settings.fimModel,
         },
         apiKey.trim() || null,
       );
@@ -147,6 +151,62 @@ export function AiTab() {
           </div>
         </Row>
       </Section>
+
+      {SQL_FIM_ENABLED ? (
+        <Section
+          title={t("ai.inline.title")}
+          description={t("ai.inline.description")}
+        >
+          <Row
+            label={t("ai.inline.enabled.label")}
+            description={t("ai.inline.enabled.description")}
+          >
+            <label className="inline-flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={settings.inlineCompletionEnabled}
+                onChange={(e) =>
+                  void patch({
+                    ai: { inlineCompletionEnabled: e.currentTarget.checked },
+                  })
+                }
+                className="h-4 w-4 accent-primary"
+              />
+              <span className="text-[11px] text-muted-foreground">
+                {settings.inlineCompletionEnabled
+                  ? t("ai.inline.enabled.on")
+                  : t("ai.inline.enabled.off")}
+              </span>
+            </label>
+          </Row>
+
+          <Row
+            label={t("ai.inline.model.label")}
+            description={t("ai.inline.model.description")}
+          >
+            <input
+              value={settings.fimModel}
+              onChange={(e) => void patch({ ai: { fimModel: e.target.value } })}
+              className="w-56 rounded-md border border-border bg-background px-2 py-1.5 text-[12px]"
+              placeholder="deepseek-v4-pro"
+            />
+          </Row>
+
+          <Row
+            label={t("ai.inline.baseUrl.label")}
+            description={t("ai.inline.baseUrl.description")}
+          >
+            <input
+              value={settings.fimBaseUrl}
+              onChange={(e) =>
+                void patch({ ai: { fimBaseUrl: e.target.value } })
+              }
+              className="w-72 rounded-md border border-border bg-background px-2 py-1.5 text-[12px]"
+              placeholder="https://api.deepseek.com/beta"
+            />
+          </Row>
+        </Section>
+      ) : null}
 
       <Section title={t("ai.privacy.title")} description={t("ai.privacy.description")}>
         <Row

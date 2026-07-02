@@ -1,6 +1,8 @@
 import type {
   AiCompleteRequest,
   AiCompleteResponse,
+  AiFimCompleteRequest,
+  AiFimCompleteResponse,
   AiProviderStatus,
   AiSettings,
 } from "@shared/types";
@@ -22,3 +24,8 @@ export function completeAi(
   return window.stela.ai.complete(request);
 }
 
+export function completeAiFim(
+  request: AiFimCompleteRequest,
+): Promise<AiFimCompleteResponse> {
+  return window.stela.ai.fimComplete(request);
+}

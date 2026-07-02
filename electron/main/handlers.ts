@@ -17,6 +17,8 @@ import { IPC } from "@shared/ipc-channels";
 import type {
   AiCompleteRequest,
   AiCompleteResponse,
+  AiFimCompleteRequest,
+  AiFimCompleteResponse,
   AiProviderStatus,
   AiSettings,
   AppSettings,
@@ -446,6 +448,15 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
     IPC.AI_COMPLETE,
     async ({ request }) =>
       ai.complete(
+        requireVault(),
+        (await deviceProfile.loadDeviceProfile()).slug,
+        request,
+      ),
+  );
+  registerHandler<{ request: AiFimCompleteRequest }, AiFimCompleteResponse>(
+    IPC.AI_FIM_COMPLETE,
+    async ({ request }) =>
+      ai.fimComplete(
         requireVault(),
         (await deviceProfile.loadDeviceProfile()).slug,
         request,

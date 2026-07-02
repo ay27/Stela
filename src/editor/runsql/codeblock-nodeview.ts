@@ -64,6 +64,10 @@ import {
   createTableMentionInput,
   type TableMentionInputHandle,
 } from "./ai-mention-input";
+import {
+  SQL_FIM_ENABLED,
+  sqlFimCompletionExtension,
+} from "./sql-fim-completion";
 import { renderMarkdownIntoDom } from "./render-markdown-dom";
 import { useColumnCache } from "./column-cache";
 import { formatSqlCommand } from "./sql-format";
@@ -551,6 +555,13 @@ export class CodeBlockNodeView implements NodeView {
         // languageExtension 里走 languageCompartment，这样语言改成普通 code
         // 时能跟着 reconfigure 掉，行为与 sqlExtensions 一致。
         CMView.lineWrapping,
+        ...(language === RUNSQL_LANGUAGE && SQL_FIM_ENABLED
+          ? [
+              sqlFimCompletionExtension(
+                () => getRunContext()?.connectionName ?? null,
+              ),
+            ]
+          : []),
       ];
     }
     return [];
@@ -595,6 +606,10 @@ export class CodeBlockNodeView implements NodeView {
   ): Promise<ColumnDef[]> {
     const ctx = getRunContext();
     if (!ctx?.connectionName) return [];
+    const tableNames = peekAutocompleteFor(ctx.connectionName);
+    if (tableNames.length > 0 && !isKnownTable(tableNames, db, table)) {
+      return [];
+    }
     return useColumnCache.getState().ensure(ctx.connectionName, db, table);
   }
 
@@ -1646,6 +1661,15 @@ function buildAiRewriteDiffExtension(
     CMView.editable.of(false),
     CMView.decorations.of(Decoration.set(ranges, true)),
   ];
+}
+
+function isKnownTable(
+  tableNames: readonly string[],
+  db: string | null,
+  table: string,
+): boolean {
+  if (db) return tableNames.includes(`${db}.${table}`);
+  return tableNames.includes(table) || tableNames.some((name) => name.endsWith(`.${table}`));
 }
 
 function diffSqlLines(original: string[], proposed: string[]): SqlDiffOp[] {
