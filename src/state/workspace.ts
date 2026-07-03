@@ -7,6 +7,7 @@ import { useConnections } from "@/state/connections";
 import { usePluginsStore } from "@/services/plugins";
 import { resetAutoGit, scheduleAutoGit, startAutoPull } from "@/services/auto-git";
 import { refreshGitStatus } from "@/state/git";
+import { clearTabBuffer } from "@/state/tab-buffer";
 import type { VaultFsEvent } from "@shared/ipc-events";
 
 /**
@@ -55,6 +56,8 @@ export interface Tab {
    * 切 tab / 重新打开同一文件时该偏好仍跟随该 tab。
    */
   backlinksOpen?: boolean;
+  /** 当前 tab 内正在执行的 RunSQL 数量；>0 时 TabBar 显示执行中。 */
+  sqlRunningCount?: number;
 }
 
 /** 最近关闭历史栈上限。超过会从栈底丢弃。 */
@@ -181,6 +184,10 @@ interface WorkspaceState {
   reopenLastClosed: () => void;
   setActive: (id: string | null) => void;
   setDirty: (id: string, dirty: boolean) => void;
+  getTabIdByPath: (path: string) => string | null;
+  incrementSqlRunning: (id: string) => void;
+  decrementSqlRunning: (id: string) => void;
+  reloadTabFromBuffer: (id: string) => void;
   /** 把指定 ephemeral tab 升级为永久 tab；非 ephemeral 时 no-op。 */
   promoteEphemeral: (id: string) => void;
   /** 切换 tab 的 pinned 状态。pinned 的 tab 会被搬到 pinned 区末尾，
@@ -526,6 +533,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
     const snap = snapshotFor(target);
     const droppedMru = dropMru(mruTabIds, [id]);
+    clearTabBuffer(id);
     set({
       tabs: next,
       activeTabId: nextActive,
@@ -546,6 +554,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       if (t.pinned) return true;
       const snap = snapshotFor(t);
       if (snap) stack = pushClosedSnapshot(stack, snap);
+      clearTabBuffer(t.id);
       return false;
     });
     if (next.length === tabs.length) return;
@@ -569,6 +578,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const snap = snapshotFor(t);
       if (snap) stack = pushClosedSnapshot(stack, snap);
       removed.push(t);
+      clearTabBuffer(t.id);
       return false;
     });
     if (removed.length === 0) return;
@@ -593,6 +603,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       if (t.pinned) return true;
       const snap = snapshotFor(t);
       if (snap) stack = pushClosedSnapshot(stack, snap);
+      clearTabBuffer(t.id);
       return false;
     });
     if (next.length === tabs.length) return;
@@ -627,6 +638,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   closeTabsForPath: (path) => {
     const { tabs, activeTabId, mruTabIds } = get();
     const isMatch = (p: string) => p === path || p.startsWith(`${path}/`);
+    tabs.forEach((t) => {
+      if (t.kind === "file" && t.path && isMatch(t.path)) clearTabBuffer(t.id);
+    });
     const next = tabs.filter((t) => !(t.kind === "file" && t.path && isMatch(t.path)));
     if (next.length === tabs.length) return;
     let nextActive: string | null = activeTabId;
@@ -684,6 +698,47 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       set({ tabs: next });
       if (!dirty) scheduleAutoGit("tab-clean");
     }
+  },
+
+  getTabIdByPath: (path) => {
+    const tab = get().tabs.find((t) => t.kind === "file" && t.path === path);
+    return tab?.id ?? null;
+  },
+
+  incrementSqlRunning: (id) => {
+    const { tabs } = get();
+    let changed = false;
+    const next = tabs.map((t) => {
+      if (t.id !== id) return t;
+      changed = true;
+      return { ...t, sqlRunningCount: (t.sqlRunningCount ?? 0) + 1 };
+    });
+    if (changed) set({ tabs: next });
+  },
+
+  decrementSqlRunning: (id) => {
+    const { tabs } = get();
+    let changed = false;
+    const next = tabs.map((t) => {
+      if (t.id !== id) return t;
+      const count = Math.max(0, (t.sqlRunningCount ?? 0) - 1);
+      changed = count !== (t.sqlRunningCount ?? 0);
+      return count > 0
+        ? { ...t, sqlRunningCount: count }
+        : { ...t, sqlRunningCount: undefined };
+    });
+    if (changed) set({ tabs: next });
+  },
+
+  reloadTabFromBuffer: (id) => {
+    const { tabs } = get();
+    let changed = false;
+    const next = tabs.map((t) => {
+      if (t.id !== id) return t;
+      changed = true;
+      return { ...t, reloadToken: (t.reloadToken ?? 0) + 1 };
+    });
+    if (changed) set({ tabs: next });
   },
 
   setPinned: (id, pinned) => {

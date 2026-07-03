@@ -5,6 +5,11 @@ import { readFile } from "@/services/fs";
 import { writeFile } from "@/services/fs-write";
 import { setKnownDiskContent } from "@/services/note-save-tracker";
 import { useWorkspace } from "@/state/workspace";
+import {
+  getTabBuffer,
+  scheduleTabPersist,
+  setTabBuffer,
+} from "@/state/tab-buffer";
 import { useDialogs } from "@/state/dialogs";
 import { MilkdownEditor, type MilkdownEditorHandle } from "@/editor/MilkdownEditor";
 import { BacklinksPanel } from "@/components/backlinks-panel";
@@ -68,10 +73,18 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
     setRaw(null);
     setError(null);
     setReloadNonce((n) => n + 1);
+    const buffered = getTabBuffer(tabId);
+    if (buffered !== undefined) {
+      setRaw(buffered);
+      return () => {
+        alive = false;
+      };
+    }
     readFile(path)
       .then((text) => {
         if (!alive) return;
         setKnownDiskContent(path, text);
+        setTabBuffer(tabId, text);
         setRaw(text);
       })
       .catch((err: unknown) => {
@@ -80,7 +93,7 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
     return () => {
       alive = false;
     };
-  }, [path]);
+  }, [path, tabId]);
 
   // 外部变更自动重读（watcher 检测到 clean tab 被外部修改时 bump reloadToken）。
   //
@@ -102,6 +115,16 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
       return;
     }
     let alive = true;
+    const buffered = getTabBuffer(tabId);
+    if (buffered !== undefined) {
+      if (buffered !== rawRef.current) {
+        setRaw(buffered);
+        setReloadNonce((n) => n + 1);
+      }
+      return () => {
+        alive = false;
+      };
+    }
     readFile(pathRef.current)
       .then((text) => {
         if (!alive) return;
@@ -137,6 +160,7 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
       const next = updateFrontmatterField(raw, "connection_name", name);
       if (next === raw) return;
       setRaw(next);
+      setTabBuffer(tabId, next);
       setReloadNonce((n) => n + 1);
       try {
         await writeFile(path, next);
@@ -144,7 +168,17 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
         console.error("[stela] write frontmatter failed", err);
       }
     },
-    [path, raw],
+    [path, raw, tabId],
+  );
+
+  const onEditorUnmountFlush = useCallback(
+    (next: string) => {
+      setTabBuffer(tabId, next);
+      if (next === rawRef.current) return;
+      setDirty(tabId, true);
+      scheduleTabPersist(tabId, path, next, () => setDirty(tabId, false));
+    },
+    [path, setDirty, tabId],
   );
 
   const onCopyPath = useCallback(() => {
@@ -269,8 +303,10 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
           onDirtyChange={(dirty) => setDirty(tabId, dirty)}
           onPersist={async (next) => {
             setRaw(next);
+            setTabBuffer(tabId, next);
             await writeFile(path, next);
           }}
+          onUnmountFlush={onEditorUnmountFlush}
         />
       </div>
       <BacklinksPanel path={path} tabId={tabId} />

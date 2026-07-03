@@ -3,6 +3,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   ChevronDown,
   FileText,
+  Loader2,
   Pin,
   PinOff,
   X,
@@ -233,6 +234,7 @@ function TabItemImpl({
   const canCloseToRight = !isLast;
   const isPinned = !!tab.pinned;
   const isEphemeral = !!tab.ephemeral;
+  const sqlRunning = (tab.sqlRunningCount ?? 0) > 0;
   const onDragStart = (e: React.DragEvent) => onDragStartTab(tab.id, e);
   const onDragEnd = () => onDragEndTab();
   const onDragOver = (e: React.DragEvent) => onDragOverTab(tab.id, e);
@@ -268,7 +270,11 @@ function TabItemImpl({
             showRightDivider && "border-r border-border",
             dragging && "opacity-40",
           )}
-          title={tab.path ?? tab.title}
+          title={
+            sqlRunning
+              ? `${tab.path ?? tab.title}\nSQL 执行中`
+              : (tab.path ?? tab.title)
+          }
         >
           <span
             className={cn(
@@ -310,6 +316,10 @@ function TabItemImpl({
           >
             {tab.title}
           </span>
+
+          {sqlRunning ? (
+            <Loader2 className="h-3 w-3 flex-none animate-spin text-primary" />
+          ) : null}
 
           {tab.dirty ? (
             <span className="h-1.5 w-1.5 flex-none rounded-full bg-primary" />
@@ -479,6 +489,7 @@ function OverflowItem({
   onClose: () => void;
 }) {
   const closable = !tab.pinned;
+  const sqlRunning = (tab.sqlRunningCount ?? 0) > 0;
   return (
     <DropdownMenu.Item
       onSelect={onSelect}
@@ -493,6 +504,9 @@ function OverflowItem({
       ) : (
         <FileText className="h-3.5 w-3.5 flex-none text-muted-foreground" />
       )}
+      {sqlRunning ? (
+        <Loader2 className="h-3 w-3 flex-none animate-spin text-primary" />
+      ) : null}
       <span
         className={cn(
           "flex-1 truncate",

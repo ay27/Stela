@@ -93,6 +93,7 @@ interface MilkdownEditorProps {
   connectionName: string | null;
   onDirtyChange?: (dirty: boolean) => void;
   onPersist?: (next: string) => Promise<void> | void;
+  onUnmountFlush?: (next: string) => void;
 }
 
 export interface MilkdownEditorHandle {
@@ -240,6 +241,7 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       connectionName,
       onDirtyChange,
       onPersist,
+      onUnmountFlush,
     },
     ref,
   ) {
@@ -256,6 +258,7 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
 
   const dirtyRef = useRef(false);
   const lastPersistedBodyRef = useRef(body);
+  const latestRawRef = useRef(initialRaw);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
 
@@ -318,9 +321,11 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
   // 把 callback 用 ref 锁住，避免每次 props 变化都重新装 listener
   const onDirtyRef = useRef(onDirtyChange);
   const onPersistRef = useRef(onPersist);
+  const onUnmountFlushRef = useRef(onUnmountFlush);
   useEffect(() => {
     onDirtyRef.current = onDirtyChange;
     onPersistRef.current = onPersist;
+    onUnmountFlushRef.current = onUnmountFlush;
   });
 
   useEditor((root) => {
@@ -457,6 +462,7 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     crepe.on((api) => {
       api.markdownUpdated((_ctx, markdown) => {
         const nextRaw = joinFrontmatter(frontmatter, markdown);
+        latestRawRef.current = nextRaw;
         updateRunContextNote(path, nextRaw);
         if (markdown === lastPersistedBodyRef.current) return;
         // 用户从未真正动过键盘/IME/粘贴 → 视为 mount 后的 programmatic
@@ -513,6 +519,7 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         clearTimeout(debounceTimerRef.current);
         debounceTimerRef.current = null;
       }
+      onUnmountFlushRef.current?.(latestRawRef.current);
     };
   }, []);
 

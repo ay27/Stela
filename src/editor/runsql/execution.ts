@@ -26,14 +26,25 @@ import type { ColumnDef, QueryResult, RunRecord } from "@/contracts";
 import { generateBlockId, type DetailMeta } from "@/core/types";
 import { electronConnectorRegistry } from "@/services/connectors/electron-connector";
 import { scheduleAutoGit } from "@/services/auto-git";
+import { readFile } from "@/services/fs";
+import { writeFile } from "@/services/fs-write";
+import { getKnownDiskContent } from "@/services/note-save-tracker";
 import { electronStorage } from "@/services/storage/electron-storage";
+import {
+  getTabBuffer,
+  scheduleTabPersist,
+  setTabBuffer,
+} from "@/state/tab-buffer";
 import { useConnections } from "@/state/connections";
+import { useWorkspace } from "@/state/workspace";
 import {
   MAX_INLINE_RESULT_BYTES,
   TRUNCATED_MESSAGE_PREFIX,
 } from "@shared/journal-limits";
 
 import { serializeDetail } from "./detail-meta";
+import { patchRunsqlDetail } from "./markdown-patch";
+import { beginPendingRun, endPendingRun } from "./pending-runs";
 import { flushAllRunsqlEditors, RUNSQL_LANGUAGE } from "./codeblock-nodeview";
 import { getRunContext } from "./run-context";
 
@@ -69,6 +80,7 @@ function setAttrs(
   getPos: () => number | undefined,
   patch: Record<string, unknown>,
 ): void {
+  if (!isViewWritable(view)) return;
   const pos = getPos();
   if (pos === undefined) return;
   const node = view.state.doc.nodeAt(pos);
@@ -80,12 +92,18 @@ function setAttrs(
   view.dispatch(tr);
 }
 
+function isViewWritable(view: PMView): boolean {
+  return view.dom.isConnected;
+}
+
 export async function runBlock(
   node: ProseNode,
   view: PMView,
   getPos: () => number | undefined,
 ): Promise<RunOutcome> {
   const ctx = getRunContext();
+  const path = ctx?.path ?? null;
+  const tabId = path ? useWorkspace.getState().getTabIdByPath(path) : null;
   if (!ctx?.connectionName) {
     setAttrs(view, getPos, { runState: "error" });
     return {
@@ -114,6 +132,11 @@ export async function runBlock(
     return { ok: false, message: "SQL 为空。" };
   }
 
+  const blockIndex = findRunsqlBlockIndex(view.state.doc, getPos());
+  if (tabId) useWorkspace.getState().incrementSqlRunning(tabId);
+  const pendingRunKey = tabId
+    ? beginPendingRun({ tabId, blockId, blockIndex, sql })
+    : null;
   setAttrs(view, getPos, { runState: "running" });
 
   const startedAt = Date.now();
@@ -133,8 +156,10 @@ export async function runBlock(
       ctx.connectionName,
       startedAt,
       message,
-      ctx.path ?? null,
+      path,
     );
+    endPendingRun(pendingRunKey);
+    if (tabId) useWorkspace.getState().decrementSqlRunning(tabId);
     return { ok: false, message };
   }
 
@@ -170,7 +195,7 @@ export async function runBlock(
     elapsedMs,
     rowCount,
     connectionName: ctx.connectionName,
-    notePath: ctx.path ?? null,
+    notePath: path,
   };
   try {
     await electronStorage.saveRun(record);
@@ -194,11 +219,27 @@ export async function runBlock(
     resultRefId: runId,
   };
   const detailRaw = serializeDetail(detail);
-  setAttrs(view, getPos, {
-    detail,
-    detailRaw,
-    runState: "idle",
-  });
+  try {
+    if (isViewWritable(view)) {
+      setAttrs(view, getPos, {
+        detail,
+        detailRaw,
+        runState: "idle",
+      });
+    } else if (path) {
+      await writeDetailToMarkdownBuffer({
+        path,
+        tabId,
+        blockId,
+        blockIndex,
+        sql,
+        detailRaw,
+      });
+    }
+  } finally {
+    endPendingRun(pendingRunKey);
+    if (tabId) useWorkspace.getState().decrementSqlRunning(tabId);
+  }
   // 结果展示由 RunSQL NodeView 自身的 BlockResult 区域负责（按 detail.resultRefId
   // 渲染表格，存进 SQLite 不必再通过全局 panel 通知）。
   return { ok: true, runId };
@@ -222,24 +263,61 @@ function isRunsqlBlock(node: ProseNode): boolean {
   );
 }
 
-/** 按文档顺序找第 n 个（0-based）非空 runsql 块。 */
-function findRunsqlBlockAtIndex(
-  doc: ProseNode,
-  index: number,
-): { pos: number; node: ProseNode } | null {
-  let i = 0;
-  let found: { pos: number; node: ProseNode } | null = null;
+function findRunsqlBlockIndex(doc: ProseNode, targetPos: number | undefined): number {
+  if (targetPos === undefined) return 0;
+  let index = 0;
+  let found = 0;
   doc.descendants((node, pos) => {
-    if (found) return false;
     if (!isRunsqlBlock(node) || !node.textContent.trim()) return;
-    if (i === index) {
-      found = { pos, node };
+    if (pos === targetPos) {
+      found = index;
       return false;
     }
-    i++;
+    index++;
     return;
   });
   return found;
+}
+
+async function writeDetailToMarkdownBuffer({
+  path,
+  tabId,
+  blockId,
+  blockIndex,
+  sql,
+  detailRaw,
+}: {
+  path: string;
+  tabId: string | null;
+  blockId: string;
+  blockIndex: number;
+  sql: string;
+  detailRaw: string;
+}): Promise<void> {
+  const raw =
+    (tabId ? getTabBuffer(tabId) : undefined) ??
+    getKnownDiskContent(path) ??
+    (await readFile(path));
+  const next = patchRunsqlDetail(raw, {
+    blockId,
+    blockIndex,
+    sql,
+    detailRaw,
+  });
+  if (next === raw) return;
+
+  if (!tabId) {
+    await writeFile(path, next);
+    return;
+  }
+
+  const workspace = useWorkspace.getState();
+  setTabBuffer(tabId, next);
+  workspace.setDirty(tabId, true);
+  scheduleTabPersist(tabId, path, next, () =>
+    useWorkspace.getState().setDirty(tabId, false),
+  );
+  workspace.reloadTabFromBuffer(tabId);
 }
 
 /**
@@ -292,16 +370,17 @@ export async function runAllBlocks(view: PMView): Promise<RunAllOutcome> {
   flushAllRunsqlEditors();
 
   const outcome: RunAllOutcome = { total: 0, ran: 0, failed: 0, messages: [] };
-  view.state.doc.descendants((node) => {
-    if (isRunsqlBlock(node) && node.textContent.trim()) outcome.total++;
+  const blocks: Array<{ pos: number; node: ProseNode }> = [];
+  view.state.doc.descendants((node, pos) => {
+    if (isRunsqlBlock(node) && node.textContent.trim()) {
+      blocks.push({ pos, node });
+    }
   });
+  outcome.total = blocks.length;
 
   if (outcome.total === 0) return outcome;
 
-  for (let index = 0; index < outcome.total; index++) {
-    const target = findRunsqlBlockAtIndex(view.state.doc, index);
-    if (!target) break;
-    const { pos, node } = target;
+  for (const { pos, node } of blocks) {
     const result = await runBlock(node, view, () => pos);
     outcome.ran++;
     if (!result.ok) {

@@ -73,8 +73,10 @@ import { useColumnCache } from "./column-cache";
 import { formatSqlCommand } from "./sql-format";
 import { formatHotkey } from "@/lib/hotkeys";
 import type { DetailMeta } from "@/core/types";
+import { useWorkspace } from "@/state/workspace";
 import { renderMermaid } from "@/editor/mermaid/render";
 import { i18n } from "@/i18n";
+import { isRunsqlBlockPending } from "./pending-runs";
 
 export const RUNSQL_LANGUAGE = "runsql";
 export const MERMAID_LANGUAGE = "mermaid";
@@ -956,7 +958,7 @@ export class CodeBlockNodeView implements NodeView {
     const isRunsql = language === RUNSQL_LANGUAGE;
     const isMermaid = language === MERMAID_LANGUAGE;
     if (isRunsql) {
-      const runState: RunStateValue = attrs.runState ?? "idle";
+      const runState = this.effectiveRunState(node);
       const running = runState === "running";
       const label = running ? "Running…" : "Run";
       const formatHint = formatHotkey("Mod+Alt+L");
@@ -1460,7 +1462,7 @@ export class CodeBlockNodeView implements NodeView {
     if (!this.resultRoot) return;
     const attrs = node.attrs as RunSqlAttrs;
     const detail = attrs.detail ?? null;
-    const runState: RunStateValue = attrs.runState ?? "idle";
+    const runState = this.effectiveRunState(node);
     const runId = detail?.resultRefId ?? null;
     const blockId = attrs.blockId ?? detail?.blockId ?? null;
 
@@ -1494,6 +1496,49 @@ export class CodeBlockNodeView implements NodeView {
             : undefined,
       }),
     );
+  }
+
+  private effectiveRunState(node: ProseNode): RunStateValue {
+    const attrs = node.attrs as RunSqlAttrs;
+    const explicit = attrs.runState ?? "idle";
+    if (explicit !== "idle") return explicit;
+    const tabId = useWorkspace.getState().activeTabId;
+    if (!tabId) return explicit;
+    const blockId = attrs.blockId ?? attrs.detail?.blockId ?? null;
+    if (
+      isRunsqlBlockPending({
+        tabId,
+        blockId,
+        blockIndex: this.currentRunsqlBlockIndex(),
+        sql: node.textContent,
+      })
+    ) {
+      return "running";
+    }
+    return explicit;
+  }
+
+  private currentRunsqlBlockIndex(): number {
+    const pos = this.getPos();
+    if (pos === undefined) return 0;
+    let index = 0;
+    let found = 0;
+    this.view.state.doc.descendants((node, nodePos) => {
+      if (
+        node.type.name !== "code_block" ||
+        (node.attrs.language as string | undefined) !== RUNSQL_LANGUAGE ||
+        !node.textContent.trim()
+      ) {
+        return;
+      }
+      if (nodePos === pos) {
+        found = index;
+        return false;
+      }
+      index++;
+      return;
+    });
+    return found;
   }
 
   // ----- mermaid 预览 ------------------------------------------------------
