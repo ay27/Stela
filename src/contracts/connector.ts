@@ -14,6 +14,8 @@ export interface ConnectorKindMeta {
   defaultConfig: unknown;
   /** 是否子进程实现 */
   subprocess: boolean;
+  /** SQL 方言名（"MySQL" / "PostgreSQL" / "StarRocks" 等），不填时按 kind 启发式回退 */
+  dialect?: string;
 }
 
 export interface ColumnDef {

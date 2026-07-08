@@ -35,6 +35,7 @@ const UI_FILES_WITHOUT_HARDCODED_CHINESE = [
   "src/layout/FileTree.tsx",
   "src/layout/RunHistoryPanel.tsx",
   "src/layout/SearchPanel.tsx",
+  "src/layout/SqlSearchView.tsx",
   "src/views/EditorView.tsx",
 ];
 

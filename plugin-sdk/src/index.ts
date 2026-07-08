@@ -59,6 +59,12 @@ export interface ConnectorKindMeta {
   defaultConfig: unknown;
   /** 是否子进程实现。module 插件一律 false。 */
   subprocess: boolean;
+  /**
+   * SQL 方言名（例 "MySQL" / "PostgreSQL" / "StarRocks"）。用于 AI prompt 提示、
+   * 编辑器语法高亮/补全的 lezer dialect 选择、以及 SQL 事实索引的方言相关解析。
+   * 不填时 host 端按 `kind`/`displayName` 做启发式回退（见 `resolveDialect`）。
+   */
+  dialect?: string;
 }
 
 /**

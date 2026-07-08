@@ -267,6 +267,22 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
     extensions: z.array(z.string()),
   }),
 
+  [IPC.SQL_INDEX_QUERY]: z.object({
+    filter: z.object({
+      operations: z
+        .array(z.enum(["select", "insert", "replace", "update", "delete", "upsert", "ddl", "other"]))
+        .optional(),
+      readTable: z.string().min(1).max(256).optional(),
+      writeTable: z.string().min(1).max(256).optional(),
+      writeColumn: z
+        .object({ table: z.string().min(1).max(256), column: z.string().min(1).max(256) })
+        .optional(),
+      maxHits: z.number().int().min(1).max(2000).optional(),
+    }),
+  }),
+  [IPC.SQL_INDEX_FACETS]: z.object({}).strict(),
+  [IPC.SQL_INDEX_STATUS]: z.object({}).strict(),
+
   [IPC.PRIVACY_GET_STATUS]: z.object({}).strict(),
 
   [IPC.AI_GET_STATUS]: z.object({}).strict(),
@@ -392,6 +408,16 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
           prompt: z.string().max(8_000),
           suffix: z.string().max(8_000),
           connectionName: z.string().max(256).nullable().optional(),
+        })
+        .strict(),
+    })
+    .strict(),
+  [IPC.AI_PARSE_SQL_QUERY]: z
+    .object({
+      request: z
+        .object({
+          question: z.string().min(1).max(2_000),
+          locale: z.enum(["zh", "en"]).optional(),
         })
         .strict(),
     })

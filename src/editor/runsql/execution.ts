@@ -219,6 +219,7 @@ export async function runBlock(
     resultRefId: runId,
   };
   const detailRaw = serializeDetail(detail);
+  endPendingRun(pendingRunKey);
   try {
     if (isViewWritable(view)) {
       setAttrs(view, getPos, {

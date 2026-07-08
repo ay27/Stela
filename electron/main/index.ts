@@ -18,6 +18,7 @@ import { assertAllRegistered, unregisterAll } from "./ipc-router";
 import { shutdownVaultContext } from "./vault-context";
 import * as connectorRegistry from "../services/connectors/registry";
 import * as resultStore from "../services/result-store";
+import * as sqlIndex from "../services/sql-index";
 import * as vaultIndex from "../services/vault-index";
 import * as vaultWatcher from "../services/vault-watcher";
 import { bootstrapFromLegacyIfFresh } from "../services/user-cache-store";
@@ -138,6 +139,17 @@ if (!gotLock) {
         win.webContents.send(channel);
       } catch (err) {
         log.error("send index:changed failed", err);
+      }
+    });
+
+    // 同上：SQL 事实索引完成全量构建 / 增量更新后通过这条 sink 推给 renderer。
+    sqlIndex.setBroadcaster((channel) => {
+      const win = mainWindow;
+      if (!win || win.isDestroyed()) return;
+      try {
+        win.webContents.send(channel);
+      } catch (err) {
+        log.error("send sql-index:changed failed", err);
       }
     });
 

@@ -48,6 +48,7 @@ import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { sqlExtensions } from "./sql-language";
+import { resolveEditorDialect } from "@/services/connectors/registry";
 import { currentCmTheme, subscribeCmTheme } from "./cm-theme";
 import { cmSearchHighlightExtension } from "./cm-search-highlight";
 import { runBlock } from "./execution";
@@ -551,6 +552,7 @@ export class CodeBlockNodeView implements NodeView {
           getTableNames: () => this.fetchTableNames(),
           ensureColumnsForTable: (db, table) =>
             this.ensureColumnsFor(db, table),
+          dialect: resolveEditorDialect(getRunContext()?.connectionName),
         }),
         // 长行自动折行：嵌在 markdown 正文里的 SQL 块宽度受限，长 SELECT /
         // 长字符串不 wrap 就会出横向滚动条，既丑又把行号 gutter 推走。放在

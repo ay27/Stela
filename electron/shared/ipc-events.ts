@@ -16,6 +16,8 @@ export const IPC_EVENTS = {
   VAULT_EXTERNAL_CHANGE: "vault:external-change",
   /** Vault index 增量更新（v0.3 双链 M2）。payload: void —— renderer 收到后失效缓存 / 重查 */
   INDEX_CHANGED: "index:changed",
+  /** SQL 事实索引状态变化（构建进度 / 就绪 / 增量更新）。payload: void —— renderer 收到后重查 status()/query() */
+  SQL_INDEX_CHANGED: "sql-index:changed",
 } as const;
 
 export type IpcEventChannel = (typeof IPC_EVENTS)[keyof typeof IPC_EVENTS];

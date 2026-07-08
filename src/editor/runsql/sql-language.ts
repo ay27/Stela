@@ -17,7 +17,7 @@
  *     首次拉取就立即返回结果；命中缓存零延迟。
  *   - lang-sql 自带的关键字补全我们用不上（关键字列表自己维护，方便约束顺序）。
  */
-import { sql } from "@codemirror/lang-sql";
+import { sql, type SQLDialect } from "@codemirror/lang-sql";
 import {
   autocompletion,
   type Completion,
@@ -103,6 +103,12 @@ export interface SqlExtensionOptions {
     db: string | null,
     table: string,
   ) => Promise<ColumnDef[]>;
+  /**
+   * 当前连接对应的 lezer SQL 方言（`MySQL` / `PostgreSQL` / `StandardSQL`…）。
+   * 不传则用 lang-sql 默认 `StandardSQL`。方言只影响词法层（关键字/引号/注释/
+   * cast 语法），不影响本文件的补全逻辑；解析走同一份 lezer 语法树。
+   */
+  dialect?: SQLDialect;
 }
 
 function normalizePrefix(prefix: string): string {
@@ -242,7 +248,7 @@ function logColumnCompletionDebug(
 }
 
 export function sqlExtensions(options: SqlExtensionOptions = {}): Extension[] {
-  const { getSiblingSqls, getTableNames, ensureColumnsForTable } = options;
+  const { getSiblingSqls, getTableNames, ensureColumnsForTable, dialect } = options;
 
   const fetchTables = async (): Promise<string[]> => {
     if (!getTableNames) return [];
@@ -331,5 +337,5 @@ export function sqlExtensions(options: SqlExtensionOptions = {}): Extension[] {
   // 注意：保留 sql() 是为了语法高亮 + 提供 syntaxTree(state) 给 sql-scope.ts 使用。
   // autocompletion override 会屏蔽 lang-sql 自带的 keyword / schema source，
   // 全部由本文件的 `source` 一手包揽（避免双源出现"列 + 表"重复或交错）。
-  return [sql(), autocompletion({ override: [source] })];
+  return [sql({ dialect }), autocompletion({ override: [source] })];
 }

@@ -3,19 +3,24 @@ import type {
   AiCompleteResponse,
   AiFimCompleteRequest,
   AiFimCompleteResponse,
+  AiParseSqlQueryRequest,
+  AiParseSqlQueryResponse,
   AiProviderStatus,
   AiSettings,
 } from "@shared/types";
 import { AppError } from "@shared/errors";
+import { resolveDialect } from "@shared/sql-dialect";
 
 import * as settingsStore from "../settings-store";
 import * as connectionsStore from "../connections-store";
 import * as connectorRegistry from "../connectors/registry";
+import * as sqlIndex from "../sql-index";
 import { getLogger } from "../logger";
 import { buildAiContext } from "./context-builder";
 import { buildPrompt } from "./prompt-builder";
 import { formatPromptDebugLog } from "./prompt-logging";
 import { mergeSchemaTargets, resolveMentionedSchemaContext, resolveSchemaContext } from "./schema-context";
+import { buildSqlQueryParsePrompt, parseModelFilterOutput } from "./sql-query-parser";
 import {
   callFimCompletions,
   callChatCompletions,
@@ -30,16 +35,6 @@ const log = getLogger("ai");
 function extractSql(text: string): string | null {
   const match = /```sql\s*([\s\S]*?)```/i.exec(text);
   return match?.[1]?.trim() || null;
-}
-
-function dialectFromKind(kind: string, displayName: string): string {
-  const key = `${kind} ${displayName}`.toLowerCase();
-  if (key.includes("starrocks")) return "StarRocks";
-  if (key.includes("postgres")) return "PostgreSQL";
-  if (key.includes("mysql")) return "MySQL";
-  if (key.includes("sqlite")) return "SQLite";
-  if (key.includes("duckdb")) return "DuckDB";
-  return displayName || kind;
 }
 
 async function enrichConnectorContext(
@@ -65,7 +60,7 @@ async function enrichConnectorContext(
         connector: {
           kind: entry.kind,
           displayName,
-          dialect: dialectFromKind(entry.kind, displayName),
+          dialect: resolveDialect({ kind: entry.kind, displayName, dialect: meta?.dialect }),
         },
       },
     };
@@ -192,7 +187,7 @@ async function resolveConnectionDialectHint(
       .listKinds()
       .find((item) => item.kind === entry.kind);
     const displayName = meta?.displayName ?? entry.kind;
-    return dialectFromKind(entry.kind, displayName);
+    return resolveDialect({ kind: entry.kind, displayName, dialect: meta?.dialect });
   } catch {
     return null;
   }
@@ -223,5 +218,40 @@ export async function fimComplete(
     suffix: request.suffix,
   });
   return { text };
+}
+
+/**
+ * NL → SQL 索引 filter JSON。只翻译不作答：真正命中一律走 `sql-index.ts` 的
+ * 确定性倒排索引求交集，这里产出的 filter 只是"用户想查什么"的结构化猜测。
+ */
+export async function parseSqlQuery(
+  vaultPath: string,
+  slug: string,
+  request: AiParseSqlQueryRequest,
+): Promise<AiParseSqlQueryResponse> {
+  const settings = await settingsStore.loadAppSettings(vaultPath);
+  const apiKey = await loadApiKey(vaultPath, slug);
+  const facetsData = await sqlIndex.facets();
+  const locale = request.locale ?? "zh";
+  const { system, instructions } = buildSqlQueryParsePrompt(facetsData, locale);
+  const text = await callChatCompletions({
+    settings: settings.ai,
+    apiKey,
+    system: `${system}\n\n${instructions}`,
+    user: request.question,
+  });
+  try {
+    const { filter, warnings } = parseModelFilterOutput(text);
+    return { filter, warnings };
+  } catch (err) {
+    log.error("parseSqlQuery: failed to parse model output", {
+      err: err instanceof Error ? err.message : String(err),
+      text: text.slice(0, 500),
+    });
+    throw new AppError(
+      "ai_parse_sql_query_failed",
+      "AI did not return a valid filter JSON for the SQL query.",
+    );
+  }
 }
 

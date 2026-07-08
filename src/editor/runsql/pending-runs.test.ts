@@ -4,6 +4,7 @@ import {
   endPendingRun,
   isRunsqlBlockPending,
 } from "./pending-runs";
+import { readFileSync } from "node:fs";
 
 interface Check {
   name: string;
@@ -85,6 +86,26 @@ const results: Check[] = [];
         blockIndex: 0,
         sql: "SELECT 3",
       }),
+    ),
+  );
+}
+
+{
+  const source = readFileSync(new URL("./execution.ts", import.meta.url), "utf8");
+  const successDetailStart = source.indexOf("const detail: DetailMeta = {");
+  const successDetailDispatch = source.indexOf(
+    "setAttrs(view, getPos, {\n        detail,",
+  );
+  const successDetailSource =
+    successDetailStart >= 0 && successDetailDispatch >= 0
+      ? source.slice(successDetailStart, successDetailDispatch)
+      : "";
+  const pendingEnd = successDetailSource.indexOf("endPendingRun(pendingRunKey);");
+  results.push(
+    expect(
+      "pending: success clears pending before idle detail render",
+      successDetailDispatch >= 0 && pendingEnd >= 0,
+      "idle detail render must not see stale pending state",
     ),
   );
 }

@@ -15,6 +15,7 @@ import { maybeSeedFromLegacy } from "../services/migrate-userdata-to-vault";
 import { setVault as registrySetVault } from "../services/connectors/registry";
 import { seedBundledPlugins } from "../services/connectors/bundled-plugins";
 import * as resultStore from "../services/result-store";
+import * as sqlIndex from "../services/sql-index";
 import * as syncOrchestrator from "../services/sync-orchestrator";
 import * as vaultIndex from "../services/vault-index";
 import * as vaultWatcher from "../services/vault-watcher";
@@ -103,6 +104,14 @@ export async function setCurrentVault(
       err: err instanceof Error ? err.message : String(err),
     });
   });
+  // 启动 SQL 事实索引（AST 结构化检索）。同样是 watcher 下游，必须在
+  // watcher.start 之后再起；失败不致命，SQL 搜索面板会显示空结果 + 报错态。
+  await sqlIndex.start(vaultPath).catch((err: unknown) => {
+    log.error("start sql index failed", {
+      vaultPath,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  });
   currentVaultPath = vaultPath;
   log.info("setCurrentVault done", { vaultPath });
 }
@@ -112,5 +121,6 @@ export function shutdownVaultContext(): void {
   void registrySetVault(null).catch(() => {});
   void vaultWatcher.stop().catch(() => {});
   void vaultIndex.stop().catch(() => {});
+  void sqlIndex.stop().catch(() => {});
   currentVaultPath = null;
 }

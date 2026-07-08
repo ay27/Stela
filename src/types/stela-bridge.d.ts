@@ -11,6 +11,8 @@ import type {
   AiCompleteResponse,
   AiFimCompleteRequest,
   AiFimCompleteResponse,
+  AiParseSqlQueryRequest,
+  AiParseSqlQueryResponse,
   AiProviderStatus,
   AiSettings,
   AppSettings,
@@ -54,6 +56,10 @@ import type {
   JournalCleanupSummary,
   JournalImportSummary,
   JournalSource,
+  SqlIndexFacets,
+  SqlIndexFilter,
+  SqlIndexHit,
+  SqlIndexStatus,
 } from "@shared/types";
 import type { VaultExternalChangePayload } from "@shared/ipc-events";
 
@@ -199,6 +205,9 @@ interface StelaBridge {
     clearApiKey: () => Promise<AiProviderStatus>;
     complete: (request: AiCompleteRequest) => Promise<AiCompleteResponse>;
     fimComplete: (request: AiFimCompleteRequest) => Promise<AiFimCompleteResponse>;
+    parseSqlQuery: (
+      request: AiParseSqlQueryRequest,
+    ) => Promise<AiParseSqlQueryResponse>;
   };
   git: {
     isRepo: () => Promise<boolean>;
@@ -280,6 +289,13 @@ interface StelaBridge {
     getBacklinks: (target: string) => Promise<IndexBacklinkEntry[]>;
     getEntry: (path: string) => Promise<IndexEntrySummary | null>;
     /** 订阅 main 推送的 INDEX_CHANGED；返回 unsubscribe（v0.3 双链 M2） */
+    onChanged: (callback: () => void) => () => void;
+  };
+  sqlIndex: {
+    query: (filter: SqlIndexFilter) => Promise<SqlIndexHit[]>;
+    facets: () => Promise<SqlIndexFacets>;
+    status: () => Promise<SqlIndexStatus>;
+    /** 订阅 main 推送的 SQL_INDEX_CHANGED；返回 unsubscribe */
     onChanged: (callback: () => void) => () => void;
   };
 }

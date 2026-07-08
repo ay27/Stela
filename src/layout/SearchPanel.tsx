@@ -18,6 +18,7 @@ import { useWorkspace } from "@/state/workspace";
 import { useLayout } from "@/state/layout";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n/use-t";
+import { SqlSearchView } from "./SqlSearchView";
 
 interface Props {
   vaultPath: string;
@@ -25,7 +26,43 @@ interface Props {
 
 const DEBOUNCE_MS = 250;
 
+type SearchMode = "text" | "sql";
+
 export function SearchPanel({ vaultPath }: Props) {
+  const t = useT();
+  const [mode, setMode] = useState<SearchMode>("text");
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center gap-1 border-b border-border px-2.5 pt-2">
+        {(["text", "sql"] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => setMode(m)}
+            className={cn(
+              "rounded-t-md px-2.5 py-1 text-[11px] font-medium",
+              mode === m
+                ? "border-b-2 border-primary text-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {m === "text" ? t("search.mode.text") : t("search.mode.sql")}
+          </button>
+        ))}
+      </div>
+      <div className="min-h-0 flex-1">
+        {mode === "text" ? (
+          <TextSearchPanel vaultPath={vaultPath} />
+        ) : (
+          <SqlSearchView vaultPath={vaultPath} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TextSearchPanel({ vaultPath }: Props) {
   const t = useT();
   const openFile = useWorkspace((s) => s.openFile);
   const hits = useSearch((s) => s.hits);

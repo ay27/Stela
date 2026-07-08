@@ -32,6 +32,8 @@ import type {
   ConnectorKindMeta,
   CredentialStorageStatus,
   FileNode,
+  AiParseSqlQueryRequest,
+  AiParseSqlQueryResponse,
   IndexBacklinkEntry,
   IndexCandidate,
   IndexEntrySummary,
@@ -66,6 +68,10 @@ import type {
   JournalCleanupSummary,
   JournalImportSummary,
   JournalSource,
+  SqlIndexFacets,
+  SqlIndexFilter,
+  SqlIndexHit,
+  SqlIndexStatus,
 } from "@shared/types";
 
 function call<T>(channel: IpcChannel, args: object = {}): Promise<T> {
@@ -288,6 +294,8 @@ const stela = {
       call<AiCompleteResponse>(IPC.AI_COMPLETE, { request }),
     fimComplete: (request: AiFimCompleteRequest) =>
       call<AiFimCompleteResponse>(IPC.AI_FIM_COMPLETE, { request }),
+    parseSqlQuery: (request: AiParseSqlQueryRequest) =>
+      call<AiParseSqlQueryResponse>(IPC.AI_PARSE_SQL_QUERY, { request }),
   },
 
   git: {
@@ -394,6 +402,24 @@ const stela = {
       ipcRenderer.on(IPC_EVENTS.INDEX_CHANGED, handler);
       return () => {
         ipcRenderer.removeListener(IPC_EVENTS.INDEX_CHANGED, handler);
+      };
+    },
+  },
+
+  sqlIndex: {
+    query: (filter: SqlIndexFilter) =>
+      call<SqlIndexHit[]>(IPC.SQL_INDEX_QUERY, { filter }),
+    facets: () => call<SqlIndexFacets>(IPC.SQL_INDEX_FACETS, {}),
+    status: () => call<SqlIndexStatus>(IPC.SQL_INDEX_STATUS, {}),
+    /**
+     * 订阅 main 进程 SQL 索引状态变化（构建进度 / 就绪 / 增量更新）。无 payload，
+     * renderer 收到后重查 status()/query()。
+     */
+    onChanged: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(IPC_EVENTS.SQL_INDEX_CHANGED, handler);
+      return () => {
+        ipcRenderer.removeListener(IPC_EVENTS.SQL_INDEX_CHANGED, handler);
       };
     },
   },

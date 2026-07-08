@@ -56,6 +56,8 @@ export interface ConnectorKindMeta {
   defaultConfig: unknown;
   /** 是否子进程实现 */
   subprocess: boolean;
+  /** SQL 方言名（"MySQL" / "PostgreSQL" / "StarRocks" 等），不填时按 kind 启发式回退 */
+  dialect?: string;
 }
 
 /**
@@ -414,6 +416,19 @@ export interface AiFimCompleteResponse {
   text: string;
 }
 
+export interface AiParseSqlQueryRequest {
+  /** 用户输入的自然语言问题,例如"orders 表的 insert 语句" */
+  question: string;
+  locale?: "zh" | "en";
+}
+
+export interface AiParseSqlQueryResponse {
+  /** AI 只做翻译,真正命中一律走确定性索引求交集,零幻觉表名风险 */
+  filter: SqlIndexFilter;
+  /** 未能识别 / 需要用户确认的提示(如"未在已知表中找到 xxx") */
+  warnings: string[];
+}
+
 export interface AiProviderStatus {
   enabled: boolean;
   providerMode: AiProviderMode;
@@ -664,6 +679,70 @@ export interface JournalCleanupSummary {
   /** 从 SQLite 中删除的 run 行数 */
   runsDeleted: number;
   elapsedMs: number;
+}
+
+// ---------- SQL 事实索引（AST 结构化检索） ----------
+
+/** 与 `sql-facts.ts` 的 `SqlOperation` 对齐，独立声明避免 shared/types 反向依赖 sql-facts。 */
+export type SqlIndexOperation =
+  | "select"
+  | "insert"
+  | "replace"
+  | "update"
+  | "delete"
+  | "upsert"
+  | "ddl"
+  | "other";
+
+export interface SqlIndexFilter {
+  operations?: SqlIndexOperation[];
+  /** `table` 或 `db.table`。裸表名匹配任意 db；限定名精确匹配。 */
+  readTable?: string;
+  writeTable?: string;
+  writeColumn?: { table: string; column: string };
+  /** 结果条数上限，默认 200。 */
+  maxHits?: number;
+}
+
+export interface SqlIndexHit {
+  /** 笔记绝对路径 */
+  path: string;
+  /** vault 根相对路径（POSIX） */
+  relPath: string;
+  /** runsql 块在文件内的序号（0-based） */
+  blockIndex: number;
+  /** 1-based 行号，指向 fence 起始行 */
+  line: number;
+  blockId: string | null;
+  connectionName: string | null;
+  dialect: string | null;
+  /** 该块最近一次执行的 `run-date`（来自 `<detail>`），未执行过为 null */
+  runDate: string | null;
+  /** 该块内命中的语句操作类型（去重） */
+  operations: SqlIndexOperation[];
+  /** 懒读文件切出的原始 SQL 片段（可能截断） */
+  snippet: string;
+}
+
+export interface SqlIndexFacets {
+  tables: string[];
+  columns: string[];
+  connections: string[];
+  operations: SqlIndexOperation[];
+  /** table（裸名/限定名两种 key 都有）-> 该表出现过的 writeColumn 列名列表，供"选表后再选列"的范围收窄用 */
+  tableColumns: Record<string, string[]>;
+}
+
+export type SqlIndexState = "idle" | "building" | "ready" | "error";
+
+export interface SqlIndexStatus {
+  state: SqlIndexState;
+  /** 已扫描文件数 / 总文件数（building 阶段的进度） */
+  processedFiles: number;
+  totalFiles: number;
+  /** 当前索引里的 runsql 块（doc）总数，含已 tombstone 的不计 */
+  blockCount: number;
+  error: string | null;
 }
 
 // ---------- Git 统一同步编排结果 ----------

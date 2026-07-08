@@ -77,6 +77,11 @@ export const IPC = {
   SEARCH_VAULT: "search:vault",
   SEARCH_LIST_FILES: "search:list-files",
 
+  // SQL 事实索引（AST 结构化检索）
+  SQL_INDEX_QUERY: "sql-index:query",
+  SQL_INDEX_FACETS: "sql-index:facets",
+  SQL_INDEX_STATUS: "sql-index:status",
+
   // Privacy / credential storage status
   PRIVACY_GET_STATUS: "privacy:get-status",
 
@@ -86,6 +91,7 @@ export const IPC = {
   AI_CLEAR_API_KEY: "ai:clear-api-key",
   AI_COMPLETE: "ai:complete",
   AI_FIM_COMPLETE: "ai:fim-complete",
+  AI_PARSE_SQL_QUERY: "ai:parse-sql-query",
 
   // Git 版本控制（替代 COS 同步；笔记 + JSONL 历史走 git remote）
   GIT_IS_REPO: "git:is-repo",

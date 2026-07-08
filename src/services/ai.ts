@@ -3,6 +3,8 @@ import type {
   AiCompleteResponse,
   AiFimCompleteRequest,
   AiFimCompleteResponse,
+  AiParseSqlQueryRequest,
+  AiParseSqlQueryResponse,
   AiProviderStatus,
   AiSettings,
 } from "@shared/types";
@@ -28,4 +30,11 @@ export function completeAiFim(
   request: AiFimCompleteRequest,
 ): Promise<AiFimCompleteResponse> {
   return window.stela.ai.fimComplete(request);
+}
+
+/** NL 问题 → SQL 索引 filter JSON。AI 只翻译不作答，实际命中走确定性索引。 */
+export function parseSqlQueryAi(
+  request: AiParseSqlQueryRequest,
+): Promise<AiParseSqlQueryResponse> {
+  return window.stela.ai.parseSqlQuery(request);
 }

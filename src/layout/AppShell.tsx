@@ -20,6 +20,7 @@ import {
 import { createNewStelaNote } from "@/services/note-actions";
 import { installExternalLinkHandler } from "@/services/opener";
 import { installVaultWatcherSubscriber } from "@/services/vault-watcher-subscriber";
+import { installSqlIndexSubscriber } from "@/state/sql-search";
 import { useFindState } from "@/editor/find-in-file";
 import { insertRunSqlIntoActiveEditor } from "@/editor/active-editor";
 import { useHotkeys, type HotkeyBinding } from "@/lib/hotkeys";
@@ -61,6 +62,9 @@ export function AppShell() {
   // 订阅 main 进程 vault watcher 的外部变更事件（v0.2 #7）。一次性安装，
   // installVaultWatcherSubscriber 内部已做幂等。
   useEffect(() => installVaultWatcherSubscriber(), []);
+
+  // 订阅 main 进程 SQL 事实索引的状态变化（建库进度 / 就绪 / 增量更新）。
+  useEffect(() => installSqlIndexSubscriber(), []);
 
   // Ctrl+Tab 切换器键盘驱动。
   //

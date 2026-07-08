@@ -11,67 +11,17 @@
  *    remark 插件接管，本文件不再参与
  */
 
+import { escapeFrontmatterKey, splitFrontmatter as sharedSplitFrontmatter } from "@shared/frontmatter";
+
+export type { SplitRaw } from "@shared/frontmatter";
+export { parseFrontmatterField } from "@shared/frontmatter";
+
+// splitFrontmatter / parseFrontmatterField 的规范实现已抽到 `@shared/frontmatter`
+// 供 main 进程的 SQL 索引服务复用（读 `connection_name`）；这里重导出保留既有导入路径。
+export const splitFrontmatter = sharedSplitFrontmatter;
+
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---(?:\n|$)/;
-const LEGACY_SEPARATOR_RE = /(?:^|\n)---\n---(?:\n|$)/g;
-// 代码块结束符 ``` 紧贴 <detail>：CommonMark 允许，但加空行更稳，且能让 stringify 回写时
-// 与吸附后的 mdast 结构对齐
-const FENCE_TO_DETAIL_RE = /(\n```[ \t]*)\n(<detail[\s>])/g;
-// </detail> 后必须有空行，否则 HTML block (type 7) 不会终止，会把后续内容吞进 HTML 块
-const DETAIL_END_NO_BLANK_RE = /(<\/detail>[ \t]*)\n(?!\n|$)/g;
-
-export interface SplitRaw {
-  /** 含两个 `---\n` 包夹的完整 frontmatter 块（可能带尾随 `\n`），无 frontmatter 时为空串。 */
-  frontmatter: string;
-  /** 剥掉 frontmatter、折叠掉 legacy `---\n---` 分隔符的正文。 */
-  body: string;
-}
-
-export function splitFrontmatter(raw: string): SplitRaw {
-  const text = raw.replace(/\r\n/g, "\n");
-  const m = text.match(FRONTMATTER_RE);
-  const frontmatter = m ? m[0] : "";
-  const after = text.slice(frontmatter.length);
-
-  // legacy `\n---\n---\n`：在 Plate 阶段被人工插入做"硬隔离"，
-  // 留到 Milkdown 这里会变成两个相邻 thematicBreak（两条横线），保存时再
-  // 序列化也会丢，干脆解析阶段就折叠掉。
-  const body = after
-    .replace(LEGACY_SEPARATOR_RE, "\n\n")
-    .replace(FENCE_TO_DETAIL_RE, "$1\n\n$2")
-    .replace(DETAIL_END_NO_BLANK_RE, "$1\n\n");
-
-  return { frontmatter, body };
-}
-
-/**
- * 从 frontmatter 文本里抓单行 `key: value` 形式的字段值。
- *
- * 极简实现，刻意不引 yaml parser：Stela 的 frontmatter 字段就是一组 scalar，
- * 不存在嵌套或多行 string。无匹配返回 null。
- *
- * 兼容值带引号的写法，如 `key: "value"` / `key: 'value'`。
- */
-export function parseFrontmatterField(
-  frontmatter: string,
-  key: string,
-): string | null {
-  if (!frontmatter) return null;
-  const re = new RegExp(`(?:^|\\n)\\s*${escapeReg(key)}\\s*:\\s*([^\\n]*)`);
-  const m = frontmatter.match(re);
-  if (!m) return null;
-  let v = m[1].trim();
-  if (
-    (v.startsWith('"') && v.endsWith('"')) ||
-    (v.startsWith("'") && v.endsWith("'"))
-  ) {
-    v = v.slice(1, -1);
-  }
-  return v.length === 0 ? null : v;
-}
-
-function escapeReg(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+const escapeReg = escapeFrontmatterKey;
 
 /**
  * 在 raw 里把 frontmatter 的某个 scalar 字段设为 `value`。

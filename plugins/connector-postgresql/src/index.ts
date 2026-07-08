@@ -148,6 +148,7 @@ class PostgresConnector implements Connector {
         ssl: false,
       },
       subprocess: false,
+      dialect: "PostgreSQL",
     };
   }
 

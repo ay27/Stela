@@ -19,6 +19,8 @@ import type {
   AiCompleteResponse,
   AiFimCompleteRequest,
   AiFimCompleteResponse,
+  AiParseSqlQueryRequest,
+  AiParseSqlQueryResponse,
   AiProviderStatus,
   AiSettings,
   AppSettings,
@@ -59,6 +61,10 @@ import type {
   JournalCleanupSummary,
   JournalImportSummary,
   JournalSource,
+  SqlIndexFacets,
+  SqlIndexFilter,
+  SqlIndexHit,
+  SqlIndexStatus,
 } from "@shared/types";
 
 import { AppError } from "@shared/errors";
@@ -81,6 +87,7 @@ import * as journal from "../services/history-journal";
 import * as deviceProfile from "../services/device-profile";
 import * as syncOrchestrator from "../services/sync-orchestrator";
 import * as vaultIndex from "../services/vault-index";
+import * as sqlIndex from "../services/sql-index";
 import * as autoUpdate from "../services/auto-updater";
 import * as ai from "../services/ai";
 
@@ -462,6 +469,15 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
         request,
       ),
   );
+  registerHandler<{ request: AiParseSqlQueryRequest }, AiParseSqlQueryResponse>(
+    IPC.AI_PARSE_SQL_QUERY,
+    async ({ request }) =>
+      ai.parseSqlQuery(
+        requireVault(),
+        (await deviceProfile.loadDeviceProfile()).slug,
+        request,
+      ),
+  );
 
   // ---------- Git 版本控制 ----------
   registerHandler<Record<string, never>, boolean>(IPC.GIT_IS_REPO, () =>
@@ -680,6 +696,18 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
   registerHandler<{ path: string }, IndexEntrySummary | null>(
     IPC.INDEX_GET_ENTRY,
     ({ path: p }) => vaultIndex.getEntry({ path: p }),
+  );
+
+  // ---------- SQL 事实索引（AST 结构化检索） ----------
+  registerHandler<{ filter: SqlIndexFilter }, SqlIndexHit[]>(
+    IPC.SQL_INDEX_QUERY,
+    ({ filter }) => sqlIndex.query(filter),
+  );
+  registerHandler<Record<string, never>, SqlIndexFacets>(IPC.SQL_INDEX_FACETS, () =>
+    sqlIndex.facets(),
+  );
+  registerHandler<Record<string, never>, SqlIndexStatus>(IPC.SQL_INDEX_STATUS, () =>
+    sqlIndex.status(),
   );
 
   // ---------- Export ----------

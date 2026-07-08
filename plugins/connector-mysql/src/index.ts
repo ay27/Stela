@@ -178,6 +178,7 @@ class MysqlConnector implements Connector {
         database: "",
       },
       subprocess: false,
+      dialect: "MySQL",
     };
   }
 
