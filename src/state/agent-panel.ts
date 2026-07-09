@@ -2,17 +2,22 @@
  * Harness agent 面板状态。
  *
  * main 端一次 run 会连续推送多条 [AgentEvent](../../electron/shared/types.ts)；
- * 这里把它们叠成一条 `timeline`，UI 只管渲染 timeline，不用关心事件到达顺序的
- * 细节（tool_call 和随后的 tool_result 会合并进同一条 timeline entry）。
+ * 这里把它们叠成每个 tab 独立的 `timeline`，UI 只管渲染当前 tab。
  */
 
 import { create } from "zustand";
 
-import type { AgentEvent, AgentToolCallInfo } from "@shared/types";
+import type { AgentEvent, AgentProposalPayload, AgentToolCallInfo } from "@shared/types";
 import { cancelAgent, onAgentEvent, respondAgentProposal, runAgent } from "@/services/agent";
 import { useLayout } from "@/state/layout";
 
 export type AgentRunStatus = "idle" | "running" | "done" | "error" | "cancelled";
+
+export interface AgentDraft {
+  text: string;
+  mentionedTables: string[];
+  isEmpty: boolean;
+}
 
 export type AgentTimelineEntry =
   | { kind: "user"; id: string; content: string }
@@ -28,31 +33,46 @@ export type AgentTimelineEntry =
   | {
       kind: "proposal";
       id: string;
+      runId: string;
       callId: string;
       proposalKind: "edit_note" | "mutation_sql";
-      payload: { notePath?: string; sql?: string; description: string };
+      payload: AgentProposalPayload;
       resolution: "pending" | "approved" | "rejected";
     }
   | { kind: "final"; id: string; content: string }
   | { kind: "error"; id: string; message: string }
   | { kind: "cancelled"; id: string };
 
-interface AgentPanelState {
+export interface AgentTab {
+  id: string;
+  title: string;
   runId: string | null;
-  /** 本次对话的会话 id；同一 id 下的多次 start() 在 main 进程里共享对话历史，实现多轮对话。 */
-  sessionId: string | null;
+  /** 同一 tab 下的多次 start() 在 main 进程里共享对话历史，实现多轮对话。 */
+  sessionId: string;
   status: AgentRunStatus;
   timeline: AgentTimelineEntry[];
+  draft: AgentDraft;
+  connectionName: string | null;
+  resetToken: number;
+}
+
+interface AgentPanelState {
+  tabs: AgentTab[];
+  activeTabId: string;
+  switchTab: (tabId: string) => void;
+  newConversation: () => void;
+  closeTab: (tabId: string) => void;
+  setConnectionName: (connectionName: string | null) => void;
+  updateDraft: (draft: AgentDraft) => void;
   start: (input: {
     prompt: string;
+    mentionedTables?: string[];
     connectionName?: string | null;
     notePath?: string | null;
     locale?: "zh" | "en";
   }) => Promise<void>;
   cancel: () => Promise<void>;
-  respondProposal: (callId: string, approve: boolean) => Promise<void>;
-  /** 清空 timeline 并断开会话，下一次 start() 会开启一段全新的对话。 */
-  newConversation: () => void;
+  respondProposal: (runId: string, callId: string, approve: boolean) => Promise<void>;
 }
 
 let entrySeq = 0;
@@ -60,6 +80,26 @@ function nextId(): string {
   entrySeq += 1;
   return `entry_${entrySeq}`;
 }
+
+function newSessionId(): string {
+  return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function newTab(): AgentTab {
+  return {
+    id: `tab_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    title: "New",
+    runId: null,
+    sessionId: newSessionId(),
+    status: "idle",
+    timeline: [],
+    draft: { text: "", mentionedTables: [], isEmpty: true },
+    connectionName: null,
+    resetToken: 0,
+  };
+}
+
+const initialTab = newTab();
 
 function toolCallEntry(call: AgentToolCallInfo): AgentTimelineEntry {
   return { kind: "tool", id: nextId(), callId: call.callId, name: call.name, args: call.arguments };
@@ -85,6 +125,7 @@ function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTim
         {
           kind: "proposal",
           id: nextId(),
+          runId: event.runId,
           callId: event.callId,
           proposalKind: event.kind,
           payload: event.payload,
@@ -113,67 +154,149 @@ function statusAfter(event: AgentEvent, current: AgentRunStatus): AgentRunStatus
   }
 }
 
-function newSessionId(): string {
-  return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+function updateActiveTab(state: AgentPanelState, patch: (tab: AgentTab) => AgentTab): Pick<AgentPanelState, "tabs"> {
+  return {
+    tabs: state.tabs.map((tab) => (tab.id === state.activeTabId ? patch(tab) : tab)),
+  };
+}
+
+function titleFromPrompt(prompt: string): string {
+  return prompt.trim().replace(/\s+/g, " ").slice(0, 28) || "New";
 }
 
 export const useAgentPanel = create<AgentPanelState>((set, get) => ({
-  runId: null,
-  sessionId: null,
-  status: "idle",
-  timeline: [],
-  async start({ prompt, connectionName, notePath, locale }) {
-    const runId = `agent_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const sessionId = get().sessionId ?? newSessionId();
+  tabs: [initialTab],
+  activeTabId: initialTab.id,
+  switchTab(tabId) {
+    if (!get().tabs.some((tab) => tab.id === tabId)) return;
+    set({ activeTabId: tabId });
+  },
+  newConversation() {
+    const tab = newTab();
+    set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id }));
     useLayout.getState().focusAgentPanel();
-    set((s) => ({
-      runId,
-      sessionId,
-      status: "running",
-      timeline: [...s.timeline, { kind: "user", id: nextId(), content: prompt }],
-    }));
+  },
+  closeTab(tabId) {
+    const state = get();
+    const tab = state.tabs.find((item) => item.id === tabId);
+    if (!tab || state.tabs.length <= 1) return;
+    if (tab.status === "running" && tab.runId) void cancelAgent(tab.runId).catch(() => {});
+    const index = state.tabs.findIndex((item) => item.id === tabId);
+    const tabs = state.tabs.filter((item) => item.id !== tabId);
+    const activeTabId =
+      state.activeTabId === tabId ? tabs[Math.max(0, index - 1)]?.id ?? tabs[0].id : state.activeTabId;
+    set({ tabs, activeTabId });
+  },
+  setConnectionName(connectionName) {
+    set((s) => updateActiveTab(s, (tab) => ({ ...tab, connectionName })));
+  },
+  updateDraft(draft) {
+    set((s) => updateActiveTab(s, (tab) => ({ ...tab, draft })));
+  },
+  async start({ prompt, mentionedTables, connectionName, notePath, locale }) {
+    const state = get();
+    const tab = state.tabs.find((item) => item.id === state.activeTabId);
+    if (!tab || tab.status === "running") return;
+    const runId = `agent_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    useLayout.getState().focusAgentPanel();
+    set((s) =>
+      updateActiveTab(s, (current) => ({
+        ...current,
+        runId,
+        status: "running",
+        title: current.timeline.length === 0 ? titleFromPrompt(prompt) : current.title,
+        timeline: [...current.timeline, { kind: "user", id: nextId(), content: prompt }],
+        draft: { text: "", mentionedTables: [], isEmpty: true },
+        resetToken: current.resetToken + 1,
+      })),
+    );
     try {
-      await runAgent({ runId, sessionId, prompt, connectionName, notePath, locale });
+      await runAgent({
+        runId,
+        sessionId: tab.sessionId,
+        prompt,
+        mentionedTables,
+        connectionName,
+        notePath,
+        locale,
+      });
     } catch (err) {
       set((s) => ({
-        status: "error",
-        timeline: [
-          ...s.timeline,
-          { kind: "error", id: nextId(), message: err instanceof Error ? err.message : String(err) },
-        ],
+        tabs: s.tabs.map((current) =>
+          current.runId === runId
+            ? {
+                ...current,
+                status: "error",
+                timeline: [
+                  ...current.timeline,
+                  {
+                    kind: "error",
+                    id: nextId(),
+                    message: err instanceof Error ? err.message : String(err),
+                  },
+                ],
+              }
+            : current,
+        ),
       }));
     }
   },
-  newConversation() {
-    if (get().status === "running") void get().cancel();
-    set({ runId: null, sessionId: null, status: "idle", timeline: [] });
-  },
   async cancel() {
-    const runId = get().runId;
-    if (!runId || get().status !== "running") return;
-    await cancelAgent(runId).catch(() => {});
+    const tab = get().tabs.find((item) => item.id === get().activeTabId);
+    if (!tab?.runId || tab.status !== "running") return;
+    await cancelAgent(tab.runId).catch(() => {});
   },
-  async respondProposal(callId, approve) {
-    const runId = get().runId;
-    if (!runId) return;
+  async respondProposal(runId, callId, approve) {
+    const resolution: "approved" | "rejected" = approve ? "approved" : "rejected";
     set((s) => ({
-      timeline: s.timeline.map((entry) =>
-        entry.kind === "proposal" && entry.callId === callId
-          ? { ...entry, resolution: approve ? "approved" : "rejected" }
-          : entry,
+      tabs: s.tabs.map((tab) =>
+        tab.runId === runId
+          ? {
+              ...tab,
+              timeline: tab.timeline.map((entry) =>
+                entry.kind === "proposal" && entry.callId === callId
+                  ? { ...entry, resolution }
+                  : entry,
+              ),
+            }
+          : tab,
       ),
     }));
-    await respondAgentProposal({ runId, callId, approve }).catch(() => {});
+    const response = await respondAgentProposal({ runId, callId, approve }).catch(() => ({ ok: false }));
+    if (response.ok) return;
+    set((s) => ({
+      tabs: s.tabs.map((tab) =>
+        tab.runId === runId
+          ? (() => {
+              const timeline: AgentTimelineEntry[] = tab.timeline.map((entry) =>
+                entry.kind === "proposal" && entry.callId === callId
+                  ? { ...entry, resolution: "pending" }
+                  : entry,
+              );
+              timeline.push({
+                kind: "error",
+                id: nextId(),
+                message: "Proposal response failed or expired. Please run the edit again.",
+              });
+              return { ...tab, timeline };
+            })()
+          : tab,
+      ),
+    }));
   },
 }));
 
-// 全局只订阅一次事件流；按 event.runId 过滤，忽略不属于当前 run 的旧事件
-// （用户可能在上一次 run 还没收尾时就取消 + 开新的一轮）。
+// 全局只订阅一次事件流；按 event.runId 路由到所属 tab，避免多个 tab 同时运行时串线。
 onAgentEvent((event) => {
-  const state = useAgentPanel.getState();
-  if (event.runId !== state.runId) return;
   useAgentPanel.setState((s) => ({
-    timeline: applyEvent(s.timeline, event),
-    status: statusAfter(event, s.status),
+    tabs: s.tabs.map((tab) =>
+      event.runId === tab.runId
+        ? {
+            ...tab,
+            timeline: applyEvent(tab.timeline, event),
+            status: statusAfter(event, tab.status),
+          }
+        : tab,
+    ),
   }));
 });

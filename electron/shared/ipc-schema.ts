@@ -440,6 +440,7 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
           sessionId: stringMin1.max(128).optional(),
           prompt: z.string().min(1).max(20_000),
           connectionName: z.string().max(256).nullable().optional(),
+          mentionedTables: z.array(z.string().max(512)).max(8).optional(),
           notePath: z.string().max(8192).nullable().optional(),
           locale: z.enum(["zh", "en"]).optional(),
         })

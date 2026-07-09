@@ -56,8 +56,8 @@ const AI_DEFAULT: AiSettings = {
   inlineCompletionEnabled: false,
   fimBaseUrl: "https://api.deepseek.com/beta",
   fimModel: "deepseek-v4-pro",
-  agentMaxIterations: 12,
-  agentWallClockMs: 90_000,
+  agentMaxIterations: 30,
+  agentWallClockMs: 300_000,
   agentAllowMutations: false,
 };
 

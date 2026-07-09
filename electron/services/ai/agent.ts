@@ -74,7 +74,12 @@ function buildSystemPrompt(
     connection
       ? `The active data connection is "${request.connectionName}" (kind: ${connection.kind}${dialect ? `, dialect: ${dialect}` : ""}).`
       : "No data connection is configured for the current note; SQL/schema tools will fail until one is set.",
+    request.mentionedTables && request.mentionedTables.length > 0
+      ? `The user explicitly mentioned these tables: ${request.mentionedTables.join(", ")}. Prefer get_table_schema for them before guessing schema.`
+      : null,
     "When you don't know which table to query, use search_tables with business keywords before guessing table names.",
+    "For data-analysis questions, follow this playbook: (1) identify candidate tables with mentioned tables, search_tables, and only then list_databases/list_tables; (2) inspect schemas before writing SQL; (3) if the user uses business terms such as pbr/coloring/status, map them to concrete columns by checking column names, DDL comments, vault notes, and small grouped samples; (4) run a small verification SQL first when field meaning is uncertain; (5) if results contradict the hypothesis, try the next plausible field and say what changed; (6) finish with the exact table, fields, SQL logic, and numbers used.",
+    "Use search_vault/list_vault_files/read_note for business definitions in notes. read_note supports offset/maxChars for paging through large notes.",
     "Never assume schema or row values you haven't fetched with a tool.",
     "SQL row limits are enforced automatically; you don't need to add LIMIT yourself.",
     "Mutating SQL and note edits always require explicit user approval via the tool itself — don't tell the user you already did it until the tool result confirms it.",
@@ -126,6 +131,7 @@ function makeRequestProposal(
 }
 
 const TOOL_RESULT_LOG_CHARS = 500;
+const TOOL_RESULT_SUMMARY_CHARS = 12_000;
 
 export interface RunAgentOptions {
   vaultPath: string;
@@ -234,7 +240,7 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
           runId,
           callId: call.id,
           ok: outcome.ok,
-          summary: outcome.text.slice(0, 2_000),
+          summary: outcome.text.slice(0, TOOL_RESULT_SUMMARY_CHARS),
         });
         messages.push({
           role: "tool",

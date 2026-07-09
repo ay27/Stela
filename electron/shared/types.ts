@@ -463,6 +463,7 @@ export type AgentToolName =
   | "get_table_schema"
   | "run_sql"
   | "search_vault"
+  | "list_vault_files"
   | "read_note"
   | "propose_edit";
 
@@ -478,6 +479,8 @@ export interface AgentRunRequest {
   prompt: string;
   /** 数据连接名（frontmatter.connection_name），未配置连接时相关工具会报错让模型自行调整。 */
   connectionName?: string | null;
+  /** 用户在输入框里通过 @ 显式引用的表名（`db.table` 或 `table`）。 */
+  mentionedTables?: string[];
   notePath?: string | null;
   locale?: AiPromptLocale;
 }
@@ -487,6 +490,14 @@ export interface AgentToolCallInfo {
   callId: string;
   name: AgentToolName | string;
   arguments: unknown;
+}
+
+export interface AgentProposalPayload {
+  notePath?: string;
+  sql?: string;
+  description: string;
+  oldContent?: string;
+  newContent?: string;
 }
 
 export type AgentEvent =
@@ -507,7 +518,7 @@ export type AgentEvent =
       callId: string;
       kind: "edit_note" | "mutation_sql";
       /** edit_note: notePath + diff 描述；mutation_sql: sql 文本。 */
-      payload: { notePath?: string; sql?: string; description: string };
+      payload: AgentProposalPayload;
     }
   | { type: "final"; runId: string; content: string }
   | { type: "error"; runId: string; message: string }

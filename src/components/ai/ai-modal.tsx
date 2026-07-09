@@ -205,11 +205,11 @@ export function renderMarkdown(markdown: string): ReactNode {
         <div key={out.length} className="my-3 overflow-auto">
           <table className="w-full border-collapse text-left text-[12px]">
             <thead>
-              <tr>{header.map((cell, idx) => <th key={idx} className="border border-border bg-muted px-2 py-1 font-medium">{cell}</th>)}</tr>
+              <tr>{header.map((cell, idx) => <th key={idx} className="border border-border bg-muted px-2 py-1 font-medium">{renderInline(cell)}</th>)}</tr>
             </thead>
             <tbody>
               {rows.map((row, idx) => (
-                <tr key={idx}>{row.map((cell, cidx) => <td key={cidx} className="border border-border px-2 py-1">{cell}</td>)}</tr>
+                <tr key={idx}>{row.map((cell, cidx) => <td key={cidx} className="border border-border px-2 py-1">{renderInline(cell)}</td>)}</tr>
               ))}
             </tbody>
           </table>

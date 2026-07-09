@@ -6,13 +6,17 @@
  * 只读放行/改动确认、编辑走 propose）、结果截断防止撑爆上下文。
  */
 
+import path from "node:path";
+
 import { AppError } from "@shared/errors";
 import type {
   AgentToolName,
+  AgentProposalPayload,
   AiSettings,
   ConnectionEntry,
   ConnectorKindMeta,
   QueryResult,
+  SearchHit,
 } from "@shared/types";
 
 import * as search from "../search";
@@ -34,16 +38,16 @@ export interface AgentConnectorOps {
   execute(kind: string, config: unknown, sql: string): Promise<QueryResult>;
 }
 
-const RESULT_CHAR_BUDGET = 8_000;
+const RESULT_CHAR_BUDGET = 30_000;
 
-function truncate(text: string): string {
-  return text.length <= RESULT_CHAR_BUDGET
+function truncate(text: string, maxChars = RESULT_CHAR_BUDGET): string {
+  return text.length <= maxChars
     ? text
-    : `${text.slice(0, RESULT_CHAR_BUDGET)}\n...[truncated ${text.length - RESULT_CHAR_BUDGET} chars]`;
+    : `${text.slice(0, maxChars)}\n...[truncated ${text.length - maxChars} chars]`;
 }
 
-function ok(value: unknown): ToolOutcome {
-  return { ok: true, text: truncate(typeof value === "string" ? value : JSON.stringify(value, null, 2)) };
+function ok(value: unknown, maxChars = RESULT_CHAR_BUDGET): ToolOutcome {
+  return { ok: true, text: truncate(typeof value === "string" ? value : JSON.stringify(value, null, 2), maxChars) };
 }
 
 function fail(message: string): ToolOutcome {
@@ -57,7 +61,7 @@ export interface ToolOutcome {
 
 export interface ProposalRequest {
   kind: "edit_note" | "mutation_sql";
-  payload: { notePath?: string; sql?: string; description: string };
+  payload: AgentProposalPayload;
 }
 
 /**
@@ -110,6 +114,10 @@ export const AGENT_TOOL_DEFS: AgentToolDef[] = [
             items: { type: "string" },
             description: "Keywords to match against table/column names and DDL, e.g. [\"quarter\", \"revenue\", \"order\"].",
           },
+          limit: {
+            type: "number",
+            description: "Optional max candidate tables to return. Defaults to 10.",
+          },
         },
         required: ["keywords"],
       },
@@ -150,11 +158,33 @@ export const AGENT_TOOL_DEFS: AgentToolDef[] = [
     type: "function",
     function: {
       name: "search_vault",
-      description: "Full-text search across the vault's Markdown notes.",
+      description:
+        "Full-text search across the vault's Markdown notes. Accepts one keyword or several keywords; several keywords are searched independently and merged.",
       parameters: {
         type: "object",
-        properties: { keyword: { type: "string" } },
-        required: ["keyword"],
+        properties: {
+          keyword: { type: "string", description: "Single keyword for compatibility." },
+          keywords: {
+            type: "array",
+            items: { type: "string" },
+            description: "Preferred: several business terms or identifiers to search independently.",
+          },
+          maxHits: { type: "number", description: "Max total hits to return. Defaults to 100." },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_vault_files",
+      description:
+        "List Markdown files in the vault by relative path. Use this before read_note when you need to discover likely notes/files.",
+      parameters: {
+        type: "object",
+        properties: {
+          maxFiles: { type: "number", description: "Max files to return. Defaults to 200." },
+        },
       },
     },
   },
@@ -162,10 +192,21 @@ export const AGENT_TOOL_DEFS: AgentToolDef[] = [
     type: "function",
     function: {
       name: "read_note",
-      description: "Read the full Markdown content of a note by vault-relative or absolute path.",
+      description:
+        "Read Markdown content of a note by vault-relative or absolute path. For large files, use offset/maxChars to page through the file.",
       parameters: {
         type: "object",
-        properties: { path: { type: "string" } },
+        properties: {
+          path: { type: "string" },
+          offset: {
+            type: "number",
+            description: "Character offset to start reading from. Defaults to 0.",
+          },
+          maxChars: {
+            type: "number",
+            description: "Maximum characters to return. Defaults to 50000, max 120000. Use 0 only when you truly need the full note.",
+          },
+        },
         required: ["path"],
       },
     },
@@ -175,15 +216,17 @@ export const AGENT_TOOL_DEFS: AgentToolDef[] = [
     function: {
       name: "propose_edit",
       description:
-        "Propose replacing a note's full content. This never writes to disk directly — it shows the user a diff and waits for approval.",
+        "Propose editing a note. Use newContent to replace the whole file, or oldText/newText for one exact local replacement in long files. This never writes to disk directly — it shows the user a diff and waits for approval.",
       parameters: {
         type: "object",
         properties: {
           path: { type: "string" },
-          newContent: { type: "string" },
+          newContent: { type: "string", description: "Full replacement content. Prefer oldText/newText for long notes." },
+          oldText: { type: "string", description: "Exact text to replace once in the existing note." },
+          newText: { type: "string", description: "Replacement text for oldText." },
           description: { type: "string", description: "One-line summary of what changed, shown to the user." },
         },
-        required: ["path", "newContent"],
+        required: ["path"],
       },
     },
   },
@@ -201,6 +244,21 @@ function requireConnection(ctx: AgentToolContext): ConnectionEntry {
     );
   }
   return ctx.connection;
+}
+
+function stringList(value: unknown): string[] {
+  const raw = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  return raw.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
+}
+
+function boundedInt(value: unknown, fallback: number, min: number, max: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(max, Math.max(min, Math.floor(value)))
+    : fallback;
+}
+
+function resolveVaultTarget(vaultPath: string, target: string): string {
+  return path.isAbsolute(target) ? target : path.join(vaultPath, target);
 }
 
 function formatQueryResult(result: QueryResult): unknown {
@@ -228,14 +286,16 @@ async function runListTables(args: { database?: string }, ctx: AgentToolContext)
   return ok(tables);
 }
 
-async function runSearchTables(args: { keywords?: string[] }, ctx: AgentToolContext): Promise<ToolOutcome> {
+async function runSearchTables(args: { keywords?: unknown; limit?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
   const connection = requireConnection(ctx);
-  const keywords = (args.keywords ?? []).filter((k) => typeof k === "string" && k.trim().length > 0);
+  const keywords = stringList(args.keywords);
   if (keywords.length === 0) return fail("keywords must be a non-empty array of strings.");
+  const limit = boundedInt(args.limit, 10, 1, 20);
   const targets = await searchTables({
     connectionName: ctx.connectionName!,
     connection,
     keywords,
+    limit,
   });
   if (targets.length === 0) {
     return fail("No matching tables found. Try list_databases/list_tables, or broaden the keywords.");
@@ -251,9 +311,9 @@ async function runSearchTables(args: { keywords?: string[] }, ctx: AgentToolCont
   );
 }
 
-async function runGetTableSchema(args: { tables?: string[] }, ctx: AgentToolContext): Promise<ToolOutcome> {
+async function runGetTableSchema(args: { tables?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
   const connection = requireConnection(ctx);
-  const tables = (args.tables ?? []).filter((t) => typeof t === "string" && t.trim().length > 0);
+  const tables = stringList(args.tables);
   if (tables.length === 0) return fail("tables must be a non-empty array of table names.");
   const targets = await resolveNamedTableSchemas({
     tableNames: tables,
@@ -304,36 +364,109 @@ async function runSql(args: { sql?: string }, ctx: AgentToolContext): Promise<To
   return ok(formatQueryResult(result));
 }
 
-async function runSearchVault(args: { keyword?: string }, ctx: AgentToolContext): Promise<ToolOutcome> {
-  if (!args.keyword) return fail("keyword must be a non-empty string.");
-  const hits = await search.searchVault(ctx.vaultPath, args.keyword, { maxHits: 50 });
-  if (hits.length === 0) return fail(`No matches for "${args.keyword}".`);
+async function runSearchVault(args: { keyword?: unknown; keywords?: unknown; maxHits?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
+  const keywords = [
+    ...(typeof args.keyword === "string" ? [args.keyword] : []),
+    ...stringList(args.keywords),
+  ].map((keyword) => keyword.trim()).filter(Boolean);
+  const uniqueKeywords = Array.from(new Set(keywords));
+  if (uniqueKeywords.length === 0) return fail("keyword or keywords must contain at least one non-empty string.");
+  const maxHits = boundedInt(args.maxHits, 100, 1, 300);
+  const perKeyword = Math.max(1, Math.ceil(maxHits / uniqueKeywords.length));
+  const merged = new Map<string, SearchHit & { keyword: string }>();
+  for (const keyword of uniqueKeywords) {
+    const hits = await search.searchVault(ctx.vaultPath, keyword, { maxHits: perKeyword });
+    for (const hit of hits) {
+      const key = `${hit.path}:${hit.line}:${hit.column}:${keyword}`;
+      merged.set(key, { ...hit, path: path.relative(ctx.vaultPath, hit.path), keyword });
+      if (merged.size >= maxHits) break;
+    }
+    if (merged.size >= maxHits) break;
+  }
+  const hits = Array.from(merged.values());
+  if (hits.length === 0) return fail(`No matches for ${uniqueKeywords.map((keyword) => `"${keyword}"`).join(", ")}.`);
   return ok(hits);
 }
 
-async function runReadNote(args: { path?: string }, ctx: AgentToolContext): Promise<ToolOutcome> {
-  if (!args.path) return fail("path must be a non-empty string.");
-  const target = await vaultFs.ensureWithinVault(ctx.vaultPath, args.path);
+async function runListVaultFiles(args: { maxFiles?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
+  const maxFiles = boundedInt(args.maxFiles, 200, 1, 1_000);
+  const files = await search.listVaultFiles(ctx.vaultPath, [".md"]);
+  return ok({
+    files: files.slice(0, maxFiles).map((file) => path.relative(ctx.vaultPath, file)),
+    totalFiles: files.length,
+    truncated: files.length > maxFiles,
+  });
+}
+
+async function runReadNote(args: { path?: unknown; offset?: unknown; maxChars?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
+  if (typeof args.path !== "string" || !args.path.trim()) return fail("path must be a non-empty string.");
+  const target = await vaultFs.ensureWithinVault(ctx.vaultPath, resolveVaultTarget(ctx.vaultPath, args.path));
   const content = await vaultFs.readFile(target);
-  return ok(content);
+  const offset = boundedInt(args.offset, 0, 0, content.length);
+  const fullRead = args.maxChars === 0;
+  const maxChars = fullRead ? content.length - offset : boundedInt(args.maxChars, 50_000, 1, 120_000);
+  const slice = fullRead ? content.slice(offset) : content.slice(offset, offset + maxChars);
+  return ok({
+    path: path.relative(ctx.vaultPath, target),
+    offset,
+    charsReturned: slice.length,
+    totalChars: content.length,
+    nextOffset: offset + slice.length < content.length ? offset + slice.length : null,
+    content: slice,
+  }, fullRead ? Number.POSITIVE_INFINITY : maxChars + 2_000);
 }
 
 async function runProposeEdit(
-  args: { path?: string; newContent?: string; description?: string },
+  args: { path?: unknown; newContent?: unknown; oldText?: unknown; newText?: unknown; description?: unknown },
   ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
-  if (!args.path || args.newContent === undefined) {
-    return fail("path and newContent are required.");
+  if (typeof args.path !== "string" || !args.path.trim()) {
+    return fail("path must be a non-empty string.");
   }
-  const description = args.description?.trim() || `Replace contents of ${args.path}`;
+  if (args.newContent !== undefined && typeof args.newContent !== "string") {
+    return fail("newContent must be a string when provided.");
+  }
+  if (
+    args.newContent === undefined &&
+    (typeof args.oldText !== "string" || typeof args.newText !== "string")
+  ) {
+    return fail("Provide either newContent, or oldText and newText for a local replacement.");
+  }
+  const description = typeof args.description === "string" && args.description.trim()
+    ? args.description.trim()
+    : `Replace contents of ${args.path}`;
+  const target = await vaultFs.ensureWithinVault(ctx.vaultPath, resolveVaultTarget(ctx.vaultPath, args.path));
+  const oldContent = await vaultFs.readFile(target);
+  let nextContent = args.newContent;
+  if (nextContent === undefined) {
+    const oldText = args.oldText as string;
+    const first = oldContent.indexOf(oldText);
+    if (first < 0) return fail("oldText was not found in the note.");
+    if (oldContent.indexOf(oldText, first + oldText.length) >= 0) {
+      return fail("oldText appears more than once. Provide a larger unique oldText snippet.");
+    }
+    nextContent = oldContent.slice(0, first) + (args.newText as string) + oldContent.slice(first + oldText.length);
+  }
   const approved = await ctx.requestProposal({
     kind: "edit_note",
-    payload: { notePath: args.path, description },
+    payload: {
+      notePath: args.path,
+      description,
+      oldContent: truncate(oldContent, 6_000),
+      newContent: truncate(nextContent, 6_000),
+    },
   });
   if (!approved) return fail("The user rejected this edit. Do not retry it as-is.");
-  const target = await vaultFs.ensureWithinVault(ctx.vaultPath, args.path);
-  await vaultFs.writeFile(target, args.newContent);
-  return ok(`Wrote ${args.newContent.length} chars to ${args.path}.`);
+  await vaultFs.writeFile(target, nextContent);
+  const verified = await vaultFs.readFile(target);
+  if (verified !== nextContent) {
+    return fail(`Write verification failed for ${args.path}.`);
+  }
+  return ok({
+    message: `Wrote and verified ${nextContent.length} chars.`,
+    path: args.path,
+    verified: true,
+  });
 }
 
 /** 把模型返回的 JSON 字符串参数安全 parse 成对象；失败时返回 `{}` 让工具自己报参数缺失。 */
@@ -367,6 +500,8 @@ export async function dispatchTool(
         return await runSql(args, ctx);
       case "search_vault":
         return await runSearchVault(args, ctx);
+      case "list_vault_files":
+        return await runListVaultFiles(args, ctx);
       case "read_note":
         return await runReadNote(args, ctx);
       case "propose_edit":

@@ -62,9 +62,9 @@ import {
 import type { ColumnDef } from "@/contracts";
 import { ensureAutocompleteFor, peekAutocompleteFor } from "./fetch-schema";
 import {
-  createTableMentionInput,
-  type TableMentionInputHandle,
-} from "./ai-mention-input";
+  mountTableMentionInput,
+  type MountedTableMentionInputHandle,
+} from "@/components/ai/mount-table-mention-input";
 import {
   SQL_FIM_ENABLED,
   sqlFimCompletionExtension,
@@ -136,7 +136,7 @@ export class CodeBlockNodeView implements NodeView {
   private resultHostEl: HTMLElement | null = null;
   private resultRoot: Root | null = null;
   private aiComposerEl: HTMLElement | null = null;
-  private aiMentionHandle: TableMentionInputHandle | null = null;
+  private aiMentionHandle: MountedTableMentionInputHandle | null = null;
   private aiReviewEl: HTMLElement | null = null;
   private pendingAiRewrite: PendingAiRewrite | null = null;
   private aiComposerGlobalCleanup: (() => void) | null = null;
@@ -375,7 +375,7 @@ export class CodeBlockNodeView implements NodeView {
     const active = document.activeElement;
     if (!active) return false;
     if (this.aiComposerEl.contains(active)) return true;
-    if (active instanceof Element && active.closest(".stela-cb__ai-mention-menu")) {
+    if (active instanceof Element && active.closest("[data-mentions-portal]")) {
       return true;
     }
     return false;
@@ -408,8 +408,8 @@ export class CodeBlockNodeView implements NodeView {
       const target = ev.target as Node | null;
       const editable =
         target instanceof Element &&
-        (target.closest(".stela-cb__ai-mention-input") !== null ||
-          target.closest(".stela-cb__ai-mention-menu") !== null);
+        (target.closest(".stela-table-mention") !== null ||
+          target.closest("[data-mentions-portal]") !== null);
       this.lastNonCmInteractionAt = Date.now();
       if (editable) return;
       ev.stopPropagation();
@@ -862,7 +862,7 @@ export class CodeBlockNodeView implements NodeView {
       const target = ev.target as Node | null;
       if (!target) return;
       if (this.aiComposerEl?.contains(target)) return;
-      if (target instanceof Element && target.closest(".stela-cb__ai-mention-menu")) return;
+      if (target instanceof Element && target.closest("[data-mentions-portal]")) return;
       if (this.headerEl.contains(target)) return;
       if (this.aiReviewEl?.contains(target)) return;
       if (this.resultHostEl?.contains(target)) return;
@@ -1126,26 +1126,12 @@ export class CodeBlockNodeView implements NodeView {
     const resultEl = el.querySelector<HTMLElement>(".stela-cb__ai-result");
     const ctx = getRunContext();
     const connectionName = ctx?.connectionName;
-    let mentionInput: TableMentionInputHandle | null = null;
+    let mentionInput: MountedTableMentionInputHandle | null = null;
     const syncDisabled = () => {
       if (primaryBtn && mode === "ask") {
         primaryBtn.disabled = mentionInput?.isEmpty() ?? true;
       }
     };
-    if (inputHost) {
-      mentionInput = createTableMentionInput({
-        placeholder,
-        initialValue: mode === "ask" ? selectedText : undefined,
-        getTableNamesCached: () =>
-          connectionName ? peekAutocompleteFor(connectionName) : [],
-        getTableNames: () =>
-          connectionName ? ensureAutocompleteFor(connectionName) : Promise.resolve([]),
-        onChange: syncDisabled,
-      });
-      inputHost.append(mentionInput.el);
-      this.aiMentionHandle = mentionInput;
-    }
-    let composing = false;
     const setLoading = (loading: boolean, message: string) => {
       el.classList.toggle("stela-cb__ai-quickedit--loading", loading);
       mentionInput?.setDisabled(loading);
@@ -1174,28 +1160,20 @@ export class CodeBlockNodeView implements NodeView {
       setLoading(true, i18n.t("ai.runsql.asking"));
       await this.runSqlAsk(userInstruction, selectedText, resultEl, setLoading, mentionedTables);
     };
-    mentionInput?.el.addEventListener("input", syncDisabled);
-    mentionInput?.el.addEventListener("compositionstart", () => {
-      composing = true;
-    });
-    mentionInput?.el.addEventListener("compositionend", () => {
-      composing = false;
-    });
-    mentionInput?.el.addEventListener("keydown", (ev) => {
-      if (mentionInput?.handleKeyDown(ev)) {
-        ev.stopPropagation();
-        return;
-      }
-      if (ev.key === "Enter" && !ev.shiftKey && !composing && !ev.isComposing) {
-        ev.preventDefault();
-        ev.stopPropagation();
-        void submit();
-      } else if (ev.key === "Escape") {
-        ev.preventDefault();
-        ev.stopPropagation();
-        this.closeAiComposer();
-      }
-    }, true);
+    if (inputHost) {
+      mentionInput = mountTableMentionInput(inputHost, {
+        placeholder,
+        initialValue: mode === "ask" ? selectedText : undefined,
+        getTableNamesCached: () =>
+          connectionName ? peekAutocompleteFor(connectionName) : [],
+        getTableNames: () =>
+          connectionName ? ensureAutocompleteFor(connectionName) : Promise.resolve([]),
+        onChange: syncDisabled,
+        onSubmit: () => void submit(),
+        onCancel: () => this.closeAiComposer(),
+      });
+      this.aiMentionHandle = mentionInput;
+    }
     syncDisabled();
     cancelBtn?.addEventListener("click", () => this.closeAiComposer());
     primaryBtn?.addEventListener("click", () => void submit());
