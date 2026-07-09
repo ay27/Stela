@@ -14,9 +14,9 @@ const legacy = normalizeSettings({
   },
 } as AppSettings);
 
-assert.equal(legacy.ai.inlineCompletionEnabled, false);
-assert.equal(legacy.ai.fimBaseUrl, "https://api.deepseek.com/beta");
-assert.equal(legacy.ai.fimModel, "deepseek-v4-pro");
+assert.equal(legacy.ai.agentMaxIterations, 200);
+assert.equal(legacy.ai.agentWallClockMs, 300_000);
+assert.equal(legacy.ai.agentAllowMutations, false);
 
 const patched = normalizeSettings({
   ai: {
@@ -26,11 +26,11 @@ const patched = normalizeSettings({
     hasApiKey: true,
     sendResultSamples: true,
     maxSampleRows: 20,
-    inlineCompletionEnabled: true,
+    agentAllowMutations: true,
   },
 } as AppSettings);
 
-assert.equal(patched.ai.inlineCompletionEnabled, true);
-assert.equal(patched.ai.fimBaseUrl, "https://api.deepseek.com/beta");
+assert.equal(patched.ai.agentAllowMutations, true);
+assert.equal(patched.ai.agentMaxIterations, 200);
 
 console.log("settings-store tests passed.");

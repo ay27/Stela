@@ -21,8 +21,6 @@ import type {
   AgentRunRequest,
   AiCompleteRequest,
   AiCompleteResponse,
-  AiFimCompleteRequest,
-  AiFimCompleteResponse,
   AiParseSqlQueryRequest,
   AiParseSqlQueryResponse,
   AiProviderStatus,
@@ -238,10 +236,7 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
   );
   registerHandler<{ patch: PartialAppSettings }, AppSettings>(
     IPC.SETTINGS_PATCH,
-    async ({ patch }) => {
-      const vaultPath = requireVault();
-      return settingsStore.patchAppSettings(vaultPath, patch);
-    },
+    async ({ patch }) => settingsStore.patchAppSettings(requireVault(), patch),
   );
 
   // ---------- Connections (vault-scoped) ----------
@@ -463,15 +458,6 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
     IPC.AI_COMPLETE,
     async ({ request }) =>
       ai.complete(
-        requireVault(),
-        (await deviceProfile.loadDeviceProfile()).slug,
-        request,
-      ),
-  );
-  registerHandler<{ request: AiFimCompleteRequest }, AiFimCompleteResponse>(
-    IPC.AI_FIM_COMPLETE,
-    async ({ request }) =>
-      ai.fimComplete(
         requireVault(),
         (await deviceProfile.loadDeviceProfile()).slug,
         request,

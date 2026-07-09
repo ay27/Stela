@@ -332,9 +332,6 @@ interface AiSettings {
   hasApiKey: boolean;              // never the raw key
   sendResultSamples: boolean;
   maxSampleRows: number;
-  inlineCompletionEnabled: boolean;
-  fimBaseUrl: string;              // separate FIM completions root
-  fimModel: string;
   agentMaxIterations: number;
   agentWallClockMs: number;
   agentAllowMutations: boolean;    // still requires per-call user approve
@@ -379,18 +376,6 @@ interface AiCompleteRequest {
 ```
 
 Pipeline: enrich schema → cap sizes → optional samples → `redactForPrompt` → action prompt → chat completions. See [ADR-0012](./adr/0012-dual-ai-surfaces-actions-and-agent.md), [ADR-0014](./adr/0014-ai-context-redaction-and-schema-enrichment.md).
-
-### FIM completion
-
-```typescript
-interface AiFimCompleteRequest {
-  prompt: string;    // prefix
-  suffix: string;    // suffix after cursor
-  connectionName?: string | null;  // dialect hint only
-}
-```
-
-Gated by `inlineCompletionEnabled`. CM6 integration: `src/editor/runsql/sql-fim-completion.ts`.
 
 ### SQL query parse (NL → filter)
 
@@ -442,7 +427,7 @@ Safety ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md)):
 
 - `sql-guard` classifies read-only vs mutation vs multi-statement
 - Mutations + `propose_edit` block on `ai:agent-respond-proposal`
-- Caps: `agentMaxIterations`, `agentWallClockMs`
+- Caps: `agentMaxIterations` (default 200, max 10000), `agentWallClockMs`
 
 ### UI entry points
 
@@ -452,7 +437,6 @@ Safety ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md)):
 | Schema actions | `SchemaBrowserPanel` + `ai-modal` | `ai:complete` |
 | Agent chat | `AgentSidebar` / `agent-panel` | `ai:agent-run` + events |
 | `@table` mentions | `table-mention-input` | `mentionedTables` on requests |
-| Ghost-text FIM | `sql-fim-completion` | `ai:fim-complete` |
 | Settings | `settings/ai-tab` | `ai:configure` / `clearApiKey` |
 
 ## IPC Error Model

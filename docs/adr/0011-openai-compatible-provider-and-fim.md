@@ -2,7 +2,8 @@
 type: ADR
 id: "0011"
 title: "OpenAI-compatible chat provider with separate FIM endpoint"
-status: active
+status: superseded
+superseded_by: "0015"
 date: 2026-06-01
 ---
 

@@ -24,8 +24,6 @@ import type {
   AgentRunRequest,
   AiCompleteRequest,
   AiCompleteResponse,
-  AiFimCompleteRequest,
-  AiFimCompleteResponse,
   AiProviderStatus,
   AiSettings,
   AppSettings,
@@ -295,8 +293,6 @@ const stela = {
     clearApiKey: () => call<AiProviderStatus>(IPC.AI_CLEAR_API_KEY, {}),
     complete: (request: AiCompleteRequest) =>
       call<AiCompleteResponse>(IPC.AI_COMPLETE, { request }),
-    fimComplete: (request: AiFimCompleteRequest) =>
-      call<AiFimCompleteResponse>(IPC.AI_FIM_COMPLETE, { request }),
     parseSqlQuery: (request: AiParseSqlQueryRequest) =>
       call<AiParseSqlQueryResponse>(IPC.AI_PARSE_SQL_QUERY, { request }),
   },

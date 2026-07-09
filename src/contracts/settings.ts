@@ -82,9 +82,6 @@ export interface AiSettings {
   hasApiKey: boolean;
   sendResultSamples: boolean;
   maxSampleRows: number;
-  inlineCompletionEnabled: boolean;
-  fimBaseUrl: string;
-  fimModel: string;
   agentMaxIterations: number;
   agentWallClockMs: number;
   agentAllowMutations: boolean;
@@ -133,10 +130,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     hasApiKey: false,
     sendResultSamples: true,
     maxSampleRows: 20,
-    inlineCompletionEnabled: false,
-    fimBaseUrl: "https://api.deepseek.com/beta",
-    fimModel: "deepseek-v4-pro",
-    agentMaxIterations: 30,
+    agentMaxIterations: 200,
     agentWallClockMs: 300_000,
     agentAllowMutations: false,
   },

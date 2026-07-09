@@ -12,8 +12,6 @@ import type {
   AgentRunRequest,
   AiCompleteRequest,
   AiCompleteResponse,
-  AiFimCompleteRequest,
-  AiFimCompleteResponse,
   AiParseSqlQueryRequest,
   AiParseSqlQueryResponse,
   AiProviderStatus,
@@ -207,7 +205,6 @@ interface StelaBridge {
     ) => Promise<AiProviderStatus>;
     clearApiKey: () => Promise<AiProviderStatus>;
     complete: (request: AiCompleteRequest) => Promise<AiCompleteResponse>;
-    fimComplete: (request: AiFimCompleteRequest) => Promise<AiFimCompleteResponse>;
     parseSqlQuery: (
       request: AiParseSqlQueryRequest,
     ) => Promise<AiParseSqlQueryResponse>;

@@ -6,23 +6,20 @@ import { parseInput } from "./ipc-schema";
 const parsed = parseInput<{
   patch: {
     ai?: {
-      inlineCompletionEnabled?: boolean;
-      fimBaseUrl?: string;
-      fimModel?: string;
+      sendResultSamples?: boolean;
+      maxSampleRows?: number;
     };
   };
 }>(IPC.SETTINGS_PATCH, {
   patch: {
     ai: {
-      inlineCompletionEnabled: true,
-      fimBaseUrl: "https://api.deepseek.com/beta",
-      fimModel: "deepseek-v4-pro",
+      sendResultSamples: true,
+      maxSampleRows: 20,
     },
   },
 });
 
-assert.equal(parsed.patch.ai?.inlineCompletionEnabled, true);
-assert.equal(parsed.patch.ai?.fimBaseUrl, "https://api.deepseek.com/beta");
-assert.equal(parsed.patch.ai?.fimModel, "deepseek-v4-pro");
+assert.equal(parsed.patch.ai?.sendResultSamples, true);
+assert.equal(parsed.patch.ai?.maxSampleRows, 20);
 
 console.log("ipc-schema tests passed.");

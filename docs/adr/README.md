@@ -63,7 +63,8 @@ proposed → active → superseded
 | [0008](0008-search-first-ai-instead-of-rag.md) | Search-first AI instead of on-device RAG | active |
 | [0009](0009-vault-vs-machine-settings.md) | Vault-scoped vs machine-scoped settings boundary | active |
 | [0010](0010-in-memory-derived-indexes.md) | In-memory derived indexes (vault-index, sql-index) | active |
-| [0011](0011-openai-compatible-provider-and-fim.md) | OpenAI-compatible chat provider with separate FIM endpoint | active |
+| [0011](0011-openai-compatible-provider-and-fim.md) | OpenAI-compatible chat provider with separate FIM endpoint | superseded → [0015](0015-openai-compatible-provider-without-fim.md) |
 | [0012](0012-dual-ai-surfaces-actions-and-agent.md) | Dual AI surfaces — action complete and harness agent | active |
 | [0013](0013-agent-tools-sql-guard-and-proposals.md) | Agent tools with SQL guard and user proposal confirmation | active |
 | [0014](0014-ai-context-redaction-and-schema-enrichment.md) | AI context assembly with redaction and schema enrichment | active |
+| [0015](0015-openai-compatible-provider-without-fim.md) | OpenAI-compatible chat provider without FIM inline completion | active |

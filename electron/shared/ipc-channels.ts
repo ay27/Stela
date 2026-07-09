@@ -90,7 +90,6 @@ export const IPC = {
   AI_CONFIGURE: "ai:configure",
   AI_CLEAR_API_KEY: "ai:clear-api-key",
   AI_COMPLETE: "ai:complete",
-  AI_FIM_COMPLETE: "ai:fim-complete",
   AI_PARSE_SQL_QUERY: "ai:parse-sql-query",
 
   // Harness agent（原生 function-calling 循环，见 electron/services/ai/agent.ts）

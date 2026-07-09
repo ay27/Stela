@@ -1,8 +1,6 @@
 import type {
   AiCompleteRequest,
   AiCompleteResponse,
-  AiFimCompleteRequest,
-  AiFimCompleteResponse,
   AiParseSqlQueryRequest,
   AiParseSqlQueryResponse,
   AiProviderStatus,
@@ -22,7 +20,6 @@ import { formatPromptDebugLog } from "./prompt-logging";
 import { mergeSchemaTargets, resolveMentionedSchemaContext, resolveSchemaContext } from "./schema-context";
 import { buildSqlQueryParsePrompt, parseModelFilterOutput } from "./sql-query-parser";
 import {
-  callFimCompletions,
   callChatCompletions,
   clearApiKey,
   configureProvider,
@@ -173,53 +170,6 @@ export async function complete(
   };
 }
 
-async function resolveConnectionDialectHint(
-  vaultPath: string,
-  slug: string,
-  connectionName?: string | null,
-): Promise<string | null> {
-  if (!connectionName) return null;
-  try {
-    const connections = await connectionsStore.loadConnections(vaultPath, slug);
-    const entry = connections[connectionName];
-    if (!entry) return null;
-    const meta = connectorRegistry
-      .listKinds()
-      .find((item) => item.kind === entry.kind);
-    const displayName = meta?.displayName ?? entry.kind;
-    return resolveDialect({ kind: entry.kind, displayName, dialect: meta?.dialect });
-  } catch {
-    return null;
-  }
-}
-
-export async function fimComplete(
-  vaultPath: string,
-  slug: string,
-  request: AiFimCompleteRequest,
-): Promise<AiFimCompleteResponse> {
-  const settings = await settingsStore.loadAppSettings(vaultPath);
-  if (!settings.ai.inlineCompletionEnabled) {
-    throw new AppError("ai_fim_disabled", "AI inline completion is disabled.");
-  }
-  const apiKey = await loadApiKey(vaultPath, slug);
-  const dialect = await resolveConnectionDialectHint(
-    vaultPath,
-    slug,
-    request.connectionName,
-  );
-  const prompt = dialect
-    ? `-- SQL dialect: ${dialect}\n${request.prompt}`
-    : request.prompt;
-  const text = await callFimCompletions({
-    settings: settings.ai,
-    apiKey,
-    prompt,
-    suffix: request.suffix,
-  });
-  return { text };
-}
-
 /**
  * NL → SQL 索引 filter JSON。只翻译不作答：真正命中一律走 `sql-index.ts` 的
  * 确定性倒排索引求交集，这里产出的 filter 只是"用户想查什么"的结构化猜测。
@@ -254,4 +204,3 @@ export async function parseSqlQuery(
     );
   }
 }
-

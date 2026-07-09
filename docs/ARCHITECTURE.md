@@ -273,11 +273,10 @@ Stela AI is **search-first and provider-backed**, not on-device RAG. Retrieval u
 | Concern | Implementation |
 |---------|----------------|
 | Chat / agent | OpenAI-compatible `{baseUrl}/chat/completions` from main |
-| Inline SQL FIM | Separate `{fimBaseUrl}/completions` + `fimModel` (opt-in) |
 | API key | `{vault}/.stela/secrets/ai_{deviceSlug}.json` via `safeStorage` |
 | Settings | vault `.stela/settings.json` → `ai.*` (`hasApiKey` only, never the key) |
 
-See [ADR-0011](./adr/0011-openai-compatible-provider-and-fim.md).
+No cloud FIM / ghost-text inline completion — removed for latency ([ADR-0015](./adr/0015-openai-compatible-provider-without-fim.md); supersedes [ADR-0011](./adr/0011-openai-compatible-provider-and-fim.md)). RunSQL still has local schema/keyword autocomplete.
 
 ### Two surfaces (+ one translator)
 
@@ -286,7 +285,6 @@ flowchart TB
   UI["Renderer UI\nRunSQL panel / AI modal / AgentSidebar"]
   PRE["window.stela.ai.* / agent.*"]
   ACT["ai:complete\naction + AiRequestContext"]
-  FIM["ai:fim-complete\nghost text in CM6"]
   PARSE["ai:parse-sql-query\nNL → SqlIndexFilter only"]
   AGENT["ai:agent-run\nfunction-calling loop"]
   CTX["context-builder + schema-context\n+ redaction"]
@@ -296,11 +294,9 @@ flowchart TB
 
   UI --> PRE
   PRE --> ACT
-  PRE --> FIM
   PRE --> PARSE
   PRE --> AGENT
   ACT --> CTX --> PROV
-  FIM --> PROV
   PARSE --> PROV
   AGENT --> PROV
   AGENT --> TOOLS
@@ -334,8 +330,8 @@ Before any action prompt leaves the machine ([ADR-0014](./adr/0014-ai-context-re
 
 | Path | Role |
 |------|------|
-| `electron/services/ai/provider.ts` | API key shards, chat / FIM / agent-turn HTTP |
-| `electron/services/ai/index.ts` | complete / fimComplete / parseSqlQuery entry |
+| `electron/services/ai/provider.ts` | API key shards, chat / agent-turn HTTP |
+| `electron/services/ai/index.ts` | complete / parseSqlQuery entry |
 | `electron/services/ai/context-builder.ts` | bounded context + related runs |
 | `electron/services/ai/schema-context.ts` | table/DDL enrichment |
 | `electron/services/ai/prompt-builder.ts` | action prompts |
@@ -344,7 +340,6 @@ Before any action prompt leaves the machine ([ADR-0014](./adr/0014-ai-context-re
 | `electron/services/ai/agent-tools.ts` | tool defs + dispatch |
 | `electron/services/ai/sql-guard.ts` | read-only vs mutation classification |
 | `src/components/ai/` | modal, inline panel, agent panel, `@table` input |
-| `src/editor/runsql/sql-fim-completion.ts` | CM6 ghost-text FIM |
 
 ## IPC Contract
 
@@ -372,7 +367,7 @@ window.stela.connector.*      — execute + plugin management
 window.stela.search.*         — vault search + file list
 window.stela.git.*            — Git operations
 window.stela.journal.*          — JSONL history import/export
-window.stela.ai.* / agent.*   — completion, FIM, agent harness
+window.stela.ai.* / agent.*   — completion, agent harness
 window.stela.index.*          — vault wiki index
 window.stela.sqlIndex.*       — SQL fact index
 window.stela.export.*         — export markdown with results

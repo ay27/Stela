@@ -53,10 +53,7 @@ const AI_DEFAULT: AiSettings = {
   hasApiKey: false,
   sendResultSamples: true,
   maxSampleRows: 20,
-  inlineCompletionEnabled: false,
-  fimBaseUrl: "https://api.deepseek.com/beta",
-  fimModel: "deepseek-v4-pro",
-  agentMaxIterations: 30,
+  agentMaxIterations: 200,
   agentWallClockMs: 300_000,
   agentAllowMutations: false,
 };
@@ -93,15 +90,13 @@ function sanitizeAi(input: unknown): AiSettings {
       : "disabled";
   const baseUrl = typeof r.baseUrl === "string" ? r.baseUrl.trim() : "";
   const model = typeof r.model === "string" ? r.model.trim() : "";
-  const fimBaseUrl = typeof r.fimBaseUrl === "string" ? r.fimBaseUrl.trim() : "";
-  const fimModel = typeof r.fimModel === "string" ? r.fimModel.trim() : "";
   const maxSampleRows =
     typeof r.maxSampleRows === "number" && Number.isFinite(r.maxSampleRows)
       ? Math.min(100, Math.max(0, Math.floor(r.maxSampleRows)))
       : AI_DEFAULT.maxSampleRows;
   const agentMaxIterations =
     typeof r.agentMaxIterations === "number" && Number.isFinite(r.agentMaxIterations)
-      ? Math.min(50, Math.max(1, Math.floor(r.agentMaxIterations)))
+      ? Math.min(10_000, Math.max(1, Math.floor(r.agentMaxIterations)))
       : AI_DEFAULT.agentMaxIterations;
   const agentWallClockMs =
     typeof r.agentWallClockMs === "number" && Number.isFinite(r.agentWallClockMs)
@@ -117,9 +112,6 @@ function sanitizeAi(input: unknown): AiSettings {
         ? AI_DEFAULT.sendResultSamples
         : r.sendResultSamples === true,
     maxSampleRows,
-    inlineCompletionEnabled: r.inlineCompletionEnabled === true,
-    fimBaseUrl: fimBaseUrl || AI_DEFAULT.fimBaseUrl,
-    fimModel: fimModel || AI_DEFAULT.fimModel,
     agentMaxIterations,
     agentWallClockMs,
     agentAllowMutations: r.agentAllowMutations === true,

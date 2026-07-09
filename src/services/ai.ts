@@ -1,8 +1,6 @@
 import type {
   AiCompleteRequest,
   AiCompleteResponse,
-  AiFimCompleteRequest,
-  AiFimCompleteResponse,
   AiParseSqlQueryRequest,
   AiParseSqlQueryResponse,
   AiProviderStatus,
@@ -24,12 +22,6 @@ export function completeAi(
   request: AiCompleteRequest,
 ): Promise<AiCompleteResponse> {
   return window.stela.ai.complete(request);
-}
-
-export function completeAiFim(
-  request: AiFimCompleteRequest,
-): Promise<AiFimCompleteResponse> {
-  return window.stela.ai.fimComplete(request);
 }
 
 /** NL 问题 → SQL 索引 filter JSON。AI 只翻译不作答，实际命中走确定性索引。 */

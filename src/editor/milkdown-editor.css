@@ -1248,12 +1248,6 @@
   user-select: none;
 }
 
-.stela-cb__cm .cm-stela-fim-ghost {
-  color: hsl(var(--muted-foreground));
-  opacity: 0.55;
-  white-space: pre;
-}
-
 @keyframes stela-ai-pulse {
   0%,
   100% {

@@ -206,12 +206,6 @@ export interface AiSettings {
   sendResultSamples: boolean;
   /** Per-request row sample cap. */
   maxSampleRows: number;
-  /** Enable ghost-text SQL completion in RunSQL blocks. */
-  inlineCompletionEnabled: boolean;
-  /** FIM completions endpoint root. DeepSeek requires the /beta base URL. */
-  fimBaseUrl: string;
-  /** Model name passed to the FIM completions endpoint. */
-  fimModel: string;
   /** Agent harness: max tool-call iterations before forcing a final answer. */
   agentMaxIterations: number;
   /** Agent harness: wall-clock budget in ms before forcing a final answer. */
@@ -420,16 +414,6 @@ export interface AiCompleteResponse {
   sql: string | null;
   warnings: string[];
   contextSummary: string[];
-}
-
-export interface AiFimCompleteRequest {
-  prompt: string;
-  suffix: string;
-  connectionName?: string | null;
-}
-
-export interface AiFimCompleteResponse {
-  text: string;
 }
 
 export interface AiParseSqlQueryRequest {

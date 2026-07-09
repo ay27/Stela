@@ -65,10 +65,6 @@ import {
   mountTableMentionInput,
   type MountedTableMentionInputHandle,
 } from "@/components/ai/mount-table-mention-input";
-import {
-  SQL_FIM_ENABLED,
-  sqlFimCompletionExtension,
-} from "./sql-fim-completion";
 import { renderMarkdownIntoDom } from "./render-markdown-dom";
 import { useColumnCache } from "./column-cache";
 import { formatSqlCommand } from "./sql-format";
@@ -559,13 +555,6 @@ export class CodeBlockNodeView implements NodeView {
         // languageExtension 里走 languageCompartment，这样语言改成普通 code
         // 时能跟着 reconfigure 掉，行为与 sqlExtensions 一致。
         CMView.lineWrapping,
-        ...(language === RUNSQL_LANGUAGE && SQL_FIM_ENABLED
-          ? [
-              sqlFimCompletionExtension(
-                () => getRunContext()?.connectionName ?? null,
-              ),
-            ]
-          : []),
       ];
     }
     return [];

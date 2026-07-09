@@ -125,7 +125,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
     }
   },
   async patch(partial) {
-    const next = mergeSettings(get().settings, partial);
+    const previous = get().settings;
+    const next = mergeSettings(previous, partial);
     set({ settings: next });
     try {
       const truth = await patchAppSettings(partial);
@@ -133,6 +134,12 @@ export const useSettings = create<SettingsState>((set, get) => ({
         // main 端 sanitize / 投影后的真值；覆盖乐观结果，确保 hasSecretAccessKey
         // 等"由 main 决定"的字段与磁盘一致
         set({ settings: truth });
+      } else {
+        // no_vault：不能假装已落盘——回滚乐观值并提示
+        set({ settings: previous });
+        console.warn(
+          "[stela] settings not persisted: open a vault before changing vault-scoped settings",
+        );
       }
     } catch (err) {
       console.error("[stela] patchAppSettings failed", err);

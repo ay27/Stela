@@ -91,10 +91,7 @@ const partialSettingsSchema = z
         hasApiKey: z.boolean(),
         sendResultSamples: z.boolean(),
         maxSampleRows: z.number().int().min(0).max(100),
-        inlineCompletionEnabled: z.boolean(),
-        fimBaseUrl: z.string().max(2048),
-        fimModel: z.string().max(256),
-        agentMaxIterations: z.number().int().min(1).max(50),
+        agentMaxIterations: z.number().int().min(1).max(10_000),
         agentWallClockMs: z.number().int().min(5_000).max(600_000),
         agentAllowMutations: z.boolean(),
       })
@@ -301,10 +298,7 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
           model: z.string().max(256).optional(),
           sendResultSamples: z.boolean().optional(),
           maxSampleRows: z.number().int().min(0).max(100).optional(),
-          inlineCompletionEnabled: z.boolean().optional(),
-          fimBaseUrl: z.string().max(2048).optional(),
-          fimModel: z.string().max(256).optional(),
-          agentMaxIterations: z.number().int().min(1).max(50).optional(),
+          agentMaxIterations: z.number().int().min(1).max(10_000).optional(),
           agentWallClockMs: z.number().int().min(5_000).max(600_000).optional(),
           agentAllowMutations: z.boolean().optional(),
         })
@@ -408,17 +402,6 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
           userInstruction: z.string().max(20_000).nullable().optional(),
         }),
       }),
-    })
-    .strict(),
-  [IPC.AI_FIM_COMPLETE]: z
-    .object({
-      request: z
-        .object({
-          prompt: z.string().max(8_000),
-          suffix: z.string().max(8_000),
-          connectionName: z.string().max(256).nullable().optional(),
-        })
-        .strict(),
     })
     .strict(),
   [IPC.AI_PARSE_SQL_QUERY]: z
