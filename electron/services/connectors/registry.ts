@@ -30,6 +30,8 @@ import type {
 
 import { atomicWriteFile } from "../atomic-write";
 import { getLogger } from "../logger";
+import { applyRowLimit } from "../sql-limit";
+import * as settingsStore from "../settings-store";
 import { vaultConfigDir, vaultFilePath } from "../vault-paths";
 import {
   bundledPluginDir,
@@ -202,12 +204,29 @@ export async function test(kind: string, config: unknown): Promise<TestResult> {
   return getOrThrow(kind).test(config);
 }
 
+/**
+ * ponytail: 每次 execute 都读一次 settings.json 拿 maxRows；上限是高频执行时
+ * 多一次磁盘 IO，升级路径是在 setVault/patch 时把 maxRows 缓存到模块变量。
+ * 当前 SQL 执行本身的网络往返远大于这次本地文件读取，先不做。
+ */
 export async function execute(
   kind: string,
   config: unknown,
   sql: string,
 ): Promise<QueryResult> {
-  return getOrThrow(kind).execute(config, sql);
+  const connector = getOrThrow(kind);
+  let limitedSql = sql;
+  if (currentVaultPath) {
+    try {
+      const settings = await settingsStore.loadAppSettings(currentVaultPath);
+      limitedSql = applyRowLimit(sql, settings.execution.maxRows);
+    } catch (err) {
+      log.warn("failed to load execution.maxRows, running SQL unmodified", {
+        err: (err as Error).message,
+      });
+    }
+  }
+  return connector.execute(config, limitedSql);
 }
 
 export async function listDatabases(

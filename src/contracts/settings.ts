@@ -16,6 +16,8 @@ export interface AppearanceSettings {
 export interface ExecutionSettings {
   /** Run All 失败时的策略，M4 仅 UI 暴露，引擎落地在 M5 */
   onError: "continue" | "stop";
+  /** 单次查询最大返回行数，核心层对所有只读查询自动追加 LIMIT。0 = 不限制。 */
+  maxRows: number;
 }
 
 export interface PersistenceSettings {
@@ -83,6 +85,9 @@ export interface AiSettings {
   inlineCompletionEnabled: boolean;
   fimBaseUrl: string;
   fimModel: string;
+  agentMaxIterations: number;
+  agentWallClockMs: number;
+  agentAllowMutations: boolean;
 }
 
 export interface AppSettings {
@@ -111,7 +116,7 @@ export type PartialAppSettings = {
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   vault: { recentFiles: [] },
   appearance: { theme: "system" },
-  execution: { onError: "continue" },
+  execution: { onError: "continue", maxRows: 1000 },
   persistence: { cleanupMonths: 12 },
   ui: { defaultPageSize: 200, editorWidth: "narrow" },
   git: {
@@ -131,6 +136,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     inlineCompletionEnabled: false,
     fimBaseUrl: "https://api.deepseek.com/beta",
     fimModel: "deepseek-v4-pro",
+    agentMaxIterations: 12,
+    agentWallClockMs: 90_000,
+    agentAllowMutations: false,
   },
 };
 

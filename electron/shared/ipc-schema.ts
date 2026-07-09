@@ -56,7 +56,10 @@ const partialSettingsSchema = z
       .optional(),
     appearance: z.object({ theme: themeModeSchema }).partial().optional(),
     execution: z
-      .object({ onError: z.enum(["continue", "stop"]) })
+      .object({
+        onError: z.enum(["continue", "stop"]),
+        maxRows: z.number().int().min(0).max(1_000_000),
+      })
       .partial()
       .optional(),
     persistence: z
@@ -91,6 +94,9 @@ const partialSettingsSchema = z
         inlineCompletionEnabled: z.boolean(),
         fimBaseUrl: z.string().max(2048),
         fimModel: z.string().max(256),
+        agentMaxIterations: z.number().int().min(1).max(50),
+        agentWallClockMs: z.number().int().min(5_000).max(600_000),
+        agentAllowMutations: z.boolean(),
       })
       .partial()
       .optional(),
@@ -298,6 +304,9 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
           inlineCompletionEnabled: z.boolean().optional(),
           fimBaseUrl: z.string().max(2048).optional(),
           fimModel: z.string().max(256).optional(),
+          agentMaxIterations: z.number().int().min(1).max(50).optional(),
+          agentWallClockMs: z.number().int().min(5_000).max(600_000).optional(),
+          agentAllowMutations: z.boolean().optional(),
         })
         .strict(),
       apiKey: z.string().max(8192).nullable().optional(),
@@ -422,6 +431,27 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
         .strict(),
     })
     .strict(),
+
+  [IPC.AI_AGENT_RUN]: z
+    .object({
+      request: z
+        .object({
+          runId: stringMin1.max(128),
+          sessionId: stringMin1.max(128).optional(),
+          prompt: z.string().min(1).max(20_000),
+          connectionName: z.string().max(256).nullable().optional(),
+          notePath: z.string().max(8192).nullable().optional(),
+          locale: z.enum(["zh", "en"]).optional(),
+        })
+        .strict(),
+    })
+    .strict(),
+  [IPC.AI_AGENT_CANCEL]: z.object({ runId: stringMin1.max(128) }),
+  [IPC.AI_AGENT_RESPOND_PROPOSAL]: z.object({
+    runId: stringMin1.max(128),
+    callId: stringMin1.max(256),
+    approve: z.boolean(),
+  }),
 
   // Git 版本控制
   [IPC.GIT_IS_REPO]: z.object({}).strict(),

@@ -26,6 +26,7 @@ import {
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
+  Star,
   Trash2,
 } from "lucide-react";
 import type { ConnectorKindMeta, TestResult } from "@/contracts";
@@ -481,6 +482,25 @@ export function ConnectionsTab() {
     });
   };
 
+  /**
+   * 设为默认连接：同一时间至多一个连接为默认，先把其它已标记的连接清掉，
+   * 再把目标连接标记上。默认连接会被 `firstConnectionName` 优先选中
+   * （新文档 / Agent 面板没有显式选择连接时的兜底）。
+   */
+  const setDefaultConnection = useCallback(
+    async (name: string) => {
+      const target = entries[name];
+      if (!target) return;
+      for (const [n, e] of Object.entries(entries)) {
+        if (n !== name && e.isDefault) {
+          await upsert(n, { ...e, isDefault: false });
+        }
+      }
+      await upsert(name, { ...target, isDefault: true });
+    },
+    [entries, upsert],
+  );
+
   const onDelete = async () => {
     if (!draft.originalName) return;
     const ok = window.confirm(
@@ -540,6 +560,30 @@ export function ConnectionsTab() {
                           e.kind}
                       </span>
                     </div>
+                    <span
+                      role="button"
+                      tabIndex={-1}
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        if (!e.isDefault) void setDefaultConnection(name);
+                      }}
+                      title={
+                        e.isDefault
+                          ? t("connections.isDefault")
+                          : t("connections.setDefault")
+                      }
+                      className={cn(
+                        "flex h-4 w-4 flex-none cursor-pointer items-center justify-center rounded hover:bg-accent",
+                        e.isDefault
+                          ? "text-amber-500"
+                          : "text-muted-foreground/30 hover:text-muted-foreground",
+                      )}
+                    >
+                      <Star
+                        className="h-3 w-3"
+                        fill={e.isDefault ? "currentColor" : "none"}
+                      />
+                    </span>
                     <AutocompleteStatusDot connectionName={name} />
                   </button>
                 );

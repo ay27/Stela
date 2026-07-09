@@ -115,7 +115,8 @@
     cursor: ew-resize !important;
     user-select: none;
   }
-  body[data-sidebar-resizing] aside[data-sidebar-aside] {
+  body[data-sidebar-resizing] aside[data-sidebar-aside],
+  body[data-sidebar-resizing] aside[data-agent-aside] {
     transition: none !important;
   }
 

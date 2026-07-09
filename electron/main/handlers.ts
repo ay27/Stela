@@ -14,7 +14,11 @@ import path from "node:path";
 import { BrowserWindow, app, dialog } from "electron";
 
 import { IPC } from "@shared/ipc-channels";
+import { IPC_EVENTS } from "@shared/ipc-events";
 import type {
+  AgentEvent,
+  AgentProposalResponse,
+  AgentRunRequest,
   AiCompleteRequest,
   AiCompleteResponse,
   AiFimCompleteRequest,
@@ -90,6 +94,7 @@ import * as vaultIndex from "../services/vault-index";
 import * as sqlIndex from "../services/sql-index";
 import * as autoUpdate from "../services/auto-updater";
 import * as ai from "../services/ai";
+import * as agent from "../services/ai/agent";
 
 /** 共用：所有 vault-级 handler 的入口拿当前 vault；没有时按 IPC 错误返回。 */
 function requireVault(): string {
@@ -102,6 +107,9 @@ function requireVault(): string {
   }
   return v;
 }
+
+/** runId -> 该次 agent run 的 AbortController，供 AI_AGENT_CANCEL 查找。 */
+const agentRunControllers = new Map<string, AbortController>();
 
 const STARTUP_UPDATE_CHECK_DELAY_MS = 10_000;
 const UPDATE_CHECK_THROTTLE_MS = 24 * 60 * 60 * 1000;
@@ -477,6 +485,54 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
         (await deviceProfile.loadDeviceProfile()).slug,
         request,
       ),
+  );
+
+  // ---------- Harness agent ----------
+  registerHandler<{ request: AgentRunRequest }, { runId: string }>(
+    IPC.AI_AGENT_RUN,
+    async ({ request }, handlerCtx) => {
+      const vaultPath = requireVault();
+      const slug = (await deviceProfile.loadDeviceProfile()).slug;
+      const controller = new AbortController();
+      agentRunControllers.set(request.runId, controller);
+      const sender = handlerCtx.event.sender;
+      const onEvent = (event: AgentEvent) => {
+        if (sender.isDestroyed()) return;
+        try {
+          sender.send(IPC_EVENTS.AI_AGENT_EVENT, event);
+        } catch (err) {
+          getLogger("ai.agent").warn("send agent event failed", {
+            err: (err as Error).message,
+          });
+        }
+      };
+      // Fire-and-forget：invoke 立刻返回 runId，进度全部走流式事件推送。
+      void agent
+        .runAgent({ vaultPath, slug, request, onEvent, signal: controller.signal })
+        .catch((err) => {
+          getLogger("ai.agent").error("agent run crashed", {
+            runId: request.runId,
+            err: (err as Error).message,
+          });
+        })
+        .finally(() => {
+          agentRunControllers.delete(request.runId);
+        });
+      return { runId: request.runId };
+    },
+  );
+  registerHandler<{ runId: string }, { cancelled: boolean }>(
+    IPC.AI_AGENT_CANCEL,
+    ({ runId }) => {
+      const controller = agentRunControllers.get(runId);
+      if (!controller) return { cancelled: false };
+      controller.abort();
+      return { cancelled: true };
+    },
+  );
+  registerHandler<AgentProposalResponse, { ok: boolean }>(
+    IPC.AI_AGENT_RESPOND_PROPOSAL,
+    (response) => ({ ok: agent.respondToProposal(response) }),
   );
 
   // ---------- Git 版本控制 ----------

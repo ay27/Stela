@@ -1,6 +1,7 @@
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
+  Bot,
   ChevronDown,
   FileText,
   Loader2,
@@ -11,6 +12,7 @@ import {
 import { memo, useCallback, useMemo, useState } from "react";
 
 import { useWorkspace, type Tab } from "@/state/workspace";
+import { useLayout } from "@/state/layout";
 import { cn } from "@/lib/utils";
 import { formatHotkey } from "@/lib/hotkeys";
 
@@ -33,6 +35,10 @@ export function TabBar() {
   const reorderTab = useWorkspace((s) => s.reorderTab);
   const promoteEphemeral = useWorkspace((s) => s.promoteEphemeral);
   const closedCount = useWorkspace((s) => s.closedTabsStack.length);
+
+  const agentPanelCollapsed = useLayout((s) => s.agentPanelCollapsed);
+  const toggleAgentPanel = useLayout((s) => s.toggleAgentPanel);
+  const focusAgentPanel = useLayout((s) => s.focusAgentPanel);
 
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [hoverTargetId, setHoverTargetId] = useState<string | null>(null);
@@ -173,6 +179,21 @@ export function TabBar() {
           onClose={closeTab}
         />
       ) : null}
+      <button
+        type="button"
+        onClick={() =>
+          agentPanelCollapsed ? focusAgentPanel() : toggleAgentPanel()
+        }
+        title={agentPanelCollapsed ? "打开 Agent 面板" : "收起 Agent 面板"}
+        className={cn(
+          "stela-app-no-drag flex w-8 flex-none items-center justify-center border-l border-border hover:bg-background/50",
+          agentPanelCollapsed
+            ? "text-muted-foreground hover:text-foreground"
+            : "text-primary",
+        )}
+      >
+        <Bot className="h-3.5 w-3.5" />
+      </button>
     </div>
   );
 }

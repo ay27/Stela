@@ -7,6 +7,9 @@
  */
 
 import type {
+  AgentEvent,
+  AgentProposalResponse,
+  AgentRunRequest,
   AiCompleteRequest,
   AiCompleteResponse,
   AiFimCompleteRequest,
@@ -208,6 +211,13 @@ interface StelaBridge {
     parseSqlQuery: (
       request: AiParseSqlQueryRequest,
     ) => Promise<AiParseSqlQueryResponse>;
+  };
+  agent: {
+    run: (request: AgentRunRequest) => Promise<{ runId: string }>;
+    cancel: (runId: string) => Promise<{ cancelled: boolean }>;
+    respondProposal: (response: AgentProposalResponse) => Promise<{ ok: boolean }>;
+    /** 订阅 agent 单步事件流；返回 unsubscribe 函数。 */
+    onEvent: (callback: (event: AgentEvent) => void) => () => void;
   };
   git: {
     isRepo: () => Promise<boolean>;

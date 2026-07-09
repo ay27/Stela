@@ -287,6 +287,83 @@ function rankCatalog(
     );
 }
 
+function rankCatalogByKeywords(
+  catalog: SchemaCatalogEntry[],
+  keywords: string[],
+): RankedSchemaEntry[] {
+  const terms = tokenize(keywords, { filterStopwords: true });
+  return catalog
+    .map((entry) => {
+      let score = 0;
+      const reasons: string[] = [];
+      const tableName = normalizeName(entry.table);
+      const qName = normalizeName(entry.qualifiedName);
+      for (const term of terms) {
+        if (tableName.includes(term) || qName.includes(term)) {
+          score += 16;
+          reasons.push(`table match:${term}`);
+        }
+        if (entry.columns.some((column) => normalizeName(column.name).includes(term))) {
+          score += 8;
+          reasons.push(`column match:${term}`);
+        }
+        if (entry.ddlSnippet?.toLowerCase().includes(term)) {
+          score += 3;
+          reasons.push(`ddl match:${term}`);
+        }
+      }
+      return { ...entry, score, reasons };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || a.qualifiedName.localeCompare(b.qualifiedName));
+}
+
+export interface SearchTablesOptions {
+  connectionName: string;
+  connection: ConnectionEntry;
+  /** 自然语言关键词（表名/业务词），来自 agent 对用户问题的推测。 */
+  keywords: string[];
+  limit?: number;
+  deps?: SchemaResolverDeps;
+}
+
+/**
+ * 需求 5 的核心：agent 拿一组模糊关键词（表名片段 / 业务词），在 schema-dir
+ * 文档 或 connector 的 database/table 目录里模糊打分找候选表。复用
+ * [rankCatalog](#rankCatalog) 同款打分逻辑（表名/列名/DDL 命中），只是输入
+ * 从 `AiCompleteRequest` 换成一组裸关键词，方便 agent 工具直接调用。
+ */
+export async function searchTables(
+  options: SearchTablesOptions,
+): Promise<AiSchemaTargetContext[]> {
+  const deps = {
+    readDir: fs.readdir,
+    readFile: fs.readFile,
+    ...options.deps,
+  };
+  const fromSchemaDir = await loadSchemaDirCatalog(
+    options.connectionName,
+    options.connection.schemaDir,
+    deps,
+  );
+  const catalog =
+    fromSchemaDir.length > 0
+      ? fromSchemaDir
+      : await loadConnectorCatalog(options.connectionName, options.connection, deps);
+  const ranked = rankCatalogByKeywords(catalog, options.keywords);
+  const limit = options.limit ?? MAX_SCHEMA_TARGETS;
+  return ranked.slice(0, limit).map((entry) => ({
+    connectionName: entry.connectionName,
+    database: entry.database,
+    table: entry.table,
+    columns: entry.columns,
+    ddlSnippet: entry.ddlSnippet,
+    source: entry.source === "schema-dir" ? "schema-dir" : "connector",
+    matchReason: Array.from(new Set(entry.reasons)).slice(0, 4).join(", "),
+    score: entry.score,
+  }));
+}
+
 function quoteIdent(value: string, dialect: string | undefined): string {
   const quote = dialect?.toLowerCase().includes("postgres") ? `"` : "`";
   return `${quote}${value.replaceAll(quote, `${quote}${quote}`)}${quote}`;

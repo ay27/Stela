@@ -770,16 +770,21 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     [],
   );
 
-  // 布局：横向 flex 行。左边 .stela-editor-main 是 flex-1 的相对定位主列（滚动 host
-  // + overlay 们都在里面）。右边 DocumentTocRail 是常驻的极简目录刻度条（固定 ~20px
-  // 占位列），与主列内 right:0 的滚动条物理分离、永不重叠——这是把目录放右侧又不和
-  // 滚动条打架的关键。
+  // 布局：横向 flex 行，从左到右 = 正文主列 | 目录 | 滚动条。
   //
-  // HostScrollbar / FindBar / ImagePreviewOverlay 都是 host 的**兄弟**而非子——
-  // host 自身是滚动容器，absolute 子元素会随滚动一起向上位移（被滚出视口），所以
-  // 必须挂到不滚动的父（.stela-editor-main 这个 relative div）里，相对它定位才不会
-  // 跟着滚。FindBar 同款约束：相对该 relative 父定位（top:8px / right:16px），永远
-  // 悬停在编辑器视口右上角。
+  // .stela-editor-main 是 flex-1 的相对定位主列，滚动 host / 查找栏 / 图片
+  // 预览挂在它下面。DocumentTocRail 是它右边的**固定宽度** flex 列——用真实
+  // 布局宽度挤占空间（正文随之收窄居中），不是绝对定位悬浮，否则宽度不被
+  // 保留、窄窗口/长行时会跟正文重叠。
+  //
+  // HostScrollbar 单独提到 .stela-editor-layout 这一层、绝对定位到整块布局
+  // 的最右边（right:0），所以它落在目录**右侧**、贴着窗口边——目录因此夹在
+  // 正文和滚动条之间（正是"目录在滚动条左侧"的诉求）。它只靠 hostRef 读
+  // host 的滚动量算 thumb 位置，DOM 挂在哪一层都不影响计算。
+  //
+  // FindBar / ImagePreviewOverlay 仍留在 main 内：host 是滚动容器，absolute
+  // 子元素会随滚动位移，必须挂到不滚动的 relative 父（.stela-editor-main）
+  // 上定位才不会跟着滚。FindBar 相对该父 top:8/right:16 悬停在视口右上角。
   return (
     <div className="stela-editor-layout">
       <div className="stela-editor-main">
@@ -799,11 +804,11 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         >
           <Milkdown />
         </div>
-        <HostScrollbar hostRef={hostRef} />
         <FindBar viewRef={viewRef} />
         <ImagePreviewOverlay hostRef={hostRef} />
       </div>
       <DocumentTocRail hostRef={hostRef} />
+      <HostScrollbar hostRef={hostRef} />
     </div>
   );
 });
@@ -990,21 +995,14 @@ interface TocItem {
 const TOC_ACTIVE_OFFSET_PX = 80;
 
 /**
- * 目录停靠栏的展开/收起会话偏好（模块级，不写盘）。切文件会重挂载 DocumentTocRail，
- * 用它把上次的选择带到下一个文件，避免每次都弹回默认展开。
- */
-let tocDockCollapsed = false;
-
-/**
- * 右侧文档目录停靠栏（DocumentTocRail）。
+ * 文档目录停靠栏（DocumentTocRail）。
  *
- * 形态：编辑器最右侧的常驻停靠栏。文档有标题时默认展开为 ~260px 的目录列，
- * 作为 .stela-editor-layout 的右侧 flex 占位列，**挤占**宽度（正文随之收窄居中）
- * 而非浮层遮挡；与主列内 right:0 的滚动条物理分离、永不重叠。可点收起按钮折成
- * 一条 ~32px 窄条（只留一颗展开按钮），需要时再展开。
- *
- * 收起偏好：用模块级 `tocDockCollapsed` 记住本次会话内的展开/收起选择，切文件
- * 重挂载后仍保持（不写盘、不进 markdown）。其余 UI 状态随重挂载重置。
+ * 形态：夹在正文主列和最右侧滚动条之间的常驻固定宽度 flex 列，无背景无
+ * 分割线、字色刻意调淡——目录是当前文档范畴的轻量导航，视觉上刻意弱化成
+ * "正文留白的一部分"而非独立面板（全局性的 Agent 面板才该在应用层级另起
+ * 一栏，跟目录分开）。用真实布局宽度**挤占**空间（正文随之收窄居中），而
+ * 不是绝对定位悬浮——悬浮虽然视觉上更"融入"，但宽度不会被保留，窄窗口/
+ * 长行时会跟正文重叠，所以用占位布局。常驻显示，不提供收起。
  *
  * heading 数据：直接读取 host 内 `.ProseMirror` 中带有 `data-heading-slug`
  * 的 `<h1>-<h6>`（属性由 [./heading-anchor](./heading-anchor) 的 PM 插件写入）。
@@ -1024,18 +1022,9 @@ function DocumentTocRail({
 }) {
   const [items, setItems] = useState<TocItem[]>([]);
   const [activeSlug, setActiveSlug] = useState<string | null>(null);
-  // 展开/收起偏好：初值取模块级会话记忆，切文件重挂载后仍保持上次选择。
-  const [collapsed, setCollapsed] = useState(tocDockCollapsed);
   const containerRef = useRef<HTMLDivElement>(null);
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollAnimRef = useRef<number | null>(null);
-
-  const toggleCollapsed = useCallback(() => {
-    setCollapsed((c) => {
-      tocDockCollapsed = !c;
-      return !c;
-    });
-  }, []);
 
   // ---- 1) 收集 heading：MutationObserver 节流，与 HostScrollbar 同款思路 ----
   useEffect(() => {
@@ -1229,76 +1218,16 @@ function DocumentTocRail({
     [hostRef],
   );
 
-  // 没有 heading 不渲染：整列停靠栏都不占位，避免空目录还吃掉右侧宽度。
+  // 没有 heading 不渲染：整列停靠栏都不占位，避免空目录还吃掉正文宽度。
   if (items.length === 0) return null;
 
   // 多级标题以最浅那一级为基准，缩进从 0 开始数。文档全是 h2-h4 时，
   // h2 不会被白白缩两格。
   const minLevel = items.reduce((m, it) => Math.min(m, it.level), 6);
 
-  // 收起态：只留一条窄条 + 展开按钮，点一下展开回目录列。
-  if (collapsed) {
-    return (
-      <div ref={containerRef} className="stela-toc-rail" data-collapsed="true">
-        <button
-          type="button"
-          className="stela-toc-rail__trigger"
-          onClick={toggleCollapsed}
-          aria-label="展开目录"
-          title="展开目录"
-        >
-          {/* lucide list icon —— 4 条不齐的横线，远看像一份目录 */}
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            width="14"
-            height="14"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden
-          >
-            <line x1="21" y1="6" x2="3" y2="6" />
-            <line x1="17" y1="12" x2="3" y2="12" />
-            <line x1="21" y1="18" x2="3" y2="18" />
-            <line x1="13" y1="9" x2="3" y2="9" />
-          </svg>
-        </button>
-      </div>
-    );
-  }
-
   return (
     <div ref={containerRef} className="stela-toc-rail">
       <div className="stela-toc-rail__panel" role="navigation" aria-label="文档目录">
-        <div className="stela-toc-rail__header">
-          <span className="stela-toc-rail__title">目录</span>
-          <button
-            type="button"
-            className="stela-toc-rail__collapse"
-            onClick={toggleCollapsed}
-            aria-label="收起目录"
-            title="收起目录"
-          >
-            {/* lucide panel-right-close —— 向右收起的箭头 */}
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              width="14"
-              height="14"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-            >
-              <path d="m9 6 6 6-6 6" />
-            </svg>
-          </button>
-        </div>
         <ul className="stela-toc-rail__list">
           {items.map((item, idx) => (
             <li

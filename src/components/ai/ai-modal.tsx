@@ -152,7 +152,7 @@ export function AiModal() {
   );
 }
 
-function renderMarkdown(markdown: string): ReactNode {
+export function renderMarkdown(markdown: string): ReactNode {
   const lines = markdown.split(/\r?\n/);
   const out: ReactNode[] = [];
   let i = 0;

@@ -15,6 +15,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { Command } from "cmdk";
 import {
+  Bot,
   Code2,
   Database,
   FileText,
@@ -38,6 +39,7 @@ export interface CommandHandlers {
   chooseVault: () => void;
   /** 往当前激活编辑器光标处插入一个空 runsql 块；无打开文件时返回 false（静默 no-op）。 */
   insertRunSqlBlock: () => boolean;
+  openAgent: () => void;
 }
 
 interface Props {
@@ -158,6 +160,14 @@ export function CommandPalette({ open, onOpenChange, handlers }: Props) {
                   onSelect={() => {
                     close();
                     handlers.newStelaNote();
+                  }}
+                />
+                <CmdItem
+                  icon={<Bot className="h-3.5 w-3.5" />}
+                  label={t("commandPalette.openAgent.label")}
+                  onSelect={() => {
+                    close();
+                    handlers.openAgent();
                   }}
                 />
                 <CmdItem

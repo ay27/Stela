@@ -156,6 +156,105 @@ export async function callChatCompletions({
   return content;
 }
 
+// ---------- Agent (native function-calling) ----------
+
+export type AgentChatRole = "system" | "user" | "assistant" | "tool";
+
+/** OpenAI-compatible chat message, extended with tool-calling fields. */
+export interface AgentChatMessage {
+  role: AgentChatRole;
+  /** Assistant messages with only tool_calls may have empty/null content. */
+  content?: string | null;
+  /** Present on assistant messages that requested tool calls. */
+  tool_calls?: AgentToolCall[];
+  /** Present on role:"tool" messages, echoing which call this answers. */
+  tool_call_id?: string;
+  /** Present on role:"tool" messages (OpenAI convention: tool result needs the fn name too). */
+  name?: string;
+}
+
+export interface AgentToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+/** JSON-Schema tool definition passed as `tools` in the chat completions request. */
+export interface AgentToolDef {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: unknown;
+  };
+}
+
+export interface AgentTurnResult {
+  content: string | null;
+  toolCalls: AgentToolCall[];
+}
+
+/**
+ * 一轮 harness 循环的模型调用：带 `tools` + `tool_choice:"auto"`，让模型自己
+ * 决定要不要调工具。返回值把 `tool_calls` 透传给调用方处理，不在这里解析。
+ */
+export async function callAgentTurn({
+  settings,
+  apiKey,
+  messages,
+  tools,
+  signal,
+}: {
+  settings: AiSettings;
+  apiKey: string;
+  messages: AgentChatMessage[];
+  tools: AgentToolDef[];
+  signal?: AbortSignal;
+}): Promise<AgentTurnResult> {
+  if (settings.providerMode === "disabled") {
+    throw new AppError("ai_disabled", "AI provider is disabled.");
+  }
+  if (!apiKey) {
+    throw new AppError("ai_missing_api_key", "AI provider API key is not configured.");
+  }
+  const baseUrl = settings.baseUrl.replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: settings.model,
+      temperature: 0.2,
+      messages,
+      tools,
+      tool_choice: "auto",
+    }),
+    signal,
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new AppError(
+      "ai_provider_failed",
+      `AI provider returned ${response.status}: ${body.slice(0, 500)}`,
+    );
+  }
+  const data = (await response.json()) as {
+    choices?: {
+      message?: { content?: string | null; tool_calls?: AgentToolCall[] };
+    }[];
+  };
+  const message = data.choices?.[0]?.message;
+  if (!message) {
+    throw new AppError("ai_empty_response", "AI provider returned an empty response.");
+  }
+  return {
+    content: message.content ?? null,
+    toolCalls: message.tool_calls ?? [],
+  };
+}
+
 export async function callFimCompletions({
   settings,
   apiKey,

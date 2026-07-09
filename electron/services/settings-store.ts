@@ -16,6 +16,7 @@ import { AppError } from "@shared/errors";
 import type {
   AiSettings,
   AppSettings,
+  ExecutionSettings,
   GitSettings,
   PartialAppSettings,
   RecentFileEntry,
@@ -55,12 +56,18 @@ const AI_DEFAULT: AiSettings = {
   inlineCompletionEnabled: false,
   fimBaseUrl: "https://api.deepseek.com/beta",
   fimModel: "deepseek-v4-pro",
+  agentMaxIterations: 12,
+  agentWallClockMs: 90_000,
+  agentAllowMutations: false,
 };
+
+/** 单次查询默认最大返回行数；`0` = 不限制。见 [sql-limit.ts](./sql-limit.ts)。 */
+const EXECUTION_DEFAULT: ExecutionSettings = { onError: "continue", maxRows: 1000 };
 
 const DEFAULTS: AppSettings = {
   vault: { recentFiles: [] },
   appearance: { theme: "system" },
-  execution: { onError: "continue" },
+  execution: { ...EXECUTION_DEFAULT },
   persistence: { cleanupMonths: 12 },
   ui: { defaultPageSize: 200, editorWidth: "narrow" },
   git: { ...GIT_DEFAULT },
@@ -70,7 +77,7 @@ const DEFAULTS: AppSettings = {
 interface RawSettings {
   vault?: Record<string, unknown>;
   appearance?: { theme?: ThemeMode };
-  execution?: { onError?: "continue" | "stop" };
+  execution?: { onError?: "continue" | "stop"; maxRows?: number };
   persistence?: { cleanupMonths?: number };
   ui?: { defaultPageSize?: number; editorWidth?: EditorWidth };
   git?: Partial<GitSettings>;
@@ -92,6 +99,14 @@ function sanitizeAi(input: unknown): AiSettings {
     typeof r.maxSampleRows === "number" && Number.isFinite(r.maxSampleRows)
       ? Math.min(100, Math.max(0, Math.floor(r.maxSampleRows)))
       : AI_DEFAULT.maxSampleRows;
+  const agentMaxIterations =
+    typeof r.agentMaxIterations === "number" && Number.isFinite(r.agentMaxIterations)
+      ? Math.min(50, Math.max(1, Math.floor(r.agentMaxIterations)))
+      : AI_DEFAULT.agentMaxIterations;
+  const agentWallClockMs =
+    typeof r.agentWallClockMs === "number" && Number.isFinite(r.agentWallClockMs)
+      ? Math.min(600_000, Math.max(5_000, Math.floor(r.agentWallClockMs)))
+      : AI_DEFAULT.agentWallClockMs;
   return {
     providerMode,
     baseUrl: baseUrl || AI_DEFAULT.baseUrl,
@@ -105,7 +120,21 @@ function sanitizeAi(input: unknown): AiSettings {
     inlineCompletionEnabled: r.inlineCompletionEnabled === true,
     fimBaseUrl: fimBaseUrl || AI_DEFAULT.fimBaseUrl,
     fimModel: fimModel || AI_DEFAULT.fimModel,
+    agentMaxIterations,
+    agentWallClockMs,
+    agentAllowMutations: r.agentAllowMutations === true,
   };
+}
+
+function sanitizeExecution(input: unknown): ExecutionSettings {
+  if (!input || typeof input !== "object") return { ...EXECUTION_DEFAULT };
+  const r = input as Record<string, unknown>;
+  const onError = r.onError === "stop" ? "stop" : "continue";
+  const maxRows =
+    typeof r.maxRows === "number" && Number.isFinite(r.maxRows)
+      ? Math.max(0, Math.floor(r.maxRows))
+      : EXECUTION_DEFAULT.maxRows;
+  return { onError, maxRows };
 }
 
 function sanitizeGit(input: unknown): GitSettings {
@@ -187,9 +216,7 @@ export async function loadAppSettings(
     appearance: {
       theme: raw.appearance?.theme ?? DEFAULTS.appearance.theme,
     },
-    execution: {
-      onError: raw.execution?.onError ?? DEFAULTS.execution.onError,
-    },
+    execution: sanitizeExecution(raw.execution),
     persistence: {
       cleanupMonths:
         raw.persistence?.cleanupMonths ?? DEFAULTS.persistence.cleanupMonths,
@@ -223,7 +250,7 @@ export async function patchAppSettings(
     next.appearance = { ...raw.appearance, ...partial.appearance };
   }
   if (partial.execution !== undefined) {
-    next.execution = { ...raw.execution, ...partial.execution };
+    next.execution = sanitizeExecution({ ...raw.execution, ...partial.execution });
   }
   if (partial.persistence !== undefined) {
     next.persistence = { ...raw.persistence, ...partial.persistence };

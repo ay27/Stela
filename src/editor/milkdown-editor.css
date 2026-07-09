@@ -83,8 +83,11 @@
  * HostScrollbar React 组件画一个自定义 overlay thumb（见
  * [MilkdownEditor.tsx](./MilkdownEditor.tsx) 内的 HostScrollbar）。
  */
-/* 编辑器顶层布局：横向 flex 行。左主列（滚动 host + overlay）+ 右侧停靠目录栏。 */
+/* 编辑器顶层布局：横向 flex 行 = 正文主列 | 目录 | 滚动条。
+ * position:relative 让提到这一层的 HostScrollbar 能 right:0 贴到整块布局的
+ * 最右边（目录右侧、窗口边缘），而不是贴在正文主列的右边。 */
 .stela-editor-layout {
+  position: relative;
   display: flex;
   height: 100%;
   width: 100%;
@@ -1779,101 +1782,30 @@
 }
 
 /* ---------------------------------------------------------------------------
- * 右侧文档目录停靠栏（DocumentTocRail）
+ * 文档目录停靠栏（DocumentTocRail），夹在正文和最右侧滚动条之间
  *
- * 形态：.stela-editor-layout 最右侧的常驻 flex 子项。
- *   - 展开态：固定 260px 的目录列，挤占主列宽度（正文随之收窄居中）而非浮层遮挡；
- *     与主列内 right:0 的滚动条物理分离、永不重叠。
- *   - 收起态：折成 32px 窄条，只留一颗居中靠上的展开按钮（list 图标）。
+ * 形态：.stela-editor-layout 里正文主列与滚动条之间的常驻固定宽度 flex 列，
+ * 真实占用布局空间（正文随之收窄居中），宽度是布局意义上"保留"的，不会
+ * 跟随窗口变窄 / 正文行变长而跟文字重叠。无背景无分割线、字色刻意调淡，
+ * 视觉上尽量融入正文。padding-right 给最右侧那条 10px 滚动条让出物理空间，
+ * 避免目录文字被 thumb 压住。常驻显示，不提供收起。
  * ------------------------------------------------------------------------- */
 .stela-toc-rail {
   flex: 0 0 auto;
-  width: 260px;
+  width: 168px;
   height: 100%;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-left: 1px solid hsl(var(--border));
-  background: hsl(var(--background));
+  padding-right: 12px;
 }
 
-.stela-toc-rail[data-collapsed="true"] {
-  width: 32px;
-  align-items: center;
-}
-
-/* 收起态的展开按钮 */
-.stela-toc-rail__trigger {
-  margin-top: 8px;
-  width: 26px;
-  height: 26px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 1px solid hsl(var(--border));
-  border-radius: 6px;
-  background: hsl(var(--background));
-  color: hsl(var(--muted-foreground));
-  cursor: pointer;
-  transition:
-    background-color 120ms,
-    color 120ms,
-    border-color 120ms;
-}
-
-.stela-toc-rail__trigger:hover {
-  background: hsl(var(--accent));
-  color: hsl(var(--accent-foreground));
-}
-
-/* 展开态目录面板：纵向 flex 占满停靠栏 */
+/* 目录面板：纵向 flex，靠上贴齐——视觉落在正文右上角 */
 .stela-toc-rail__panel {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  color: hsl(var(--popover-foreground));
-}
-
-.stela-toc-rail__header {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 6px 6px 12px;
-  border-bottom: 1px solid hsl(var(--border));
-}
-
-.stela-toc-rail__title {
-  flex: 1 1 auto;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: hsl(var(--muted-foreground));
-  user-select: none;
-}
-
-.stela-toc-rail__collapse {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: hsl(var(--muted-foreground));
-  cursor: pointer;
-  transition: background-color 120ms, color 120ms;
-}
-
-.stela-toc-rail__collapse:hover {
-  background: hsl(var(--accent));
-  color: hsl(var(--accent-foreground));
 }
 
 .stela-toc-rail__list {
@@ -1883,7 +1815,7 @@
   overscroll-behavior: contain;
   list-style: none;
   margin: 0;
-  padding: 4px 4px 6px;
+  padding: 28px 6px 6px;
 }
 
 .stela-toc-rail__item {
@@ -1898,27 +1830,24 @@
   border: none;
   background: transparent;
   font: inherit;
-  font-size: 12.5px;
-  line-height: 1.45;
-  color: hsl(var(--muted-foreground));
-  padding: 4px 8px 4px calc(8px + var(--indent, 0) * 12px);
+  font-size: 12px;
+  line-height: 1.5;
+  color: hsl(var(--muted-foreground) / 0.65);
+  padding: 3px 6px 3px calc(6px + var(--indent, 0) * 12px);
   border-radius: 4px;
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: background-color 100ms, color 100ms;
+  transition: color 100ms;
 }
 
 .stela-toc-rail__link:hover {
-  background: hsl(var(--accent));
-  color: hsl(var(--accent-foreground));
+  color: hsl(var(--foreground));
 }
 
 .stela-toc-rail__item[data-level="0"] .stela-toc-rail__link {
   --indent: 0;
-  font-weight: 600;
-  color: hsl(var(--foreground));
 }
 .stela-toc-rail__item[data-level="1"] .stela-toc-rail__link {
   --indent: 1;
@@ -1936,14 +1865,11 @@
   --indent: 5;
 }
 
+/* active 项只变字色，不加底色/竖条——保持无背景的轻量观感；用灰阶而非
+ * 品牌蓝，避免在轻量导航上出现太抢眼的强调色 */
 .stela-toc-rail__item[data-active="true"] .stela-toc-rail__link {
-  color: hsl(var(--primary));
-  background: hsl(var(--primary) / 0.08);
-  box-shadow: inset 2px 0 0 hsl(var(--primary));
-}
-
-.stela-toc-rail__item[data-active="true"] .stela-toc-rail__link:hover {
-  background: hsl(var(--primary) / 0.14);
+  color: hsl(var(--foreground));
+  font-weight: 600;
 }
 
 /* ---------- 搜索跳转高亮 ---------- */

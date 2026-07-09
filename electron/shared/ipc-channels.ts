@@ -93,6 +93,11 @@ export const IPC = {
   AI_FIM_COMPLETE: "ai:fim-complete",
   AI_PARSE_SQL_QUERY: "ai:parse-sql-query",
 
+  // Harness agent（原生 function-calling 循环，见 electron/services/ai/agent.ts）
+  AI_AGENT_RUN: "ai:agent-run",
+  AI_AGENT_CANCEL: "ai:agent-cancel",
+  AI_AGENT_RESPOND_PROPOSAL: "ai:agent-respond-proposal",
+
   // Git 版本控制（替代 COS 同步；笔记 + JSONL 历史走 git remote）
   GIT_IS_REPO: "git:is-repo",
   GIT_INIT_REPO: "git:init-repo",

@@ -232,6 +232,52 @@ export function AiTab() {
         </Row>
       </Section>
 
+      <Section title={t("ai.agent.title")} description={t("ai.agent.description")}>
+        <Row
+          label={t("ai.agent.maxIterations.label")}
+          description={t("ai.agent.maxIterations.description")}
+        >
+          <input
+            type="number"
+            min={1}
+            max={50}
+            value={settings.agentMaxIterations}
+            onChange={(e) =>
+              void patch({
+                ai: { agentMaxIterations: Math.max(1, Number(e.target.value) || 1) },
+              })
+            }
+            className="w-20 rounded-md border border-border bg-background px-2 py-1.5 text-[12px]"
+          />
+        </Row>
+        <Row
+          label={t("ai.agent.wallClockMs.label")}
+          description={t("ai.agent.wallClockMs.description")}
+        >
+          <input
+            type="number"
+            min={1000}
+            step={1000}
+            value={settings.agentWallClockMs}
+            onChange={(e) =>
+              void patch({
+                ai: { agentWallClockMs: Math.max(1000, Number(e.target.value) || 1000) },
+              })
+            }
+            className="w-28 rounded-md border border-border bg-background px-2 py-1.5 text-[12px]"
+          />
+        </Row>
+        <Row
+          label={t("ai.agent.allowMutations.label")}
+          description={t("ai.agent.allowMutations.description")}
+        >
+          <Toggle
+            checked={settings.agentAllowMutations}
+            onChange={(v) => void patch({ ai: { agentAllowMutations: v } })}
+          />
+        </Row>
+      </Section>
+
       <div
         className={cn(
           "flex items-start gap-2 rounded-md border px-3 py-2 text-[12px]",

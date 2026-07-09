@@ -19,6 +19,9 @@ import {
   type VaultExternalChangePayload,
 } from "@shared/ipc-events";
 import type {
+  AgentEvent,
+  AgentProposalResponse,
+  AgentRunRequest,
   AiCompleteRequest,
   AiCompleteResponse,
   AiFimCompleteRequest,
@@ -296,6 +299,22 @@ const stela = {
       call<AiFimCompleteResponse>(IPC.AI_FIM_COMPLETE, { request }),
     parseSqlQuery: (request: AiParseSqlQueryRequest) =>
       call<AiParseSqlQueryResponse>(IPC.AI_PARSE_SQL_QUERY, { request }),
+  },
+
+  agent: {
+    run: (request: AgentRunRequest) => call<{ runId: string }>(IPC.AI_AGENT_RUN, { request }),
+    cancel: (runId: string) =>
+      call<{ cancelled: boolean }>(IPC.AI_AGENT_CANCEL, { runId }),
+    respondProposal: (response: AgentProposalResponse) =>
+      call<{ ok: boolean }>(IPC.AI_AGENT_RESPOND_PROPOSAL, response),
+    /** 返回 unsubscribe 函数；同 `vault.onExternalChange` 的订阅模式。 */
+    onEvent: (callback: (event: AgentEvent) => void) => {
+      const handler = (_ev: Electron.IpcRendererEvent, event: AgentEvent) => callback(event);
+      ipcRenderer.on(IPC_EVENTS.AI_AGENT_EVENT, handler);
+      return () => {
+        ipcRenderer.removeListener(IPC_EVENTS.AI_AGENT_EVENT, handler);
+      };
+    },
   },
 
   git: {

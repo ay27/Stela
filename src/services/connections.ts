@@ -16,22 +16,25 @@ export interface ConnectionEntry {
   config: unknown;
   /** 同步表结构到 Markdown 的目标目录 */
   schemaDir?: string;
+  /** 是否为默认连接。同一时间至多一个连接为 true，由 UI 负责互斥维护。 */
+  isDefault?: boolean;
 }
 
 export type ConnectionMap = Record<string, ConnectionEntry>;
 
 /**
- * 返回按名称升序排序后的第一个连接名；无连接时返回 null。
+ * 返回默认连接名：优先取标了 `isDefault` 的连接，否则回退到按名称升序排序后的
+ * 第一个；无连接时返回 null。
  *
  * 用于文件 frontmatter 未指定 `connection_name` 时的默认兜底：新开的 / 老的 markdown
- * 笔记直接拿第一个已保存连接，省掉手动选一次的步骤。Picker 和 RunContext 共用
+ * 笔记直接拿默认连接，省掉手动选一次的步骤。Picker、Agent 面板和 RunContext 共用
  * 这一规则，保证展示态和执行态一致。
  */
 export function firstConnectionName(entries: ConnectionMap): string | null {
-  for (const name of Object.keys(entries).sort()) {
-    return name;
-  }
-  return null;
+  const names = Object.keys(entries).sort();
+  const marked = names.find((name) => entries[name]?.isDefault);
+  if (marked) return marked;
+  return names[0] ?? null;
 }
 
 function isNoVault(err: unknown): boolean {

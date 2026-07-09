@@ -18,6 +18,8 @@ export const IPC_EVENTS = {
   INDEX_CHANGED: "index:changed",
   /** SQL 事实索引状态变化（构建进度 / 就绪 / 增量更新）。payload: void —— renderer 收到后重查 status()/query() */
   SQL_INDEX_CHANGED: "sql-index:changed",
+  /** Harness agent 单步事件流（started/tool_call/tool_result/proposal/final/error/cancelled）。payload: AgentEvent */
+  AI_AGENT_EVENT: "ai:agent-event",
 } as const;
 
 export type IpcEventChannel = (typeof IPC_EVENTS)[keyof typeof IPC_EVENTS];

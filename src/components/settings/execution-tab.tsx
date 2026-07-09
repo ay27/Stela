@@ -6,6 +6,7 @@ import { Row, Section, TabContainer } from "./atoms";
 export function ExecutionTab() {
   const t = useT();
   const onError = useSettings((s) => s.settings.execution.onError);
+  const maxRows = useSettings((s) => s.settings.execution.maxRows);
   const patch = useSettings((s) => s.patch);
   const onErrorOptions = [
     { value: "continue", label: t("execution.onError.continue"), labelText: t("execution.onError.continue") },
@@ -28,6 +29,22 @@ export function ExecutionTab() {
               void patch({ execution: { onError: v } })
             }
             options={onErrorOptions}
+          />
+        </Row>
+        <Row
+          label={t("execution.maxRows")}
+          description={t("execution.maxRows.description")}
+        >
+          <input
+            type="number"
+            min={0}
+            value={maxRows}
+            onChange={(e) =>
+              void patch({
+                execution: { maxRows: Math.max(0, Number(e.target.value) || 0) },
+              })
+            }
+            className="w-24 rounded-md border border-border bg-background px-2 py-1 text-sm"
           />
         </Row>
       </Section>

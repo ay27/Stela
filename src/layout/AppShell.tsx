@@ -2,6 +2,7 @@ import { useEffect, useMemo } from "react";
 
 import { Sidebar } from "./Sidebar";
 import { SidebarResizer } from "./SidebarResizer";
+import { AgentSidebar } from "./AgentSidebar";
 import { TabBar } from "./TabBar";
 import { Workspace } from "./Workspace";
 import { useWorkspace } from "@/state/workspace";
@@ -49,6 +50,7 @@ export function AppShell() {
   const toggleSidebar = useLayout((s) => s.toggleSidebar);
   const focusSearch = useLayout((s) => s.focusSearch);
   const focusFiles = useLayout((s) => s.focusFiles);
+  const focusAgentPanel = useLayout((s) => s.focusAgentPanel);
   const revealActiveFile = useWorkspace((s) => s.revealActiveFile);
 
   useEffect(() => {
@@ -123,6 +125,7 @@ export function AppShell() {
     chooseVault: () => void chooseVault(),
     newStelaNote: () => createNewStelaNote(vaultPath),
     insertRunSqlBlock: () => insertRunSqlIntoActiveEditor(),
+    openAgent: () => focusAgentPanel(),
   };
 
   // Hotkeys：key 规则见 docs/keybindings.md
@@ -200,6 +203,11 @@ export function AppShell() {
         handler: () => setSettingsOpen(true),
       },
       {
+        keys: "Mod+Shift+A",
+        context: "always",
+        handler: () => focusAgentPanel(),
+      },
+      {
         // Mod+Shift+S：在光标处插入一个空 runsql 块（S=SQL）。context "always"
         // 让它在编辑器内打字时也生效——这正是插入块的使用场景。无打开文件时
         // insertRunSqlIntoActiveEditor() 返回 false，静默 no-op。
@@ -248,6 +256,7 @@ export function AppShell() {
     setActiveTab,
     focusSearch,
     focusFiles,
+    focusAgentPanel,
     revealActiveFile,
     toggleSidebar,
     setSettingsOpen,
@@ -288,6 +297,8 @@ export function AppShell() {
         <TabBar />
         <Workspace />
       </main>
+
+      <AgentSidebar />
 
       <ConnectionsDialog
         open={connectionsOpen}

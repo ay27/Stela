@@ -162,6 +162,11 @@ export interface AppearanceSettings {
 
 export interface ExecutionSettings {
   onError: "continue" | "stop";
+  /**
+   * 单次查询最大返回行数，核心层对所有走 registry.execute 的只读查询自动追加
+   * `LIMIT`（编辑器手写 SQL 与 agent 通吃）。`0` = 不限制。
+   */
+  maxRows: number;
 }
 
 export interface PersistenceSettings {
@@ -207,6 +212,15 @@ export interface AiSettings {
   fimBaseUrl: string;
   /** Model name passed to the FIM completions endpoint. */
   fimModel: string;
+  /** Agent harness: max tool-call iterations before forcing a final answer. */
+  agentMaxIterations: number;
+  /** Agent harness: wall-clock budget in ms before forcing a final answer. */
+  agentWallClockMs: number;
+  /**
+   * Agent harness: whether mutation SQL (INSERT/UPDATE/DELETE/DDL/...) may run
+   * after user confirmation. Default false = mutations are always blocked.
+   */
+  agentAllowMutations: boolean;
 }
 
 /**
@@ -272,6 +286,8 @@ export interface ConnectionEntry {
   config: unknown;
   /** 同步表结构到 Markdown 的目标目录 */
   schemaDir?: string;
+  /** 是否为默认连接。同一时间至多一个连接为 true，由 UI 负责互斥维护。 */
+  isDefault?: boolean;
 }
 
 export type ConnectionMap = Record<string, ConnectionEntry>;
@@ -436,6 +452,71 @@ export interface AiProviderStatus {
   baseUrl: string;
   hasApiKey: boolean;
   credentialBackend: "safeStorage" | "plain";
+}
+
+// ---------- Harness agent ----------
+
+export type AgentToolName =
+  | "list_databases"
+  | "list_tables"
+  | "search_tables"
+  | "get_table_schema"
+  | "run_sql"
+  | "search_vault"
+  | "read_note"
+  | "propose_edit";
+
+export interface AgentRunRequest {
+  /** 用于关联流式事件；renderer 生成一个即可（uuid 或时间戳皆可）。 */
+  runId: string;
+  /**
+   * 会话 id：同一 sessionId 的多次 run 会在 main 进程里复用同一份对话历史
+   * （system+user+assistant+tool 消息），实现多轮对话。不传则每次都是独立的
+   * 单轮对话（向后兼容）。
+   */
+  sessionId?: string;
+  prompt: string;
+  /** 数据连接名（frontmatter.connection_name），未配置连接时相关工具会报错让模型自行调整。 */
+  connectionName?: string | null;
+  notePath?: string | null;
+  locale?: AiPromptLocale;
+}
+
+/** 单次工具调用的审计记录，供前端 timeline 渲染。 */
+export interface AgentToolCallInfo {
+  callId: string;
+  name: AgentToolName | string;
+  arguments: unknown;
+}
+
+export type AgentEvent =
+  | { type: "started"; runId: string }
+  | { type: "assistant_message"; runId: string; content: string }
+  | { type: "tool_call"; runId: string; call: AgentToolCallInfo }
+  | {
+      type: "tool_result";
+      runId: string;
+      callId: string;
+      ok: boolean;
+      /** 截断后的结果文本（人类可读），供 timeline 展示；不是喂给模型的原始 payload。 */
+      summary: string;
+    }
+  | {
+      type: "proposal";
+      runId: string;
+      callId: string;
+      kind: "edit_note" | "mutation_sql";
+      /** edit_note: notePath + diff 描述；mutation_sql: sql 文本。 */
+      payload: { notePath?: string; sql?: string; description: string };
+    }
+  | { type: "final"; runId: string; content: string }
+  | { type: "error"; runId: string; message: string }
+  | { type: "cancelled"; runId: string };
+
+export interface AgentProposalResponse {
+  runId: string;
+  callId: string;
+  approve: boolean;
 }
 
 // ---------- Wiki / Vault index（v0.3 双链 M2/M3） ----------
