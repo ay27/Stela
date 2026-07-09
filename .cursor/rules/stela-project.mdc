@@ -1,0 +1,56 @@
+---
+description: Stela 项目全局规则 — Electron 架构边界、安全基线、代码风格
+alwaysApply: true
+---
+
+# Stela 项目规则
+
+Stela 是一个 **Electron 41 + React + Milkdown** 桌面 SQL 数据笔记应用。
+
+## 上下文加载
+
+开始任务前按需读取：
+
+- `AGENTS.md` — 开发流程与 ADR/文档门禁
+- `docs/ARCHITECTURE.md` — 进程模型、存储权威、IPC、connectors、Git、AI
+- `docs/ABSTRACTIONS.md` — 领域模型与契约
+- `docs/adr/` — 相关架构决策
+
+## 架构边界（最重要）
+
+Electron 三进程，**严禁跨边界直接调用**：
+
+- **renderer**（`src/`）：React UI、Milkdown、Zustand。**不拿 Node 权限**，只调 `window.stela.*`
+- **preload**（`electron/preload/`）：唯一桥接。一项业务能力一个方法，绝不暴露通用 `invoke`
+- **main**（`electron/main/`）：窗口、IPC 路由、vault context、安全策略
+- **services**（`electron/services/`）：主进程业务实现
+- **shared**（`electron/shared/`）：channels / Zod schema / DTOs / errors
+
+新增能力流程：
+
+1. `electron/shared/ipc-channels.ts` 加 channel
+2. `electron/shared/ipc-schema.ts` 加 Zod
+3. `electron/services/` 写实现
+4. `electron/main/handlers.ts` 注册
+5. `electron/preload/index.ts` 暴露 typed 方法
+6. `src/types/stela-bridge.d.ts` 加类型
+7. renderer 调 `window.stela.<domain>.<method>()`
+
+## 安全基线
+
+- `contextIsolation: true`、`nodeIntegration: false`、`webSecurity: true`
+- 所有 IPC 输入必经 Zod；vault 写操作必经 `ensureWithinVault`
+- 删除走 `shell.trashItem`；外链只放行 `http(s):` / `mailto:`
+- 凭据写盘前经 `safeStorage` wrap
+
+## TypeScript / UI
+
+- strict；禁用 `@ts-ignore`；避免 `any`
+- 导出接口用 `I` 前缀（`IStorage`、`IConnectorRegistry`）
+- UI：shadcn/ui + Tailwind；状态用 Zustand
+- CSS class 一律 `stela-` 前缀
+
+## 构建
+
+- `npm run dev` / `npm run build` / `npm test` / `npm run rebuild`
+- 公开仓库门禁：`npm run check:release`

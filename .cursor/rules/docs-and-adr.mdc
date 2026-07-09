@@ -1,0 +1,47 @@
+---
+description: 写代码前读架构文档；结构性改动后必须 ADR + 更新 ARCHITECTURE/ABSTRACTIONS
+alwaysApply: true
+---
+
+# Docs & ADR 门禁
+
+## 写代码前
+
+1. 扫一眼 `docs/ARCHITECTURE.md` / `docs/ABSTRACTIONS.md` 中与任务相关的章节
+2. 检查 `docs/adr/` 是否已有约束本次改动的决策
+3. 若属于下方「需要 ADR」的类别，先定决策再写代码
+
+## 需要 ADR 的改动
+
+- 新/删重大依赖
+- 存储或同步策略（Markdown / JSONL / SQLite / Git / secrets）
+- IPC、安全边界、进程模型
+- Connector 插件协议或信任模型
+- 新的核心抽象 / 领域模型
+- 会影响后续写法的横切模式
+
+**不需要 ADR：** bugfix、样式、行为不变的 refactor、纯测试
+
+## 改完后 / 任务结束前
+
+1. 结构性改动 → 新建 ADR（或 supersede），并更新 `docs/adr/README.md`
+2. 同步更新必要文档：
+   - 架构/数据流/IPC → `docs/ARCHITECTURE.md`
+   - 类型/契约/约定 → `docs/ABSTRACTIONS.md`
+3. 创建 ADR 时遵循 `.cursor/skills/create-adr/SKILL.md`
+4. **禁止**修改已有 `status: active` ADR 的正文；只能改 status 元数据并 supersede
+5. 完成回复必须包含：
+   - `ADRs: <ids 或 none>`
+   - `Docs: <更新了哪些 或 none>`
+
+## 敏感路径（改这些几乎一定要过文档门禁）
+
+- `electron/shared/**`
+- `electron/services/connectors/**`
+- `electron/services/result-store.ts`
+- `electron/services/history-journal.ts`
+- `electron/services/git/**`
+- `electron/main/vault-context.ts`
+- `src/contracts/**`
+- `src/core/**`
+- `plugin-sdk/**`

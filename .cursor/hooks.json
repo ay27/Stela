@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": ".cursor/hooks/session-docs-reminder.sh"
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": ".cursor/hooks/mark-docs-gate.sh"
+      }
+    ],
+    "stop": [
+      {
+        "command": ".cursor/hooks/stop-docs-gate.sh",
+        "loop_limit": 1
+      }
+    ]
+  }
+}

@@ -29,6 +29,7 @@ scripts/local-macos-package.sh
 .understand-anything/
 .worktrees/
 worktrees/
+.cursor/.docs-gate-pending
 
 # env
 .env
