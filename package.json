@@ -1,7 +1,7 @@
 {
   "name": "stela",
   "private": true,
-  "version": "0.8.0",
+  "version": "0.9.0",
   "type": "module",
   "main": "out/main/index.js",
   "description": "Stela — desktop SQL data notes (Electron + React + Milkdown)",
