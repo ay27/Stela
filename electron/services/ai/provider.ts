@@ -132,7 +132,6 @@ export async function callChatCompletions({
     },
     body: JSON.stringify({
       model: settings.model,
-      temperature: 0.2,
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -226,7 +225,6 @@ export async function callAgentTurn({
     },
     body: JSON.stringify({
       model: settings.model,
-      temperature: 0.2,
       messages,
       tools,
       tool_choice: "auto",
