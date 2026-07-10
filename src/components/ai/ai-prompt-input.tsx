@@ -8,10 +8,12 @@ import {
   TableMentionInput,
   type TableMentionInputHandle as TableMentionInputRef,
 } from "./table-mention-input";
+import type { MentionItem } from "@skyastrall/mentions-react";
 
 export interface AiPromptSubmitPayload {
   text: string;
   mentionedTables: string[];
+  referencedNotes: string[];
 }
 
 export interface AiPromptInputHandle {
@@ -29,9 +31,11 @@ export interface AiPromptInputProps {
   resetToken?: number;
   getTableNamesCached?: () => string[];
   getTableNames: () => Promise<string[]>;
+  getNoteCandidates?: (query: string) => Promise<MentionItem[]>;
   onChange?: (payload: {
     text: string;
     mentionedTables: string[];
+    referencedNotes: string[];
     isEmpty: boolean;
   }) => void;
   onSubmit?: (payload: AiPromptSubmitPayload) => void;
@@ -48,6 +52,7 @@ export const AiPromptInput = forwardRef<AiPromptInputHandle, AiPromptInputProps>
       resetToken = 0,
       getTableNamesCached,
       getTableNames,
+      getNoteCandidates,
       onChange,
       onSubmit,
     },
@@ -70,6 +75,7 @@ export const AiPromptInput = forwardRef<AiPromptInputHandle, AiPromptInputProps>
         minHeightPx={minHeightPx}
         getTableNamesCached={getTableNamesCached}
         getTableNames={getTableNames}
+        getNoteCandidates={getNoteCandidates}
         onChange={onChange}
         onSubmit={onSubmit}
       />

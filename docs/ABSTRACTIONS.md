@@ -236,7 +236,7 @@ interface AppSettings {
   persistence: PersistenceSettings; // cleanupMonths
   ui: UISettings;                 // defaultPageSize, editorWidth
   git: GitSettings;               // enabled, autoCommit, autoPush, autoPull
-  ai: AiSettings;                 // provider, model, agent limits
+  ai: AiSettings;                 // provider, model, agent mutation policy
 }
 ```
 
@@ -332,8 +332,8 @@ interface AiSettings {
   hasApiKey: boolean;              // never the raw key
   sendResultSamples: boolean;
   maxSampleRows: number;
-  agentMaxIterations: number;
-  agentWallClockMs: number;
+  agentMaxIterations: number;      // legacy compatibility; ignored by harness agent
+  agentWallClockMs: number;        // legacy compatibility; ignored by harness agent
   agentAllowMutations: boolean;    // still requires per-call user approve
 }
 ```
@@ -408,6 +408,11 @@ interface AgentRunRequest {
   prompt: string;
   connectionName?: string | null;
   mentionedTables?: string[];
+  referencedNotes?: string[];  // vault-relative note paths from [[...]] / current note chips
+  attachments?: Array<
+    | { kind: "selection"; label: string; text: string; sourcePath?: string }
+    | { kind: "runsql"; label: string; sql: string; sourcePath?: string }
+  >;
   notePath?: string | null;
   locale?: "zh" | "en";
 }
@@ -427,7 +432,9 @@ Safety ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md)):
 
 - `sql-guard` classifies read-only vs mutation vs multi-statement
 - Mutations + `propose_edit` block on `ai:agent-respond-proposal`
-- Caps: `agentMaxIterations` (default 200, max 10000), `agentWallClockMs`
+- Runs continue until model completion, error, or explicit user cancellation ([ADR-0017](./adr/0017-user-cancelled-agent-runs.md))
+- Note references are paths only; the agent should call `read_note` before relying on note contents
+- Selection / RunSQL attachments are bounded and included only on the user turn that added them
 
 ### UI entry points
 
@@ -437,6 +444,8 @@ Safety ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md)):
 | Schema actions | `SchemaBrowserPanel` + `ai-modal` | `ai:complete` |
 | Agent chat | `AgentSidebar` / `agent-panel` | `ai:agent-run` + events |
 | `@table` mentions | `table-mention-input` | `mentionedTables` on requests |
+| `[[note]]` references | `agent-panel` prompt chips | `referencedNotes` on `ai:agent-run` |
+| Add to Chat | editor context menu / `Mod+I` | `attachments` on `ai:agent-run` |
 | Settings | `settings/ai-tab` | `ai:configure` / `clearApiKey` |
 
 ## IPC Error Model

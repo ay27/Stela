@@ -35,6 +35,7 @@ const GROUPS: ShortcutGroup[] = [
       { keys: "Mod+F / Mod+Shift+F", actionKey: "shortcuts.global.search" },
       { keys: "Mod+B", actionKey: "shortcuts.global.toggleSidebar" },
       { keys: "Mod+,", actionKey: "shortcuts.global.settings" },
+      { keys: "Mod+I", actionKey: "shortcuts.global.addToChat" },
       { keys: "Mod+Enter", actionKey: "shortcuts.global.runBlock" },
       { keys: "Mod+1 … Mod+9", actionKey: "shortcuts.global.switchTab" },
     ],
@@ -54,6 +55,7 @@ const GROUPS: ShortcutGroup[] = [
     items: [
       { actionKey: "shortcuts.context.run" },
       { actionKey: "shortcuts.context.refresh" },
+      { keys: "Mod+I", actionKey: "shortcuts.context.addToChat" },
       { actionKey: "shortcuts.context.copy" },
       { actionKey: "shortcuts.context.delete" },
     ],

@@ -108,6 +108,14 @@ export function notifySelfWrite(absPath: string): void {
   suppressed.set(normalizeKey(absPath), Date.now() + SUPPRESS_TTL_MS);
 }
 
+/** Main-process tools that mutate vault files intentionally still need renderer/index invalidation. */
+export function notifyFileChanged(absPath: string): void {
+  const rt = runtime;
+  if (!rt) return;
+  if (shouldIgnore(absPath, rt.vaultPath)) return;
+  enqueue(rt, { type: "changed", path: absPath, isDir: false });
+}
+
 function normalizeKey(p: string): string {
   // 在 Linux / macOS 上路径区分大小写；Windows 习惯不区分，但 chokidar 给出的
   // 路径与传入 watch 的根路径大小写一致，这里不做大小写归一，避免误抑制。

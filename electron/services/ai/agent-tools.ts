@@ -21,6 +21,7 @@ import type {
 
 import * as search from "../search";
 import * as vaultFs from "../vault-fs";
+import { notifyFileChanged } from "../vault-watcher";
 import type { AgentToolDef } from "./provider";
 import { resolveNamedTableSchemas, searchTables } from "./schema-context";
 import { classifySql } from "./sql-guard";
@@ -462,6 +463,7 @@ async function runProposeEdit(
   if (verified !== nextContent) {
     return fail(`Write verification failed for ${args.path}.`);
   }
+  notifyFileChanged(target);
   return ok({
     message: `Wrote and verified ${nextContent.length} chars.`,
     path: args.path,

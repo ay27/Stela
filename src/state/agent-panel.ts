@@ -7,15 +7,30 @@
 
 import { create } from "zustand";
 
-import type { AgentEvent, AgentProposalPayload, AgentToolCallInfo } from "@shared/types";
+import type {
+  AgentAttachment,
+  AgentEvent,
+  AgentProposalPayload,
+  AgentToolCallInfo,
+} from "@shared/types";
 import { cancelAgent, onAgentEvent, respondAgentProposal, runAgent } from "@/services/agent";
 import { useLayout } from "@/state/layout";
 
 export type AgentRunStatus = "idle" | "running" | "done" | "error" | "cancelled";
 
+export type AgentDraftAttachment =
+  | { id: string; kind: "note"; path: string }
+  | ({ id: string } & AgentAttachment);
+
+export type AgentDraftAttachmentInput =
+  | { kind: "note"; path: string }
+  | AgentAttachment;
+
 export interface AgentDraft {
   text: string;
   mentionedTables: string[];
+  attachments: AgentDraftAttachment[];
+  dismissedNotePaths: string[];
   isEmpty: boolean;
 }
 
@@ -64,9 +79,14 @@ interface AgentPanelState {
   closeTab: (tabId: string) => void;
   setConnectionName: (connectionName: string | null) => void;
   updateDraft: (draft: AgentDraft) => void;
+  addToChat: (attachment: AgentDraftAttachmentInput) => void;
+  removeAttachment: (attachmentId: string) => void;
+  ensureDefaultNote: (path: string | null | undefined) => void;
   start: (input: {
     prompt: string;
     mentionedTables?: string[];
+    referencedNotes?: string[];
+    attachments?: AgentAttachment[];
     connectionName?: string | null;
     notePath?: string | null;
     locale?: "zh" | "en";
@@ -85,6 +105,14 @@ function newSessionId(): string {
   return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function newAttachmentId(): string {
+  return `att_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function emptyDraft(): AgentDraft {
+  return { text: "", mentionedTables: [], attachments: [], dismissedNotePaths: [], isEmpty: true };
+}
+
 function newTab(): AgentTab {
   return {
     id: `tab_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -93,7 +121,7 @@ function newTab(): AgentTab {
     sessionId: newSessionId(),
     status: "idle",
     timeline: [],
-    draft: { text: "", mentionedTables: [], isEmpty: true },
+    draft: emptyDraft(),
     connectionName: null,
     resetToken: 0,
   };
@@ -164,6 +192,23 @@ function titleFromPrompt(prompt: string): string {
   return prompt.trim().replace(/\s+/g, " ").slice(0, 28) || "New";
 }
 
+function draftWithAttachment(draft: AgentDraft, attachment: AgentDraftAttachmentInput): AgentDraft {
+  if (attachment.kind === "note") {
+    if (draft.attachments.some((item) => item.kind === "note" && item.path === attachment.path)) {
+      return draft;
+    }
+    return {
+      ...draft,
+      attachments: [...draft.attachments, { id: newAttachmentId(), kind: "note", path: attachment.path }],
+      dismissedNotePaths: draft.dismissedNotePaths.filter((path) => path !== attachment.path),
+    };
+  }
+  return {
+    ...draft,
+    attachments: [...draft.attachments, { id: newAttachmentId(), ...attachment }],
+  };
+}
+
 export const useAgentPanel = create<AgentPanelState>((set, get) => ({
   tabs: [initialTab],
   activeTabId: initialTab.id,
@@ -193,7 +238,40 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
   updateDraft(draft) {
     set((s) => updateActiveTab(s, (tab) => ({ ...tab, draft })));
   },
-  async start({ prompt, mentionedTables, connectionName, notePath, locale }) {
+  addToChat(attachment) {
+    set((s) => updateActiveTab(s, (tab) => ({ ...tab, draft: draftWithAttachment(tab.draft, attachment) })));
+    useLayout.getState().focusAgentPanel();
+  },
+  removeAttachment(attachmentId) {
+    set((s) =>
+      updateActiveTab(s, (tab) => {
+        const removed = tab.draft.attachments.find((item) => item.id === attachmentId);
+        return {
+          ...tab,
+          draft: {
+            ...tab.draft,
+            attachments: tab.draft.attachments.filter((item) => item.id !== attachmentId),
+            dismissedNotePaths:
+              removed?.kind === "note"
+                ? Array.from(new Set([...tab.draft.dismissedNotePaths, removed.path]))
+                : tab.draft.dismissedNotePaths,
+          },
+        };
+      }),
+    );
+  },
+  ensureDefaultNote(path) {
+    const notePath = path?.trim();
+    if (!notePath) return;
+    set((s) =>
+      updateActiveTab(s, (tab) => {
+        const hasNote = tab.draft.attachments.some((item) => item.kind === "note" && item.path === notePath);
+        if (hasNote || tab.draft.dismissedNotePaths.includes(notePath)) return tab;
+        return { ...tab, draft: draftWithAttachment(tab.draft, { kind: "note", path: notePath }) };
+      }),
+    );
+  },
+  async start({ prompt, mentionedTables, referencedNotes, attachments, connectionName, notePath, locale }) {
     const state = get();
     const tab = state.tabs.find((item) => item.id === state.activeTabId);
     if (!tab || tab.status === "running") return;
@@ -206,7 +284,7 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
         status: "running",
         title: current.timeline.length === 0 ? titleFromPrompt(prompt) : current.title,
         timeline: [...current.timeline, { kind: "user", id: nextId(), content: prompt }],
-        draft: { text: "", mentionedTables: [], isEmpty: true },
+        draft: emptyDraft(),
         resetToken: current.resetToken + 1,
       })),
     );
@@ -216,6 +294,8 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
         sessionId: tab.sessionId,
         prompt,
         mentionedTables,
+        referencedNotes,
+        attachments,
         connectionName,
         notePath,
         locale,

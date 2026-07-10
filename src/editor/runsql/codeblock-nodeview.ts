@@ -65,6 +65,7 @@ import {
   mountTableMentionInput,
   type MountedTableMentionInputHandle,
 } from "@/components/ai/mount-table-mention-input";
+import { addRunsqlToChat, addSelectionToChat } from "@/components/ai/add-to-chat";
 import { renderMarkdownIntoDom } from "./render-markdown-dom";
 import { useColumnCache } from "./column-cache";
 import { formatSqlCommand } from "./sql-format";
@@ -639,15 +640,7 @@ export class CodeBlockNodeView implements NodeView {
         key: "Mod-i",
         run: () => {
           if (this.node.attrs.language !== RUNSQL_LANGUAGE) return false;
-          this.openAiComposer("rewrite");
-          return true;
-        },
-      },
-      {
-        key: "Mod-Shift-i",
-        run: () => {
-          if (this.node.attrs.language !== RUNSQL_LANGUAGE) return false;
-          this.openAiComposer("ask");
+          this.addCurrentSqlToChat();
           return true;
         },
       },
@@ -784,6 +777,15 @@ export class CodeBlockNodeView implements NodeView {
     const { main } = this.cm.state.selection;
     if (main.empty) return "";
     return this.cm.state.doc.sliceString(main.from, main.to);
+  }
+
+  private addCurrentSqlToChat(): void {
+    const selectedText = this.selectedSqlText();
+    if (selectedText.trim()) {
+      addSelectionToChat(selectedText, "RunSQL selection");
+      return;
+    }
+    addRunsqlToChat(this.node.textContent, "RunSQL block");
   }
 
   private insertAiAuxElement(el: HTMLElement): void {
@@ -953,14 +955,12 @@ export class CodeBlockNodeView implements NodeView {
       const running = runState === "running";
       const label = running ? "Running…" : "Run";
       const formatHint = formatHotkey("Mod+Alt+L");
-      const rewriteHint = formatHotkey("Mod+I");
-      const askHint = formatHotkey("Mod+Shift+I");
       this.headerEl.innerHTML = `
         <span class="stela-cb__icon">${DATABASE_ICON_HTML}</span>
         <span class="stela-cb__title">Run SQL</span>
         ${attrs.blockId ? `<span class="stela-cb__id">${escapeHtml(attrs.blockId)}</span>` : ""}
-        <button type="button" class="stela-cb__ai stela-cb__ai-rewrite" title="${escapeHtml(i18n.t("ai.runsql.rewriteSql"))}">${AI_ICON_HTML}${escapeHtml(i18n.t("ai.runsql.rewriteShort"))}<span class="stela-cb__ai-kbd" aria-hidden="true">${escapeHtml(rewriteHint)}</span></button>
-        <button type="button" class="stela-cb__ai stela-cb__ai-ask" title="${escapeHtml(i18n.t("ai.runsql.askSql"))}">${AI_ICON_HTML}${escapeHtml(i18n.t("ai.runsql.askShort"))}<span class="stela-cb__ai-kbd" aria-hidden="true">${escapeHtml(askHint)}</span></button>
+        <button type="button" class="stela-cb__ai stela-cb__ai-rewrite" title="${escapeHtml(i18n.t("ai.runsql.rewriteSql"))}">${AI_ICON_HTML}${escapeHtml(i18n.t("ai.runsql.rewriteShort"))}</button>
+        <button type="button" class="stela-cb__ai stela-cb__ai-ask" title="${escapeHtml(i18n.t("ai.runsql.askSql"))}">${AI_ICON_HTML}${escapeHtml(i18n.t("ai.runsql.askShort"))}</button>
         <button type="button" class="stela-cb__format" title="格式化 SQL (${escapeHtml(formatHint)})" aria-label="格式化 SQL">${FORMAT_ICON_HTML}<span class="stela-cb__format-kbd" aria-hidden="true">${escapeHtml(formatHint)}</span></button>
         <button type="button" class="stela-cb__run" data-state="${runState}" ${running ? "disabled" : ""} title="执行 SQL (${formatHotkey("Mod+Enter")})">${PLAY_ICON_HTML}${escapeHtml(label)}<span class="stela-cb__run-kbd" aria-hidden="true">${escapeHtml(formatHotkey("Mod+Enter"))}</span></button>
       `;
@@ -1342,6 +1342,12 @@ export class CodeBlockNodeView implements NodeView {
     if (isRunsql) {
       items.push(
         {
+          label: i18n.t("agent.addToChat"),
+          shortcut: formatHotkey("Mod+I"),
+          onSelect: () => this.addCurrentSqlToChat(),
+        },
+        { kind: "separator" },
+        {
           label: "运行",
           shortcut: formatHotkey("Mod+Enter"),
           onSelect: () => this.triggerRun(),
@@ -1354,12 +1360,10 @@ export class CodeBlockNodeView implements NodeView {
         },
         {
           label: i18n.t("ai.runsql.rewriteSql"),
-          shortcut: formatHotkey("Mod+I"),
           onSelect: () => this.openAiComposer("rewrite"),
         },
         {
           label: i18n.t("ai.runsql.askSql"),
-          shortcut: formatHotkey("Mod+Shift+I"),
           onSelect: () => this.openAiComposer("ask"),
         },
         { kind: "separator" },
@@ -1374,14 +1378,28 @@ export class CodeBlockNodeView implements NodeView {
         },
       );
     } else {
-      items.push({
-        label: "复制代码",
-        onSelect: () => {
-          void navigator.clipboard
-            .writeText(this.node.textContent)
-            .catch((err) => console.warn("[stela] copy code failed", err));
+      items.push(
+        {
+          label: i18n.t("agent.addToChat"),
+          shortcut: formatHotkey("Mod+I"),
+          onSelect: () => {
+            const selectedText = this.selectedSqlText();
+            addSelectionToChat(
+              selectedText.trim() ? selectedText : this.node.textContent,
+              "Code block",
+            );
+          },
         },
-      });
+        { kind: "separator" },
+        {
+          label: "复制代码",
+          onSelect: () => {
+            void navigator.clipboard
+              .writeText(this.node.textContent)
+              .catch((err) => console.warn("[stela] copy code failed", err));
+          },
+        },
+      );
     }
     items.push({ kind: "separator" });
     items.push({

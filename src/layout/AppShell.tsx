@@ -13,6 +13,7 @@ import { ConnectionsDialog } from "@/components/connections-dialog";
 import { ExportNoteDialog } from "@/components/export-note-dialog";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { AiModal } from "@/components/ai/ai-modal";
+import { addFocusedContextToChat } from "@/components/ai/add-to-chat";
 import { TabSwitcher } from "@/components/tab-switcher";
 import {
   CommandPalette,
@@ -206,6 +207,13 @@ export function AppShell() {
         keys: "Mod+Shift+A",
         context: "always",
         handler: () => focusAgentPanel(),
+      },
+      {
+        keys: "Mod+I",
+        context: "always",
+        handler: () => {
+          addFocusedContextToChat();
+        },
       },
       {
         // Mod+Shift+S：在光标处插入一个空 runsql 块（S=SQL）。context "always"

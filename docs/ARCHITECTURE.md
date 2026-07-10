@@ -304,7 +304,7 @@ flowchart TB
 ```
 
 1. **Action complete** — one-shot `AiActionKind` (rewrite-sql, ask-sql, explain-result, explain-table, …). Prompt assembled in main; returns text + optional extracted SQL. UI: RunSQL inline panel, AI modal, schema browser actions. ([ADR-0012](./adr/0012-dual-ai-surfaces-actions-and-agent.md))
-2. **Harness agent** — native tool loop with streaming `ai:agent-event`. Tools browse schema, run SQL, search/read notes, propose edits. Mutations and note writes wait for user approve. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md))
+2. **Harness agent** — native tool loop with streaming `ai:agent-event`. Tools browse schema, run SQL, search/read notes, propose edits. Mutations and note writes wait for user approve. Agent chat accepts `@table` mentions, `[[note]]` references, a default current-note reference, and Add to Chat content attachments. Runs continue until the model finishes, errors, or the user cancels. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md), [ADR-0016](./adr/0016-agent-chat-references-and-add-to-chat.md), [ADR-0017](./adr/0017-user-cancelled-agent-runs.md))
 3. **SQL query parse** — model only emits a `SqlIndexFilter`; hits always come from deterministic `sql-index`.
 
 ### Context pipeline
@@ -323,8 +323,9 @@ Before any action prompt leaves the machine ([ADR-0014](./adr/0014-ai-context-re
 - Multi-statement SQL blocked
 - Mutations require `agentAllowMutations` **and** `ai:agent-respond-proposal`
 - `propose_edit` never writes until approved
-- Caps: `agentMaxIterations`, `agentWallClockMs`
+- Agent runs are stopped by model completion, errors, or explicit user cancellation; legacy iteration/time settings are ignored
 - Session history is in-memory by `sessionId` (not persisted)
+- Agent chat references are structured: note paths are listed for tool-driven `read_note`, while selected prose and RunSQL snippets are added to the current user turn with a bounded character budget
 
 ### Key files
 
@@ -339,7 +340,7 @@ Before any action prompt leaves the machine ([ADR-0014](./adr/0014-ai-context-re
 | `electron/services/ai/agent.ts` | harness loop + session memory |
 | `electron/services/ai/agent-tools.ts` | tool defs + dispatch |
 | `electron/services/ai/sql-guard.ts` | read-only vs mutation classification |
-| `src/components/ai/` | modal, inline panel, agent panel, `@table` input |
+| `src/components/ai/` | modal, inline panel, agent panel, `@table` / `[[note]]` input, Add to Chat |
 
 ## IPC Contract
 

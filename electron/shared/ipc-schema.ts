@@ -424,6 +424,30 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
           prompt: z.string().min(1).max(20_000),
           connectionName: z.string().max(256).nullable().optional(),
           mentionedTables: z.array(z.string().max(512)).max(8).optional(),
+          referencedNotes: z.array(z.string().min(1).max(8192)).max(16).optional(),
+          attachments: z
+            .array(
+              z.discriminatedUnion("kind", [
+                z
+                  .object({
+                    kind: z.literal("selection"),
+                    label: z.string().min(1).max(256),
+                    text: z.string().min(1).max(30_000),
+                    sourcePath: z.string().max(8192).optional(),
+                  })
+                  .strict(),
+                z
+                  .object({
+                    kind: z.literal("runsql"),
+                    label: z.string().min(1).max(256),
+                    sql: z.string().min(1).max(30_000),
+                    sourcePath: z.string().max(8192).optional(),
+                  })
+                  .strict(),
+              ]),
+            )
+            .max(12)
+            .optional(),
           notePath: z.string().max(8192).nullable().optional(),
           locale: z.enum(["zh", "en"]).optional(),
         })

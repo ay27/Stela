@@ -3,7 +3,9 @@ import {
   Bot,
   CheckCircle2,
   ChevronDown,
+  FileText,
   Loader2,
+  MessageSquareQuote,
   Plus,
   Send,
   ShieldAlert,
@@ -11,6 +13,8 @@ import {
   X,
   XCircle,
 } from "lucide-react";
+import type { AgentAttachment } from "@shared/types";
+import type { MentionItem } from "@skyastrall/mentions-react";
 
 import { i18n } from "@/i18n";
 import { useT } from "@/i18n/use-t";
@@ -20,9 +24,15 @@ import {
   ensureAutocompleteFor,
   peekAutocompleteFor,
 } from "@/editor/runsql/fetch-schema";
-import { useAgentPanel, type AgentTimelineEntry } from "@/state/agent-panel";
+import {
+  useAgentPanel,
+  type AgentDraft,
+  type AgentDraftAttachment,
+  type AgentTimelineEntry,
+} from "@/state/agent-panel";
 import { useLayout } from "@/state/layout";
 import { useConnections } from "@/state/connections";
+import { useWorkspace } from "@/state/workspace";
 import { firstConnectionName } from "@/services/connections";
 import { ConnectionPicker } from "@/components/connection-picker";
 
@@ -32,6 +42,74 @@ import {
   type AiPromptSubmitPayload,
 } from "./ai-prompt-input";
 import { renderMarkdown } from "./ai-modal";
+
+type AiPromptInputDraft = {
+  text: string;
+  mentionedTables: string[];
+  referencedNotes: string[];
+  isEmpty: boolean;
+};
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function relativeToVault(path: string | null | undefined, vaultPath: string | null): string | null {
+  if (!path) return null;
+  if (!vaultPath) return path;
+  const normalizedVault = vaultPath.replace(/\\/g, "/").replace(/\/+$/, "");
+  const normalizedPath = path.replace(/\\/g, "/");
+  if (normalizedPath.startsWith(`${normalizedVault}/`)) {
+    return normalizedPath.slice(normalizedVault.length + 1);
+  }
+  return normalizedPath;
+}
+
+function attachmentLabel(attachment: AgentDraftAttachment): string {
+  switch (attachment.kind) {
+    case "note":
+      return attachment.path.split("/").pop() || attachment.path;
+    case "runsql":
+      return attachment.label;
+    case "selection":
+      return attachment.label;
+  }
+}
+
+function attachmentTitle(attachment: AgentDraftAttachment): string {
+  switch (attachment.kind) {
+    case "note":
+      return attachment.path;
+    case "runsql":
+      return attachment.sql;
+    case "selection":
+      return attachment.text;
+  }
+}
+
+function mergePromptValue(draft: AgentDraft, value: AiPromptInputDraft): AgentDraft {
+  const referencedNotes = uniqueStrings(value.referencedNotes);
+  const existingNotePaths = new Set(
+    draft.attachments
+      .filter((item): item is Extract<AgentDraftAttachment, { kind: "note" }> => item.kind === "note")
+      .map((item) => item.path),
+  );
+  const addedNotes: AgentDraftAttachment[] = referencedNotes
+    .filter((path) => !existingNotePaths.has(path))
+    .map((path) => ({
+      id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      kind: "note",
+      path,
+    }));
+  return {
+    ...draft,
+    text: value.text,
+    mentionedTables: value.mentionedTables,
+    attachments: [...draft.attachments, ...addedNotes],
+    dismissedNotePaths: draft.dismissedNotePaths.filter((path) => !referencedNotes.includes(path)),
+    isEmpty: value.isEmpty,
+  };
+}
 
 /**
  * 应用级全局 Agent 面板主体，嵌在 [AgentSidebar](../../layout/AgentSidebar.tsx)
@@ -48,6 +126,7 @@ export function AgentPanel() {
   const draft = activeTab.draft;
   const resetToken = activeTab.resetToken;
   const connectionName = activeTab.connectionName;
+  const vaultPath = useWorkspace((s) => s.vaultPath);
   const focusToken = useLayout((s) => s.agentFocusToken);
   const switchTab = useAgentPanel((s) => s.switchTab);
   const start = useAgentPanel((s) => s.start);
@@ -57,6 +136,8 @@ export function AgentPanel() {
   const closeTab = useAgentPanel((s) => s.closeTab);
   const setConnectionName = useAgentPanel((s) => s.setConnectionName);
   const updateDraft = useAgentPanel((s) => s.updateDraft);
+  const removeAttachment = useAgentPanel((s) => s.removeAttachment);
+  const ensureDefaultNote = useAgentPanel((s) => s.ensureDefaultNote);
   const scrollRef = useRef<HTMLDivElement>(null);
   const promptInputRef = useRef<AiPromptInputHandle>(null);
   const busy = status === "running";
@@ -87,6 +168,10 @@ export function AgentPanel() {
     if (focusToken > 0) promptInputRef.current?.focus();
   }, [focusToken]);
 
+  useEffect(() => {
+    ensureDefaultNote(relativeToVault(getRunContext()?.path, vaultPath));
+  }, [activeTabId, focusToken, vaultPath, ensureDefaultNote]);
+
   const getTableNamesCached = useCallback(
     () => (connectionName ? peekAutocompleteFor(connectionName) : []),
     [connectionName],
@@ -96,6 +181,16 @@ export function AgentPanel() {
       connectionName ? ensureAutocompleteFor(connectionName) : Promise.resolve([]),
     [connectionName],
   );
+  const getNoteCandidates = useCallback(async (query: string): Promise<MentionItem[]> => {
+    const candidates = await window.stela.index.listCandidates(query, 24);
+    return candidates
+      .filter((candidate) => candidate.kind === "file" && candidate.detail)
+      .slice(0, 12)
+      .map((candidate) => ({
+        id: candidate.detail,
+        label: candidate.detail,
+      }));
+  }, []);
 
   const onWheelScroll = useCallback((ev: WheelEvent<HTMLDivElement>) => {
     if (ev.deltaX === 0 && ev.deltaY !== 0) {
@@ -107,18 +202,48 @@ export function AgentPanel() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [activeTabId, timeline]);
 
-  const send = ({ text, mentionedTables }: AiPromptSubmitPayload) => {
+  const send = ({ text, mentionedTables, referencedNotes }: AiPromptSubmitPayload) => {
     const trimmed = text.trim();
     if (!trimmed || busy) return;
     const ctx = getRunContext();
+    const notePaths = uniqueStrings([
+      ...draft.attachments.filter((item): item is Extract<AgentDraftAttachment, { kind: "note" }> => item.kind === "note").map((item) => item.path),
+      ...referencedNotes,
+    ]);
+    const contentAttachments = draft.attachments
+      .filter((item): item is Extract<AgentDraftAttachment, { kind: "selection" | "runsql" }> => item.kind !== "note")
+      .map((attachment): AgentAttachment =>
+        attachment.kind === "runsql"
+          ? {
+              kind: "runsql",
+              label: attachment.label,
+              sql: attachment.sql,
+              sourcePath: attachment.sourcePath,
+            }
+          : {
+              kind: "selection",
+              label: attachment.label,
+              text: attachment.text,
+              sourcePath: attachment.sourcePath,
+            },
+      );
     void start({
       prompt: trimmed,
       mentionedTables: mentionedTables.length > 0 ? mentionedTables : undefined,
+      referencedNotes: notePaths.length > 0 ? notePaths : undefined,
+      attachments: contentAttachments.length > 0 ? contentAttachments : undefined,
       connectionName,
       notePath: ctx?.path ?? null,
       locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
     });
   };
+
+  const updatePromptDraft = useCallback(
+    (value: AiPromptInputDraft) => {
+      updateDraft(mergePromptValue(draft, value));
+    },
+    [draft, updateDraft],
+  );
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
@@ -219,9 +344,11 @@ export function AgentPanel() {
           minHeightPx={132}
           getTableNamesCached={getTableNamesCached}
           getTableNames={getTableNames}
-          onChange={updateDraft}
+          getNoteCandidates={getNoteCandidates}
+          onChange={updatePromptDraft}
           onSubmit={send}
         />
+        <AttachmentChips attachments={draft.attachments} onRemove={removeAttachment} />
         {/* 独立一行放操作按钮——未来还会加别的面板级功能按钮，Send/Stop 先占最右。 */}
         <div className="mt-1.5 flex items-center justify-end gap-1.5">
           {busy ? (
@@ -237,7 +364,7 @@ export function AgentPanel() {
             <button
               type="button"
               onClick={() =>
-                send({ text: draft.text, mentionedTables: draft.mentionedTables })
+                send({ text: draft.text, mentionedTables: draft.mentionedTables, referencedNotes: [] })
               }
               disabled={draft.isEmpty}
               title={t("agent.panel.send")}
@@ -248,6 +375,42 @@ export function AgentPanel() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function AttachmentChips({
+  attachments,
+  onRemove,
+}: {
+  attachments: AgentDraftAttachment[];
+  onRemove: (attachmentId: string) => void;
+}) {
+  if (attachments.length === 0) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1">
+      {attachments.map((attachment) => (
+        <span
+          key={attachment.id}
+          title={attachmentTitle(attachment)}
+          className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-background px-1.5 py-1 text-[11px] text-muted-foreground"
+        >
+          {attachment.kind === "note" ? (
+            <FileText className="h-3 w-3 flex-none text-primary" />
+          ) : (
+            <MessageSquareQuote className="h-3 w-3 flex-none text-primary" />
+          )}
+          <span className="max-w-[180px] truncate">{attachmentLabel(attachment)}</span>
+          <button
+            type="button"
+            onClick={() => onRemove(attachment.id)}
+            className="ml-0.5 rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+            aria-label="Remove chat attachment"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </span>
+      ))}
     </div>
   );
 }

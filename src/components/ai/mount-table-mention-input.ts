@@ -42,6 +42,7 @@ export function mountTableMentionInput(
   let value: TableMentionInputValue = {
     text: options.initialValue?.trim() ?? "",
     mentionedTables: [],
+    referencedNotes: [],
     isEmpty: (options.initialValue?.trim() ?? "").length === 0,
   };
 

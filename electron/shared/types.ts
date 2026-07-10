@@ -451,6 +451,20 @@ export type AgentToolName =
   | "read_note"
   | "propose_edit";
 
+export type AgentAttachment =
+  | {
+      kind: "selection";
+      label: string;
+      text: string;
+      sourcePath?: string;
+    }
+  | {
+      kind: "runsql";
+      label: string;
+      sql: string;
+      sourcePath?: string;
+    };
+
 export interface AgentRunRequest {
   /** 用于关联流式事件；renderer 生成一个即可（uuid 或时间戳皆可）。 */
   runId: string;
@@ -465,6 +479,10 @@ export interface AgentRunRequest {
   connectionName?: string | null;
   /** 用户在输入框里通过 @ 显式引用的表名（`db.table` 或 `table`）。 */
   mentionedTables?: string[];
+  /** 用户通过 [[...]] 或默认当前文件显式引用的 vault-relative note paths。 */
+  referencedNotes?: string[];
+  /** 用户通过 Add to Chat 添加的正文选区或 RunSQL 内容。 */
+  attachments?: AgentAttachment[];
   notePath?: string | null;
   locale?: AiPromptLocale;
 }

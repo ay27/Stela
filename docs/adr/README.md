@@ -68,3 +68,5 @@ proposed → active → superseded
 | [0013](0013-agent-tools-sql-guard-and-proposals.md) | Agent tools with SQL guard and user proposal confirmation | active |
 | [0014](0014-ai-context-redaction-and-schema-enrichment.md) | AI context assembly with redaction and schema enrichment | active |
 | [0015](0015-openai-compatible-provider-without-fim.md) | OpenAI-compatible chat provider without FIM inline completion | active |
+| [0016](0016-agent-chat-references-and-add-to-chat.md) | Agent chat references and Add to Chat | active |
+| [0017](0017-user-cancelled-agent-runs.md) | User-cancelled agent runs instead of iteration limits | active |

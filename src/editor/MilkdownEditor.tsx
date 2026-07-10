@@ -39,6 +39,7 @@ import {
   MERMAID_LANGUAGE,
   RUNSQL_LANGUAGE,
 } from "./runsql/codeblock-nodeview";
+import { showContextMenu } from "./runsql/context-menu";
 import {
   clearRunContext,
   setRunContext,
@@ -74,6 +75,9 @@ import {
   setActiveReveal,
   useFindState,
 } from "./find-in-file";
+import { addFocusedContextToChat } from "@/components/ai/add-to-chat";
+import { i18n } from "@/i18n";
+import { formatHotkey } from "@/lib/hotkeys";
 
 // Crepe 内置 frame 主题（@milkdown/crepe/theme/frame.css）会把 14 个 --crepe-color-* token
 // 硬编码写到 .milkdown 上（白底 / 黑字 / Noto Serif），特异性高于外层 host，会反向覆盖
@@ -770,6 +774,22 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     [],
   );
 
+  const onHostContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    showContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        {
+          label: i18n.t("agent.addToChat"),
+          shortcut: formatHotkey("Mod+I"),
+          onSelect: () => addFocusedContextToChat(),
+        },
+      ],
+    });
+  }, []);
+
   // 布局：横向 flex 行，从左到右 = 正文主列 | 目录 | 滚动条。
   //
   // .stela-editor-main 是 flex-1 的相对定位主列，滚动 host / 查找栏 / 图片
@@ -801,6 +821,7 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
           // Esc，统一翻成 FindBar 的 open / close。否则 CM 内 Cmd+F 会进它自家的
           // search panel，PM 的 Esc 会移除 mark / 失焦，体感割裂。
           onKeyDownCapture={onHostKeyDownCapture}
+          onContextMenu={onHostContextMenu}
         >
           <Milkdown />
         </div>

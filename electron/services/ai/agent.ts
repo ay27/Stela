@@ -31,6 +31,7 @@ import {
 import { callAgentTurn, loadApiKey, type AgentChatMessage } from "./provider";
 
 const log = getLogger("ai.agent");
+const AGENT_ATTACHMENT_CHAR_BUDGET = 30_000;
 
 type ProposalResolver = (approve: boolean) => void;
 
@@ -77,6 +78,9 @@ function buildSystemPrompt(
     request.mentionedTables && request.mentionedTables.length > 0
       ? `The user explicitly mentioned these tables: ${request.mentionedTables.join(", ")}. Prefer get_table_schema for them before guessing schema.`
       : null,
+    request.referencedNotes && request.referencedNotes.length > 0
+      ? `The user explicitly referenced these notes: ${request.referencedNotes.join(", ")}. Use read_note on these paths before relying on their contents; do not guess note text.`
+      : null,
     "When you don't know which table to query, use search_tables with business keywords before guessing table names.",
     "For data-analysis questions, follow this playbook: (1) identify candidate tables with mentioned tables, search_tables, and only then list_databases/list_tables; (2) inspect schemas before writing SQL; (3) if the user uses business terms such as pbr/coloring/status, map them to concrete columns by checking column names, DDL comments, vault notes, and small grouped samples; (4) run a small verification SQL first when field meaning is uncertain; (5) if results contradict the hypothesis, try the next plausible field and say what changed; (6) finish with the exact table, fields, SQL logic, and numbers used.",
     "Use search_vault/list_vault_files/read_note for business definitions in notes. read_note supports offset/maxChars for paging through large notes.",
@@ -87,6 +91,42 @@ function buildSystemPrompt(
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function truncateForAgentContext(text: string, remainingBudget: number): { text: string; remainingBudget: number } {
+  if (remainingBudget <= 0) return { text: "", remainingBudget: 0 };
+  if (text.length <= remainingBudget) return { text, remainingBudget: remainingBudget - text.length };
+  const omitted = text.length - remainingBudget;
+  return {
+    text: `${text.slice(0, Math.max(0, remainingBudget - 80))}\n\n[truncated ${omitted} chars]`,
+    remainingBudget: 0,
+  };
+}
+
+function buildUserContent(request: AgentRunRequest): string {
+  const parts = [request.prompt];
+  if (request.referencedNotes && request.referencedNotes.length > 0) {
+    parts.push(
+      [
+        "Referenced notes:",
+        ...request.referencedNotes.map((notePath: string) => `- ${notePath}`),
+        "Use read_note with these paths when their contents matter.",
+      ].join("\n"),
+    );
+  }
+
+  let remainingBudget = AGENT_ATTACHMENT_CHAR_BUDGET;
+  for (const attachment of request.attachments ?? []) {
+    const raw =
+      attachment.kind === "runsql"
+        ? `Attached RunSQL block: ${attachment.label}${attachment.sourcePath ? ` (${attachment.sourcePath})` : ""}\n\n\`\`\`sql\n${attachment.sql}\n\`\`\``
+        : `Attached selection: ${attachment.label}${attachment.sourcePath ? ` (${attachment.sourcePath})` : ""}\n\n${attachment.text}`;
+    const next = truncateForAgentContext(raw, remainingBudget);
+    if (!next.text) break;
+    parts.push(next.text);
+    remainingBudget = next.remainingBudget;
+  }
+  return parts.join("\n\n");
 }
 
 async function resolveConnection(
@@ -174,18 +214,16 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
     const messages: AgentChatMessage[] =
       existing ?? [{ role: "system", content: buildSystemPrompt(request, connection, dialect) }];
     if (!existing && request.sessionId) sessions.set(request.sessionId, messages);
-    messages.push({ role: "user", content: request.prompt });
+    messages.push({ role: "user", content: buildUserContent(request) });
 
-    const deadline = Date.now() + settings.ai.agentWallClockMs;
     let finished = false;
 
-    for (let iteration = 0; iteration < settings.ai.agentMaxIterations; iteration++) {
+    for (;;) {
       if (signal.aborted) {
         onEvent({ type: "cancelled", runId });
         finished = true;
         break;
       }
-      if (Date.now() > deadline) break;
 
       const turn = await callAgentTurn({
         settings: settings.ai,
@@ -252,14 +290,6 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
       if (finished) break;
     }
 
-    if (!finished) {
-      onEvent({
-        type: "final",
-        runId,
-        content:
-          "Reached the iteration/time limit before finishing. Consider narrowing the request or raising the agent limits in Settings → AI.",
-      });
-    }
   } catch (err) {
     const isAbort = signal.aborted || (err instanceof Error && err.name === "AbortError");
     if (isAbort) {

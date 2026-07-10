@@ -889,6 +889,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       }
       // clean tab + 外部修改 → bump reloadToken，让 EditorView 重读磁盘并按内容
       // 决定是否真的重载（EditorView 会先比对磁盘内容与当前 buffer，一致则不闪）。
+      clearTabBuffer(t.id);
       mutated = true;
       return { ...t, reloadToken: (t.reloadToken ?? 0) + 1 };
     });

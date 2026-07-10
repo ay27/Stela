@@ -22,16 +22,20 @@ import "./table-mention-input.css";
 
 const TABLE_TRIGGER = "@";
 const TABLE_MARKUP = "@[__display__](__id__)";
+const NOTE_TRIGGER = "[[";
+const NOTE_MARKUP = "[[__display__]](__id__)";
 
 export interface TableMentionInputValue {
   text: string;
   mentionedTables: string[];
+  referencedNotes: string[];
   isEmpty: boolean;
 }
 
 export interface TableMentionInputSubmitPayload {
   text: string;
   mentionedTables: string[];
+  referencedNotes: string[];
 }
 
 export interface TableMentionInputHandle {
@@ -49,6 +53,7 @@ export interface TableMentionInputProps {
   minHeightPx?: number;
   getTableNamesCached?: () => string[];
   getTableNames: () => Promise<string[]>;
+  getNoteCandidates?: (query: string) => Promise<MentionItem[]>;
   onChange?: (value: TableMentionInputValue) => void;
   onSubmit?: (payload: TableMentionInputSubmitPayload) => void;
   onCancel?: () => void;
@@ -73,11 +78,25 @@ function hasVisibleMentionList(): boolean {
 function serializeMarkup(markup: string, triggers: TriggerConfig[]): TableMentionInputValue {
   const segments = parseMarkup(markup, triggers);
   const text = segments
-    .map((segment) => (segment.type === "mention" ? `${segment.trigger}${segment.id}` : segment.text))
+    .map((segment) => {
+      if (segment.type !== "mention") return segment.text;
+      if (segment.trigger === TABLE_TRIGGER) return `${segment.trigger}${segment.id}`;
+      return "";
+    })
     .join("")
     .trim();
-  const mentionedTables = unique(extractMentions(markup, triggers).map((item) => item.id));
-  return { text, mentionedTables, isEmpty: text.length === 0 };
+  const mentions = extractMentions(markup, triggers);
+  const mentionedTables = unique(
+    mentions
+      .filter((item) => item.trigger === TABLE_TRIGGER)
+      .map((item) => item.id),
+  );
+  const referencedNotes = unique(
+    mentions
+      .filter((item) => item.trigger === NOTE_TRIGGER)
+      .map((item) => item.id),
+  );
+  return { text, mentionedTables, referencedNotes, isEmpty: text.length === 0 };
 }
 
 export const TableMentionInput = forwardRef<TableMentionInputHandle, TableMentionInputProps>(
@@ -90,6 +109,7 @@ export const TableMentionInput = forwardRef<TableMentionInputHandle, TableMentio
       minHeightPx = 28,
       getTableNamesCached,
       getTableNames,
+      getNoteCandidates,
       onChange,
       onSubmit,
       onCancel,
@@ -104,6 +124,7 @@ export const TableMentionInput = forwardRef<TableMentionInputHandle, TableMentio
     const valueRef = useRef<TableMentionInputValue>({
       text: initialValue.trim(),
       mentionedTables: [],
+      referencedNotes: [],
       isEmpty: initialValue.trim().length === 0,
     });
 
@@ -138,8 +159,21 @@ export const TableMentionInput = forwardRef<TableMentionInputHandle, TableMentio
             return Promise.resolve(tableItems(matched));
           },
         },
+        ...(getNoteCandidates
+          ? [
+              {
+                char: NOTE_TRIGGER,
+                markup: NOTE_MARKUP,
+                minChars: 0,
+                debounce: 80,
+                maxSuggestions: 12,
+                color: "hsl(var(--accent) / 0.55)",
+                data: (query: string) => getNoteCandidates(query),
+              },
+            ]
+          : []),
       ],
-      [getTableNamesCached],
+      [getTableNamesCached, getNoteCandidates],
     );
 
     const syncValue = (markup: string): TableMentionInputValue => {
@@ -161,14 +195,17 @@ export const TableMentionInput = forwardRef<TableMentionInputHandle, TableMentio
     useEffect(() => {
       const next = serializeMarkup(initialValue, triggers);
       valueRef.current = next;
-      onChange?.(next);
-    }, [initialValue, triggers, onChange]);
+    }, [initialValue, triggers]);
 
     const submit = () => {
       if (disabled) return;
       const current = valueRef.current;
       if (current.isEmpty) return;
-      onSubmit?.({ text: current.text, mentionedTables: current.mentionedTables });
+      onSubmit?.({
+        text: current.text,
+        mentionedTables: current.mentionedTables,
+        referencedNotes: current.referencedNotes,
+      });
     };
 
     return (
