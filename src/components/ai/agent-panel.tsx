@@ -332,8 +332,9 @@ export function AgentPanel() {
           </div>
         ) : null}
       </div>
-
+          
       <div className="border-t border-border bg-muted/20 px-2 py-2">
+      <AttachmentChips attachments={draft.attachments} onRemove={removeAttachment} />
         <AiPromptInput
           key={activeTabId}
           ref={promptInputRef}
@@ -348,7 +349,7 @@ export function AgentPanel() {
           onChange={updatePromptDraft}
           onSubmit={send}
         />
-        <AttachmentChips attachments={draft.attachments} onRemove={removeAttachment} />
+
         {/* 独立一行放操作按钮——未来还会加别的面板级功能按钮，Send/Stop 先占最右。 */}
         <div className="mt-1.5 flex items-center justify-end gap-1.5">
           {busy ? (
@@ -388,7 +389,7 @@ function AttachmentChips({
 }) {
   if (attachments.length === 0) return null;
   return (
-    <div className="mt-1.5 flex flex-wrap gap-1">
+    <div className="mb-1.5 flex flex-wrap gap-1">
       {attachments.map((attachment) => (
         <span
           key={attachment.id}
