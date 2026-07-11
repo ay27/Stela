@@ -152,13 +152,26 @@ function shouldIgnore(absPath: string, vaultPath: string): boolean {
   return false;
 }
 
+/** 同一 batch 内合并 type+path+isDir 完全相同的事件（迟到的 fsevents 回声很常见）。 */
+function coalesceEvents(events: VaultFsEvent[]): VaultFsEvent[] {
+  const seen = new Set<string>();
+  const out: VaultFsEvent[] = [];
+  for (const e of events) {
+    const key = `${e.type}\0${e.path}\0${e.isDir ? 1 : 0}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(e);
+  }
+  return out;
+}
+
 function enqueue(rt: WatcherRuntime, event: VaultFsEvent): void {
   rt.queue.push(event);
   if (rt.flushTimer) return;
   rt.flushTimer = setTimeout(() => {
     rt.flushTimer = null;
     if (rt.queue.length === 0) return;
-    const events = rt.queue;
+    const events = coalesceEvents(rt.queue);
     rt.queue = [];
     const payload: VaultExternalChangePayload = {
       vaultPath: rt.vaultPath,
