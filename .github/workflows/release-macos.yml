@@ -13,13 +13,13 @@ jobs:
   release-macos:
     name: Build, sign, notarize, and publish macOS
     runs-on: macos-latest
+    # Dual-arch + notarize can take a while; hang should fail before this.
+    timeout-minutes: 120
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      CSC_LINK: ${{ secrets.CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,5 +42,20 @@ jobs:
       - name: Build app
         run: npm run build
 
+      # electron-builder's CSC_LINK temp-keychain path often hangs on GHA
+      # (codesign waits for a keychain prompt that never appears).
+      # Import into an unlocked keychain first, then let builder discover it.
+      - name: Import Apple signing certificate
+        uses: apple-actions/import-codesign-certs@v5
+        with:
+          p12-file-base64: ${{ secrets.CSC_LINK }}
+          p12-password: ${{ secrets.CSC_KEY_PASSWORD }}
+
+      - name: Verify signing identity
+        run: security find-identity -v -p codesigning
+
       - name: Publish macOS artifacts
+        # Do NOT set CSC_LINK here — that recreates a temp keychain and can hang again.
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "true"
         run: npx electron-builder --mac --publish always --config.publish.owner=${{ github.repository_owner }} --config.publish.repo=${{ github.event.repository.name }}
