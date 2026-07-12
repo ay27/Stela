@@ -232,7 +232,7 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="flex flex-none items-center justify-between gap-3 border-b border-border px-4 py-2 text-xs text-muted-foreground">
+      <div className="flex h-8 flex-none items-center justify-between gap-3 border-b border-border px-3 text-xs text-muted-foreground">
         <div className="flex min-w-0 flex-1 items-center gap-1">
           <div className="min-w-0 flex-1 truncate font-mono" title={path}>
             {path}
@@ -257,7 +257,7 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
             onClick={() => void onRunAllBlocks()}
             disabled={runAllBusy || !connectionName}
             className={cn(
-              "stela-app-no-drag inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium transition-colors",
+              "stela-app-no-drag inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-xs font-medium transition-colors",
               "hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-40",
             )}
             title={

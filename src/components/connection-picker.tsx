@@ -71,7 +71,7 @@ export function ConnectionPicker({
         type="button"
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+          "inline-flex h-6 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors",
           "hover:bg-accent hover:text-accent-foreground",
           status === "ok" &&
             "border-border bg-background text-foreground",

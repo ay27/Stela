@@ -35,7 +35,7 @@ export function Sidebar() {
       <div className="stela-app-drag stela-titlebar-safe-left h-9 flex-none border-b border-border" />
 
       {vaultPath ? (
-        <div className="flex items-center border-b border-border px-2 py-1">
+        <div className="flex h-8 flex-none items-center border-b border-border px-2">
           <div className="flex min-w-0 flex-1">
             <ModeButton
               label={t("sidebar.files")}
@@ -111,7 +111,7 @@ function ModeButton({
       onClick={onClick}
       title={hint ? `${label} (${hint})` : label}
       className={cn(
-        "flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1 text-[12px]",
+        "flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md px-2 text-[12px]",
         active
           ? "bg-sidebar-hover text-foreground font-medium"
           : "text-muted-foreground hover:bg-sidebar-hover/60",
