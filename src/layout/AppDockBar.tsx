@@ -3,14 +3,15 @@
  *
  * 不属于文件树：Welcome / 侧栏收起 / AgentPanel 展开时都在。
  * 分区：
- *   左 — 按内容自然撑开（不强制塞进侧栏默认宽度，避免裁切/重叠）：
- *         侧栏开关 | Vault（可点切换）| Git(分支) | Settings
+ *   左 — 按内容自然撑开：侧栏开关 | Settings | Vault | Git(分支)
  *   中 — 文档状态：有 file tab 时从左显示静态「反向链接(N)」
- *   右 — Agent 占位（展开时占 agentPanelWidth，本次留空）
+ *   右 — 版本号（有更新时蓝点）+ Agent 占位
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FolderSync, Link2, Settings as SettingsIcon } from "lucide-react";
+import { FolderSync, Link2, Settings as SettingsIcon, Tag } from "lucide-react";
+
+import type { UpdaterStatus } from "@shared/types";
 
 import { GitBadge } from "@/components/git-badge";
 import { useT } from "@/i18n/use-t";
@@ -33,6 +34,10 @@ function DockSep() {
 const dockItem =
   "inline-flex flex-none items-center gap-1 rounded-sm px-2 hover:bg-accent hover:text-foreground";
 
+function updateAvailable(status: UpdaterStatus | null): boolean {
+  return status?.state === "available" || status?.state === "downloaded";
+}
+
 export function AppDockBar() {
   const t = useT();
   const vaultPath = useWorkspace((s) => s.vaultPath);
@@ -50,9 +55,9 @@ export function AppDockBar() {
     active?.kind === "file" && active.path ? active.path : null;
 
   return (
-    <div className="box-border flex h-8 flex-none items-center border-t border-border bg-muted/30 text-[12px] font-medium text-muted-foreground">
+    <div className="box-border flex h-8 flex-none items-center border-t border-border bg-muted/30 text-[12px] font-medium text-muted-foreground px-1.5">
       {/* 左侧控制组：宽度跟内容走，禁止 overflow 裁切 */}
-      <div className="flex h-full flex-none items-center overflow-visible pl-1.5">
+      <div className="flex h-full flex-none items-center overflow-visible">
         <SidebarToggleButton
           collapsed={sidebarCollapsed}
           className={dockItem}
@@ -89,14 +94,74 @@ export function AppDockBar() {
 
       <DockSep />
 
-      <div className="flex h-full min-w-0 flex-1 items-center overflow-hidden pr-1.5">
+      <div className="flex h-full min-w-0 flex-1 items-center overflow-hidden">
         {activeFilePath ? <BacklinkStatus path={activeFilePath} /> : null}
       </div>
 
       {!agentPanelCollapsed ? (
         <div className="h-full flex-none" style={{ width: agentPanelWidth }} />
       ) : null}
+
+<DockSep />
+      <VersionBadge />
     </div>
+  );
+}
+
+/** Dock 最右：当前版本；有更新时小蓝点（对齐 GitBadge） */
+function VersionBadge() {
+  const t = useT();
+  const setSettings = useDialogs((s) => s.setSettings);
+  const [status, setStatus] = useState<UpdaterStatus | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.stela?.updater) return;
+    let cancelled = false;
+    let slowId: number | null = null;
+    const refresh = async () => {
+      try {
+        const next = await window.stela.updater.getStatus();
+        if (!cancelled) setStatus(next);
+      } catch {
+        // keep last known
+      }
+    };
+    void refresh();
+    // 启动检查约 10s；前 20s 密轮询，之后 30s 一次
+    const fast = window.setInterval(() => void refresh(), 3_000);
+    const slowDelay = window.setTimeout(() => {
+      window.clearInterval(fast);
+      if (cancelled) return;
+      slowId = window.setInterval(() => void refresh(), 30_000);
+    }, 20_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(fast);
+      window.clearTimeout(slowDelay);
+      if (slowId !== null) window.clearInterval(slowId);
+    };
+  }, []);
+
+  const version = status?.currentVersion?.trim() || t("updates.unknownVersion");
+  const hasUpdate = updateAvailable(status);
+  const title = hasUpdate
+    ? t("dock.version.updateAvailable", { version })
+    : t("dock.version.title", { version });
+
+  return (
+    <button
+      type="button"
+      onClick={() => setSettings(true, "updates")}
+      className={`${dockItem} pr-2`}
+      title={title}
+      aria-label={title}
+    >
+      <Tag className="h-3.5 w-3.5 flex-none" />
+      <span className="whitespace-nowrap tabular-nums">{version}</span>
+      {hasUpdate ? (
+        <span className="h-1.5 w-1.5 flex-none rounded-full bg-primary" />
+      ) : null}
+    </button>
   );
 }
 

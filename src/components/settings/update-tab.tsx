@@ -1,9 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, ExternalLink, Loader2, RefreshCw, RotateCcw } from "lucide-react";
+import {
+  CheckCircle2,
+  Download,
+  ExternalLink,
+  Loader2,
+  RefreshCw,
+  RotateCcw,
+  TriangleAlert,
+} from "lucide-react";
 
-import type { UpdaterStatus } from "@shared/types";
+import type { UpdaterState, UpdaterStatus } from "@shared/types";
 
 import { useT } from "@/i18n/use-t";
+import { cn } from "@/lib/utils";
 
 import { Row, Section, TabContainer } from "./atoms";
 
@@ -25,10 +34,22 @@ function formatDate(value: string | null): string | null {
   return date.toLocaleString();
 }
 
+function formatCheckedAt(value: number | null): string | null {
+  if (!value) return null;
+  return new Date(value).toLocaleString();
+}
+
+function showVersionCard(state: UpdaterState | undefined): boolean {
+  return state === "available" || state === "downloading" || state === "downloaded";
+}
+
 export function UpdateTab() {
   const t = useT();
   const [status, setStatus] = useState<UpdaterStatus | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [inFlight, setInFlight] = useState<"check" | "download" | "install" | null>(
+    null,
+  );
 
   const refresh = async (): Promise<void> => {
     setStatus(await window.stela.updater.getStatus());
@@ -40,36 +61,67 @@ export function UpdateTab() {
     });
   }, []);
 
+  // check/download 的 IPC 要等整段结束才返回；中间态只在 main 里变。
+  // 进行中轮询 getStatus，才能看到 checking / 下载进度。
   useEffect(() => {
-    if (!isBusy(status)) return;
+    if (!inFlight && !isBusy(status)) return;
     const id = window.setInterval(() => {
       void refresh().catch((err) => {
         setActionError((err as Error).message);
       });
-    }, 1000);
+    }, 400);
     return () => window.clearInterval(id);
-  }, [status?.state]);
+  }, [inFlight, status?.state]);
 
   const releaseDate = useMemo(
     () => formatDate(status?.releaseDate ?? null),
     [status?.releaseDate],
   );
+  const lastChecked = useMemo(
+    () => formatCheckedAt(status?.lastCheckedAt ?? null),
+    [status?.lastCheckedAt],
+  );
 
   const runAction = async (
+    kind: "check" | "download" | "install",
     action: () => Promise<UpdaterStatus> | UpdaterStatus,
+    optimistic?: UpdaterState,
   ): Promise<void> => {
     setActionError(null);
+    setInFlight(kind);
+    if (optimistic) {
+      setStatus((prev) =>
+        prev
+          ? {
+              ...prev,
+              state: optimistic,
+              error: null,
+              progress: optimistic === "downloading" ? prev.progress : null,
+              lastCheckedAt:
+                optimistic === "checking" ? Date.now() : prev.lastCheckedAt,
+            }
+          : prev,
+      );
+    }
     try {
       setStatus(await action());
     } catch (err) {
       setActionError((err as Error).message);
+      try {
+        await refresh();
+      } catch {
+        // keep actionError
+      }
+    } finally {
+      setInFlight(null);
     }
   };
 
   const progressPercent = status?.progress?.percent ?? 0;
-  const busy = isBusy(status);
-  const canDownload = status?.state === "available";
-  const canInstall = status?.state === "downloaded";
+  const busy = Boolean(inFlight) || isBusy(status);
+  const canDownload = status?.state === "available" && !busy;
+  const canInstall = status?.state === "downloaded" && inFlight !== "install";
+  const state = status?.state;
 
   return (
     <TabContainer>
@@ -86,17 +138,50 @@ export function UpdateTab() {
           </span>
         </Row>
 
-        <Row label={t("updates.status.title")}>
-          <span className="text-xs text-muted-foreground">
-            {t(statusKey(status))}
-          </span>
-        </Row>
+        <div
+          className={cn(
+            "rounded-md border px-3 py-2.5",
+            state === "error" || actionError
+              ? "border-destructive/40 bg-destructive/10"
+              : state === "downloaded" || state === "available"
+                ? "border-primary/30 bg-primary/5"
+                : "border-border/60 bg-card/40",
+          )}
+        >
+          <div className="flex items-start gap-2">
+            <StatusIcon state={state} busy={busy} />
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-medium text-foreground">
+                {t("updates.status.title")}
+              </div>
+              <div
+                className={cn(
+                  "mt-0.5 text-xs",
+                  state === "error" || actionError
+                    ? "text-destructive"
+                    : "text-muted-foreground",
+                )}
+              >
+                {t(statusKey(status))}
+              </div>
+              {lastChecked ? (
+                <div className="mt-1 text-[11px] text-muted-foreground">
+                  {t("updates.lastChecked", { time: lastChecked })}
+                </div>
+              ) : (
+                <div className="mt-1 text-[11px] text-muted-foreground">
+                  {t("updates.lastChecked.never")}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
 
         {status?.state === "downloading" ? (
           <div className="rounded-md border border-border/60 bg-card/40 px-3 py-2.5">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span>{t("updates.downloadProgress")}</span>
-              <span>{Math.round(progressPercent)}%</span>
+              <span className="tabular-nums">{Math.round(progressPercent)}%</span>
             </div>
             <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
               <div
@@ -107,7 +192,7 @@ export function UpdateTab() {
           </div>
         ) : null}
 
-        {status?.version ? (
+        {showVersionCard(state) && status?.version ? (
           <div className="rounded-md border border-border/60 bg-card/40 px-3 py-2.5 text-xs">
             <div className="font-medium text-foreground">
               {t("updates.availableVersion", { version: status.version })}
@@ -142,13 +227,17 @@ export function UpdateTab() {
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || state === "disabled"}
             onClick={() =>
-              void runAction(() => window.stela.updater.checkForUpdates())
+              void runAction(
+                "check",
+                () => window.stela.updater.checkForUpdates(),
+                "checking",
+              )
             }
             className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {status?.state === "checking" ? (
+            {inFlight === "check" || state === "checking" ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
               <RefreshCw className="h-3.5 w-3.5" />
@@ -157,28 +246,64 @@ export function UpdateTab() {
           </button>
           <button
             type="button"
-            disabled={!canDownload || busy}
+            disabled={!canDownload}
             onClick={() =>
-              void runAction(() => window.stela.updater.downloadUpdate())
+              void runAction(
+                "download",
+                () => window.stela.updater.downloadUpdate(),
+                "downloading",
+              )
             }
             className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <Download className="h-3.5 w-3.5" />
+            {inFlight === "download" || state === "downloading" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Download className="h-3.5 w-3.5" />
+            )}
             {t("updates.download")}
           </button>
           <button
             type="button"
             disabled={!canInstall}
             onClick={() =>
-              void runAction(() => window.stela.updater.quitAndInstall())
+              void runAction("install", () =>
+                window.stela.updater.quitAndInstall(),
+              )
             }
             className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <RotateCcw className="h-3.5 w-3.5" />
+            {inFlight === "install" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RotateCcw className="h-3.5 w-3.5" />
+            )}
             {t("updates.restart")}
           </button>
         </div>
       </Section>
     </TabContainer>
   );
+}
+
+function StatusIcon({
+  state,
+  busy,
+}: {
+  state: UpdaterState | undefined;
+  busy: boolean;
+}) {
+  if (busy || state === "checking" || state === "downloading") {
+    return <Loader2 className="mt-0.5 h-4 w-4 flex-none animate-spin text-primary" />;
+  }
+  if (state === "error") {
+    return <TriangleAlert className="mt-0.5 h-4 w-4 flex-none text-destructive" />;
+  }
+  if (state === "downloaded" || state === "available" || state === "not-available") {
+    return <CheckCircle2 className="mt-0.5 h-4 w-4 flex-none text-primary" />;
+  }
+  if (state === "disabled") {
+    return <TriangleAlert className="mt-0.5 h-4 w-4 flex-none text-amber-600" />;
+  }
+  return <RefreshCw className="mt-0.5 h-4 w-4 flex-none text-muted-foreground" />;
 }

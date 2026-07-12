@@ -13,11 +13,13 @@ import { create } from "zustand";
 interface DialogsState {
   connectionsOpen: boolean;
   settingsOpen: boolean;
+  /** 打开 Settings 时落到的 tab；null 表示用默认 connections */
+  settingsTab: string | null;
   paletteOpen: boolean;
   /** 当前要导出的笔记路径；null 表示对话框关闭 */
   exportNoteFilePath: string | null;
   setConnections: (open: boolean) => void;
-  setSettings: (open: boolean) => void;
+  setSettings: (open: boolean, tab?: string) => void;
   setPalette: (open: boolean) => void;
   togglePalette: () => void;
   openExportNote: (filePath: string) => void;
@@ -27,10 +29,15 @@ interface DialogsState {
 export const useDialogs = create<DialogsState>((set, get) => ({
   connectionsOpen: false,
   settingsOpen: false,
+  settingsTab: null,
   paletteOpen: false,
   exportNoteFilePath: null,
   setConnections: (open) => set({ connectionsOpen: open }),
-  setSettings: (open) => set({ settingsOpen: open }),
+  setSettings: (open, tab) =>
+    set({
+      settingsOpen: open,
+      settingsTab: open ? (tab ?? null) : null,
+    }),
   setPalette: (open) => set({ paletteOpen: open }),
   togglePalette: () => set({ paletteOpen: !get().paletteOpen }),
   openExportNote: (filePath) => set({ exportNoteFilePath: filePath }),

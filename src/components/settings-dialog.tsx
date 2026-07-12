@@ -16,6 +16,7 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Tabs from "@radix-ui/react-tabs";
+import { useEffect, useState } from "react";
 import {
   Database,
   Bot,
@@ -34,6 +35,7 @@ import {
 
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n/use-t";
+import { useDialogs } from "@/state/dialogs";
 
 import { AppearanceTab } from "./settings/appearance-tab";
 import { AiTab } from "./settings/ai-tab";
@@ -75,6 +77,13 @@ const TABS: TabSpec[] = [
 
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const t = useT();
+  const settingsTab = useDialogs((s) => s.settingsTab);
+  const [tab, setTab] = useState(settingsTab ?? "connections");
+
+  useEffect(() => {
+    if (open) setTab(settingsTab ?? "connections");
+  }, [open, settingsTab]);
+
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -109,7 +118,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           </div>
 
           <Tabs.Root
-            defaultValue="connections"
+            value={tab}
+            onValueChange={setTab}
             orientation="vertical"
             className="flex flex-1 min-h-0"
           >
@@ -117,12 +127,12 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               aria-label="Settings sections"
               className="flex w-44 flex-none flex-col border-r border-border bg-muted/20 p-2"
             >
-              {TABS.map((tab) => {
-                const Icon = tab.icon;
+              {TABS.map((tabSpec) => {
+                const Icon = tabSpec.icon;
                 return (
                   <Tabs.Trigger
-                    key={tab.id}
-                    value={tab.id}
+                    key={tabSpec.id}
+                    value={tabSpec.id}
                     className={cn(
                       "flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm",
                       "text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -130,19 +140,19 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                     )}
                   >
                     <Icon className="h-4 w-4" />
-                    {t(tab.labelKey)}
+                    {t(tabSpec.labelKey)}
                   </Tabs.Trigger>
                 );
               })}
             </Tabs.List>
             <div className="flex-1 min-w-0 overflow-hidden">
-              {TABS.map((tab) => (
+              {TABS.map((tabSpec) => (
                 <Tabs.Content
-                  key={tab.id}
-                  value={tab.id}
+                  key={tabSpec.id}
+                  value={tabSpec.id}
                   className="h-full overflow-auto focus:outline-none"
                 >
-                  {tab.render()}
+                  {tabSpec.render()}
                 </Tabs.Content>
               ))}
             </div>
