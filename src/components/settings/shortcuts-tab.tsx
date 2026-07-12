@@ -37,6 +37,8 @@ const GROUPS: ShortcutGroup[] = [
       { keys: "Mod+I", actionKey: "shortcuts.global.addToChat" },
       { keys: "Mod+Enter", actionKey: "shortcuts.global.runBlock" },
       { keys: "Mod+1 … Mod+9", actionKey: "shortcuts.global.switchTab" },
+      { keys: "Mod+[", actionKey: "shortcuts.global.navBack" },
+      { keys: "Mod+]", actionKey: "shortcuts.global.navForward" },
     ],
   },
   {

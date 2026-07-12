@@ -36,6 +36,8 @@ export function AppShell() {
   const closeTab = useWorkspace((s) => s.closeTab);
   const setActiveTab = useWorkspace((s) => s.setActive);
   const reopenLastClosed = useWorkspace((s) => s.reopenLastClosed);
+  const goBack = useWorkspace((s) => s.goBack);
+  const goForward = useWorkspace((s) => s.goForward);
 
   const connectionsOpen = useDialogs((s) => s.connectionsOpen);
   const setConnectionsOpen = useDialogs((s) => s.setConnections);
@@ -163,6 +165,17 @@ export function AppShell() {
         handler: () => reopenLastClosed(),
       },
       {
+        // 文档导航后退（浏览器式历史，含 wikilink / 搜索定位）。
+        keys: "Mod+[",
+        context: "always",
+        handler: () => goBack(),
+      },
+      {
+        keys: "Mod+]",
+        context: "always",
+        handler: () => goForward(),
+      },
+      {
         // Mod+Shift+F 仍走 vault 全局搜索（侧栏 SearchPanel）。
         keys: "Mod+Shift+F",
         context: "always",
@@ -256,6 +269,8 @@ export function AppShell() {
     togglePalette,
     closeTab,
     reopenLastClosed,
+    goBack,
+    goForward,
     setActiveTab,
     focusSearch,
     focusFiles,

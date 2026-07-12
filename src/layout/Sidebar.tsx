@@ -14,6 +14,7 @@ import { RunHistoryPanel } from "./RunHistoryPanel";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 import { formatHotkey } from "@/lib/hotkeys";
+import { TitlebarNavButtons } from "./TitlebarNavButtons";
 
 /**
  * 左侧栏：顶栏 / 模式 / 面板。底部应用级 chrome 见 [AppDockBar]。
@@ -28,11 +29,12 @@ export function Sidebar() {
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
       {/*
-       * SidebarTopChrome：纯留白顶栏。
-       *   - frameless 窗口拖拽区（stela-app-drag）
-       *   - macOS 红绿灯安全区（stela-titlebar-safe-left → pl-[78px]）
+       * SidebarTopChrome：frameless 拖拽区 + macOS 红绿灯安全区。
+       * 导航按钮本身 no-drag，条带其余空白仍可拖窗。
        */}
-      <div className="stela-app-drag stela-titlebar-safe-left h-9 flex-none border-b border-border" />
+      <div className="stela-app-drag stela-titlebar-safe-left flex h-9 flex-none items-center border-b border-border">
+        <TitlebarNavButtons />
+      </div>
 
       {vaultPath ? (
         <div className="flex h-8 flex-none items-center border-b border-border px-2">

@@ -130,6 +130,23 @@ export interface OpenFileOptions {
   ephemeral?: boolean;
 }
 
+/**
+ * 浏览器式文档导航条目（会话内存，不持久化）。
+ * path 必填；其余字段与 OpenFileOptions 的定位语义对齐。
+ */
+export interface NavigationEntry {
+  path: string;
+  scrollToLine?: number;
+  scrollToColumn?: number;
+  scrollToSlug?: string;
+  keyword?: string;
+  caseSensitive?: boolean;
+  nthInFile?: number;
+}
+
+/** 文档导航栈上限；超出从栈底丢弃。 */
+const NAV_STACK_LIMIT = 50;
+
 interface WorkspaceState {
   vaultPath: string | null;
   vaultReady: boolean;
@@ -156,6 +173,13 @@ interface WorkspaceState {
   /** 最近关闭的 file tab 快照栈（栈顶最近）。Mod+Shift+T 弹一个出来重开。 */
   closedTabsStack: ClosedTabSnapshot[];
 
+  /**
+   * 浏览器式文档导航栈（会话内）。`navIndex` 指向当前条目；
+   * goBack / goForward 移动 index 并 activate，不重复入栈。
+   */
+  navStack: NavigationEntry[];
+  navIndex: number;
+
   /** MilkdownEditor 订阅此字段并消费；消费后应立即调用 consumeReveal */
   pendingReveal: PendingReveal | null;
 
@@ -167,6 +191,21 @@ interface WorkspaceState {
   closeVault: () => Promise<void>;
 
   openFile: (path: string, optionsOrTitle?: string | OpenFileOptions) => void;
+  /** 文档导航：后退一格。栈空 / 已在最前时 no-op。 */
+  goBack: () => void;
+  /** 文档导航：前进一格。无 forward 时 no-op。 */
+  goForward: () => void;
+  canGoBack: () => boolean;
+  canGoForward: () => boolean;
+  /**
+   * openFile 的内部实现。`recordHistory=false` 供 goBack/goForward 复用激活
+   * 逻辑而不重复入栈。
+   */
+  openFileInternal: (
+    path: string,
+    opts: OpenFileOptions,
+    recordHistory: boolean,
+  ) => void;
   /** 关闭指定 tab；id=null 时为 no-op（Welcome 空态下 Mod+W 不应崩）。 */
   closeTab: (id: string | null) => void;
   /** 关闭除目标 tab 外的所有可关闭 tab（保留 Welcome 与目标本身） */
@@ -284,6 +323,103 @@ function reconcileMru(
   return next;
 }
 
+function entryFromOpen(path: string, opts: OpenFileOptions): NavigationEntry {
+  const entry: NavigationEntry = { path };
+  if (opts.scrollToLine !== undefined) entry.scrollToLine = opts.scrollToLine;
+  if (opts.scrollToColumn !== undefined) entry.scrollToColumn = opts.scrollToColumn;
+  if (opts.scrollToSlug !== undefined) entry.scrollToSlug = opts.scrollToSlug;
+  if (opts.keyword !== undefined) entry.keyword = opts.keyword;
+  if (opts.caseSensitive !== undefined) entry.caseSensitive = opts.caseSensitive;
+  if (opts.nthInFile !== undefined) entry.nthInFile = opts.nthInFile;
+  return entry;
+}
+
+function sameNavEntry(a: NavigationEntry, b: NavigationEntry): boolean {
+  return (
+    a.path === b.path &&
+    a.scrollToLine === b.scrollToLine &&
+    a.scrollToColumn === b.scrollToColumn &&
+    a.scrollToSlug === b.scrollToSlug &&
+    a.keyword === b.keyword &&
+    (a.caseSensitive ?? false) === (b.caseSensitive ?? false) &&
+    a.nthInFile === b.nthInFile
+  );
+}
+
+function pushNav(
+  stack: NavigationEntry[],
+  index: number,
+  entry: NavigationEntry,
+): { navStack: NavigationEntry[]; navIndex: number } {
+  if (index >= 0 && stack[index] && sameNavEntry(stack[index]!, entry)) {
+    return { navStack: stack, navIndex: index };
+  }
+  // index === -1 → 空栈起步
+  const base = index < 0 ? [] : stack.slice(0, index + 1);
+  base.push(entry);
+  if (base.length > NAV_STACK_LIMIT) {
+    const drop = base.length - NAV_STACK_LIMIT;
+    return {
+      navStack: base.slice(drop),
+      navIndex: base.length - 1 - drop,
+    };
+  }
+  return { navStack: base, navIndex: base.length - 1 };
+}
+
+/** 丢弃 path（或其子路径）命中的导航条目，并校正 index。 */
+function dropNavForPath(
+  stack: NavigationEntry[],
+  index: number,
+  path: string,
+): { navStack: NavigationEntry[]; navIndex: number } {
+  const isMatch = (p: string) => p === path || p.startsWith(`${path}/`);
+  if (!stack.some((e) => isMatch(e.path))) {
+    return { navStack: stack, navIndex: index };
+  }
+  const kept: NavigationEntry[] = [];
+  let removedBefore = 0;
+  for (let i = 0; i < stack.length; i++) {
+    const e = stack[i]!;
+    if (isMatch(e.path)) {
+      if (i <= index) removedBefore++;
+      continue;
+    }
+    kept.push(e);
+  }
+  if (kept.length === 0) return { navStack: [], navIndex: -1 };
+  const nextIndex = Math.min(
+    Math.max(0, index - removedBefore),
+    kept.length - 1,
+  );
+  return { navStack: kept, navIndex: nextIndex };
+}
+
+function remapNavPaths(
+  stack: NavigationEntry[],
+  from: string,
+  to: string,
+): NavigationEntry[] {
+  return stack.map((e) => {
+    if (e.path === from) return { ...e, path: to };
+    if (e.path.startsWith(`${from}/`)) {
+      return { ...e, path: `${to}${e.path.slice(from.length)}` };
+    }
+    return e;
+  });
+}
+
+function openOptsFromEntry(entry: NavigationEntry): OpenFileOptions {
+  return {
+    scrollToLine: entry.scrollToLine,
+    scrollToColumn: entry.scrollToColumn,
+    scrollToSlug: entry.scrollToSlug,
+    keyword: entry.keyword,
+    caseSensitive: entry.caseSensitive,
+    nthInFile: entry.nthInFile,
+  };
+}
+
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
   vaultPath: null,
   vaultReady: false,
@@ -291,6 +427,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   activeTabId: null,
   mruTabIds: [],
   closedTabsStack: [],
+  navStack: [],
+  navIndex: -1,
   pendingReveal: null,
 
   initialize: async () => {
@@ -363,6 +501,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       tabs: [],
       activeTabId: null,
       mruTabIds: [],
+      navStack: [],
+      navIndex: -1,
     });
     // AutoGit 状态属于 vault 级，切 vault 时必须 reset，否则旧 vault 的
     // lastError 会串台到新 vault；随后按新 vault 的 git 设置重启自动 pull。
@@ -391,6 +531,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       tabs: [],
       activeTabId: null,
       mruTabIds: [],
+      navStack: [],
+      navIndex: -1,
     });
     resetAutoGit();
     refreshGitStatus();
@@ -405,8 +547,40 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       typeof optionsOrTitle === "string"
         ? { title: optionsOrTitle }
         : optionsOrTitle ?? {};
+    get().openFileInternal(path, opts, /* recordHistory */ true);
+  },
+
+  goBack: () => {
+    const { navStack, navIndex } = get();
+    if (navIndex <= 0) return;
+    const nextIndex = navIndex - 1;
+    const entry = navStack[nextIndex];
+    if (!entry) return;
+    set({ navIndex: nextIndex });
+    get().openFileInternal(entry.path, openOptsFromEntry(entry), false);
+  },
+
+  goForward: () => {
+    const { navStack, navIndex } = get();
+    if (navIndex < 0 || navIndex >= navStack.length - 1) return;
+    const nextIndex = navIndex + 1;
+    const entry = navStack[nextIndex];
+    if (!entry) return;
+    set({ navIndex: nextIndex });
+    get().openFileInternal(entry.path, openOptsFromEntry(entry), false);
+  },
+
+  canGoBack: () => get().navIndex > 0,
+
+  canGoForward: () => {
+    const { navStack, navIndex } = get();
+    return navIndex >= 0 && navIndex < navStack.length - 1;
+  },
+
+  openFileInternal: (path, opts, recordHistory) => {
     const wantEphemeral = opts.ephemeral === true;
-    const { tabs, pendingReveal, vaultPath, mruTabIds } = get();
+    const { tabs, pendingReveal, vaultPath, mruTabIds, navStack, navIndex } =
+      get();
     const existing = tabs.find((t) => t.kind === "file" && t.path === path);
 
     const hasReveal =
@@ -424,13 +598,20 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
           caseSensitive: opts.caseSensitive,
           nthInFile: opts.nthInFile,
         }
-      : pendingReveal;
+      : // goBack/goForward 无定位时清掉残留 reveal，避免误重放上一次搜索/锚点
+        recordHistory
+        ? pendingReveal
+        : null;
 
     // 推 recent files：fire-and-forget，仅在真有 vault 时记录。
     // 失败会在 settings store 内部 console.error，不影响 openFile 主流程。
     if (vaultPath) {
       void useSettings.getState().pushRecentFile(path, vaultPath);
     }
+
+    const navPatch = recordHistory
+      ? pushNav(navStack, navIndex, entryFromOpen(path, opts))
+      : null;
 
     // Case 1：命中已开 tab → 复用；如果命中的是 ephemeral 且本次想要永久，则升级
     if (existing) {
@@ -445,6 +626,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         activeTabId: existing.id,
         mruTabIds: pushMru(mruTabIds, existing.id),
         pendingReveal: nextReveal,
+        ...(navPatch ?? {}),
       });
       return;
     }
@@ -472,6 +654,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
           activeTabId: id,
           mruTabIds: pushMru(cleared, id),
           pendingReveal: nextReveal,
+          ...(navPatch ?? {}),
         });
         return;
       }
@@ -483,6 +666,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       activeTabId: id,
       mruTabIds: pushMru(mruTabIds, id),
       pendingReveal: nextReveal,
+      ...(navPatch ?? {}),
     });
   },
 
@@ -623,19 +807,35 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   setActive: (id) => {
-    const { activeTabId, mruTabIds } = get();
+    const { activeTabId, mruTabIds, tabs, navStack, navIndex } = get();
     if (activeTabId === id) return;
-    set({ activeTabId: id, mruTabIds: pushMru(mruTabIds, id) });
+    const tab = id ? tabs.find((t) => t.id === id) : undefined;
+    // Tab 切换也记一条 path-only 历史，避免只靠 openFile 时丢了点选 tab 的链路。
+    const navPatch =
+      tab?.kind === "file" && tab.path
+        ? pushNav(navStack, navIndex, { path: tab.path })
+        : null;
+    set({
+      activeTabId: id,
+      mruTabIds: pushMru(mruTabIds, id),
+      ...(navPatch ?? {}),
+    });
   },
 
   closeTabsForPath: (path) => {
-    const { tabs, activeTabId, mruTabIds } = get();
+    const { tabs, activeTabId, mruTabIds, navStack, navIndex } = get();
     const isMatch = (p: string) => p === path || p.startsWith(`${path}/`);
     tabs.forEach((t) => {
       if (t.kind === "file" && t.path && isMatch(t.path)) clearTabBuffer(t.id);
     });
     const next = tabs.filter((t) => !(t.kind === "file" && t.path && isMatch(t.path)));
-    if (next.length === tabs.length) return;
+    const navPatch = dropNavForPath(navStack, navIndex, path);
+    if (next.length === tabs.length) {
+      if (navPatch.navStack !== navStack || navPatch.navIndex !== navIndex) {
+        set(navPatch);
+      }
+      return;
+    }
     let nextActive: string | null = activeTabId;
     const stillActive = next.some((t) => t.id === activeTabId);
     if (!stillActive) {
@@ -645,11 +845,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       tabs: next,
       activeTabId: nextActive,
       mruTabIds: reconcileMru(mruTabIds, next, nextActive),
+      ...navPatch,
     });
   },
 
   renameTabsForPath: (from, to) => {
-    const { tabs, activeTabId, mruTabIds } = get();
+    const { tabs, activeTabId, mruTabIds, navStack } = get();
     let mutated = false;
     let nextActive = activeTabId;
     const idRemap = new Map<string, string>();
@@ -665,12 +866,15 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       }
       return t;
     });
-    if (!mutated) return;
+    const nextNav = remapNavPaths(navStack, from, to);
+    const navMutated = nextNav.some((e, i) => e.path !== navStack[i]?.path);
+    if (!mutated && !navMutated) return;
     const remappedMru = mruTabIds.map((id) => idRemap.get(id) ?? id);
     set({
       tabs: next,
       activeTabId: nextActive,
       mruTabIds: reconcileMru(remappedMru, next, nextActive),
+      navStack: nextNav,
     });
   },
 

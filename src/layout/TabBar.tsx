@@ -15,6 +15,7 @@ import { useWorkspace, type Tab } from "@/state/workspace";
 import { useLayout } from "@/state/layout";
 import { cn } from "@/lib/utils";
 import { formatHotkey } from "@/lib/hotkeys";
+import { TitlebarNavButtons } from "./TitlebarNavButtons";
 
 const CLOSE_TAB_HINT = formatHotkey("Mod+W");
 const REOPEN_HINT = formatHotkey("Mod+Shift+T");
@@ -126,6 +127,11 @@ export function TabBar() {
         sidebarCollapsed && "stela-titlebar-safe-left",
       )}
     >
+      {sidebarCollapsed ? (
+        <div className="flex flex-none items-center self-center">
+          <TitlebarNavButtons />
+        </div>
+      ) : null}
       {/*
        * min-w-0 关键：父级是 flex container，flex 子项默认 min-width:auto，
        * 会被内部 N 个 TabItem 撑超过父容器宽度，触发外层 main overflow-hidden

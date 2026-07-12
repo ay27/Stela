@@ -22,6 +22,7 @@ import { pathExists } from "@/services/fs";
 import { useT } from "@/i18n/use-t";
 import { formatHotkey } from "@/lib/hotkeys";
 import { cn } from "@/lib/utils";
+import { TitlebarNavButtons } from "@/layout/TitlebarNavButtons";
 
 const NEW_NOTE_HINT = formatHotkey("Mod+N");
 const PALETTE_HINT = formatHotkey("Mod+K");
@@ -128,10 +129,9 @@ export function WelcomeView() {
     // 该区域内所以仍可点）。拖窗只放在不可滚动的顶条；内容区正常滚动点击。
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-background">
       {sidebarCollapsed ? (
-        <div
-          className="stela-app-drag stela-titlebar-safe-left absolute inset-x-0 top-0 z-10 h-9"
-          aria-hidden
-        />
+        <div className="stela-app-drag stela-titlebar-safe-left absolute inset-x-0 top-0 z-10 flex h-9 items-center">
+          <TitlebarNavButtons />
+        </div>
       ) : null}
       <div
         className={cn(
