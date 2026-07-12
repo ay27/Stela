@@ -11,7 +11,7 @@ interface Check {
 }
 
 const UI_FILES_WITHOUT_HARDCODED_CHINESE = [
-  "src/components/backlinks-panel.tsx",
+  "src/layout/AppDockBar.tsx",
   "src/components/block-run-tabs.tsx",
   "src/components/ai/ai-modal.tsx",
   "src/components/command-palette.tsx",

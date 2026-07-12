@@ -1,5 +1,5 @@
 /**
- * Sidebar 仓库头上的 Git 状态徽章（替代旧的 SyncBadge）。
+ * Git 状态徽章。
  *
  * 一眼传达"当前 vault 的 Git 状态"，点击打开 [`GitSyncDialog`](./git-sync-dialog.tsx)
  * 做提交 / 推送 / 拉取 / 冲突解决：
@@ -10,6 +10,8 @@
  *   - ahead/behind：箭头提示需要 push / pull
  *   - 冲突：amber 警告
  *   - busy：旋转
+ *
+ * `showBranch`：在图标旁显示分支名（DockBar 用）。
  */
 
 import { useEffect, useState } from "react";
@@ -23,7 +25,14 @@ import { useAutoGit } from "@/services/auto-git";
 import { useT } from "@/i18n/use-t";
 import { GitSyncDialog } from "./git-sync-dialog";
 
-export function GitBadge() {
+export function GitBadge({
+  className,
+  showBranch = false,
+}: {
+  className?: string;
+  /** DockBar：图标旁显示当前分支名 */
+  showBranch?: boolean;
+}) {
   const t = useT();
   const gitEnabled = useSettings((s) => s.settings.git.enabled);
   const status = useGitStore((s) => s.status);
@@ -44,9 +53,13 @@ export function GitBadge() {
         onClick={() => setSettingsOpen(true)}
         title={t("git.badge.disabledTitle")}
         aria-label={t("git.badge.disabledLabel")}
-        className="rounded-md p-1.5 text-muted-foreground/60 transition-colors hover:bg-sidebar-hover hover:text-muted-foreground"
+        className={cn(
+          "relative inline-flex flex-none items-center gap-1 text-muted-foreground/60 transition-colors hover:text-muted-foreground",
+          className,
+        )}
       >
-        <GitBranch className="h-4 w-4" />
+        <GitBranch className="h-3.5 w-3.5" />
+        {showBranch ? <span className="max-w-[96px] truncate">—</span> : null}
       </button>
     );
   }
@@ -56,18 +69,18 @@ export function GitBadge() {
   const dirty = status.changedCount > 0;
   const needsSync = status.ahead > 0 || status.behind > 0;
 
-  let icon: React.ReactNode = <GitBranch className="h-4 w-4" />;
+  let icon: React.ReactNode = <GitBranch className="h-3.5 w-3.5" />;
   let color = "text-muted-foreground hover:text-foreground";
   let title = status.isRepo
     ? t("git.badge.cleanTitle")
     : t("git.badge.notRepoTitle");
 
   if (busy) {
-    icon = <Loader2 className="h-4 w-4 animate-spin" />;
+    icon = <Loader2 className="h-3.5 w-3.5 animate-spin" />;
     color = "text-primary";
     title = t("git.badge.busyTitle");
   } else if (conflict) {
-    icon = <AlertTriangle className="h-4 w-4" />;
+    icon = <AlertTriangle className="h-3.5 w-3.5" />;
     color = "text-amber-600 hover:text-amber-700";
     title = t("git.badge.conflictTitle", { count: status.conflictCount });
   } else if (dirty || needsSync) {
@@ -79,6 +92,8 @@ export function GitBadge() {
     });
   }
 
+  const branchLabel = status.branch?.trim() || "—";
+
   return (
     <>
       <button
@@ -87,14 +102,21 @@ export function GitBadge() {
         title={title}
         aria-label={title}
         className={cn(
-          "relative rounded-md p-1.5 transition-colors hover:bg-sidebar-hover",
+          "relative inline-flex flex-none items-center gap-1 transition-colors",
           color,
+          className,
         )}
         data-git-phase={busy ? "busy" : conflict ? "conflict" : dirty ? "dirty" : "clean"}
       >
         {icon}
-        {!busy && (dirty || needsSync) && !conflict ? (
-          <span className="absolute -right-0.5 -top-0.5 flex h-2 w-2 rounded-full bg-primary" />
+        {showBranch ? (
+          <span className="max-w-[96px] truncate">{branchLabel}</span>
+        ) : null}
+        {!showBranch && !busy && (dirty || needsSync) && !conflict ? (
+          <span className="absolute -right-0.5 -top-0.5 flex h-1.5 w-1.5 rounded-full bg-primary" />
+        ) : null}
+        {showBranch && !busy && (dirty || needsSync) && !conflict ? (
+          <span className="h-1.5 w-1.5 flex-none rounded-full bg-primary" />
         ) : null}
       </button>
       <GitSyncDialog open={dialogOpen} onOpenChange={setDialogOpen} />

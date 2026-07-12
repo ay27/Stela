@@ -12,7 +12,6 @@ import {
 } from "@/state/tab-buffer";
 import { useDialogs } from "@/state/dialogs";
 import { MilkdownEditor, type MilkdownEditorHandle } from "@/editor/MilkdownEditor";
-import { BacklinksPanel } from "@/components/backlinks-panel";
 import { ConnectionPicker } from "@/components/connection-picker";
 import { useConnections } from "@/state/connections";
 import { firstConnectionName } from "@/services/connections";
@@ -309,7 +308,6 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
           onUnmountFlush={onEditorUnmountFlush}
         />
       </div>
-      <BacklinksPanel path={path} tabId={tabId} />
     </div>
   );
 }

@@ -5,8 +5,8 @@
  * [ConnectionsDialog](./connections-dialog.tsx) 的 Radix Dialog 风格保持一致。
  *
  * Tabs：
- *   - Connections：复用 [ConnectionsTab](./settings/connections-tab.tsx)（与 Sidebar
- *     底部的 Connections 入口共享）
+ *   - Connections：复用 [ConnectionsTab](./settings/connections-tab.tsx)
+ *     （入口：本对话框 / 命令面板 / Welcome；Sidebar 不再放快捷入口）
  *   - Execution：onError 单选；其它字段标 M5
  *   - Persistence：SQLite 路径 / 文件大小 / cleanup 策略 / 立即清理按钮
  *   - Security：明文存储 banner + 路径

@@ -14,6 +14,7 @@ import {
 
 import { useWorkspace } from "@/state/workspace";
 import { useDialogs } from "@/state/dialogs";
+import { useLayout } from "@/state/layout";
 import { useSettings } from "@/state/settings";
 import { createNewStelaNote } from "@/services/note-actions";
 import { seedDemoVault } from "@/services/demo-vault";
@@ -74,6 +75,7 @@ export function WelcomeView() {
   const setConnectionsOpen = useDialogs((s) => s.setConnections);
   const setSettingsOpen = useDialogs((s) => s.setSettings);
   const togglePalette = useDialogs((s) => s.togglePalette);
+  const sidebarCollapsed = useLayout((s) => s.sidebarCollapsed);
 
   // recentVaults / lastVault 走 user-cache（跨 vault）；recentFiles 走 local 文件
   const recentVaultsAll = useSettings((s) => s.recentVaults);
@@ -121,13 +123,23 @@ export function WelcomeView() {
   }, [openVaultByPath, t]);
 
   return (
-    // 外层容器设为 frameless 窗口 drag region，把 Welcome 内容四周的空白
-    // （py-10 顶部 / px-10 两侧 / justify-center 居中外的留白）变成可拖窗
-    // 区域，避免"sidebar 显示 + 无 tab"状态下 main 顶部找不到地方拖窗。
-    // 内层 max-w-3xl 立刻 no-drag 把内容区恢复成正常交互（点击 / 选中 /
-    // 滚动条 / X 删除按钮），不影响业务行为。
-    <div className="stela-app-drag flex h-full w-full justify-center overflow-auto bg-background px-10 py-10">
-      <div className="stela-app-no-drag w-full max-w-3xl">
+    // 不要把 stela-app-drag 放在 overflow-auto 容器上：Electron 在「可滚动
+    // drag region」滚到底后 hit-test 会坏掉，整页点不了（侧栏/DockBar 不在
+    // 该区域内所以仍可点）。拖窗只放在不可滚动的顶条；内容区正常滚动点击。
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-background">
+      {sidebarCollapsed ? (
+        <div
+          className="stela-app-drag stela-titlebar-safe-left absolute inset-x-0 top-0 z-10 h-9"
+          aria-hidden
+        />
+      ) : null}
+      <div
+        className={cn(
+          "min-h-0 flex-1 overflow-auto px-10 py-10",
+          sidebarCollapsed && "pt-12",
+        )}
+      >
+        <div className="mx-auto w-full max-w-3xl">
         <header className="mb-8 flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-lg font-bold text-primary-foreground">
             S
@@ -190,6 +202,7 @@ export function WelcomeView() {
             </ul>
           </Section>
         ) : null}
+      </div>
       </div>
     </div>
   );

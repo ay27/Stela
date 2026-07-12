@@ -1,6 +1,6 @@
-import { Fragment, useMemo, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Bot, Clipboard, Loader2, RefreshCw, X } from "lucide-react";
+import { Bot, Check, Clipboard, Loader2, RefreshCw, X } from "lucide-react";
 
 import type { AiActionKind } from "@shared/types";
 import { useAiModal } from "@/state/ai-modal";
@@ -169,10 +169,7 @@ export function renderMarkdown(markdown: string): ReactNode {
       }
       i += 1;
       out.push(
-        <pre key={out.length} className="my-3 overflow-auto rounded-lg bg-muted p-3 font-mono text-[12px] leading-5">
-          {lang ? <div className="mb-2 text-[10px] uppercase text-muted-foreground">{lang}</div> : null}
-          <code>{buf.join("\n")}</code>
-        </pre>,
+        <MarkdownCodeBlock key={out.length} lang={lang} code={buf.join("\n")} />,
       );
       continue;
     }
@@ -244,6 +241,39 @@ export function renderMarkdown(markdown: string): ReactNode {
     out.push(<p key={out.length} className="my-2">{renderInline(para.join(" "))}</p>);
   }
   return out;
+}
+
+function MarkdownCodeBlock({ lang, code }: { lang: string; code: string }) {
+  const t = useT();
+  const [copied, setCopied] = useState(false);
+
+  const onCopy = () => {
+    window.stela.shell.writeClipboardText(code);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div className="my-3 overflow-hidden rounded-lg border border-border/60 bg-muted">
+      <div className="flex items-center justify-between gap-2 border-b border-border/50 px-2.5 py-1">
+        <span className="truncate text-[10px] uppercase tracking-wide text-muted-foreground">
+          {lang || "code"}
+        </span>
+        <button
+          type="button"
+          onClick={onCopy}
+          title={copied ? t("common.copied") : t("common.copy")}
+          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-background hover:text-foreground"
+        >
+          {copied ? <Check className="h-3 w-3" /> : <Clipboard className="h-3 w-3" />}
+          <span>{copied ? t("common.copied") : t("common.copy")}</span>
+        </button>
+      </div>
+      <pre className="overflow-auto p-3 font-mono text-[12px] leading-5">
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
 }
 
 function splitTableRow(line: string): string[] {

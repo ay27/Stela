@@ -119,7 +119,7 @@ function FindBarImpl({ viewRef }: Props) {
   }, [viewRef]);
 
   // 仅对"我们要消费的键"做 preventDefault + stopPropagation；其它键放行让全局 hotkey
-  // 仍然能在 bar 输入态下生效（如 Mod+B 折叠侧栏、Mod+Shift+F 切到 vault 搜索）。
+  // 仍然能在 bar 输入态下生效（如 Mod+Shift+F 切到 vault 搜索）。
   // bar 现在挂在 host 兄弟节点上，普通键不会冒泡到 PM，所以无需无差别 stopPropagation。
   const onKeywordKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLInputElement>) => {

@@ -37,6 +37,7 @@ export function TabBar() {
   const closedCount = useWorkspace((s) => s.closedTabsStack.length);
 
   const agentPanelCollapsed = useLayout((s) => s.agentPanelCollapsed);
+  const sidebarCollapsed = useLayout((s) => s.sidebarCollapsed);
   const toggleAgentPanel = useLayout((s) => s.toggleAgentPanel);
   const focusAgentPanel = useLayout((s) => s.focusAgentPanel);
 
@@ -119,7 +120,12 @@ export function TabBar() {
   if (tabs.length === 0) return null;
 
   return (
-    <div className="stela-app-drag stela-titlebar-safe-right flex h-9 flex-none items-stretch border-b border-border bg-muted/60">
+    <div
+      className={cn(
+        "stela-app-drag stela-titlebar-safe-right flex h-9 flex-none items-stretch border-b border-border bg-muted/60",
+        sidebarCollapsed && "stela-titlebar-safe-left",
+      )}
+    >
       {/*
        * min-w-0 关键：父级是 flex container，flex 子项默认 min-width:auto，
        * 会被内部 N 个 TabItem 撑超过父容器宽度，触发外层 main overflow-hidden

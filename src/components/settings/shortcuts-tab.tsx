@@ -33,7 +33,6 @@ const GROUPS: ShortcutGroup[] = [
       { keys: "Mod+N", actionKey: "shortcuts.global.newNote" },
       { keys: "Mod+W", actionKey: "shortcuts.global.closeTab" },
       { keys: "Mod+F / Mod+Shift+F", actionKey: "shortcuts.global.search" },
-      { keys: "Mod+B", actionKey: "shortcuts.global.toggleSidebar" },
       { keys: "Mod+,", actionKey: "shortcuts.global.settings" },
       { keys: "Mod+I", actionKey: "shortcuts.global.addToChat" },
       { keys: "Mod+Enter", actionKey: "shortcuts.global.runBlock" },

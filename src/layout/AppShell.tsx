@@ -3,6 +3,7 @@ import { useEffect, useMemo } from "react";
 import { Sidebar } from "./Sidebar";
 import { SidebarResizer } from "./SidebarResizer";
 import { AgentSidebar } from "./AgentSidebar";
+import { AppDockBar } from "./AppDockBar";
 import { TabBar } from "./TabBar";
 import { Workspace } from "./Workspace";
 import { useWorkspace } from "@/state/workspace";
@@ -48,7 +49,6 @@ export function AppShell() {
 
   const sidebarCollapsed = useLayout((s) => s.sidebarCollapsed);
   const sidebarWidth = useLayout((s) => s.sidebarWidth);
-  const toggleSidebar = useLayout((s) => s.toggleSidebar);
   const focusSearch = useLayout((s) => s.focusSearch);
   const focusFiles = useLayout((s) => s.focusFiles);
   const focusAgentPanel = useLayout((s) => s.focusAgentPanel);
@@ -183,11 +183,6 @@ export function AppShell() {
         handler: () => useFindState.getState().open("replace"),
       },
       {
-        keys: "Mod+B",
-        context: "always",
-        handler: () => toggleSidebar(),
-      },
-      {
         // 定位当前活跃 file tab 到文件树（同 VSCode / Obsidian 的 reveal in
         // explorer）。先把 sidebar 切到 files 模式 + 展开，再让 file-tree
         // useEffect 通过 pendingReveal 滚动并展开祖先。
@@ -266,47 +261,37 @@ export function AppShell() {
     focusFiles,
     focusAgentPanel,
     revealActiveFile,
-    toggleSidebar,
     setSettingsOpen,
     vaultPath,
   ]);
   useHotkeys(bindings);
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
-      <aside
-        data-sidebar-aside
-        style={sidebarCollapsed ? { width: 0 } : { width: sidebarWidth }}
-        className={cn(
-          "relative flex h-full flex-none flex-col border-r border-border bg-sidebar text-sidebar-foreground transition-[width] duration-150",
-          sidebarCollapsed && "overflow-hidden border-r-0",
-        )}
-      >
-        <Sidebar />
-        {sidebarCollapsed ? null : <SidebarResizer />}
-      </aside>
-      <main className="flex h-full flex-1 flex-col overflow-hidden">
-        {/*
-         * Frameless 窗口拖拽兜底：
-         *   - Sidebar 显示时：vault header + TabBar 都已是 drag region，
-         *     窗口随便拖；红绿灯落在 Sidebar 顶部，不挡 main 区。
-         *   - Sidebar 收起时：sidebar width=0 → Editor 占满整窗，左上角
-         *     会被 macOS 红绿灯遮住 / Windows overlay 按钮飘在右上角，且
-         *     若同时没有 tab（无 TabBar），整窗找不到任何 drag region。
-         *
-         * 解决：sidebar 收起时在 main 顶部插一条 h-9 透明 strip，承担
-         *   1) drag region；2) 给红绿灯（mac）/ overlay 按钮（win/linux）
-         *   让出物理空间，避免它们盖住 EditorView 内容。
-         * 高度与 TabBar 一致，视觉上像 TabBar 的延续（即使 TabBar 不渲染）。
-         */}
-        {sidebarCollapsed ? (
-          <div className="stela-app-drag stela-titlebar-safe-right flex h-9 flex-none items-stretch border-b border-border bg-muted/40" />
-        ) : null}
-        <TabBar />
-        <Workspace />
-      </main>
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <aside
+          data-sidebar-aside
+          style={sidebarCollapsed ? { width: 0 } : { width: sidebarWidth }}
+          className={cn(
+            "relative flex h-full flex-none flex-col border-r border-border bg-sidebar text-sidebar-foreground transition-[width] duration-150",
+            sidebarCollapsed && "overflow-hidden border-r-0",
+          )}
+        >
+          {sidebarCollapsed ? null : <Sidebar />}
+          {sidebarCollapsed ? null : <SidebarResizer />}
+        </aside>
+        <main className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+          {/*
+           * Frameless 拖拽：SidebarTopChrome / TabBar / Welcome 空白区。
+           * 侧栏收起时展开入口在 AppDockBar 最左；Welcome 自带 drag + 红绿灯安全区。
+           */}
+          <TabBar />
+          <Workspace />
+        </main>
+        <AgentSidebar />
+      </div>
 
-      <AgentSidebar />
+      <AppDockBar />
 
       <ConnectionsDialog
         open={connectionsOpen}

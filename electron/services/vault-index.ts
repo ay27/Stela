@@ -634,7 +634,7 @@ export async function getBacklinks(args: {
 }): Promise<IndexBacklinkEntry[]> {
   if (!runtime) return [];
   await runtime.scanReady;
-  // 调用方（backlinks-panel）传过来的 target 是 vault 根相对、已去扩展名形式；
+  // 调用方（AppDockBar BacklinkStatus）传过来的 target 是 vault 根相对、已去扩展名形式；
   // 这里再走一次 targetToInvertedKey 与 addToInverted 用的归一化 key 完全对齐。
   const lookup = targetToInvertedKey(args.target);
   if (!lookup) return [];

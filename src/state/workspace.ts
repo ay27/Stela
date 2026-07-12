@@ -51,11 +51,6 @@ export interface Tab {
    * dirty 时 +1；EditorView 把它放进 readFile 的 effect 依赖里。
    */
   reloadToken?: number;
-  /**
-   * Backlinks 面板（v0.3 双链 M3）的折叠状态。`undefined` 视为默认折叠。
-   * 切 tab / 重新打开同一文件时该偏好仍跟随该 tab。
-   */
-  backlinksOpen?: boolean;
   /** 当前 tab 内正在执行的 RunSQL 数量；>0 时 TabBar 显示执行中。 */
   sqlRunningCount?: number;
 }
@@ -213,8 +208,6 @@ interface WorkspaceState {
   acceptExternalChange: (id: string) => void;
   /** 用户选择保留本地（忽略外部变更）：仅清掉 externalChange，不动 buffer */
   dismissExternalChange: (id: string) => void;
-  /** Backlinks 面板折叠状态切换（v0.3 双链 M3） */
-  setBacklinksOpen: (id: string, open: boolean) => void;
   /**
    * 把 main 进程 vault watcher 推送来的事件 batch 应用到 tab 状态（v0.2 #7）。
    *
@@ -828,15 +821,6 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (!target.externalChange) return;
     const next = tabs.map((t) =>
       t.id === id ? { ...t, externalChange: undefined } : t,
-    );
-    set({ tabs: next });
-  },
-
-  setBacklinksOpen: (id, open) => {
-    const { tabs } = get();
-    if (!tabs.some((t) => t.id === id)) return;
-    const next = tabs.map((t) =>
-      t.id === id ? { ...t, backlinksOpen: open } : t,
     );
     set({ tabs: next });
   },

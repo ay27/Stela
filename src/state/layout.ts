@@ -2,7 +2,6 @@
  * 全局布局状态 store。
  *
  * 用途：让快捷键层（`src/lib/hotkeys.ts`）能跨组件树操作 Sidebar / Agent 栏：
- *   - 折叠 / 展开左侧 Sidebar（Mod+B）
  *   - 把 Sidebar 切到 "search" 模式并请求 input 聚焦（Mod+Shift+F）
  *   - 折叠 / 展开右侧全局 Agent 栏（Mod+Shift+A）
  *   - 记住用户拖拽出的宽度（localStorage 持久化，不经 Rust 设置仓，避免每次拖拽
