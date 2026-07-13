@@ -101,7 +101,7 @@ The renderer has **no Node privileges**. All desktop capabilities flow through a
 | IPC validation | Zod | 3.x |
 | i18n | i18next | zh / en |
 | Packaging | electron-builder | mac dmg/zip, win nsis, linux AppImage/deb |
-| Auto-update | electron-updater | GitHub Releases |
+| Auto-update | electron-updater | GitHub Releases (macOS zip, Windows NSIS) |
 
 **Historical note:** Stela began as an Obsidian plugin, then a Tauri/Rust prototype. The open-source release is **Electron-only**; legacy code is not part of the runtime.
 

@@ -100,7 +100,17 @@ async function main(): Promise<void> {
     logger: { info: () => {}, warn: () => {}, error: () => {} },
   });
   await linux.checkForUpdates();
-  assert("non-mac check is disabled", linux.getStatus().state === "disabled");
+  assert("linux check is disabled", linux.getStatus().state === "disabled");
+
+  const win = createAutoUpdaterService({
+    updater: makeFakeUpdater(),
+    isDev: false,
+    platform: "win32",
+    version: "0.6.0",
+    logger: { info: () => {}, warn: () => {}, error: () => {} },
+  });
+  await win.checkForUpdates();
+  assert("win32 check is enabled", win.getStatus().state === "checking");
 }
 
 void main().catch((err) => {

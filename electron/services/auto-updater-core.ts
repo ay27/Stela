@@ -35,8 +35,14 @@ export interface AutoUpdaterServiceOptions {
   logger: LoggerLike;
 }
 
+const AUTO_UPDATE_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "win32"]);
+
 const DISABLED_MESSAGE =
-  "macOS auto update is only available in packaged darwin builds";
+  "Auto update is only available in packaged macOS and Windows builds";
+
+function isAutoUpdatePlatform(platform: NodeJS.Platform): boolean {
+  return AUTO_UPDATE_PLATFORMS.has(platform);
+}
 
 function releaseNotesText(value: unknown): string | null {
   if (typeof value === "string") return value;
@@ -73,17 +79,17 @@ function statusFromInfo(
 export function createAutoUpdaterService(opts: AutoUpdaterServiceOptions) {
   let configured = false;
   let status: UpdaterStatus = {
-    state: opts.isDev || opts.platform !== "darwin" ? "disabled" : "idle",
+    state: opts.isDev || !isAutoUpdatePlatform(opts.platform) ? "disabled" : "idle",
     currentVersion: opts.version,
     version: null,
     releaseDate: null,
     releaseNotes: null,
     progress: null,
     lastCheckedAt: null,
-    error: opts.isDev || opts.platform !== "darwin" ? DISABLED_MESSAGE : null,
+    error: opts.isDev || !isAutoUpdatePlatform(opts.platform) ? DISABLED_MESSAGE : null,
   };
 
-  const isEnabled = () => !opts.isDev && opts.platform === "darwin";
+  const isEnabled = () => !opts.isDev && isAutoUpdatePlatform(opts.platform);
 
   const setError = (err: unknown): void => {
     const message = err instanceof Error ? err.message : String(err);
