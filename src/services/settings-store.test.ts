@@ -17,6 +17,7 @@ const legacy = normalizeSettings({
 assert.equal(legacy.ai.agentMaxIterations, 200);
 assert.equal(legacy.ai.agentWallClockMs, 300_000);
 assert.equal(legacy.ai.agentAllowMutations, false);
+assert.equal(legacy.ai.contextWindow, 128_000);
 
 const patched = normalizeSettings({
   ai: {

@@ -1,8 +1,8 @@
 /**
  * Agent 侧 SQL 护栏：只读放行，改动类默认拦截，禁止多语句堆叠。
  *
- * 行数上限不在这里——已下沉到核心层 [sql-limit.ts](../sql-limit.ts)，
- * 编辑器手写 SQL 与 agent 通用，见 `registry.execute`。
+ * 行数上限不在这里——connector registry 只截断保存/展示的结果行，
+ * 不改写用户 SQL，编辑器手写 SQL 与 agent 通用。
  *
  * ponytail: 关键字分类是启发式（取首个有效关键字），不是真 SQL parser。
  * 上限：动态拼接 / 存储过程调用等复杂语句可能分类不准。升级路径：接入真正

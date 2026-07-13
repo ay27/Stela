@@ -163,8 +163,7 @@ export interface AppearanceSettings {
 export interface ExecutionSettings {
   onError: "continue" | "stop";
   /**
-   * 单次查询最大返回行数，核心层对所有走 registry.execute 的只读查询自动追加
-   * `LIMIT`（编辑器手写 SQL 与 agent 通吃）。`0` = 不限制。
+   * 单次查询最多保存/展示的结果行数；核心层不改写用户 SQL。`0` = 不限制。
    */
   maxRows: number;
 }
@@ -194,6 +193,12 @@ export interface UISettings {
  */
 export type AiProviderMode = "disabled" | "openai-compatible" | "cloud";
 
+/** Allowed context-window presets for OpenAI-compatible models (tokens). */
+export const AI_CONTEXT_WINDOW_OPTIONS = [
+  64_000, 128_000, 200_000, 256_000, 1_000_000,
+] as const;
+export type AiContextWindow = (typeof AI_CONTEXT_WINDOW_OPTIONS)[number];
+
 export interface AiSettings {
   providerMode: AiProviderMode;
   /** OpenAI-compatible endpoint. Empty means use the provider default. */
@@ -206,6 +211,11 @@ export interface AiSettings {
   sendResultSamples: boolean;
   /** Per-request row sample cap. */
   maxSampleRows: number;
+  /**
+   * Declared model context window (tokens). Used for AgentHarness compaction
+   * budgeting; OpenAI-compatible endpoints do not advertise this reliably.
+   */
+  contextWindow: AiContextWindow;
   /** Agent harness: max tool-call iterations before forcing a final answer. */
   agentMaxIterations: number;
   /** Agent harness: wall-clock budget in ms before forcing a final answer. */
@@ -521,6 +531,19 @@ export type AgentEvent =
       kind: "edit_note" | "mutation_sql";
       /** edit_note: notePath + diff 描述；mutation_sql: sql 文本。 */
       payload: AgentProposalPayload;
+    }
+  | {
+      type: "context_usage";
+      runId: string;
+      usedTokens: number;
+      contextWindow: number;
+      /** true when usage is estimated rather than reported by the provider. */
+      estimated: boolean;
+    }
+  | {
+      type: "compaction";
+      runId: string;
+      phase: "started" | "completed";
     }
   | { type: "final"; runId: string; content: string }
   | { type: "error"; runId: string; message: string }

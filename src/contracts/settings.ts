@@ -16,7 +16,7 @@ export interface AppearanceSettings {
 export interface ExecutionSettings {
   /** Run All 失败时的策略，M4 仅 UI 暴露，引擎落地在 M5 */
   onError: "continue" | "stop";
-  /** 单次查询最大返回行数，核心层对所有只读查询自动追加 LIMIT。0 = 不限制。 */
+  /** 单次查询最多保存/展示的结果行数；不改写用户 SQL。0 = 不限制。 */
   maxRows: number;
 }
 
@@ -75,6 +75,8 @@ export interface GitSettings {
 
 export type AiProviderMode = "disabled" | "openai-compatible" | "cloud";
 
+export type AiContextWindow = 64_000 | 128_000 | 200_000 | 256_000 | 1_000_000;
+
 export interface AiSettings {
   providerMode: AiProviderMode;
   baseUrl: string;
@@ -82,6 +84,7 @@ export interface AiSettings {
   hasApiKey: boolean;
   sendResultSamples: boolean;
   maxSampleRows: number;
+  contextWindow: AiContextWindow;
   agentMaxIterations: number;
   agentWallClockMs: number;
   agentAllowMutations: boolean;
@@ -130,6 +133,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     hasApiKey: false,
     sendResultSamples: true,
     maxSampleRows: 20,
+    contextWindow: 128_000,
     agentMaxIterations: 200,
     agentWallClockMs: 300_000,
     agentAllowMutations: false,

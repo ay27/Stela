@@ -206,6 +206,7 @@ execution.ts runBlock()
     ├── resolve connection from frontmatter connection_name
     ├── setNodeMarkup({ runState: "running" })  ← transient, not in markdown
     ├── connectorRegistry.execute(kind, config, sql)
+    │       └── sends SQL unchanged; caps returned rows by execution.maxRows
     ├── runId = uuid()
     ├── storage.saveRun / saveSchema / saveRows
     ├── historyJournal.appendRun()  → JSONL
@@ -272,11 +273,12 @@ Stela AI is **search-first and provider-backed**, not on-device RAG. Retrieval u
 
 | Concern | Implementation |
 |---------|----------------|
-| Chat / agent | OpenAI-compatible `{baseUrl}/chat/completions` from main |
-| API key | `{vault}/.stela/secrets/ai_{deviceSlug}.json` via `safeStorage` |
-| Settings | vault `.stela/settings.json` → `ai.*` (`hasApiKey` only, never the key) |
+| Chat / agent transport | `@earendil-works/pi-ai` custom OpenAI-compatible provider (`completeSimple` / AgentHarness streams) |
+| Agent loop | `@earendil-works/pi-agent-core` `AgentHarness` + in-memory `Session` |
+| API key | `{vault}/.stela/secrets/ai_{deviceSlug}.json` via `safeStorage` (injected into pi `CredentialStore`; not pi `auth.json`) |
+| Settings | vault `.stela/settings.json` → `ai.*` (`hasApiKey` only, never the key; `contextWindow` presets for compaction) |
 
-No cloud FIM / ghost-text inline completion — removed for latency ([ADR-0015](./adr/0015-openai-compatible-provider-without-fim.md); supersedes [ADR-0011](./adr/0011-openai-compatible-provider-and-fim.md)). RunSQL still has local schema/keyword autocomplete.
+No cloud FIM / ghost-text inline completion — removed for latency ([ADR-0018](./adr/0018-pi-ai-agent-harness.md) supersedes [ADR-0015](./adr/0015-openai-compatible-provider-without-fim.md) / [ADR-0011](./adr/0011-openai-compatible-provider-and-fim.md)). RunSQL still has local schema/keyword autocomplete.
 
 ### Two surfaces (+ one translator)
 
@@ -286,10 +288,11 @@ flowchart TB
   PRE["window.stela.ai.* / agent.*"]
   ACT["ai:complete\naction + AiRequestContext"]
   PARSE["ai:parse-sql-query\nNL → SqlIndexFilter only"]
-  AGENT["ai:agent-run\nfunction-calling loop"]
+  AGENT["ai:agent-run\nAgentHarness loop"]
   CTX["context-builder + schema-context\n+ redaction"]
-  PROV["provider.ts fetch"]
-  TOOLS["agent-tools → connectors / search / vault-fs"]
+  PROV["provider.ts → pi-ai Models"]
+  HARNESS["agent.ts → AgentHarness\n+ compact / overflow recovery"]
+  TOOLS["agent-tools → sequential AgentTool\n→ connectors / search / vault-fs"]
   GUARD["sql-guard + proposal IPC"]
 
   UI --> PRE
@@ -298,13 +301,13 @@ flowchart TB
   PRE --> AGENT
   ACT --> CTX --> PROV
   PARSE --> PROV
-  AGENT --> PROV
-  AGENT --> TOOLS
+  AGENT --> HARNESS --> PROV
+  HARNESS --> TOOLS
   TOOLS --> GUARD
 ```
 
-1. **Action complete** — one-shot `AiActionKind` (rewrite-sql, ask-sql, explain-result, explain-table, …). Prompt assembled in main; returns text + optional extracted SQL. UI: RunSQL inline panel, AI modal, schema browser actions. ([ADR-0012](./adr/0012-dual-ai-surfaces-actions-and-agent.md))
-2. **Harness agent** — native tool loop with streaming `ai:agent-event`. Tools browse schema, run SQL, search/read notes, propose edits. Mutations and note writes wait for user approve. Agent chat accepts `@table` mentions, `[[note]]` references, a default current-note reference, and Add to Chat content attachments. Runs continue until the model finishes, errors, or the user cancels. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md), [ADR-0016](./adr/0016-agent-chat-references-and-add-to-chat.md), [ADR-0017](./adr/0017-user-cancelled-agent-runs.md))
+1. **Action complete** — one-shot `AiActionKind` (rewrite-sql, ask-sql, explain-result, explain-table, …). Prompt assembled in main; returns text + optional extracted SQL. UI: RunSQL inline panel, AI modal, schema browser actions. ([ADR-0018](./adr/0018-pi-ai-agent-harness.md))
+2. **Harness agent** — `AgentHarness` tool loop with streaming `ai:agent-event`. Tools browse schema, run SQL, search/read notes, propose edits. Mutations and note writes wait for user approve. Agent chat accepts `@table` mentions, `[[note]]` references, a default current-note reference, and Add to Chat content attachments. Runs continue until the model finishes, errors, or the user cancels. Compacts when near `ai.contextWindow` budget and once on provider context overflow; Panel shows approximate usage + compacting status. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md), [ADR-0016](./adr/0016-agent-chat-references-and-add-to-chat.md), [ADR-0017](./adr/0017-user-cancelled-agent-runs.md), [ADR-0018](./adr/0018-pi-ai-agent-harness.md))
 3. **SQL query parse** — model only emits a `SqlIndexFilter`; hits always come from deterministic `sql-index`.
 
 ### Context pipeline
@@ -319,26 +322,27 @@ Before any action prompt leaves the machine ([ADR-0014](./adr/0014-ai-context-re
 
 ### Agent safety
 
-- Read-only SQL runs immediately; core `sql-limit` still applies
+- Read-only SQL runs immediately; core execution caps saved/displayed result rows without rewriting SQL
 - Multi-statement SQL blocked
 - Mutations require `agentAllowMutations` **and** `ai:agent-respond-proposal`
 - `propose_edit` never writes until approved
 - Agent runs are stopped by model completion, errors, or explicit user cancellation; legacy iteration/time settings are ignored
-- Session history is in-memory by `sessionId` (not persisted)
+- Session history is in-memory `Session` / `InMemorySessionStorage` by `sessionId` (not persisted)
+- Compaction: proactive `shouldCompact` against `ai.contextWindow`, plus one overflow recovery compact + continue; additive `context_usage` / `compaction` events on `ai:agent-event`
 - Agent chat references are structured: note paths are listed for tool-driven `read_note`, while selected prose and RunSQL snippets are added to the current user turn with a bounded character budget
 
 ### Key files
 
 | Path | Role |
 |------|------|
-| `electron/services/ai/provider.ts` | API key shards, chat / agent-turn HTTP |
+| `electron/services/ai/provider.ts` | API key shards, pi-ai Models / OpenAI-compatible transport |
 | `electron/services/ai/index.ts` | complete / parseSqlQuery entry |
 | `electron/services/ai/context-builder.ts` | bounded context + related runs |
 | `electron/services/ai/schema-context.ts` | table/DDL enrichment |
 | `electron/services/ai/prompt-builder.ts` | action prompts |
 | `electron/services/ai/redaction.ts` | secret scrubbing |
-| `electron/services/ai/agent.ts` | harness loop + session memory |
-| `electron/services/ai/agent-tools.ts` | tool defs + dispatch |
+| `electron/services/ai/agent.ts` | AgentHarness + session memory + compaction |
+| `electron/services/ai/agent-tools.ts` | sequential AgentTool wrappers + dispatch |
 | `electron/services/ai/sql-guard.ts` | read-only vs mutation classification |
 | `src/components/ai/` | modal, inline panel, agent panel, `@table` / `[[note]]` input, Add to Chat |
 

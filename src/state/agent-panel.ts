@@ -69,6 +69,12 @@ export interface AgentTab {
   draft: AgentDraft;
   connectionName: string | null;
   resetToken: number;
+  contextUsage: {
+    usedTokens: number;
+    contextWindow: number;
+    estimated: boolean;
+  } | null;
+  compacting: boolean;
 }
 
 interface AgentPanelState {
@@ -124,6 +130,8 @@ function newTab(): AgentTab {
     draft: emptyDraft(),
     connectionName: null,
     resetToken: 0,
+    contextUsage: null,
+    compacting: false,
   };
 }
 
@@ -136,6 +144,8 @@ function toolCallEntry(call: AgentToolCallInfo): AgentTimelineEntry {
 function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTimelineEntry[] {
   switch (event.type) {
     case "started":
+    case "context_usage":
+    case "compaction":
       return timeline;
     case "assistant_message":
       return [...timeline, { kind: "assistant", id: nextId(), content: event.content }];
@@ -369,14 +379,27 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
 // 全局只订阅一次事件流；按 event.runId 路由到所属 tab，避免多个 tab 同时运行时串线。
 onAgentEvent((event) => {
   useAgentPanel.setState((s) => ({
-    tabs: s.tabs.map((tab) =>
-      event.runId === tab.runId
-        ? {
-            ...tab,
-            timeline: applyEvent(tab.timeline, event),
-            status: statusAfter(event, tab.status),
-          }
-        : tab,
-    ),
+    tabs: s.tabs.map((tab) => {
+      if (event.runId !== tab.runId) return tab;
+      const next: AgentTab = {
+        ...tab,
+        timeline: applyEvent(tab.timeline, event),
+        status: statusAfter(event, tab.status),
+      };
+      if (event.type === "context_usage") {
+        next.contextUsage = {
+          usedTokens: event.usedTokens,
+          contextWindow: event.contextWindow,
+          estimated: event.estimated,
+        };
+      }
+      if (event.type === "compaction") {
+        next.compacting = event.phase === "started";
+      }
+      if (event.type === "final" || event.type === "error" || event.type === "cancelled") {
+        next.compacting = false;
+      }
+      return next;
+    }),
   }));
 });

@@ -30,7 +30,6 @@ import type {
 
 import { atomicWriteFile } from "../atomic-write";
 import { getLogger } from "../logger";
-import { applyRowLimit } from "../sql-limit";
 import * as settingsStore from "../settings-store";
 import { vaultConfigDir, vaultFilePath } from "../vault-paths";
 import {
@@ -194,6 +193,18 @@ function getOrThrow(kind: string): Connector {
   return c;
 }
 
+function capQueryRows(result: QueryResult, maxRows: number | null): QueryResult {
+  if (
+    result.kind !== "query" ||
+    maxRows === null ||
+    maxRows <= 0 ||
+    result.rows.length <= maxRows
+  ) {
+    return result;
+  }
+  return { ...result, rows: result.rows.slice(0, maxRows) };
+}
+
 // ---------- unified query API ----------
 
 export function listKinds(): ConnectorKindMeta[] {
@@ -208,6 +219,7 @@ export async function test(kind: string, config: unknown): Promise<TestResult> {
  * ponytail: 每次 execute 都读一次 settings.json 拿 maxRows；上限是高频执行时
  * 多一次磁盘 IO，升级路径是在 setVault/patch 时把 maxRows 缓存到模块变量。
  * 当前 SQL 执行本身的网络往返远大于这次本地文件读取，先不做。
+ * maxRows 只截断 Stela 保存/展示的结果行，不改写用户 SQL。
  */
 export async function execute(
   kind: string,
@@ -215,18 +227,18 @@ export async function execute(
   sql: string,
 ): Promise<QueryResult> {
   const connector = getOrThrow(kind);
-  let limitedSql = sql;
+  let maxRows: number | null = null;
   if (currentVaultPath) {
     try {
       const settings = await settingsStore.loadAppSettings(currentVaultPath);
-      limitedSql = applyRowLimit(sql, settings.execution.maxRows);
+      maxRows = settings.execution.maxRows;
     } catch (err) {
-      log.warn("failed to load execution.maxRows, running SQL unmodified", {
+      log.warn("failed to load execution.maxRows, returning unbounded rows", {
         err: (err as Error).message,
       });
     }
   }
-  return connector.execute(config, limitedSql);
+  return capQueryRows(await connector.execute(config, sql), maxRows);
 }
 
 export async function listDatabases(

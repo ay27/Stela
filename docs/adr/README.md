@@ -64,9 +64,10 @@ proposed → active → superseded
 | [0009](0009-vault-vs-machine-settings.md) | Vault-scoped vs machine-scoped settings boundary | active |
 | [0010](0010-in-memory-derived-indexes.md) | In-memory derived indexes (vault-index, sql-index) | active |
 | [0011](0011-openai-compatible-provider-and-fim.md) | OpenAI-compatible chat provider with separate FIM endpoint | superseded → [0015](0015-openai-compatible-provider-without-fim.md) |
-| [0012](0012-dual-ai-surfaces-actions-and-agent.md) | Dual AI surfaces — action complete and harness agent | active |
+| [0012](0012-dual-ai-surfaces-actions-and-agent.md) | Dual AI surfaces — action complete and harness agent | superseded → [0018](0018-pi-ai-agent-harness.md) |
 | [0013](0013-agent-tools-sql-guard-and-proposals.md) | Agent tools with SQL guard and user proposal confirmation | active |
 | [0014](0014-ai-context-redaction-and-schema-enrichment.md) | AI context assembly with redaction and schema enrichment | active |
-| [0015](0015-openai-compatible-provider-without-fim.md) | OpenAI-compatible chat provider without FIM inline completion | active |
+| [0015](0015-openai-compatible-provider-without-fim.md) | OpenAI-compatible chat provider without FIM inline completion | superseded → [0018](0018-pi-ai-agent-harness.md) |
 | [0016](0016-agent-chat-references-and-add-to-chat.md) | Agent chat references and Add to Chat | active |
 | [0017](0017-user-cancelled-agent-runs.md) | User-cancelled agent runs instead of iteration limits | active |
+| [0018](0018-pi-ai-agent-harness.md) | pi-ai transport and AgentHarness for AI provider and agent loop | active |

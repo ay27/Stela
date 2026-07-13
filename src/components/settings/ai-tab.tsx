@@ -48,6 +48,8 @@ export function AiTab() {
           model: settings.model,
           sendResultSamples: settings.sendResultSamples,
           maxSampleRows: settings.maxSampleRows,
+          contextWindow: settings.contextWindow,
+          agentAllowMutations: settings.agentAllowMutations,
         },
         apiKey.trim() || null,
       );
@@ -106,6 +108,31 @@ export function AiTab() {
             className="w-56 rounded-md border border-border bg-background px-2 py-1.5 text-[12px]"
             placeholder="gpt-4o-mini"
           />
+        </Row>
+
+        <Row label={t("ai.contextWindow.label")} description={t("ai.contextWindow.description")}>
+          <select
+            value={String(settings.contextWindow)}
+            onChange={(e) =>
+              void patch({
+                ai: {
+                  contextWindow: Number(e.target.value) as
+                    | 64_000
+                    | 128_000
+                    | 200_000
+                    | 256_000
+                    | 1_000_000,
+                },
+              })
+            }
+            className="w-56 rounded-md border border-border bg-background px-2 py-1.5 text-[12px]"
+          >
+            <option value="64000">64K</option>
+            <option value="128000">128K</option>
+            <option value="200000">200K</option>
+            <option value="256000">256K</option>
+            <option value="1000000">1M</option>
+          </select>
         </Row>
 
         <Row label={t("ai.baseUrl.label")} description={t("ai.baseUrl.description")}>

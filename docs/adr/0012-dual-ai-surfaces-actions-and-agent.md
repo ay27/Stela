@@ -2,7 +2,8 @@
 type: ADR
 id: "0012"
 title: "Dual AI surfaces — action complete and harness agent"
-status: active
+status: superseded
+superseded_by: "0018"
 date: 2026-06-15
 ---
 

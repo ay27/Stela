@@ -46,6 +46,8 @@ const GIT_DEFAULT: GitSettings = {
   autoPullIntervalMs: AUTO_PULL_DEFAULT_MS,
 };
 
+const AI_CONTEXT_WINDOWS = new Set([64_000, 128_000, 200_000, 256_000, 1_000_000]);
+
 const AI_DEFAULT: AiSettings = {
   providerMode: "disabled",
   baseUrl: "https://api.openai.com/v1",
@@ -53,12 +55,13 @@ const AI_DEFAULT: AiSettings = {
   hasApiKey: false,
   sendResultSamples: true,
   maxSampleRows: 20,
+  contextWindow: 128_000,
   agentMaxIterations: 200,
   agentWallClockMs: 300_000,
   agentAllowMutations: false,
 };
 
-/** 单次查询默认最大返回行数；`0` = 不限制。见 [sql-limit.ts](./sql-limit.ts)。 */
+/** 单次查询默认最多保存/展示的结果行数；`0` = 不限制。 */
 const EXECUTION_DEFAULT: ExecutionSettings = { onError: "continue", maxRows: 1000 };
 
 const DEFAULTS: AppSettings = {
@@ -102,6 +105,10 @@ function sanitizeAi(input: unknown): AiSettings {
     typeof r.agentWallClockMs === "number" && Number.isFinite(r.agentWallClockMs)
       ? Math.min(600_000, Math.max(5_000, Math.floor(r.agentWallClockMs)))
       : AI_DEFAULT.agentWallClockMs;
+  const contextWindow =
+    typeof r.contextWindow === "number" && AI_CONTEXT_WINDOWS.has(Math.floor(r.contextWindow))
+      ? (Math.floor(r.contextWindow) as AiSettings["contextWindow"])
+      : AI_DEFAULT.contextWindow;
   return {
     providerMode,
     baseUrl: baseUrl || AI_DEFAULT.baseUrl,
@@ -112,6 +119,7 @@ function sanitizeAi(input: unknown): AiSettings {
         ? AI_DEFAULT.sendResultSamples
         : r.sendResultSamples === true,
     maxSampleRows,
+    contextWindow,
     agentMaxIterations,
     agentWallClockMs,
     agentAllowMutations: r.agentAllowMutations === true,

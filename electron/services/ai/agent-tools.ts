@@ -8,6 +8,9 @@
 
 import path from "node:path";
 
+import { Type } from "@earendil-works/pi-ai";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+
 import { AppError } from "@shared/errors";
 import type {
   AgentToolName,
@@ -22,7 +25,6 @@ import type {
 import * as search from "../search";
 import * as vaultFs from "../vault-fs";
 import { notifyFileChanged } from "../vault-watcher";
-import type { AgentToolDef } from "./provider";
 import { resolveNamedTableSchemas, searchTables } from "./schema-context";
 import { classifySql } from "./sql-guard";
 
@@ -79,159 +81,158 @@ export interface AgentToolContext {
   requestProposal: (proposal: ProposalRequest) => Promise<boolean>;
 }
 
-export const AGENT_TOOL_DEFS: AgentToolDef[] = [
-  {
-    type: "function",
-    function: {
+/**
+ * Build sequential pi AgentTool wrappers around {@link dispatchTool}.
+ * Proposal gating stays inside dispatch; harness receives thrown errors as isError results.
+ */
+export function createAgentTools(options: {
+  ctx: Omit<AgentToolContext, "requestProposal">;
+  requestProposal: (toolCallId: string, proposal: ProposalRequest) => Promise<boolean>;
+}): AgentTool[] {
+  const { ctx, requestProposal } = options;
+  return [
+    {
       name: "list_databases",
+      label: "List databases",
       description: "List databases/schemas visible through the current data connection.",
-      parameters: { type: "object", properties: {} },
+      parameters: Type.Object({}),
+      executionMode: "sequential",
+      execute: (toolCallId) => runTool("list_databases", toolCallId, {}, ctx, requestProposal),
     },
-  },
-  {
-    type: "function",
-    function: {
+    {
       name: "list_tables",
+      label: "List tables",
       description: "List tables in a database through the current data connection.",
-      parameters: {
-        type: "object",
-        properties: {
-          database: { type: "string", description: "Database name; omit to use the connector default." },
-        },
-      },
+      parameters: Type.Object({
+        database: Type.Optional(Type.String({ description: "Database name; omit to use the connector default." })),
+      }),
+      executionMode: "sequential",
+      execute: (toolCallId, params) => runTool("list_tables", toolCallId, params, ctx, requestProposal),
     },
-  },
-  {
-    type: "function",
-    function: {
+    {
       name: "search_tables",
+      label: "Search tables",
       description:
         "Fuzzy-search for candidate tables by keywords (business terms, partial table names). Use this when you don't know the exact table name yet — it scores table names, columns, and documented DDL for matches.",
-      parameters: {
-        type: "object",
-        properties: {
-          keywords: {
-            type: "array",
-            items: { type: "string" },
-            description: "Keywords to match against table/column names and DDL, e.g. [\"quarter\", \"revenue\", \"order\"].",
-          },
-          limit: {
-            type: "number",
-            description: "Optional max candidate tables to return. Defaults to 10.",
-          },
-        },
-        required: ["keywords"],
-      },
+      parameters: Type.Object({
+        keywords: Type.Array(Type.String(), {
+          description: 'Keywords to match against table/column names and DDL, e.g. ["quarter", "revenue", "order"].',
+        }),
+        limit: Type.Optional(Type.Number({ description: "Optional max candidate tables to return. Defaults to 10." })),
+      }),
+      executionMode: "sequential",
+      execute: (toolCallId, params) => runTool("search_tables", toolCallId, params, ctx, requestProposal),
     },
-  },
-  {
-    type: "function",
-    function: {
+    {
       name: "get_table_schema",
+      label: "Get table schema",
       description: "Fetch column names/types and DDL (if available) for one or more tables.",
-      parameters: {
-        type: "object",
-        properties: {
-          tables: {
-            type: "array",
-            items: { type: "string" },
-            description: "Table names, optionally qualified as db.table.",
-          },
-        },
-        required: ["tables"],
-      },
+      parameters: Type.Object({
+        tables: Type.Array(Type.String(), {
+          description: "Table names, optionally qualified as db.table.",
+        }),
+      }),
+      executionMode: "sequential",
+      execute: (toolCallId, params) => runTool("get_table_schema", toolCallId, params, ctx, requestProposal),
     },
-  },
-  {
-    type: "function",
-    function: {
+    {
       name: "run_sql",
+      label: "Run SQL",
       description:
-        "Run a SQL statement through the current data connection. Read-only statements (SELECT/WITH/SHOW/DESCRIBE/EXPLAIN) run immediately; a row limit is enforced automatically. Mutating statements (INSERT/UPDATE/DELETE/DDL/...) are blocked unless the user has enabled mutations, and always require explicit approval.",
-      parameters: {
-        type: "object",
-        properties: { sql: { type: "string" } },
-        required: ["sql"],
-      },
+        "Run a SQL statement through the current data connection. Read-only statements (SELECT/WITH/SHOW/DESCRIBE/EXPLAIN) run immediately; Stela caps saved/displayed result rows without rewriting SQL. Mutating statements (INSERT/UPDATE/DELETE/DDL/...) are blocked unless the user has enabled mutations, and always require explicit approval.",
+      parameters: Type.Object({
+        sql: Type.String(),
+      }),
+      executionMode: "sequential",
+      execute: (toolCallId, params) => runTool("run_sql", toolCallId, params, ctx, requestProposal),
     },
-  },
-  {
-    type: "function",
-    function: {
+    {
       name: "search_vault",
+      label: "Search vault",
       description:
         "Full-text search across the vault's Markdown notes. Accepts one keyword or several keywords; several keywords are searched independently and merged.",
-      parameters: {
-        type: "object",
-        properties: {
-          keyword: { type: "string", description: "Single keyword for compatibility." },
-          keywords: {
-            type: "array",
-            items: { type: "string" },
+      parameters: Type.Object({
+        keyword: Type.Optional(Type.String({ description: "Single keyword for compatibility." })),
+        keywords: Type.Optional(
+          Type.Array(Type.String(), {
             description: "Preferred: several business terms or identifiers to search independently.",
-          },
-          maxHits: { type: "number", description: "Max total hits to return. Defaults to 100." },
-        },
-      },
+          }),
+        ),
+        maxHits: Type.Optional(Type.Number({ description: "Max total hits to return. Defaults to 100." })),
+      }),
+      executionMode: "sequential",
+      execute: (toolCallId, params) => runTool("search_vault", toolCallId, params, ctx, requestProposal),
     },
-  },
-  {
-    type: "function",
-    function: {
+    {
       name: "list_vault_files",
+      label: "List vault files",
       description:
         "List Markdown files in the vault by relative path. Use this before read_note when you need to discover likely notes/files.",
-      parameters: {
-        type: "object",
-        properties: {
-          maxFiles: { type: "number", description: "Max files to return. Defaults to 200." },
-        },
-      },
+      parameters: Type.Object({
+        maxFiles: Type.Optional(Type.Number({ description: "Max files to return. Defaults to 200." })),
+      }),
+      executionMode: "sequential",
+      execute: (toolCallId, params) => runTool("list_vault_files", toolCallId, params, ctx, requestProposal),
     },
-  },
-  {
-    type: "function",
-    function: {
+    {
       name: "read_note",
+      label: "Read note",
       description:
         "Read Markdown content of a note by vault-relative or absolute path. For large files, use offset/maxChars to page through the file.",
-      parameters: {
-        type: "object",
-        properties: {
-          path: { type: "string" },
-          offset: {
-            type: "number",
-            description: "Character offset to start reading from. Defaults to 0.",
-          },
-          maxChars: {
-            type: "number",
-            description: "Maximum characters to return. Defaults to 50000, max 120000. Use 0 only when you truly need the full note.",
-          },
-        },
-        required: ["path"],
-      },
+      parameters: Type.Object({
+        path: Type.String(),
+        offset: Type.Optional(Type.Number({ description: "Character offset to start reading from. Defaults to 0." })),
+        maxChars: Type.Optional(
+          Type.Number({
+            description:
+              "Maximum characters to return. Defaults to 50000, max 120000. Use 0 only when you truly need the full note.",
+          }),
+        ),
+      }),
+      executionMode: "sequential",
+      execute: (toolCallId, params) => runTool("read_note", toolCallId, params, ctx, requestProposal),
     },
-  },
-  {
-    type: "function",
-    function: {
+    {
       name: "propose_edit",
+      label: "Propose edit",
       description:
         "Propose editing a note. Use newContent to replace the whole file, or oldText/newText for one exact local replacement in long files. This never writes to disk directly — it shows the user a diff and waits for approval.",
-      parameters: {
-        type: "object",
-        properties: {
-          path: { type: "string" },
-          newContent: { type: "string", description: "Full replacement content. Prefer oldText/newText for long notes." },
-          oldText: { type: "string", description: "Exact text to replace once in the existing note." },
-          newText: { type: "string", description: "Replacement text for oldText." },
-          description: { type: "string", description: "One-line summary of what changed, shown to the user." },
-        },
-        required: ["path"],
-      },
+      parameters: Type.Object({
+        path: Type.String(),
+        newContent: Type.Optional(
+          Type.String({ description: "Full replacement content. Prefer oldText/newText for long notes." }),
+        ),
+        oldText: Type.Optional(Type.String({ description: "Exact text to replace once in the existing note." })),
+        newText: Type.Optional(Type.String({ description: "Replacement text for oldText." })),
+        description: Type.Optional(
+          Type.String({ description: "One-line summary of what changed, shown to the user." }),
+        ),
+      }),
+      executionMode: "sequential",
+      execute: (toolCallId, params) => runTool("propose_edit", toolCallId, params, ctx, requestProposal),
     },
-  },
-];
+  ];
+}
+
+async function runTool(
+  name: string,
+  toolCallId: string,
+  params: unknown,
+  baseCtx: Omit<AgentToolContext, "requestProposal">,
+  requestProposal: (toolCallId: string, proposal: ProposalRequest) => Promise<boolean>,
+) {
+  const outcome = await dispatchTool(name, JSON.stringify(params ?? {}), {
+    ...baseCtx,
+    requestProposal: (proposal) => requestProposal(toolCallId, proposal),
+  });
+  if (!outcome.ok) {
+    throw new Error(outcome.text);
+  }
+  return {
+    content: [{ type: "text" as const, text: outcome.text }],
+    details: { summary: outcome.text },
+  };
+}
 
 function resolveDialect(kind: string, ctx: AgentToolContext): string {
   return ctx.connector.listKinds().find((meta) => meta.kind === kind)?.dialect ?? kind;

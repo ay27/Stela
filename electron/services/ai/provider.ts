@@ -1,5 +1,18 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
+/**
+ * OpenAI-compatible LLM transport via `@earendil-works/pi-ai`.
+ *
+ * Credentials stay Stela-owned (safeStorage shards). pi's auth.json is not used.
+ */
+
+import {
+  createModels,
+  createProvider,
+  type Credential,
+  type CredentialStore,
+  type Model,
+  type Models,
+} from "@earendil-works/pi-ai";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 
 import { AppError } from "@shared/errors";
 import type {
@@ -8,6 +21,9 @@ import type {
   PartialAppSettings,
 } from "@shared/types";
 
+import { promises as fs } from "node:fs";
+import path from "node:path";
+
 import { atomicWriteFile } from "../atomic-write";
 import * as secrets from "../secrets";
 import { vaultConfigDir } from "../vault-paths";
@@ -15,6 +31,7 @@ import * as settingsStore from "../settings-store";
 
 const SECRETS_DIR = "secrets";
 const AI_SECRET_FILE_PREFIX = "ai_";
+const STELA_PROVIDER_ID = "stela-openai-compatible";
 
 interface AiSecretShard {
   apiKey?: string;
@@ -106,6 +123,95 @@ export async function getProviderStatus(
   };
 }
 
+/** In-memory CredentialStore that serves one Stela-decrypted API key. */
+export function createStelaCredentialStore(apiKey: string): CredentialStore {
+  let credential: Credential | undefined = apiKey
+    ? { type: "api_key", key: apiKey }
+    : undefined;
+  return {
+    async read() {
+      return credential;
+    },
+    async modify(_providerId, fn) {
+      credential = await fn(credential);
+      return credential;
+    },
+    async delete() {
+      credential = undefined;
+    },
+  };
+}
+
+function createStelaProvider() {
+  return createProvider<"openai-completions">({
+    id: STELA_PROVIDER_ID,
+    name: "Stela OpenAI-compatible",
+    auth: {
+      apiKey: {
+        name: "Stela API key",
+        resolve: async ({ credential }) => {
+          if (!credential?.key) return undefined;
+          return {
+            auth: { apiKey: credential.key },
+            source: "stela-safeStorage",
+          };
+        },
+      },
+    },
+    models: [],
+    api: openAICompletionsApi(),
+  });
+}
+
+export function buildOpenAiCompatibleModel(settings: AiSettings): Model<"openai-completions"> {
+  const contextWindow = settings.contextWindow || 128_000;
+  return {
+    id: settings.model,
+    name: settings.model,
+    api: "openai-completions",
+    provider: STELA_PROVIDER_ID,
+    baseUrl: settings.baseUrl.replace(/\/+$/, ""),
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow,
+    maxTokens: Math.min(16_384, Math.max(1_024, Math.floor(contextWindow / 8))),
+    compat: {
+      supportsDeveloperRole: false,
+      supportsReasoningEffort: false,
+    },
+  };
+}
+
+/** Shared Models + Model for one-shot actions and AgentHarness. */
+export function createStelaTransport(settings: AiSettings, apiKey: string): {
+  models: Models;
+  model: Model<"openai-completions">;
+} {
+  if (settings.providerMode === "disabled") {
+    throw new AppError("ai_disabled", "AI provider is disabled.");
+  }
+  if (!apiKey) {
+    throw new AppError("ai_missing_api_key", "AI provider API key is not configured.");
+  }
+  if (!settings.model.trim()) {
+    throw new AppError("ai_missing_model", "AI provider model is not configured.");
+  }
+  if (!settings.baseUrl.trim()) {
+    throw new AppError("ai_missing_base_url", "AI provider base URL is not configured.");
+  }
+  const models = createModels({ credentials: createStelaCredentialStore(apiKey) });
+  models.setProvider(createStelaProvider());
+  return { models, model: buildOpenAiCompatibleModel(settings) };
+}
+
+function assistantText(message: { content: Array<{ type: string; text?: string }> }): string {
+  return message.content
+    .filter((block): block is { type: "text"; text: string } => block.type === "text" && typeof block.text === "string")
+    .map((block) => block.text)
+    .join("");
+}
+
 export async function callChatCompletions({
   settings,
   apiKey,
@@ -117,139 +223,30 @@ export async function callChatCompletions({
   system: string;
   user: string;
 }): Promise<string> {
-  if (settings.providerMode === "disabled") {
-    throw new AppError("ai_disabled", "AI provider is disabled.");
-  }
-  if (!apiKey) {
-    throw new AppError("ai_missing_api_key", "AI provider API key is not configured.");
-  }
-  const baseUrl = settings.baseUrl.replace(/\/+$/, "");
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: settings.model,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    }),
+  const { models, model } = createStelaTransport(settings, apiKey);
+  const message = await models.completeSimple(model, {
+    systemPrompt: system,
+    messages: [
+      {
+        role: "user",
+        content: user,
+        timestamp: Date.now(),
+      },
+    ],
   });
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
+
+  if (message.stopReason === "aborted") {
+    throw new AppError("ai_aborted", message.errorMessage ?? "AI request was aborted.");
+  }
+  if (message.stopReason === "error") {
     throw new AppError(
       "ai_provider_failed",
-      `AI provider returned ${response.status}: ${body.slice(0, 500)}`,
+      message.errorMessage ?? "AI provider returned an error.",
     );
   }
-  const data = (await response.json()) as {
-    choices?: { message?: { content?: string } }[];
-  };
-  const content = data.choices?.[0]?.message?.content;
+  const content = assistantText(message);
   if (!content) {
     throw new AppError("ai_empty_response", "AI provider returned an empty response.");
   }
   return content;
 }
-
-// ---------- Agent (native function-calling) ----------
-
-export type AgentChatRole = "system" | "user" | "assistant" | "tool";
-
-/** OpenAI-compatible chat message, extended with tool-calling fields. */
-export interface AgentChatMessage {
-  role: AgentChatRole;
-  /** Assistant messages with only tool_calls may have empty/null content. */
-  content?: string | null;
-  /** Present on assistant messages that requested tool calls. */
-  tool_calls?: AgentToolCall[];
-  /** Present on role:"tool" messages, echoing which call this answers. */
-  tool_call_id?: string;
-  /** Present on role:"tool" messages (OpenAI convention: tool result needs the fn name too). */
-  name?: string;
-}
-
-export interface AgentToolCall {
-  id: string;
-  type: "function";
-  function: { name: string; arguments: string };
-}
-
-/** JSON-Schema tool definition passed as `tools` in the chat completions request. */
-export interface AgentToolDef {
-  type: "function";
-  function: {
-    name: string;
-    description: string;
-    parameters: unknown;
-  };
-}
-
-export interface AgentTurnResult {
-  content: string | null;
-  toolCalls: AgentToolCall[];
-}
-
-/**
- * 一轮 harness 循环的模型调用：带 `tools` + `tool_choice:"auto"`，让模型自己
- * 决定要不要调工具。返回值把 `tool_calls` 透传给调用方处理，不在这里解析。
- */
-export async function callAgentTurn({
-  settings,
-  apiKey,
-  messages,
-  tools,
-  signal,
-}: {
-  settings: AiSettings;
-  apiKey: string;
-  messages: AgentChatMessage[];
-  tools: AgentToolDef[];
-  signal?: AbortSignal;
-}): Promise<AgentTurnResult> {
-  if (settings.providerMode === "disabled") {
-    throw new AppError("ai_disabled", "AI provider is disabled.");
-  }
-  if (!apiKey) {
-    throw new AppError("ai_missing_api_key", "AI provider API key is not configured.");
-  }
-  const baseUrl = settings.baseUrl.replace(/\/+$/, "");
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: settings.model,
-      messages,
-      tools,
-      tool_choice: "auto",
-    }),
-    signal,
-  });
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new AppError(
-      "ai_provider_failed",
-      `AI provider returned ${response.status}: ${body.slice(0, 500)}`,
-    );
-  }
-  const data = (await response.json()) as {
-    choices?: {
-      message?: { content?: string | null; tool_calls?: AgentToolCall[] };
-    }[];
-  };
-  const message = data.choices?.[0]?.message;
-  if (!message) {
-    throw new AppError("ai_empty_response", "AI provider returned an empty response.");
-  }
-  return {
-    content: message.content ?? null,
-    toolCalls: message.tool_calls ?? [],
-  };
-}
-

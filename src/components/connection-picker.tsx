@@ -66,12 +66,12 @@ export function ConnectionPicker({
         : value!;
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} className="relative inline-flex h-6 items-center leading-none">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          "inline-flex h-6 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors",
+          "inline-flex h-6 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium leading-none transition-colors",
           "hover:bg-accent hover:text-accent-foreground",
           status === "ok" &&
             "border-border bg-background text-foreground",

@@ -111,6 +111,61 @@ function mergePromptValue(draft: AgentDraft, value: AiPromptInputDraft): AgentDr
   };
 }
 
+/** Compact SVG ring for approximate context-window usage. */
+function ContextUsageRing({
+  usedTokens,
+  contextWindow,
+  estimated,
+}: {
+  usedTokens: number;
+  contextWindow: number;
+  estimated: boolean;
+}) {
+  const percent = Math.min(100, Math.max(0, Math.round((usedTokens / contextWindow) * 100)));
+  const size = 16;
+  const stroke = 2;
+  const radius = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference * (1 - percent / 100);
+  const tone =
+    percent >= 90 ? "text-destructive" : percent >= 70 ? "text-amber-500" : "text-primary";
+
+  return (
+    <span
+      className={cn("relative flex h-4 w-4 flex-none items-center justify-center", tone)}
+      title={
+        estimated
+          ? `Context ~${percent}% · ${usedTokens} / ${contextWindow} (estimated)`
+          : `Context ~${percent}% · ${usedTokens} / ${contextWindow}`
+      }
+      aria-label={`Context ~${percent}%`}
+    >
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90" aria-hidden>
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={stroke}
+          className="opacity-20"
+        />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={stroke}
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+        />
+      </svg>
+    </span>
+  );
+}
+
 /**
  * 应用级全局 Agent 面板主体，嵌在 [AgentSidebar](../../layout/AgentSidebar.tsx)
  * 里——一条独立于左侧文件树 / 文档目录的常驻右侧栏，视觉上用边框跟文档区分开，
@@ -126,6 +181,8 @@ export function AgentPanel() {
   const draft = activeTab.draft;
   const resetToken = activeTab.resetToken;
   const connectionName = activeTab.connectionName;
+  const contextUsage = activeTab.contextUsage;
+  const compacting = activeTab.compacting;
   const vaultPath = useWorkspace((s) => s.vaultPath);
   const focusToken = useLayout((s) => s.agentFocusToken);
   const switchTab = useAgentPanel((s) => s.switchTab);
@@ -309,15 +366,28 @@ export function AgentPanel() {
         </button>
       </div>
 
-      <div className="flex h-8 flex-none items-center gap-2 border-b border-border bg-muted/20 px-2.5">
+      <div className="flex h-8 flex-none items-center gap-2 border-b border-border bg-muted/20 px-3.5">
         <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-[12px] font-medium text-muted-foreground">
           <Bot className="h-3.5 w-3.5 flex-none text-primary" />
           {t("agent.panel.title")}
         </span>
+        {contextUsage && contextUsage.contextWindow > 0 ? (
+          <ContextUsageRing
+            usedTokens={contextUsage.usedTokens}
+            contextWindow={contextUsage.contextWindow}
+            estimated={contextUsage.estimated}
+          />
+        ) : null}
+        {compacting ? (
+          <span className="flex flex-none items-center gap-1 text-[11px] text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            {t("agent.panel.compacting")}
+          </span>
+        ) : null}
         <ConnectionPicker value={connectionName} onChange={setConnectionName} />
       </div>
 
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-2.5 overflow-auto px-2.5 py-2.5">
+      <div ref={scrollRef} className="min-h-0 flex-1 space-y-2.5 overflow-auto px-3.5 py-2.5">
         {timeline.length === 0 ? (
           <div className="text-[12px] text-muted-foreground">{t("agent.panel.empty")}</div>
         ) : (
@@ -333,7 +403,7 @@ export function AgentPanel() {
         ) : null}
       </div>
           
-      <div className="border-t border-border bg-muted/20 px-2 py-2">
+      <div className="border-t border-border bg-muted/20 px-2.5 py-2">
       <AttachmentChips attachments={draft.attachments} onRemove={removeAttachment} />
         <AiPromptInput
           key={activeTabId}

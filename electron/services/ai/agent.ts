@@ -1,14 +1,21 @@
 /**
- * Harness agent 循环：模型坐驾驶位，我们只提供「工具 + 循环 + 护栏 + trace」。
+ * Harness agent via `@earendil-works/pi-agent-core` AgentHarness.
  *
- * 一轮迭代 = `callAgentTurn`（原生 function-calling）→ 有 `tool_calls` 就逐个
- * dispatch（[agent-tools.ts](./agent-tools.ts)）+ 流式推事件 → 结果回填
- * `role:"tool"` 消息 → 下一轮；无 `tool_calls` 则收尾。
- *
- * 改动类操作（改动 SQL / propose_edit）通过 `requestProposal` 把「等用户
- * 确认」变成一个 Promise：IPC 层收到用户 approve/reject 后调
- * `respondToProposal` resolve 它，循环才能继续。
+ * Keeps Stela IPC event shapes, proposal gates, and in-memory sessions.
+ * Compacts proactively near context budget and once on provider overflow.
  */
+
+import {
+  AgentHarness,
+  DEFAULT_COMPACTION_SETTINGS,
+  InMemorySessionStorage,
+  Session,
+  estimateContextTokens,
+  shouldCompact,
+  type AgentMessage,
+} from "@earendil-works/pi-agent-core";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { isContextOverflow, type AssistantMessage } from "@earendil-works/pi-ai";
 
 import type {
   AgentEvent,
@@ -22,16 +29,14 @@ import * as connectionsStore from "../connections-store";
 import * as connectorRegistry from "../connectors/registry";
 import { getLogger } from "../logger";
 import * as settingsStore from "../settings-store";
-import {
-  AGENT_TOOL_DEFS,
-  dispatchTool,
-  type AgentToolContext,
-  type ProposalRequest,
-} from "./agent-tools";
-import { callAgentTurn, loadApiKey, type AgentChatMessage } from "./provider";
+import { createAgentTools, type ProposalRequest } from "./agent-tools";
+import { createStelaTransport, loadApiKey } from "./provider";
 
 const log = getLogger("ai.agent");
 const AGENT_ATTACHMENT_CHAR_BUDGET = 30_000;
+const TOOL_RESULT_SUMMARY_CHARS = 12_000;
+const OVERFLOW_CONTINUE_PROMPT =
+  "The previous request exceeded the model context window. Continue from the compacted history and finish the user's last request.";
 
 type ProposalResolver = (approve: boolean) => void;
 
@@ -39,15 +44,13 @@ type ProposalResolver = (approve: boolean) => void;
 const activeProposals = new Map<string, Map<string, ProposalResolver>>();
 
 /**
- * sessionId -> 该会话累积的对话消息（含 system/user/assistant/tool）。
- * 支撑多轮对话：同一 sessionId 的下一次 run 会在这份历史后面追加新的
- * user 消息继续对话，而不是每次都从只有 system+user 的空白开始。
+ * sessionId -> pi Session (InMemorySessionStorage).
  *
  * ponytail: 存在内存里，随 app 生命周期增长，没有上限/持久化；单机桌面
  * 应用会话数量小，重启即清空。上限=长时间不重启会积累多个旧会话占内存；
  * 升级路径=加个数上限的 LRU，或在前端"新建对话"时清掉旧的 sessionId。
  */
-const sessions = new Map<string, AgentChatMessage[]>();
+const sessions = new Map<string, Session>();
 
 /** IPC 入口：用户在前端 approve/reject 一个 proposal 时调用。找不到（已超时/run 已结束）返回 false。 */
 export function respondToProposal(response: AgentProposalResponse): boolean {
@@ -170,8 +173,39 @@ function makeRequestProposal(
   };
 }
 
-const TOOL_RESULT_LOG_CHARS = 500;
-const TOOL_RESULT_SUMMARY_CHARS = 12_000;
+function assistantText(message: AssistantMessage | AgentMessage): string {
+  if (!("content" in message) || typeof message.content === "string") {
+    return typeof message.content === "string" ? message.content : "";
+  }
+  return message.content
+    .filter((block): block is { type: "text"; text: string } => block.type === "text")
+    .map((block) => block.text)
+    .join("");
+}
+
+function toolResultSummary(result: unknown): string {
+  if (!result || typeof result !== "object") return String(result ?? "");
+  const record = result as { details?: { summary?: unknown }; content?: Array<{ type?: string; text?: string }> };
+  if (typeof record.details?.summary === "string") {
+    return record.details.summary.slice(0, TOOL_RESULT_SUMMARY_CHARS);
+  }
+  const text = (record.content ?? [])
+    .filter((block) => block.type === "text" && typeof block.text === "string")
+    .map((block) => block.text!)
+    .join("");
+  return text.slice(0, TOOL_RESULT_SUMMARY_CHARS);
+}
+
+function getOrCreateSession(sessionId: string | undefined): Session {
+  if (sessionId) {
+    const existing = sessions.get(sessionId);
+    if (existing) return existing;
+    const created = new Session(new InMemorySessionStorage());
+    sessions.set(sessionId, created);
+    return created;
+  }
+  return new Session(new InMemorySessionStorage());
+}
 
 export interface RunAgentOptions {
   vaultPath: string;
@@ -188,6 +222,12 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
   activeProposals.set(runId, pending);
   onEvent({ type: "started", runId });
 
+  let harness: AgentHarness | null = null;
+  const onAbort = () => {
+    void harness?.abort();
+  };
+  signal.addEventListener("abort", onAbort);
+
   try {
     const settings = await settingsStore.loadAppSettings(vaultPath);
     if (settings.ai.providerMode === "disabled") {
@@ -196,100 +236,150 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
     }
     const apiKey = await loadApiKey(vaultPath, slug);
     const { connection, dialect } = await resolveConnection(vaultPath, slug, request.connectionName);
+    const { models, model } = createStelaTransport(settings.ai, apiKey);
+    const contextWindow = model.contextWindow;
+    const session = getOrCreateSession(request.sessionId ?? undefined);
 
-    const toolCtx: Omit<AgentToolContext, "requestProposal"> = {
-      vaultPath,
-      connectionName: request.connectionName ?? null,
-      connection,
-      aiSettings: settings.ai,
-      connector: {
-        listKinds: connectorRegistry.listKinds,
-        listDatabases: connectorRegistry.listDatabases,
-        listTables: connectorRegistry.listTables,
-        execute: connectorRegistry.execute,
-      },
+    const emitUsage = async (estimated: boolean) => {
+      const context = await session.buildContext();
+      const estimate = estimateContextTokens(context.messages);
+      onEvent({
+        type: "context_usage",
+        runId,
+        usedTokens: estimate.tokens,
+        contextWindow,
+        estimated,
+      });
     };
 
-    const existing = request.sessionId ? sessions.get(request.sessionId) : undefined;
-    const messages: AgentChatMessage[] =
-      existing ?? [{ role: "system", content: buildSystemPrompt(request, connection, dialect) }];
-    if (!existing && request.sessionId) sessions.set(request.sessionId, messages);
-    messages.push({ role: "user", content: buildUserContent(request) });
+    const compactOnce = async () => {
+      if (!harness) return;
+      onEvent({ type: "compaction", runId, phase: "started" });
+      await harness.compact();
+      onEvent({ type: "compaction", runId, phase: "completed" });
+      await emitUsage(true);
+    };
 
-    let finished = false;
+    harness = new AgentHarness({
+      env: new NodeExecutionEnv({ cwd: vaultPath }),
+      session,
+      models,
+      model,
+      thinkingLevel: "off",
+      systemPrompt: buildSystemPrompt(request, connection, dialect),
+      tools: createAgentTools({
+        ctx: {
+          vaultPath,
+          connectionName: request.connectionName ?? null,
+          connection,
+          aiSettings: settings.ai,
+          connector: {
+            listKinds: connectorRegistry.listKinds,
+            listDatabases: connectorRegistry.listDatabases,
+            listTables: connectorRegistry.listTables,
+            execute: connectorRegistry.execute,
+          },
+        },
+        requestProposal: (toolCallId, proposal) =>
+          makeRequestProposal(runId, toolCallId, onEvent, pending, signal)(proposal),
+      }),
+    });
 
-    for (;;) {
-      if (signal.aborted) {
-        onEvent({ type: "cancelled", runId });
-        finished = true;
-        break;
-      }
-
-      const turn = await callAgentTurn({
-        settings: settings.ai,
-        apiKey,
-        messages,
-        tools: AGENT_TOOL_DEFS,
-        signal,
-      });
-
-      if (turn.toolCalls.length === 0) {
-        onEvent({ type: "final", runId, content: turn.content ?? "" });
-        finished = true;
-        break;
-      }
-
-      if (turn.content) {
-        onEvent({ type: "assistant_message", runId, content: turn.content });
-      }
-      messages.push({ role: "assistant", content: turn.content ?? null, tool_calls: turn.toolCalls });
-
-      for (const call of turn.toolCalls) {
-        if (signal.aborted) {
-          onEvent({ type: "cancelled", runId });
-          finished = true;
-          break;
+    const unsubscribe = harness.subscribe((event) => {
+      if (event.type === "message_end" && event.message.role === "assistant") {
+        const message = event.message as AssistantMessage;
+        const hasTools = message.content.some((block) => block.type === "toolCall");
+        const text = assistantText(message);
+        if (hasTools && text) {
+          onEvent({ type: "assistant_message", runId, content: text });
         }
-        let parsedArgs: unknown = {};
-        try {
-          parsedArgs = JSON.parse(call.function.arguments);
-        } catch {
-          // 让工具自己处理参数缺失/非法；这里只是给 timeline 一个可读的展示值。
-        }
+        return;
+      }
+      if (event.type === "tool_execution_start") {
         onEvent({
           type: "tool_call",
           runId,
-          call: { callId: call.id, name: call.function.name, arguments: parsedArgs },
+          call: {
+            callId: event.toolCallId,
+            name: event.toolName,
+            arguments: event.args ?? {},
+          },
         });
-
-        const ctx: AgentToolContext = {
-          ...toolCtx,
-          requestProposal: makeRequestProposal(runId, call.id, onEvent, pending, signal),
-        };
-        const outcome = await dispatchTool(call.function.name, call.function.arguments, ctx);
-        log.debug("tool result", {
-          runId,
-          tool: call.function.name,
-          ok: outcome.ok,
-          preview: outcome.text.slice(0, TOOL_RESULT_LOG_CHARS),
-        });
+        return;
+      }
+      if (event.type === "tool_execution_end") {
         onEvent({
           type: "tool_result",
           runId,
-          callId: call.id,
-          ok: outcome.ok,
-          summary: outcome.text.slice(0, TOOL_RESULT_SUMMARY_CHARS),
+          callId: event.toolCallId,
+          ok: !event.isError,
+          summary: toolResultSummary(event.result),
         });
-        messages.push({
-          role: "tool",
-          tool_call_id: call.id,
-          name: call.function.name,
-          content: outcome.text,
-        });
+        void emitUsage(true);
       }
-      if (finished) break;
-    }
+    });
 
+    try {
+      await emitUsage(true);
+      const before = await session.buildContext();
+      if (shouldCompact(estimateContextTokens(before.messages).tokens, contextWindow, DEFAULT_COMPACTION_SETTINGS)) {
+        await compactOnce();
+      }
+
+      const userContent = buildUserContent(request);
+      let result = await harness.prompt(userContent);
+      await emitUsage(false);
+
+      if (signal.aborted || result.stopReason === "aborted") {
+        onEvent({ type: "cancelled", runId });
+        return;
+      }
+
+      if (isContextOverflow(result, contextWindow)) {
+        try {
+          await compactOnce();
+          result = await harness.prompt(OVERFLOW_CONTINUE_PROMPT);
+          await emitUsage(false);
+        } catch (err) {
+          if (signal.aborted) {
+            onEvent({ type: "cancelled", runId });
+            return;
+          }
+          onEvent({
+            type: "error",
+            runId,
+            message: err instanceof Error ? err.message : String(err),
+          });
+          return;
+        }
+
+        if (signal.aborted || result.stopReason === "aborted") {
+          onEvent({ type: "cancelled", runId });
+          return;
+        }
+        if (isContextOverflow(result, contextWindow)) {
+          onEvent({
+            type: "error",
+            runId,
+            message: "Context still overflows after compaction.",
+          });
+          return;
+        }
+      }
+
+      if (result.stopReason === "error") {
+        onEvent({
+          type: "error",
+          runId,
+          message: result.errorMessage ?? "Agent run failed.",
+        });
+        return;
+      }
+
+      onEvent({ type: "final", runId, content: assistantText(result) });
+    } finally {
+      unsubscribe();
+    }
   } catch (err) {
     const isAbort = signal.aborted || (err instanceof Error && err.name === "AbortError");
     if (isAbort) {
@@ -299,6 +389,7 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
       onEvent({ type: "error", runId, message: err instanceof Error ? err.message : String(err) });
     }
   } finally {
+    signal.removeEventListener("abort", onAbort);
     activeProposals.delete(runId);
   }
 }

@@ -91,6 +91,13 @@ const partialSettingsSchema = z
         hasApiKey: z.boolean(),
         sendResultSamples: z.boolean(),
         maxSampleRows: z.number().int().min(0).max(100),
+        contextWindow: z.union([
+          z.literal(64_000),
+          z.literal(128_000),
+          z.literal(200_000),
+          z.literal(256_000),
+          z.literal(1_000_000),
+        ]),
         agentMaxIterations: z.number().int().min(1).max(10_000),
         agentWallClockMs: z.number().int().min(5_000).max(600_000),
         agentAllowMutations: z.boolean(),
@@ -298,6 +305,15 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
           model: z.string().max(256).optional(),
           sendResultSamples: z.boolean().optional(),
           maxSampleRows: z.number().int().min(0).max(100).optional(),
+          contextWindow: z
+            .union([
+              z.literal(64_000),
+              z.literal(128_000),
+              z.literal(200_000),
+              z.literal(256_000),
+              z.literal(1_000_000),
+            ])
+            .optional(),
           agentMaxIterations: z.number().int().min(1).max(10_000).optional(),
           agentWallClockMs: z.number().int().min(5_000).max(600_000).optional(),
           agentAllowMutations: z.boolean().optional(),

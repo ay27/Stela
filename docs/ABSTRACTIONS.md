@@ -232,13 +232,15 @@ Vault-scoped settings persisted to `{vault}/.stela/settings.json`.
 interface AppSettings {
   vault: VaultSettings;           // recentFiles (→ recent-files.local.json)
   appearance: AppearanceSettings; // theme: light | dark | system
-  execution: ExecutionSettings;   // onError, maxRows
+  execution: ExecutionSettings;   // onError, maxRows (result-row cap; SQL unchanged)
   persistence: PersistenceSettings; // cleanupMonths
   ui: UISettings;                 // defaultPageSize, editorWidth
   git: GitSettings;               // enabled, autoCommit, autoPush, autoPull
   ai: AiSettings;                 // provider, model, agent mutation policy
 }
 ```
+
+`execution.maxRows` limits how many query rows Stela saves and displays after a connector returns. It does not rewrite user SQL or append dialect-specific `LIMIT` clauses; `0` means unlimited.
 
 Machine-scoped cache (`{userData}/stela-cache.json`):
 
@@ -332,13 +334,14 @@ interface AiSettings {
   hasApiKey: boolean;              // never the raw key
   sendResultSamples: boolean;
   maxSampleRows: number;
+  contextWindow: 64_000 | 128_000 | 200_000 | 256_000 | 1_000_000; // compaction budget
   agentMaxIterations: number;      // legacy compatibility; ignored by harness agent
   agentWallClockMs: number;        // legacy compatibility; ignored by harness agent
   agentAllowMutations: boolean;    // still requires per-call user approve
 }
 ```
 
-API key shard: `{vault}/.stela/secrets/ai_{deviceSlug}.json` (safeStorage-wrapped).
+API key shard: `{vault}/.stela/secrets/ai_{deviceSlug}.json` (safeStorage-wrapped). Transport: `@earendil-works/pi-ai` custom OpenAI-compatible provider; agent loop: `AgentHarness` ([ADR-0018](./adr/0018-pi-ai-agent-harness.md)).
 
 ### Action complete
 
@@ -375,7 +378,7 @@ interface AiCompleteRequest {
 }
 ```
 
-Pipeline: enrich schema → cap sizes → optional samples → `redactForPrompt` → action prompt → chat completions. See [ADR-0012](./adr/0012-dual-ai-surfaces-actions-and-agent.md), [ADR-0014](./adr/0014-ai-context-redaction-and-schema-enrichment.md).
+Pipeline: enrich schema → cap sizes → optional samples → `redactForPrompt` → action prompt → pi-ai `completeSimple`. See [ADR-0018](./adr/0018-pi-ai-agent-harness.md), [ADR-0014](./adr/0014-ai-context-redaction-and-schema-enrichment.md).
 
 ### SQL query parse (NL → filter)
 
@@ -423,6 +426,8 @@ type AgentEvent =
   | { type: "tool_call"; runId: string; call: AgentToolCallInfo }
   | { type: "tool_result"; runId: string; callId: string; ok: boolean; summary: string }
   | { type: "proposal"; runId: string; callId: string; kind: "edit_note" | "mutation_sql"; payload: AgentProposalPayload }
+  | { type: "context_usage"; runId: string; usedTokens: number; contextWindow: number; estimated: boolean }
+  | { type: "compaction"; runId: string; phase: "started" | "completed" }
   | { type: "final"; runId: string; content: string }
   | { type: "error"; runId: string; message: string }
   | { type: "cancelled"; runId: string };
@@ -433,6 +438,8 @@ Safety ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md)):
 - `sql-guard` classifies read-only vs mutation vs multi-statement
 - Mutations + `propose_edit` block on `ai:agent-respond-proposal`
 - Runs continue until model completion, error, or explicit user cancellation ([ADR-0017](./adr/0017-user-cancelled-agent-runs.md))
+- Tools are sequential `AgentTool`s; NodeExecutionEnv is harness cwd only (not exposed as model tools)
+- Compaction uses `ai.contextWindow` + one overflow recovery ([ADR-0018](./adr/0018-pi-ai-agent-harness.md))
 - Note references are paths only; the agent should call `read_note` before relying on note contents
 - Selection / RunSQL attachments are bounded and included only on the user turn that added them
 

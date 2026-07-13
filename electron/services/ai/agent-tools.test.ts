@@ -14,6 +14,7 @@ const AI_SETTINGS = {
   hasApiKey: true,
   sendResultSamples: true,
   maxSampleRows: 20,
+  contextWindow: 128_000,
   agentMaxIterations: 12,
   agentWallClockMs: 90_000,
   agentAllowMutations: false,
