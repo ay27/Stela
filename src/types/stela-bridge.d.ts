@@ -282,6 +282,12 @@ interface StelaBridge {
   app: {
     rendererReady: () => Promise<void>;
   };
+  window: {
+    syncTitleBarTheme: (
+      dark: boolean,
+      mode: import("@/contracts/settings").ThemeMode,
+    ) => Promise<void>;
+  };
   updater: {
     getStatus: () => Promise<UpdaterStatus>;
     checkForUpdates: () => Promise<UpdaterStatus>;

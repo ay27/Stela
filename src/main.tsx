@@ -8,7 +8,8 @@ if (!root) throw new Error("#root not found");
 
 // 给 <html> 标记平台，用于 frameless 窗口下条件化 CSS：
 //   - mac：Sidebar header 给红绿灯留 pl-[78px]
-//   - win：TabBar 右侧给 titleBarOverlay (~138px) 留出 no-drag 安全区
+//   - win：独立顶栏 .stela-win-titlebar 承接 titleBarOverlay
+//   - linux：TabBar 右侧仍留 overlay 安全区
 // 在 IDE 内是 webkit-based，navigator.platform 在 Electron 中可靠。
 const ua = navigator.userAgent || "";
 const platform =

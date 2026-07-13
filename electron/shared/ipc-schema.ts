@@ -567,6 +567,11 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
 
   [IPC.APP_RENDERER_READY]: z.object({}).strict(),
 
+  [IPC.WINDOW_SYNC_TITLEBAR]: z.object({
+    dark: z.boolean(),
+    mode: themeModeSchema,
+  }),
+
   [IPC.UPDATER_GET_STATUS]: z.object({}).strict(),
   [IPC.UPDATER_CHECK_FOR_UPDATES]: z.object({}).strict(),
   [IPC.UPDATER_DOWNLOAD_UPDATE]: z.object({}).strict(),

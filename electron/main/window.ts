@@ -16,6 +16,11 @@
 import { BrowserWindow, app, nativeTheme } from "electron";
 import path from "node:path";
 
+import {
+  TITLEBAR_OVERLAY_COLOR,
+  titleBarSymbolColor,
+} from "./titlebar-overlay";
+
 /**
  * electron-vite 的 dev/prod 约定：
  *   - dev 模式：ELECTRON_RENDERER_URL 指向 dev server
@@ -42,9 +47,9 @@ export function createMainWindow(opts: CreateMainWindowOptions): BrowserWindow {
     //   - macOS：hidden + 自定义 trafficLightPosition，让红绿灯落进 Sidebar
     //     顶部 vault header（pl-[78px] 给它让位）。"hidden" 比 "hiddenInset"
     //     更可控（后者只在 inset=true 时偏移红绿灯，且 y 偏移固定）。
-    //   - Windows/Linux：hidden + titleBarOverlay，让原生窗口控制按钮叠加
-    //     在右上角；renderer 端给 TabBar 末尾保留 ~138px 安全区避免被遮。
-    //     transparent 背景让 overlay 完全融进 TabBar 的 muted/60 底色。
+    //   - Windows：hidden + titleBarOverlay 叠在 renderer 自绘的顶栏
+    //    （WindowsTitleBar）右上角；TabBar 不再避让。
+    //   - Linux：overlay 仍叠 TabBar 右上角，renderer 保留 ~138px 安全区。
     titleBarStyle: "hidden",
     ...(IS_MAC
       ? {
@@ -54,8 +59,8 @@ export function createMainWindow(opts: CreateMainWindowOptions): BrowserWindow {
         }
       : {
           titleBarOverlay: {
-            color: "#00000000",
-            symbolColor: nativeTheme.shouldUseDarkColors ? "#e4e4e7" : "#3f3f46",
+            color: TITLEBAR_OVERLAY_COLOR,
+            symbolColor: titleBarSymbolColor(nativeTheme.shouldUseDarkColors),
             height: 36,
           },
         }),
@@ -70,27 +75,6 @@ export function createMainWindow(opts: CreateMainWindowOptions): BrowserWindow {
       navigateOnDragDrop: false,
     },
   });
-
-  // 主题切换时，同步刷新 Win/Linux 上 overlay 按钮的图标颜色，否则切到
-  // dark 后按钮变深灰几乎看不见。macOS 红绿灯系统自管，不受此影响。
-  if (!IS_MAC) {
-    const applyOverlayTheme = () => {
-      if (win.isDestroyed()) return;
-      try {
-        win.setTitleBarOverlay({
-          color: "#00000000",
-          symbolColor: nativeTheme.shouldUseDarkColors ? "#e4e4e7" : "#3f3f46",
-          height: 36,
-        });
-      } catch {
-        /* 某些 Linux 桌面不支持，忽略 */
-      }
-    };
-    nativeTheme.on("updated", applyOverlayTheme);
-    win.on("closed", () => {
-      nativeTheme.off("updated", applyOverlayTheme);
-    });
-  }
 
   // 阻止默认菜单的 New Window 等动作意外打开远程内容
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));

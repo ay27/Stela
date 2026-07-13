@@ -29,8 +29,7 @@ export function Sidebar() {
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
       {/*
-       * SidebarTopChrome：frameless 拖拽区 + macOS 红绿灯安全区。
-       * 导航按钮本身 no-drag，条带其余空白仍可拖窗。
+       * SidebarTopChrome：frameless 拖拽区；mac 另留红绿灯安全区。
        */}
       <div className="stela-app-drag stela-titlebar-safe-left flex h-9 flex-none items-center border-b border-border">
         <TitlebarNavButtons />

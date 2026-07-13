@@ -73,6 +73,7 @@ import type {
   SqlIndexFilter,
   SqlIndexHit,
   SqlIndexStatus,
+  ThemeMode,
 } from "@shared/types";
 
 function call<T>(channel: IpcChannel, args: object = {}): Promise<T> {
@@ -391,6 +392,12 @@ const stela = {
 
   app: {
     rendererReady: () => call<void>(IPC.APP_RENDERER_READY, {}),
+  },
+
+  window: {
+    /** Win/Linux：把系统标题栏按钮符号色同步到 Stela 当前生效主题 */
+    syncTitleBarTheme: (dark: boolean, mode: ThemeMode) =>
+      call<void>(IPC.WINDOW_SYNC_TITLEBAR, { dark, mode }),
   },
 
   updater: {

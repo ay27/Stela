@@ -66,9 +66,8 @@
     "Microsoft YaHei",
     sans-serif;
   --crepe-font-title: var(--crepe-font-default);
-  --crepe-font-code:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    "Courier New", monospace;
+  /* Crepe 主题 token；栈与 :root --font-mono 一致，勿在此重复维护 */
+  --crepe-font-code: var(--font-mono);
 }
 
 /* 外壳容器（承担布局/滚动）。
@@ -259,7 +258,7 @@
   color: hsl(var(--foreground));
   background: hsl(var(--muted));
   border: 1px solid hsl(var(--border));
-  font-family: var(--crepe-font-code);
+  font-family: var(--font-mono);
   font-size: 12.5px;
   padding: 0 4px;
   border-radius: calc(var(--radius) - 2px);
@@ -726,7 +725,7 @@
 }
 
 .stela-cb__id {
-  font-family: var(--crepe-font-code, ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 10.5px;
   padding: 1px 6px;
   border-radius: 4px;
@@ -796,7 +795,7 @@
 
 .stela-cb__run .stela-cb__run-kbd {
   margin-left: 6px;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
   font-size: 10px;
   opacity: 0.6;
 }
@@ -853,13 +852,23 @@
 }
 
 .stela-cb__format .stela-cb__format-kbd {
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
   font-size: 10px;
   opacity: 0.55;
 }
 
 .stela-cb__cm {
   background: hsl(var(--background));
+  font-family: var(--font-mono);
+}
+
+/* CM 主题字体偶发被 .milkdown 正文字体覆盖；runsql / mermaid 源码区强制 mono */
+.stela-cb__cm .cm-editor,
+.stela-cb__cm .cm-scroller,
+.stela-cb__cm .cm-content,
+.stela-cb__cm .cm-line,
+.stela-cb__cm .cm-gutters {
+  font-family: var(--font-mono);
 }
 
 .milkdown .stela-cb__ai,
@@ -885,7 +894,7 @@
 }
 
 .stela-cb__ai .stela-cb__ai-kbd {
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
   font-size: 10px;
   opacity: 0.55;
 }
@@ -1123,7 +1132,7 @@
   border-radius: 4px;
   background: hsl(var(--muted) / 0.55);
   padding: 0 4px;
-  font-family: var(--crepe-font-code);
+  font-family: var(--font-mono);
   font-size: 0.92em;
 }
 
@@ -1133,7 +1142,7 @@
   border-radius: calc(var(--radius) - 2px);
   background: hsl(var(--muted) / 0.65);
   padding: 8px;
-  font-family: var(--crepe-font-code);
+  font-family: var(--font-mono);
   font-size: 11.5px;
 }
 
@@ -1230,7 +1239,7 @@
   min-height: 18px;
   background: hsl(var(--destructive) / 0.08);
   color: hsl(var(--destructive));
-  font-family: var(--crepe-font-code);
+  font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.45;
   white-space: pre;
@@ -1312,7 +1321,7 @@
 .stela-cb__mermaid-error {
   width: 100%;
   font-size: 11.5px;
-  font-family: var(--crepe-font-code, ui-monospace, monospace);
+  font-family: var(--font-mono);
   white-space: pre-wrap;
   color: hsl(var(--destructive-foreground, 0 0% 98%));
   background: hsl(var(--destructive) / 0.85);

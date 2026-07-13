@@ -148,6 +148,9 @@ export const IPC = {
   // App lifecycle (renderer 启动后回报，方便 main 决定窗口动作)
   APP_RENDERER_READY: "app:renderer-ready",
 
+  /** Win/Linux：同步 titleBarOverlay 按钮色到 Stela 生效主题 */
+  WINDOW_SYNC_TITLEBAR: "window:sync-titlebar",
+
   // Auto update（第一版仅 macOS；manual check + explicit download/install）
   UPDATER_GET_STATUS: "updater:get-status",
   UPDATER_CHECK_FOR_UPDATES: "updater:check-for-updates",

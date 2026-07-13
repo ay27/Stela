@@ -515,27 +515,24 @@ export class CodeBlockNodeView implements NodeView {
       // 桥接（PM Decoration 在 NodeView 接管的 code_block 内无 DOM 可挂，必须走
       // CM 自家的 Decoration）。
       cmSearchHighlightExtension(),
-      // Stela 嵌入式微调：仅覆盖 vscode 主题里"在 markdown 文档内部不合适"的几个
-      // 字段，颜色 / 选区 / cursor / gutter / 字体族 等都交给 vscode 主题
-      // （JetBrains Mono, Consolas, monospace —— 与 vscode 一致，看 SQL 关键字也清楚）。
-      //
-      //   - fontSize 12px：vscode 主题默认 14px 在嵌入式 markdown 块里偏大；这里
-      //     与 stela inline code（12.5px）持平，既不抢戏又能看清 syntax 颜色
-      //   - line-height 1.45：覆盖 fsegurai 的 1.6，行间距更紧凑
-      //   - .cm-content padding：让光标不贴顶
-      //   - 不动 gutter：行号字号 / 行高交给 vscode 主题，原本就合适
-      //   - 不动 background：默认就用 vscode 主题色（编辑器内部底色明显区别于
-      //     正文 → IDE 风格），与 markdown 内联代码块保持视觉一致
+      // 颜色 / 选区 / cursor / gutter 等交给 vscode 主题；字体族在 CMView.theme
+      // 与 .stela-cb__cm CSS 里显式绑 :root --font-mono。
       CMView.theme({
         "&": {
           fontSize: "12.5px",
-        },
-        ".cm-content": {
-          padding: "8px 0",
-          // lineHeight: "1.45",
+          fontFamily: "var(--font-mono)",
         },
         ".cm-scroller": {
           fontSize: "12.5px",
+          fontFamily: "var(--font-mono)",
+        },
+        ".cm-content": {
+          padding: "8px 0",
+          fontFamily: "var(--font-mono)",
+          // lineHeight: "1.45",
+        },
+        ".cm-gutters": {
+          fontFamily: "var(--font-mono)",
         },
       }),
     ];

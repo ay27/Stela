@@ -1,6 +1,6 @@
 {
   "ui": {
-    "editorWidth": "narrow"
+    "editorWidth": "wide"
   },
   "ai": {
     "providerMode": "openai-compatible",
@@ -8,6 +8,13 @@
     "model": "deepseek-v4-flash",
     "hasApiKey": true,
     "sendResultSamples": true,
-    "maxSampleRows": 20
+    "maxSampleRows": 20,
+    "contextWindow": 128000,
+    "agentMaxIterations": 200,
+    "agentWallClockMs": 300000,
+    "agentAllowMutations": true
+  },
+  "appearance": {
+    "theme": "light"
   }
 }

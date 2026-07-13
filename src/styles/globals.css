@@ -34,6 +34,19 @@
     --sidebar-hover: 220 14% 92%;
 
     --radius: 0.5rem;
+
+    /* 全项目唯一 mono 栈：Tailwind font-mono / Milkdown / runsql CM 共用 */
+    --font-mono:
+      ui-monospace,
+      "SF Mono",
+      "Cascadia Mono",
+      "Cascadia Code",
+      Menlo,
+      Monaco,
+      Consolas,
+      "Liberation Mono",
+      "Courier New",
+      monospace;
   }
 
   .dark {
@@ -79,6 +92,11 @@
 
   html {
     scrollbar-gutter: stable;
+  }
+
+  /* Win frameless：stable gutter + w-screen 会在最右侧挤出一条竖向空白 */
+  :root[data-platform="win"] {
+    scrollbar-gutter: auto;
   }
 
   body {
@@ -199,11 +217,9 @@
   }
 
   /*
-   * Windows / Linux 的 titleBarOverlay 占据右上角约 138px×36px。给 TabBar
-   * 末尾留出这块"系统按钮安全区"，避免最后一个 tab、▾ overflow 按钮被
-   * 系统按钮盖住而点不到。macOS 上 0，因为红绿灯在左侧。
+   * Linux 的 titleBarOverlay 仍叠在 TabBar 右上角（≈138px×36px），末尾留
+   * 安全区。Windows 有独立 .stela-win-titlebar 承接 overlay；mac 红绿灯在左。
    */
-  :root[data-platform="win"] .stela-titlebar-safe-right,
   :root[data-platform="linux"] .stela-titlebar-safe-right {
     padding-right: 138px;
   }

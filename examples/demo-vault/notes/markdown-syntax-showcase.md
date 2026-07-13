@@ -2,7 +2,6 @@
 type: stela-data-note
 created_at: "2026-06-28T00:00:00.000Z"
 ---
-
 # Markdown Syntax Showcase
 
 This note demonstrates common Markdown and GitHub Flavored Markdown syntax in
@@ -28,7 +27,7 @@ Code, Obsidian, and other Markdown tools.
 Markdown paragraphs are separated by blank lines. This paragraph contains a
 soft line break in the source, but it should still render as one paragraph.
 
-Add two trailing spaces before a newline to force a line break.  
+Add two trailing spaces before a newline to force a line break.\
 This sentence should start on a new line.
 
 ## Emphasis
@@ -40,9 +39,11 @@ and normal text together in the same paragraph.
 
 Unordered list:
 
-- Notes stay as `.md` files.
-- RunSQL blocks live beside regular prose.
-- Execution history can be synced with Git.
+* Notes stay as `.md` files.
+
+* RunSQL blocks live beside regular prose.
+
+* Execution history can be synced with Git.
 
 Ordered list:
 
@@ -53,27 +54,37 @@ Ordered list:
 
 Nested list:
 
-- Analysis
-  - Assumptions
-  - Queries
-  - Results
-- Publishing
-  - Export Markdown
-  - Commit notes
+* Analysis
+
+  * Assumptions
+
+  * Queries
+
+  * Results
+
+* Publishing
+
+  * Export Markdown
+
+  * Commit notes
 
 Task list:
 
-- [x] Write a Markdown note.
-- [x] Run a query.
-- [ ] Add screenshots to the README.
+* [x] Write a Markdown note.
+
+* [x] Run a query.
+
+* [ ] Add screenshots to the README.
 
 ## Blockquotes
 
 > Good data notes keep context close to the query.
 >
-> - What question are we answering?
-> - Which data source did we use?
-> - When was the result produced?
+> * What question are we answering?
+>
+> * Which data source did we use?
+>
+> * When was the result produced?
 
 ## Links and Wiki Links
 
@@ -81,13 +92,13 @@ External link: [GitHub](https://github.com/)
 
 Relative link: [MySQL demo](./mysql-demo.md)
 
-Wiki-style link: [[notes/mysql-demo]]
+Wiki-style link: \[\[notes/mysql-demo]]
 
 ## Images
 
 Standard Markdown image syntax:
 
-![Stela Markdown demo](../assets/markdown-demo.svg)
+![1.00](../assets/markdown-demo.svg)
 
 ## Code Blocks
 
@@ -125,24 +136,24 @@ ORDER BY status;
 ## Tables
 
 | Feature | Markdown source | Local cache | Git friendly |
-| --- | --- | --- | --- |
-| Notes | `.md` | No | Yes |
-| Results | detail summary | Yes | Optional |
-| History | JSONL | Rebuildable | Yes |
+| ------- | --------------- | ----------- | ------------ |
+| Notes   | `.md`           | No          | Yes          |
+| Results | detail summary  | Yes         | Optional     |
+| History | JSONL           | Rebuildable | Yes          |
 
 Aligned table:
 
-| Column | Type | Description |
-| :--- | :---: | ---: |
-| `id` | integer | Primary key |
-| `status` | text | Task state |
+| Column       |    Type   |  Description |
+| :----------- | :-------: | -----------: |
+| `id`         |  integer  |  Primary key |
+| `status`     |    text   |   Task state |
 | `created_at` | timestamp | Created time |
 
 ## Horizontal Rule
 
 Above the rule.
 
----
+***
 
 Below the rule.
 
@@ -152,14 +163,18 @@ Use a backslash to show literal Markdown markers:
 
 \*not italic\*
 
-\[not a link\](https://example.com)
+\[not a link]\(<https://example.com>)
 
 \`not inline code\`
 
 ## Checklist for Rendering
 
-- Headings should create clear sections.
-- Lists should keep indentation.
-- Tables should stay readable.
-- Code fences should preserve language labels.
-- RunSQL blocks should remain executable in Stela.
+* Headings should create clear sections.
+
+* Lists should keep indentation.
+
+* Tables should stay readable.
+
+* Code fences should preserve language labels.
+
+* RunSQL blocks should remain executable in Stela.

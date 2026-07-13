@@ -67,11 +67,13 @@ import type {
   SqlIndexFilter,
   SqlIndexHit,
   SqlIndexStatus,
+  ThemeMode,
 } from "@shared/types";
 
 import { AppError } from "@shared/errors";
 
 import { registerHandler } from "./ipc-router";
+import { syncTitleBarFromApp } from "./titlebar-overlay";
 import { openExternalIfAllowed } from "./security";
 import { getCurrentVault, setCurrentVault } from "./vault-context";
 import { getLogger } from "../services/logger";
@@ -707,6 +709,13 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
     lifecycleLog.info("renderer ready");
     scheduleStartupUpdateCheck();
   });
+
+  registerHandler<{ dark: boolean; mode: ThemeMode }, void>(
+    IPC.WINDOW_SYNC_TITLEBAR,
+    ({ dark, mode }) => {
+      syncTitleBarFromApp(ctx.getMainWindow(), mode, dark);
+    },
+  );
 
   // ---------- Auto update ----------
   registerHandler<Record<string, never>, UpdaterStatus>(

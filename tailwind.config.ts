@@ -48,7 +48,7 @@ const config: Config = {
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "-apple-system", "sans-serif"],
-        mono: ["SF Mono", "Menlo", "Consolas", "monospace"],
+        mono: ["var(--font-mono)"],
       },
     },
   },

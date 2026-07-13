@@ -12,8 +12,19 @@ import { useEffect } from "react";
 
 import { useSettings } from "@/state/settings";
 import type { ThemeMode } from "@/contracts/settings";
+import { isWindowsPlatform } from "@/lib/platform";
 
-function applyTheme(effective: "light" | "dark") {
+let lastTitleBarKey = "";
+
+function syncWindowsTitleBar(dark: boolean, mode: ThemeMode): void {
+  if (!isWindowsPlatform()) return;
+  const key = `${dark}:${mode}`;
+  if (key === lastTitleBarKey) return;
+  lastTitleBarKey = key;
+  void window.stela?.window?.syncTitleBarTheme?.(dark, mode);
+}
+
+function applyTheme(_mode: ThemeMode, effective: "light" | "dark") {
   const root = document.documentElement;
   if (effective === "dark") root.classList.add("dark");
   else root.classList.remove("dark");
@@ -39,13 +50,19 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, [initialize]);
 
   useEffect(() => {
-    applyTheme(resolveEffective(mode));
+    const effective = resolveEffective(mode);
+    applyTheme(mode, effective);
+    syncWindowsTitleBar(effective === "dark", mode);
   }, [mode]);
 
   useEffect(() => {
     if (mode !== "system") return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handle = () => applyTheme(mq.matches ? "dark" : "light");
+    const handle = () => {
+      const effective = mq.matches ? "dark" : "light";
+      applyTheme("system", effective);
+      syncWindowsTitleBar(effective === "dark", "system");
+    };
     mq.addEventListener("change", handle);
     return () => mq.removeEventListener("change", handle);
   }, [mode]);
@@ -66,4 +83,8 @@ export function useEffectiveTheme(): "light" | "dark" {
       : "light";
   }
   return mode;
+}
+
+export function useThemeMode(): ThemeMode {
+  return useSettings((s) => s.settings.appearance.theme);
 }

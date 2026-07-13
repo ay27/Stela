@@ -35,6 +35,7 @@ import { vaultConfigDir, vaultFilePath } from "../vault-paths";
 import {
   bundledPluginDir,
   listBundledManifests,
+  markBundledPluginRemoved,
 } from "./bundled-plugins";
 import {
   ModulePluginConnector,
@@ -441,6 +442,12 @@ export async function uninstallPlugin(kind: string): Promise<void> {
     await c.dispose();
     registry.delete(kind);
     await fs.rm(c.dir, { recursive: true, force: true });
+    await markBundledPluginRemoved(vaultPath, c.manifest.id).catch((err) => {
+      log.error("mark bundled plugin removed failed", {
+        id: c.manifest.id,
+        err: (err as Error).message,
+      });
+    });
     log.info("module plugin uninstalled", { kind, dir: c.dir });
     return;
   }

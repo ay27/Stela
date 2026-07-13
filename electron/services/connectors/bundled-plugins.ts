@@ -46,7 +46,18 @@ const DEFAULT_BUNDLED_PLUGIN_IDS = [
 const AUTO_SEED_IDS = ["connector-mysql", "connector-postgresql"];
 const SEED_MARKER = ".bundled-seeded.json";
 
+interface SeedMarker {
+  /** 曾成功 seed 过的 id（审计用；是否跳过看 removed + 是否已安装）。 */
+  seeded: string[];
+  /** 用户主动卸载的 auto-seed 插件，打开 vault 时不再自动装回。 */
+  removed: string[];
+}
+
 const IS_DEV = !!process.env.ELECTRON_RENDERER_URL;
+
+export function isAutoSeedPluginId(id: string): boolean {
+  return (AUTO_SEED_IDS as readonly string[]).includes(id);
+}
 
 /** 自带插件包根目录。 */
 export function bundledPluginsRoot(): string {
@@ -84,6 +95,79 @@ async function fileExists(p: string): Promise<boolean> {
   }
 }
 
+async function isPluginInstalled(
+  pluginsDir: string,
+  id: string,
+): Promise<boolean> {
+  const dir = path.join(pluginsDir, id);
+  try {
+    const manifest = await readManifest(dir);
+    return await fileExists(path.resolve(dir, manifest.entry));
+  } catch {
+    return false;
+  }
+}
+
+function parseSeedMarker(raw: unknown): SeedMarker {
+  if (Array.isArray(raw)) {
+    return {
+      seeded: raw.filter((id): id is string => typeof id === "string"),
+      removed: [],
+    };
+  }
+  if (raw && typeof raw === "object") {
+    const o = raw as Record<string, unknown>;
+    const seeded = Array.isArray(o.seeded)
+      ? o.seeded.filter((id): id is string => typeof id === "string")
+      : [];
+    const removed = Array.isArray(o.removed)
+      ? o.removed.filter((id): id is string => typeof id === "string")
+      : [];
+    return { seeded, removed };
+  }
+  return { seeded: [], removed: [] };
+}
+
+async function readSeedMarker(markerPath: string): Promise<SeedMarker> {
+  try {
+    const raw = JSON.parse(await fs.readFile(markerPath, "utf-8")) as unknown;
+    return parseSeedMarker(raw);
+  } catch {
+    return { seeded: [], removed: [] };
+  }
+}
+
+async function writeSeedMarker(
+  root: string,
+  marker: SeedMarker,
+): Promise<void> {
+  await fs.mkdir(root, { recursive: true });
+  await fs.writeFile(
+    path.join(root, SEED_MARKER),
+    JSON.stringify(marker, null, 2),
+    "utf-8",
+  );
+}
+
+/** 用户卸载 auto-seed 插件时写入 marker，避免下次打开 vault 又自动装回。 */
+export async function markBundledPluginRemoved(
+  vaultPath: string,
+  pluginId: string,
+): Promise<void> {
+  if (!isAutoSeedPluginId(pluginId)) return;
+  const root = pluginsRoot(vaultConfigDir(vaultPath));
+  const markerPath = path.join(root, SEED_MARKER);
+  const marker = await readSeedMarker(markerPath);
+  if (!marker.removed.includes(pluginId)) {
+    marker.removed.push(pluginId);
+  }
+  try {
+    await writeSeedMarker(root, marker);
+  } catch (err) {
+    log.error("write seed marker failed", { err: (err as Error).message });
+  }
+}
+
 /** 列出所有自带插件包（读各自 plugin.json）。entry 未构建的包会被跳过。 */
 export async function listBundledManifests(): Promise<ModulePluginManifest[]> {
   const root = bundledPluginsRoot();
@@ -103,28 +187,30 @@ export async function listBundledManifests(): Promise<ModulePluginManifest[]> {
 
 /**
  * 按需把自带的官方插件 seed 到目标 vault 的 `.stela/plugins/`。
- * 已经 seed 过（marker 记录）或已存在同 id 目录的不重复拷贝。失败不致命。
+ *
+ * - 已安装（manifest + entry 在）→ 跳过
+ * - 用户在 removed 列表里 → 跳过（主动卸载后不再自动装回）
+ * - marker 里写过 seeded 但文件丢了 → 仍会补种（修复损坏 / 被误删）
  */
 export async function seedBundledPlugins(vaultPath: string): Promise<void> {
   const root = pluginsRoot(vaultConfigDir(vaultPath));
-  const markerPath = path.join(root, SEED_MARKER);
-  let seeded: string[] = [];
-  try {
-    seeded = JSON.parse(await fs.readFile(markerPath, "utf-8")) as string[];
-    if (!Array.isArray(seeded)) seeded = [];
-  } catch {
-    seeded = [];
-  }
+  const marker = await readSeedMarker(path.join(root, SEED_MARKER));
   let changed = false;
   const allowed = new Set(bundledPluginIds());
   for (const id of AUTO_SEED_IDS) {
     if (!allowed.has(id)) continue;
-    if (seeded.includes(id)) continue;
+    if (marker.removed.includes(id)) continue;
+    if (await isPluginInstalled(root, id)) continue;
     const src = bundledPluginDir(id);
-    if (!(await dirExists(src))) continue;
+    if (!(await dirExists(src))) {
+      log.warn("bundled plugin source missing, skip seed", { id, src });
+      continue;
+    }
     try {
       await copyPluginPackage(src, path.join(root, id));
-      seeded.push(id);
+      if (!marker.seeded.includes(id)) {
+        marker.seeded.push(id);
+      }
       changed = true;
       log.info("seeded bundled plugin", { id, vaultPath });
     } catch (err) {
@@ -136,8 +222,7 @@ export async function seedBundledPlugins(vaultPath: string): Promise<void> {
   }
   if (changed) {
     try {
-      await fs.mkdir(root, { recursive: true });
-      await fs.writeFile(markerPath, JSON.stringify(seeded, null, 2), "utf-8");
+      await writeSeedMarker(root, marker);
     } catch (err) {
       log.error("write seed marker failed", { err: (err as Error).message });
     }

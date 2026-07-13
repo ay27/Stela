@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from "react";
 
+import { WindowsTitleBar } from "./WindowsTitleBar";
 import { Sidebar } from "./Sidebar";
 import { SidebarResizer } from "./SidebarResizer";
 import { AgentSidebar } from "./AgentSidebar";
@@ -282,7 +283,8 @@ export function AppShell() {
   useHotkeys(bindings);
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
+    <div className="flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
+      <WindowsTitleBar />
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <aside
           data-sidebar-aside
@@ -297,8 +299,8 @@ export function AppShell() {
         </aside>
         <main className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
           {/*
-           * Frameless 拖拽：SidebarTopChrome / TabBar / Welcome 空白区。
-           * 侧栏收起时展开入口在 AppDockBar 最左；Welcome 自带 drag + 红绿灯安全区。
+           * Frameless 拖拽：WindowsTitleBar / SidebarTopChrome / TabBar / Welcome 空白区。
+           * 侧栏收起时展开入口在 AppDockBar 最左；Welcome 自带 drag + 红绿灯安全区（仅 mac）。
            */}
           <TabBar />
           <Workspace />
