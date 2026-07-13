@@ -1,5 +1,7 @@
 import { Component, type ReactNode } from "react";
 
+import { i18n } from "@/i18n";
+
 interface Props {
   children: ReactNode;
   /** 用于在切换 tab 时 reset 内部错误态 */
@@ -36,7 +38,7 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-sm">
           <div className="font-medium text-destructive">
-            Something went wrong rendering this view
+            {i18n.t("errorBoundary.title")}
           </div>
           <pre className="max-w-[560px] whitespace-pre-wrap rounded-md border border-destructive/40 bg-destructive/5 p-3 text-[11px] text-destructive">
             {this.state.error.stack ?? this.state.error.message}
@@ -46,7 +48,7 @@ export class ErrorBoundary extends Component<Props, State> {
             onClick={() => this.setState({ error: null })}
             className="rounded-md border border-border bg-background px-3 py-1 text-xs hover:bg-accent"
           >
-            Retry
+            {i18n.t("common.retry")}
           </button>
         </div>
       );

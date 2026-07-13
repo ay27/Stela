@@ -213,7 +213,7 @@ function RunRow({
             className="ml-auto flex-none text-[10px] text-muted-foreground"
             title={new Date(run.startedAt).toLocaleString()}
           >
-            {formatRelative(run.startedAt)}
+            {formatRelative(run.startedAt, t)}
           </span>
         </div>
         <div
@@ -226,8 +226,8 @@ function RunRow({
           <span>{t("common.rows", { count: run.rowCount })}</span>
           <span>{formatElapsed(run.elapsedMs)}</span>
           {run.blockId ? (
-            <span className="truncate" title={`block ${run.blockId}`}>
-              block {run.blockId.slice(0, 8)}
+            <span className="truncate" title={t("runHistory.blockPrefix", { id: run.blockId })}>
+              {t("runHistory.blockPrefix", { id: run.blockId.slice(0, 8) })}
             </span>
           ) : null}
         </div>
@@ -246,17 +246,17 @@ function RunRow({
           ) : null}
 
           <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
-            <dt>started</dt>
+            <dt>{t("runHistory.field.started")}</dt>
             <dd className="font-mono text-foreground/80">
               {new Date(run.startedAt).toLocaleString()}
             </dd>
-            <dt>blockId</dt>
+            <dt>{t("runHistory.field.blockId")}</dt>
             <dd className="truncate font-mono text-foreground/80">
-              {run.blockId || "(empty)"}
+              {run.blockId || t("runHistory.field.empty")}
             </dd>
             {run.notePath ? (
               <>
-                <dt>note</dt>
+                <dt>{t("runHistory.field.note")}</dt>
                 <dd
                   className="truncate font-mono text-foreground/80"
                   title={run.notePath}
@@ -307,16 +307,16 @@ function collapseWhitespace(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
-function formatRelative(ts: number): string {
+function formatRelative(ts: number, t: ReturnType<typeof useT>): string {
   const diff = Date.now() - ts;
   const sec = Math.floor(diff / 1000);
-  if (sec < 60) return `${sec}s ago`;
+  if (sec < 60) return t("runHistory.time.secondsAgo", { count: sec });
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
+  if (min < 60) return t("runHistory.time.minutesAgo", { count: min });
   const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
+  if (hr < 24) return t("runHistory.time.hoursAgo", { count: hr });
   const day = Math.floor(hr / 24);
-  if (day < 30) return `${day}d ago`;
+  if (day < 30) return t("runHistory.time.daysAgo", { count: day });
   return new Date(ts).toLocaleDateString();
 }
 

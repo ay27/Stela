@@ -632,7 +632,7 @@ export function ConnectionsTab() {
                   options={kinds.map((k) => {
                     // 只展示对用户友好的名字；kind（http/mysql 等实现关键词）不外露。
                     const labelText = k.subprocess
-                      ? `${k.displayName} · subprocess`
+                      ? `${k.displayName} · ${t("connections.kindSubprocessSuffix")}`
                       : k.displayName;
                     return {
                       value: k.kind,
@@ -850,7 +850,7 @@ function ConfigEditor({
             onClick={() => onModeChange("json")}
             title={t("connections.config.jsonTitle")}
           >
-            JSON
+            {t("connections.config.json")}
           </ModeButton>
         </div>
       </div>

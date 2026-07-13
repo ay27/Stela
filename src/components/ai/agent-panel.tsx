@@ -457,6 +457,7 @@ function AttachmentChips({
   attachments: AgentDraftAttachment[];
   onRemove: (attachmentId: string) => void;
 }) {
+  const t = useT();
   if (attachments.length === 0) return null;
   return (
     <div className="mb-1.5 flex flex-wrap gap-1">
@@ -476,7 +477,7 @@ function AttachmentChips({
             type="button"
             onClick={() => onRemove(attachment.id)}
             className="ml-0.5 rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-            aria-label="Remove chat attachment"
+            aria-label={t("agent.panel.removeAttachment")}
           >
             <X className="h-3 w-3" />
           </button>

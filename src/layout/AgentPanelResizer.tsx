@@ -11,10 +11,12 @@ import {
   AGENT_PANEL_MIN_WIDTH,
   useLayout,
 } from "@/state/layout";
+import { useT } from "@/i18n/use-t";
 
 const BODY_RESIZING_ATTR = "data-sidebar-resizing";
 
 export function AgentPanelResizer() {
+  const t = useT();
   const width = useLayout((s) => s.agentPanelWidth);
   const setWidth = useLayout((s) => s.setAgentPanelWidth);
   const startXRef = useRef(0);
@@ -57,11 +59,11 @@ export function AgentPanelResizer() {
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label="调整 Agent 栏宽度"
+      aria-label={t("resizer.agent.aria")}
       aria-valuenow={width}
       aria-valuemin={AGENT_PANEL_MIN_WIDTH}
       aria-valuemax={AGENT_PANEL_MAX_WIDTH}
-      title="拖拽调整宽度 · 双击重置"
+      title={t("resizer.agent.title")}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}

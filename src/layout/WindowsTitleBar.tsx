@@ -6,14 +6,16 @@
  */
 
 import { isWindowsPlatform } from "@/lib/platform";
+import { useT } from "@/i18n/use-t";
 
 export function WindowsTitleBar() {
+  const t = useT();
   if (!isWindowsPlatform()) return null;
 
   return (
     <header
       className="stela-win-titlebar stela-app-drag relative flex h-9 flex-none items-center border-b border-border bg-sidebar text-sidebar-foreground"
-      aria-label="Stela"
+      aria-label={t("app.title")}
     >
       <span className="stela-app-no-drag select-none px-3 text-[12px] font-semibold tracking-tight">
         Stela

@@ -42,6 +42,7 @@ import {
 } from "react";
 
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/use-t";
 
 import type { EditorView } from "@milkdown/prose/view";
 
@@ -56,6 +57,7 @@ interface Props {
 const REFRESH_DEBOUNCE_MS = 200;
 
 function FindBarImpl({ viewRef }: Props) {
+  const t = useT();
   const isOpen = useFindState((s) => s.isOpen);
   const mode = useFindState((s) => s.mode);
   const keyword = useFindState((s) => s.keyword);
@@ -161,9 +163,12 @@ function FindBarImpl({ viewRef }: Props) {
   // hooks 顺序稳定：放在所有 early return 之前
   const counter = useMemo(() => {
     if (keyword.length === 0) return "";
-    if (totalMatches === 0) return "0 results";
-    return `${activeIndex + 1} / ${totalMatches}`;
-  }, [keyword, totalMatches, activeIndex]);
+    if (totalMatches === 0) return t("findInFile.noResults");
+    return t("findInFile.counter", {
+      active: activeIndex + 1,
+      total: totalMatches,
+    });
+  }, [keyword, totalMatches, activeIndex, t]);
 
   if (!isOpen) return null;
 
@@ -176,7 +181,7 @@ function FindBarImpl({ viewRef }: Props) {
       className="stela-find-bar"
       style={containerStyle}
       role="toolbar"
-      aria-label="Find in file"
+      aria-label={t("findInFile.aria")}
       // 阻止 bar 上的 mousedown 把 PM 焦点抢走 / 触发 PM 选区改变
       onMouseDown={(e) => {
         // input/button 上的 mousedown 还是要正常走，让 input 拿焦点
@@ -197,10 +202,10 @@ function FindBarImpl({ viewRef }: Props) {
           onKeyDown={(e) => e.stopPropagation()}
           title={
             mode === "replace"
-              ? "收起替换 (Cmd+Alt+F 切换)"
-              : "展开替换 (Cmd+Alt+F)"
+              ? t("findInFile.collapseReplace")
+              : t("findInFile.expandReplace")
           }
-          aria-label="Toggle replace"
+          aria-label={t("findInFile.toggleReplace")}
           aria-expanded={mode === "replace"}
         >
           {mode === "replace" ? (
@@ -214,10 +219,10 @@ function FindBarImpl({ viewRef }: Props) {
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
           onKeyDown={onKeywordKeyDown}
-          placeholder="Find"
+          placeholder={t("findInFile.findPlaceholder")}
           className="stela-find-bar__input"
           spellCheck={false}
-          aria-label="Find keyword"
+          aria-label={t("findInFile.findKeyword")}
         />
         <span
           className={cn(
@@ -239,7 +244,7 @@ function FindBarImpl({ viewRef }: Props) {
             toggleCaseSensitive();
           }}
           onKeyDown={(e) => e.stopPropagation()}
-          title="区分大小写 (Aa)"
+          title={t("findInFile.caseSensitive")}
           aria-pressed={caseSensitive}
         >
           <CaseSensitive className="h-3.5 w-3.5" />
@@ -253,8 +258,8 @@ function FindBarImpl({ viewRef }: Props) {
           }}
           onKeyDown={(e) => e.stopPropagation()}
           disabled={!hasMatches}
-          title="上一个 (Shift+Enter)"
-          aria-label="Previous match"
+          title={t("findInFile.prev")}
+          aria-label={t("findInFile.prev")}
         >
           <ArrowUp className="h-3.5 w-3.5" />
         </button>
@@ -267,8 +272,8 @@ function FindBarImpl({ viewRef }: Props) {
           }}
           onKeyDown={(e) => e.stopPropagation()}
           disabled={!hasMatches}
-          title="下一个 (Enter)"
-          aria-label="Next match"
+          title={t("findInFile.next")}
+          aria-label={t("findInFile.next")}
         >
           <ArrowDown className="h-3.5 w-3.5" />
         </button>
@@ -280,8 +285,8 @@ function FindBarImpl({ viewRef }: Props) {
             closeAndFocus();
           }}
           onKeyDown={(e) => e.stopPropagation()}
-          title="关闭 (Esc)"
-          aria-label="Close"
+          title={t("findInFile.close")}
+          aria-label={t("findInFile.close")}
         >
           <X className="h-3.5 w-3.5" />
         </button>
@@ -293,10 +298,10 @@ function FindBarImpl({ viewRef }: Props) {
             value={replacement}
             onChange={(e) => setReplacement(e.target.value)}
             onKeyDown={onReplacementKeyDown}
-            placeholder="Replace"
+            placeholder={t("findInFile.replacePlaceholder")}
             className="stela-find-bar__input"
             spellCheck={false}
-            aria-label="Replacement"
+            aria-label={t("findInFile.replacement")}
           />
           <button
             type="button"
@@ -307,8 +312,8 @@ function FindBarImpl({ viewRef }: Props) {
             }}
             onKeyDown={(e) => e.stopPropagation()}
             disabled={!hasMatches}
-            title="替换当前 (Enter)"
-            aria-label="Replace"
+            title={t("findInFile.replaceCurrent")}
+            aria-label={t("findInFile.replace")}
           >
             <ReplaceIcon className="h-3.5 w-3.5" />
           </button>
@@ -321,8 +326,8 @@ function FindBarImpl({ viewRef }: Props) {
             }}
             onKeyDown={(e) => e.stopPropagation()}
             disabled={!hasMatches}
-            title="全部替换 (Shift+Enter / Cmd+Enter)"
-            aria-label="Replace all"
+            title={t("findInFile.replaceAllTitle")}
+            aria-label={t("findInFile.replaceAll")}
           >
             <ReplaceAllIcon className="h-3.5 w-3.5" />
           </button>

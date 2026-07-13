@@ -356,6 +356,7 @@ export function BlockResult({
     state,
     failedLabel: t("runTabs.failed"),
     activeRun: viewingHistory ? activeRun : null,
+    t,
   });
 
   // 分页控件只在"有结果集 + 展开"时才显示在左侧
@@ -513,7 +514,7 @@ export function BlockResult({
           type="button"
           className="stela-cb__result-toggle"
           onClick={onToggle}
-          title={expanded ? "折叠" : "展开"}
+          title={expanded ? t("blockResult.collapse") : t("blockResult.expand")}
         >
           {expanded ? (
             <ChevronDown className="h-3 w-3" />
@@ -547,21 +548,21 @@ export function BlockResult({
                 <Download className="h-3 w-3 text-muted-foreground" />
                 <ExportBtn
                   label="CSV"
-                  title="导出 CSV（全量）"
+                  title={t("blockResult.exportCsv")}
                   disabled={!!exporting}
                   loading={exporting === "csv"}
                   onClick={() => exportAllRows("csv")}
                 />
                 <ExportBtn
                   label="Excel"
-                  title="导出 Excel（全量）"
+                  title={t("blockResult.exportExcel")}
                   disabled={!!exporting}
                   loading={exporting === "excel"}
                   onClick={() => exportAllRows("excel")}
                 />
                 <ExportBtn
                   label="JSON"
-                  title="导出 JSON（全量）"
+                  title={t("blockResult.exportJson")}
                   disabled={!!exporting}
                   loading={exporting === "json"}
                   onClick={() => exportAllRows("json")}
@@ -596,24 +597,24 @@ export function BlockResult({
         <div className="stela-cb__result-panel">
           <div className="stela-cb__result-body">
             {inCompare ? (
-              renderDiffBody(diffState)
+              renderDiffBody(diffState, t)
             ) : runState === "error" && errorMessage ? (
               <ErrorBox message={errorMessage} />
             ) : !effectiveRunId ? (
-              <Hint>尚未执行。点击 Run 触发查询。</Hint>
+              <Hint>{t("blockResult.hint.notRun")}</Hint>
             ) : state === null ? (
-              <Hint>初始化…</Hint>
+              <Hint>{t("blockResult.hint.initializing")}</Hint>
             ) : state.error ? (
               <ErrorBox message={state.error} />
             ) : state.schema === null ? (
-              <Hint>加载结果…</Hint>
+              <Hint>{t("blockResult.hint.loading")}</Hint>
             ) : state.total === 0 &&
               !viewingHistory &&
               detail?.firstRow &&
               detail.resultRefId === effectiveRunId ? (
               renderDetailFallback(detail, state.schema, t)
             ) : state.schema.length === 0 ? (
-              <Hint>这次执行没有返回结果集（可能是 mutation）。</Hint>
+              <Hint>{t("blockResult.hint.noResultSet")}</Hint>
             ) : (
               <ResultTable
                 columns={state.schema}
@@ -665,16 +666,19 @@ function renderDiffSummaryText(
   return parts.join(" · ");
 }
 
-function renderDiffBody(diffState: DiffState | null) {
+function renderDiffBody(
+  diffState: DiffState | null,
+  t: ReturnType<typeof useT>,
+) {
   if (
     !diffState ||
     (!diffState.diff && !diffState.loading && !diffState.error)
   ) {
-    return <Hint>选择基线与当前两次执行以查看差异。</Hint>;
+    return <Hint>{t("blockResult.hint.selectCompare")}</Hint>;
   }
   if (diffState.error) return <ErrorBox message={diffState.error} />;
-  if (diffState.loading) return <Hint>比对中…</Hint>;
-  if (!diffState.diff) return <Hint>选择基线与当前两次执行以查看差异。</Hint>;
+  if (diffState.loading) return <Hint>{t("blockResult.diffSummary.loading")}</Hint>;
+  if (!diffState.diff) return <Hint>{t("blockResult.hint.selectCompare")}</Hint>;
   return <ResultDiffTable diff={diffState.diff} />;
 }
 
@@ -686,12 +690,17 @@ interface KeyColumnSelectProps {
 
 /** 比对模式下的行匹配 key 列选择器（顶栏）。 */
 function KeyColumnSelect({ keyColumns, diff, onChange }: KeyColumnSelectProps) {
+  const t = useT();
   const keyOptions: MiniSelectOption[] = [
-    { value: "", label: "Key：自动", labelText: "Key：自动" },
+    {
+      value: "",
+      label: t("blockResult.keyAuto"),
+      labelText: t("blockResult.keyAuto"),
+    },
     ...diff.rightColumns.map((c) => ({
       value: c.name,
-      label: `Key：${c.name}`,
-      labelText: `Key：${c.name}`,
+      label: t("blockResult.keyNamed", { name: c.name }),
+      labelText: t("blockResult.keyNamed", { name: c.name }),
     })),
   ];
   return (
@@ -700,7 +709,7 @@ function KeyColumnSelect({ keyColumns, diff, onChange }: KeyColumnSelectProps) {
       options={keyOptions}
       onChange={(v) => onChange(v ? [v] : null)}
       size="sm"
-      title="行匹配 key 列"
+      title={t("blockResult.keyColumnTitle")}
     />
   );
 }
@@ -720,6 +729,7 @@ function ExportBtn({
   loading,
   onClick,
 }: ExportBtnProps) {
+  const t = useT();
   return (
     <button
       type="button"
@@ -733,7 +743,7 @@ function ExportBtn({
         "disabled:cursor-not-allowed disabled:opacity-50",
       )}
     >
-      {loading ? "导出中…" : label}
+      {loading ? t("blockResult.exporting") : label}
     </button>
   );
 }
@@ -755,6 +765,7 @@ function Pagination({
   onGoto,
   onChangePageSize,
 }: PaginationProps) {
+  const t = useT();
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const atFirst = pageIndex <= 0;
   const atLast = pageIndex >= totalPages - 1;
@@ -764,14 +775,14 @@ function Pagination({
       <PagerBtn
         disabled={atFirst || loading}
         onClick={() => onGoto(0)}
-        title="第一页"
+        title={t("blockResult.page.first")}
       >
         <ChevronsLeft className="h-3 w-3" />
       </PagerBtn>
       <PagerBtn
         disabled={atFirst || loading}
         onClick={() => onGoto(pageIndex - 1)}
-        title="上一页"
+        title={t("blockResult.page.prev")}
       >
         <ChevronLeft className="h-3 w-3" />
       </PagerBtn>
@@ -781,14 +792,14 @@ function Pagination({
       <PagerBtn
         disabled={atLast || loading}
         onClick={() => onGoto(pageIndex + 1)}
-        title="下一页"
+        title={t("blockResult.page.next")}
       >
         <ChevronRight className="h-3 w-3" />
       </PagerBtn>
       <PagerBtn
         disabled={atLast || loading}
         onClick={() => onGoto(totalPages - 1)}
-        title="最后一页"
+        title={t("blockResult.page.last")}
       >
         <ChevronsRight className="h-3 w-3" />
       </PagerBtn>
@@ -797,13 +808,13 @@ function Pagination({
         onChange={(v) => onChangePageSize(Number(v))}
         options={PAGE_SIZES.map((n) => ({
           value: String(n),
-          label: `${n}/页`,
-          labelText: `${n}/页`,
+          label: t("blockResult.page.sizeOption", { n }),
+          labelText: t("blockResult.page.sizeOption", { n }),
         }))}
         disabled={loading}
         size="sm"
         className="ml-1 tabular-nums"
-        title="每页行数"
+        title={t("blockResult.page.rowsPerPage")}
       />
     </div>
   );
@@ -842,6 +853,7 @@ interface SummaryArgs {
   failedLabel?: string;
   /** 浏览历史 run 时传入对应 RunRecord；非 null 即在摘要前加「历史 ·」前缀 */
   activeRun?: RunRecord | null;
+  t: ReturnType<typeof useT>;
 }
 
 function formatRunDate(ts: number): string {
@@ -857,44 +869,45 @@ function renderSummary({
   state,
   failedLabel,
   activeRun,
+  t,
 }: SummaryArgs): { text: string; tone: string; icon: React.ReactNode } {
   if (runState === "running") {
-    return { text: "执行中…", tone: "is-running", icon: null };
+    return { text: t("blockResult.summary.running"), tone: "is-running", icon: null };
   }
   if (runState === "error") {
     return {
-      text: failedLabel ?? "执行失败",
+      text: failedLabel ?? t("blockResult.summary.failed"),
       tone: "is-error",
       icon: <AlertCircle className="h-3 w-3" />,
     };
   }
   if (!runId) {
-    return { text: "尚未执行", tone: "is-empty", icon: null };
+    return { text: t("blockResult.summary.notRun"), tone: "is-empty", icon: null };
   }
   const parts: string[] = [];
   // 浏览历史 run：摘要来自该 run 自身记录，加「历史 ·」前缀
   if (activeRun) {
-    parts.push("历史");
+    parts.push(t("blockResult.summary.history"));
     parts.push(formatRunDate(activeRun.startedAt));
     parts.push(`${activeRun.elapsedMs}ms`);
     if (state && state.schema !== null) {
-      parts.push(`${state.total} rows`);
-      parts.push(`${state.schema.length} cols`);
+      parts.push(t("blockResult.summary.rows", { count: state.total }));
+      parts.push(t("blockResult.summary.cols", { count: state.schema.length }));
     } else {
-      parts.push(`${activeRun.rowCount} rows`);
+      parts.push(t("blockResult.summary.rows", { count: activeRun.rowCount }));
     }
     return { text: parts.join(" · "), tone: "is-ok", icon: null };
   }
   if (detail?.runDate) parts.push(detail.runDate);
   if (detail?.elapsed) parts.push(detail.elapsed);
   if (state && state.schema !== null) {
-    parts.push(`${state.total} rows`);
-    parts.push(`${state.schema.length} cols`);
+    parts.push(t("blockResult.summary.rows", { count: state.total }));
+    parts.push(t("blockResult.summary.cols", { count: state.schema.length }));
   } else if (detail) {
-    parts.push(`${detail.rowCount} rows`);
+    parts.push(t("blockResult.summary.rows", { count: detail.rowCount }));
   }
   return {
-    text: parts.join(" · ") || `run ${runId.slice(0, 8)}`,
+    text: parts.join(" · ") || t("blockResult.summary.runId", { id: runId.slice(0, 8) }),
     tone: "is-ok",
     icon: null,
   };

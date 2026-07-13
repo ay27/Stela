@@ -37,6 +37,19 @@ const UI_FILES_WITHOUT_HARDCODED_CHINESE = [
   "src/layout/SearchPanel.tsx",
   "src/layout/SqlSearchView.tsx",
   "src/views/EditorView.tsx",
+  "src/components/settings/update-tab.tsx",
+  "src/components/connections-dialog.tsx",
+  "src/components/tab-switcher.tsx",
+  "src/components/block-result.tsx",
+  "src/components/result-diff-table.tsx",
+  "src/components/result-table.tsx",
+  "src/components/ErrorBoundary.tsx",
+  "src/editor/find-in-file/find-bar.tsx",
+  "src/layout/TabBar.tsx",
+  "src/layout/SidebarResizer.tsx",
+  "src/layout/AgentPanelResizer.tsx",
+  "src/layout/WindowsTitleBar.tsx",
+  "src/components/ai/agent-panel.tsx",
 ];
 
 const OLD_SLOGAN = "Markdown + SQL 数据笔记，所有操作都将刻印在石碑之上。";

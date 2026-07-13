@@ -124,7 +124,7 @@ export function CommandPalette({ open, onOpenChange, handlers }: Props) {
           <Dialog.Title className="sr-only">
             {t("commandPalette.title")}
           </Dialog.Title>
-          <Command label="Stela commands" className="flex flex-col">
+          <Command label={t("commandPalette.aria")} className="flex flex-col">
             <div className="border-b border-border px-3">
               <Command.Input
                 value={search}

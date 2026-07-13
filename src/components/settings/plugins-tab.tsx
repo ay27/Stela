@@ -551,7 +551,7 @@ function BuiltinDetail({ plugin }: { plugin: PluginInfo }) {
     <dl className="grid grid-cols-[110px_1fr] gap-y-2 text-[12px]">
       <dt className="text-muted-foreground">{t("plugins.field.source")}</dt>
       <dd>{t("plugins.source.builtin")}</dd>
-      <dt className="text-muted-foreground">Kind</dt>
+      <dt className="text-muted-foreground">{t("plugins.field.kind")}</dt>
       <dd className="font-mono">{plugin.kind}</dd>
       <dt className="text-muted-foreground">{t("plugins.field.description")}</dt>
       <dd className="text-muted-foreground">{plugin.displayName}</dd>
@@ -579,7 +579,7 @@ function ModuleDetail({ plugin }: { plugin: PluginInfo }) {
       <dl className="grid grid-cols-[110px_1fr] gap-y-2 text-[12px]">
         <dt className="text-muted-foreground">{t("plugins.field.source")}</dt>
         <dd>{t("plugins.source.module")}</dd>
-        <dt className="text-muted-foreground">Kind</dt>
+        <dt className="text-muted-foreground">{t("plugins.field.kind")}</dt>
         <dd className="font-mono">{plugin.kind}</dd>
         <dt className="text-muted-foreground">{t("plugins.field.description")}</dt>
         <dd className="text-muted-foreground">{plugin.displayName}</dd>
@@ -642,7 +642,7 @@ function SubprocessDetail({
       <dl className="grid grid-cols-[110px_1fr] gap-y-2 text-[12px]">
         <dt className="text-muted-foreground">{t("plugins.field.source")}</dt>
         <dd>{t("plugins.source.subprocess")}</dd>
-        <dt className="text-muted-foreground">Kind</dt>
+        <dt className="text-muted-foreground">{t("plugins.field.kind")}</dt>
         <dd className="font-mono">{plugin.kind}</dd>
         <dt className="text-muted-foreground">{t("plugins.field.exePath")}</dt>
         <dd className="break-all font-mono text-[11px]">
@@ -882,23 +882,24 @@ function UninstallButton({
 }
 
 function SourceBadge({ source }: { source: PluginInfo["source"] }) {
+  const t = useT();
   if (source === "builtin") {
     return (
       <span className="inline-flex items-center rounded border border-border bg-muted/50 px-1.5 py-0.5 text-[9.5px] uppercase tracking-wide text-muted-foreground">
-        builtin
+        {t("plugins.badge.builtin")}
       </span>
     );
   }
   if (source === "module") {
     return (
       <span className="inline-flex items-center rounded border border-violet-300 bg-violet-50 px-1.5 py-0.5 text-[9.5px] uppercase tracking-wide text-violet-700 dark:border-violet-800 dark:bg-violet-950/50 dark:text-violet-300">
-        module
+        {t("plugins.badge.module")}
       </span>
     );
   }
   return (
     <span className="inline-flex items-center rounded border border-sky-300 bg-sky-50 px-1.5 py-0.5 text-[9.5px] uppercase tracking-wide text-sky-700 dark:border-sky-800 dark:bg-sky-950/50 dark:text-sky-300">
-      subprocess
+      {t("plugins.badge.subprocess")}
     </span>
   );
 }

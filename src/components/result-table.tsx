@@ -17,6 +17,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 
 import type { ColumnDef } from "@/contracts";
+import { i18n } from "@/i18n";
+import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
 export interface ResultTableProps {
@@ -46,7 +48,8 @@ interface CellContent {
 /** 把原始值转换成展示字符串 + 复制文本，纯函数。 */
 function renderCellContent(value: unknown, typeName: string | undefined): CellContent {
   if (value === null || value === undefined) {
-    return { title: "NULL", copyText: null, display: "NULL", muted: true };
+    const nullLabel = i18n.t("resultTable.nullValue");
+    return { title: nullLabel, copyText: null, display: nullLabel, muted: true };
   }
 
   if (
@@ -56,7 +59,7 @@ function renderCellContent(value: unknown, typeName: string | undefined): CellCo
   ) {
     const bytes = Math.floor((value.length * 3) / 4);
     return {
-      title: `base64 ${value.length} chars`,
+      title: i18n.t("resultTable.base64Preview", { count: value.length }),
       copyText: value,
       display: `<base64 ${bytes} bytes>`,
       muted: true,
@@ -93,8 +96,10 @@ export function ResultTable({
   columns,
   rows,
   rowOffset = 0,
-  emptyMessage = "暂无数据",
+  emptyMessage,
 }: ResultTableProps) {
+  const t = useT();
+  const resolvedEmpty = emptyMessage ?? t("resultTable.empty");
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const [hoverCell, setHoverCell] = useState<{
     row: number;
@@ -178,7 +183,7 @@ export function ResultTable({
   if (columns.length === 0) {
     return (
       <div className="py-3 text-center text-xs italic text-muted-foreground">
-        {emptyMessage}
+        {resolvedEmpty}
       </div>
     );
   }
@@ -283,7 +288,7 @@ export function ResultTable({
             isCopied && "text-primary",
           )}
           style={{ left: hoverCell.left, top: hoverCell.top }}
-          title={isCopied ? "已复制" : "复制到剪贴板"}
+          title={isCopied ? t("common.copied") : t("common.copy")}
           tabIndex={-1}
         >
           {isCopied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}

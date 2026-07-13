@@ -458,7 +458,7 @@ export function FileTree({ rootPath }: { rootPath: string }) {
   }
   if (rootChildren === undefined) {
     return (
-      <div className="px-3 py-2 text-xs text-muted-foreground">Loading…</div>
+      <div className="px-3 py-2 text-xs text-muted-foreground">{t("common.loading")}</div>
     );
   }
 

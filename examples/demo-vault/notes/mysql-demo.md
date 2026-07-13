@@ -21,3 +21,5 @@ FROM stela_demo.demo_tasks;
    <first-row>{"status":"done","count":"1"}</first-row>
    <result-ref-id>5f63a2e6-808d-45f9-9fd6-de730b550399</result-ref-id>
 </detail>
+
+<br />

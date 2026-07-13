@@ -124,7 +124,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             className="flex flex-1 min-h-0"
           >
             <Tabs.List
-              aria-label="Settings sections"
+              aria-label={t("settings.sectionsAria")}
               className="flex w-44 flex-none flex-col border-r border-border bg-muted/20 p-2"
             >
               {TABS.map((tabSpec) => {

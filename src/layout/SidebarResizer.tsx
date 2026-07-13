@@ -18,10 +18,12 @@ import {
   SIDEBAR_MIN_WIDTH,
   useLayout,
 } from "@/state/layout";
+import { useT } from "@/i18n/use-t";
 
 const BODY_RESIZING_ATTR = "data-sidebar-resizing";
 
 export function SidebarResizer() {
+  const t = useT();
   const width = useLayout((s) => s.sidebarWidth);
   const setWidth = useLayout((s) => s.setSidebarWidth);
   const startXRef = useRef(0);
@@ -64,11 +66,11 @@ export function SidebarResizer() {
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label="调整侧栏宽度"
+      aria-label={t("resizer.sidebar.aria")}
       aria-valuenow={width}
       aria-valuemin={SIDEBAR_MIN_WIDTH}
       aria-valuemax={SIDEBAR_MAX_WIDTH}
-      title="拖拽调整宽度 · 双击重置"
+      title={t("resizer.sidebar.title")}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}

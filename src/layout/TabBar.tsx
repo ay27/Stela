@@ -15,6 +15,7 @@ import { useWorkspace, type Tab } from "@/state/workspace";
 import { useLayout } from "@/state/layout";
 import { cn } from "@/lib/utils";
 import { formatHotkey } from "@/lib/hotkeys";
+import { useT } from "@/i18n/use-t";
 import { TitlebarNavButtons } from "./TitlebarNavButtons";
 
 const CLOSE_TAB_HINT = formatHotkey("Mod+W");
@@ -24,6 +25,7 @@ const REOPEN_HINT = formatHotkey("Mod+Shift+T");
 const TAB_DRAG_MIME = "application/x-stela-tab-id";
 
 export function TabBar() {
+  const t = useT();
   const tabs = useWorkspace((s) => s.tabs);
   const activeId = useWorkspace((s) => s.activeTabId);
   const setActive = useWorkspace((s) => s.setActive);
@@ -196,7 +198,9 @@ export function TabBar() {
         onClick={() =>
           agentPanelCollapsed ? focusAgentPanel() : toggleAgentPanel()
         }
-        title={agentPanelCollapsed ? "打开 Agent 面板" : "收起 Agent 面板"}
+        title={
+          agentPanelCollapsed ? t("tab.agentOpen") : t("tab.agentCollapse")
+        }
         className={cn(
           "stela-app-no-drag flex w-8 flex-none items-center justify-center border-l border-border hover:bg-background/50",
           agentPanelCollapsed
@@ -254,6 +258,7 @@ function TabItemImpl({
   onDropOnTab,
   handlers,
 }: TabItemProps) {
+  const t = useT();
   const {
     onSelect,
     onClose,
@@ -305,7 +310,7 @@ function TabItemImpl({
           )}
           title={
             sqlRunning
-              ? `${tab.path ?? tab.title}\nSQL 执行中`
+              ? `${tab.path ?? tab.title}\n${t("tab.sqlRunningSuffix")}`
               : (tab.path ?? tab.title)
           }
         >
@@ -326,7 +331,7 @@ function TabItemImpl({
                 e.stopPropagation();
                 onTogglePin(tab.id, false);
               }}
-              title="取消钉住"
+              title={t("tab.unpin")}
               className="flex h-3.5 w-3.5 flex-none items-center justify-center text-primary hover:text-foreground"
             >
               <Pin className="h-3 w-3" />
@@ -365,7 +370,7 @@ function TabItemImpl({
                 e.stopPropagation();
                 onClose(tab.id);
               }}
-              title={`关闭 (${CLOSE_TAB_HINT})`}
+              title={t("tab.closeWithHotkey", { hotkey: CLOSE_TAB_HINT })}
               className={cn(
                 "flex h-4 w-4 flex-none items-center justify-center rounded text-muted-foreground",
                 // ephemeral 与 active 一样始终显示关闭按钮——预览态本来就该一眼能丢掉
@@ -383,26 +388,30 @@ function TabItemImpl({
       <ContextMenu.Portal>
         <ContextMenu.Content className="z-[60] min-w-[200px] overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
           <MenuItem
-            label="关闭"
+            label={t("tab.close")}
             hotkey="Mod+W"
             onSelect={() => onClose(tab.id)}
             disabled={isPinned}
           />
-          <MenuItem label="关闭其他" onSelect={() => onCloseOthers(tab.id)} />
+          <MenuItem label={t("tab.closeOthers")} onSelect={() => onCloseOthers(tab.id)} />
           <MenuItem
-            label="关闭右侧"
+            label={t("tab.closeToRight")}
             onSelect={() => onCloseToRight(tab.id)}
             disabled={!canCloseToRight}
           />
-          <MenuItem label="关闭已保存" onSelect={() => onCloseSaved()} />
+          <MenuItem label={t("tab.closeSaved")} onSelect={() => onCloseSaved()} />
           <ContextMenu.Separator className="my-1 h-px bg-border" />
           <MenuItem
-            label={isPinned ? "取消钉住" : "钉住此 tab"}
+            label={isPinned ? t("tab.unpinTab") : t("tab.pin")}
             onSelect={() => onTogglePin(tab.id, !isPinned)}
           />
           <ContextMenu.Separator className="my-1 h-px bg-border" />
           <MenuItem
-            label={`恢复最近关闭${closedCount > 0 ? ` (${closedCount})` : ""}`}
+            label={
+              closedCount > 0
+                ? t("tab.reopenClosedCount", { count: closedCount })
+                : t("tab.reopenClosed")
+            }
             hotkey="Mod+Shift+T"
             onSelect={() => onReopenLast()}
             disabled={closedCount === 0}
@@ -478,12 +487,13 @@ function OverflowMenu({
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
 }) {
+  const t = useT();
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
         <button
           type="button"
-          title={`所有 Tab (${tabs.length})`}
+          title={t("tab.allTabs", { count: tabs.length })}
           className="stela-app-no-drag flex w-8 flex-none items-center justify-center border-l border-border text-muted-foreground hover:bg-background/50 hover:text-foreground"
         >
           <ChevronDown className="h-3.5 w-3.5" />
@@ -521,6 +531,7 @@ function OverflowItem({
   onSelect: () => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const closable = !tab.pinned;
   const sqlRunning = (tab.sqlRunningCount ?? 0) > 0;
   return (
@@ -560,7 +571,7 @@ function OverflowItem({
             e.stopPropagation();
             onClose();
           }}
-          title={`关闭 (${CLOSE_TAB_HINT})`}
+          title={t("tab.closeWithHotkey", { hotkey: CLOSE_TAB_HINT })}
           className="flex h-4 w-4 flex-none items-center justify-center rounded text-muted-foreground opacity-0 hover:bg-background hover:text-foreground group-hover:opacity-100"
         >
           <X className="h-3 w-3" />

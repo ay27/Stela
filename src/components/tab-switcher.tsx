@@ -18,6 +18,7 @@ import { useEffect, useMemo, useRef } from "react";
 
 import { useTabSwitcher } from "@/state/tab-switcher";
 import { useWorkspace } from "@/state/workspace";
+import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
 function relativePath(path: string | undefined, vaultPath: string | null): string {
@@ -29,6 +30,7 @@ function relativePath(path: string | undefined, vaultPath: string | null): strin
 }
 
 export function TabSwitcher() {
+  const t = useT();
   const open = useTabSwitcher((s) => s.open);
   const cursor = useTabSwitcher((s) => s.cursor);
   const orderedIds = useTabSwitcher((s) => s.orderedIds);
@@ -69,7 +71,7 @@ export function TabSwitcher() {
         }
       }}
       role="dialog"
-      aria-label="切换 Tab"
+      aria-label={t("tabSwitcher.aria")}
       aria-modal="false"
     >
       <div
@@ -77,9 +79,9 @@ export function TabSwitcher() {
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-border px-3 py-2 text-[11px] uppercase tracking-wider text-muted-foreground">
-          <span>切换 Tab</span>
+          <span>{t("tabSwitcher.title")}</span>
           <span className="font-mono normal-case">
-            {items.length} 个
+            {t("tabSwitcher.count", { count: items.length })}
           </span>
         </div>
         <div ref={listRef} className="flex-1 overflow-y-auto p-1">
@@ -123,7 +125,7 @@ export function TabSwitcher() {
                 {tab.dirty ? (
                   <span
                     className="h-1.5 w-1.5 flex-none rounded-full bg-primary"
-                    aria-label="未保存"
+                    aria-label={t("tabSwitcher.unsaved")}
                   />
                 ) : null}
                 {dir ? (
@@ -133,7 +135,7 @@ export function TabSwitcher() {
                 ) : null}
                 {isCurrent ? (
                   <span className="ml-1 flex-none text-[10px] uppercase tracking-wider text-muted-foreground">
-                    当前
+                    {t("tabSwitcher.current")}
                   </span>
                 ) : null}
               </div>
@@ -142,12 +144,15 @@ export function TabSwitcher() {
         </div>
         <div className="flex items-center justify-between gap-3 border-t border-border px-3 py-1.5 font-mono text-[10px] text-muted-foreground">
           <span>
-            <kbd className="rounded bg-muted px-1 py-0.5">Tab</kbd> 下一个 ·
-            <kbd className="ml-1 rounded bg-muted px-1 py-0.5">⇧Tab</kbd> 上一个
+            <kbd className="rounded bg-muted px-1 py-0.5">Tab</kbd>{" "}
+            {t("tabSwitcher.nextTab")} ·
+            <kbd className="ml-1 rounded bg-muted px-1 py-0.5">⇧Tab</kbd>{" "}
+            {t("tabSwitcher.prevTab")}
           </span>
           <span>
-            松开 <kbd className="rounded bg-muted px-1 py-0.5">Ctrl</kbd> 切换
-            ·<kbd className="ml-1 rounded bg-muted px-1 py-0.5">Esc</kbd> 取消
+            {t("tabSwitcher.releaseToSwitch")} ·
+            <kbd className="ml-1 rounded bg-muted px-1 py-0.5">Esc</kbd>{" "}
+            {t("tabSwitcher.escCancel")}
           </span>
         </div>
       </div>

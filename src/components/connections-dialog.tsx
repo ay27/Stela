@@ -11,6 +11,7 @@ import { X } from "lucide-react";
 
 import { ConnectionsTab } from "./settings/connections-tab";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/use-t";
 
 interface ConnectionsDialogProps {
   open: boolean;
@@ -18,6 +19,7 @@ interface ConnectionsDialogProps {
 }
 
 export function ConnectionsDialog({ open, onOpenChange }: ConnectionsDialogProps) {
+  const t = useT();
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -30,16 +32,18 @@ export function ConnectionsDialog({ open, onOpenChange }: ConnectionsDialogProps
         >
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <div>
-              <Dialog.Title className="text-sm font-semibold">连接管理</Dialog.Title>
+              <Dialog.Title className="text-sm font-semibold">
+                {t("connections.dialog.title")}
+              </Dialog.Title>
               <Dialog.Description className="text-xs text-muted-foreground">
-                配置 RunSQL 块需要的连接（与 frontmatter.connection_name 对应）。
+                {t("connections.dialog.description")}
               </Dialog.Description>
             </div>
             <Dialog.Close asChild>
               <button
                 type="button"
                 className="rounded-md p-1.5 text-muted-foreground hover:bg-accent"
-                aria-label="关闭"
+                aria-label={t("settings.close")}
               >
                 <X className="h-4 w-4" />
               </button>

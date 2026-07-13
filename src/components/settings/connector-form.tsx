@@ -185,7 +185,7 @@ function renderInput(
       <JsonFallback
         value={value}
         onChange={onChange}
-        placeholder={field.description ?? "JSON value"}
+        placeholder={field.description}
       />
     );
   }
@@ -278,7 +278,7 @@ function KeyValueEditor({
               type="text"
               value={k}
               onChange={(e) => update(idx, e.target.value, v)}
-              placeholder="key"
+              placeholder={t("connectorForm.keyPlaceholder")}
               spellCheck={false}
               className="w-1/3 rounded-md border border-border bg-background px-2 py-1 font-mono text-[11px] focus:border-primary focus:outline-none"
             />
@@ -286,7 +286,7 @@ function KeyValueEditor({
               type="text"
               value={v}
               onChange={(e) => update(idx, k, e.target.value)}
-              placeholder="value"
+              placeholder={t("connectorForm.valuePlaceholder")}
               spellCheck={false}
               className="flex-1 rounded-md border border-border bg-background px-2 py-1 font-mono text-[11px] focus:border-primary focus:outline-none"
             />
@@ -326,6 +326,7 @@ function JsonFallback({
   onChange: (v: unknown) => void;
   placeholder?: string;
 }) {
+  const t = useT();
   const text = useMemo(() => {
     try {
       return JSON.stringify(value ?? null, null, 2);
@@ -347,7 +348,7 @@ function JsonFallback({
       }}
       rows={4}
       spellCheck={false}
-      placeholder={placeholder}
+      placeholder={placeholder ?? t("connectorForm.jsonValue")}
       className={cn(
         "w-full rounded-md border border-border bg-background px-2 py-2",
         "font-mono text-[12px] leading-relaxed focus:border-primary focus:outline-none",

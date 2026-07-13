@@ -90,7 +90,7 @@ export function PersistenceTab() {
   return (
     <TabContainer>
       <Section title={t("persistence.location.title")}>
-        <Row label="Vault" description={vaultPath ?? t("persistence.vault.none")}>
+        <Row label={t("persistence.vault.label")} description={vaultPath ?? t("persistence.vault.none")}>
           <span className="text-xs text-muted-foreground">
             {vaultPath ? t("persistence.ready") : "—"}
           </span>

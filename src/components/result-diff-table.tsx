@@ -10,14 +10,15 @@
 
 import type { CellDiffStatus, DiffColumn, ResultDiff } from "@/services/result-diff";
 import { cellValue } from "@/services/result-diff";
+import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
 const COLUMN_WIDTH = 160;
 const ROW_NUMBER_WIDTH = 56;
 
-function fmt(value: unknown): { text: string; muted: boolean } {
+function fmt(value: unknown, nullLabel: string): { text: string; muted: boolean } {
   if (value === null || value === undefined) {
-    return { text: "NULL", muted: true };
+    return { text: nullLabel, muted: true };
   }
   if (typeof value === "object") {
     try {
@@ -41,10 +42,11 @@ export interface ResultDiffTableProps {
 }
 
 export function ResultDiffTable({ diff }: ResultDiffTableProps) {
+  const t = useT();
   if (diff.columns.length === 0) {
     return (
       <div className="py-3 text-center text-xs italic text-muted-foreground">
-        无可比对的列
+        {t("resultDiff.noColumns")}
       </div>
     );
   }
@@ -58,20 +60,37 @@ export function ResultDiffTable({ diff }: ResultDiffTableProps) {
   return (
     <div className="w-full overflow-x-auto bg-background font-mono text-xs">
       {singleRow
-        ? renderTransposed(diff)
-        : renderRowLevel(diff)}
+        ? renderTransposed(diff, t)
+        : renderRowLevel(diff, t)}
     </div>
   );
 }
 
+function cellStatusLabel(
+  status: CellDiffStatus,
+  t: ReturnType<typeof useT>,
+): string {
+  if (status === "same") return "";
+  if (status === "changed") return t("resultDiff.cellStatus.changed");
+  if (status === "added") return t("resultDiff.cellStatus.added");
+  return t("resultDiff.cellStatus.removed");
+}
+
 /** 单行监控：转置为 列 | 基线 | 当前 | 状态。 */
-function renderTransposed(diff: ResultDiff) {
+function renderTransposed(diff: ResultDiff, t: ReturnType<typeof useT>) {
+  const nullLabel = t("resultTable.nullValue");
+  const headers = [
+    t("resultDiff.column"),
+    t("resultDiff.baseline"),
+    t("resultDiff.current"),
+    t("resultDiff.status"),
+  ];
   const row = diff.rows[0];
   return (
     <table className="w-max border-separate border-spacing-0">
       <thead className="bg-muted/80">
         <tr>
-          {["列", "基线", "当前", "状态"].map((h, i) => (
+          {headers.map((h, i) => (
             <th
               key={h}
               className="border-b border-r border-border px-2 py-1 text-left font-medium text-foreground"
@@ -90,9 +109,11 @@ function renderTransposed(diff: ResultDiff) {
           const status = row.cells[colIdx];
           const left = fmt(
             cellValue(row.left, col, "left", diff.leftColumns, diff.rightColumns),
+            nullLabel,
           );
           const right = fmt(
             cellValue(row.right, col, "right", diff.leftColumns, diff.rightColumns),
+            nullLabel,
           );
           return (
             <tr key={col.name} className={cn(status !== "same" && CELL_TONE[status])}>
@@ -110,7 +131,7 @@ function renderTransposed(diff: ResultDiff) {
                 </span>
               </td>
               <td className="border-b border-r border-border px-2 py-1 text-muted-foreground">
-                {status === "same" ? "" : status}
+                {cellStatusLabel(status, t)}
               </td>
             </tr>
           );
@@ -121,7 +142,8 @@ function renderTransposed(diff: ResultDiff) {
 }
 
 /** 多行：行级 diff。 */
-function renderRowLevel(diff: ResultDiff) {
+function renderRowLevel(diff: ResultDiff, t: ReturnType<typeof useT>) {
+  const nullLabel = t("resultTable.nullValue");
   const totalWidth = ROW_NUMBER_WIDTH + diff.columns.length * COLUMN_WIDTH;
   return (
     <table
@@ -145,8 +167,8 @@ function renderRowLevel(diff: ResultDiff) {
                 col.inLeft && col.inRight
                   ? col.name
                   : col.inRight
-                    ? `${col.name}（新增列）`
-                    : `${col.name}（已删除列）`
+                    ? t("resultDiff.columnAdded", { name: col.name })
+                    : t("resultDiff.columnRemoved", { name: col.name })
               }
             >
               <span className="block truncate">{col.name}</span>
@@ -180,6 +202,7 @@ function renderRowLevel(diff: ResultDiff) {
                   kind={row.kind}
                   left={cellValue(row.left, col, "left", diff.leftColumns, diff.rightColumns)}
                   right={cellValue(row.right, col, "right", diff.leftColumns, diff.rightColumns)}
+                  nullLabel={nullLabel}
                 />
               ))}
             </tr>
@@ -196,22 +219,23 @@ interface DiffCellProps {
   kind: "matched" | "added" | "removed";
   left: unknown;
   right: unknown;
+  nullLabel: string;
 }
 
-function DiffCell({ status, kind, left, right }: DiffCellProps) {
+function DiffCell({ status, kind, left, right, nullLabel }: DiffCellProps) {
   const tone = status === "same" ? "" : CELL_TONE[status];
   let content: React.ReactNode;
   if (kind === "added") {
-    const r = fmt(right);
+    const r = fmt(right, nullLabel);
     content = <span className={cn(r.muted && "italic text-muted-foreground/70")}>{r.text}</span>;
   } else if (kind === "removed") {
-    const l = fmt(left);
+    const l = fmt(left, nullLabel);
     content = (
       <span className={cn("line-through opacity-70", l.muted && "italic")}>{l.text}</span>
     );
   } else if (status === "changed") {
-    const l = fmt(left);
-    const r = fmt(right);
+    const l = fmt(left, nullLabel);
+    const r = fmt(right, nullLabel);
     content = (
       <span className="whitespace-nowrap">
         <span className="line-through opacity-60">{l.text}</span>
@@ -220,7 +244,7 @@ function DiffCell({ status, kind, left, right }: DiffCellProps) {
       </span>
     );
   } else {
-    const r = fmt(right);
+    const r = fmt(right, nullLabel);
     content = <span className={cn(r.muted && "italic text-muted-foreground/70")}>{r.text}</span>;
   }
   return (
