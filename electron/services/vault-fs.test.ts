@@ -202,9 +202,11 @@ function runSanitizeAttachmentName(): Check[] {
   );
   out.push(
     expect(
+      // Windows path.basename 会把 "a:" 当盘符剥掉；sanitize 必须先保留再替换
       "sanitize replaces unsafe chars",
-      sanitizeAttachmentName('a:b*c?"d<>|.png') === "a_b_c__d___.png",
-      `got: ${sanitizeAttachmentName('a:b*c?"d<>|.png')}`,
+      sanitizeAttachmentName('a:b*c?"d<>|.png') === "a_b_c__d___.png" &&
+        sanitizeAttachmentName("C:hello.png") === "C_hello.png",
+      `got: ${sanitizeAttachmentName('a:b*c?"d<>|.png')} / ${sanitizeAttachmentName("C:hello.png")}`,
     ),
   );
   out.push(

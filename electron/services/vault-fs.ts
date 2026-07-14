@@ -389,7 +389,10 @@ export const ATTACHMENTS_DIR_NAME = "assets";
 
 /** 把任意 fileName 收敛到一个安全 basename：去路径分隔符、去控制字符、保留扩展名。 */
 export function sanitizeAttachmentName(fileName: string): string {
-  const base = path.basename(fileName);
+  // 不用 path.basename：Windows 会把 "X:..." 当成盘符前缀剥掉字母，
+  // 导致 "a:b.png" 在 sanitize `:` 之前就变成 "b.png"。
+  const segments = fileName.split(/[/\\]/).filter((s) => s !== "");
+  const base = segments.at(-1) ?? fileName;
   // 删 / \\ : * ? " < > | + ASCII 控制字符
   // eslint-disable-next-line no-control-regex
   const cleaned = base.replace(/[\\/:*?"<>|\x00-\x1f]/g, "_").trim();
