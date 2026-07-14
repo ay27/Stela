@@ -423,6 +423,13 @@ docs/               # Architecture docs + product screenshots
 | Wiki links + SQL index | MCP server child process |
 | Module + subprocess connector framework | Obsidian plugin runtime |
 
+Forbidden-text scanning:
+
+- **In-repo:** only generic API-key leak shapes.
+- **Private identifiers:** `STELA_RELEASE_FORBIDDEN_PATTERNS` env (CI → GitHub Secret)
+  and/or gitignored `scripts/internal/release-gate.local.json`. See [ADR-0019](./adr/0019-private-release-gate-patterns-via-secret.md).
+
+
 ## Related Documents
 
 - [ABSTRACTIONS.md](./ABSTRACTIONS.md) — domain models and interface contracts

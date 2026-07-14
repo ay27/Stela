@@ -106,6 +106,10 @@ npm run check:release  # public-release gate
 - Private connector plugins outside the allowlist
 - COS / proprietary cloud sync
 
+Private forbidden-text patterns are **not** committed: set GitHub Secret
+`STELA_RELEASE_FORBIDDEN_PATTERNS`, or local `scripts/internal/release-gate.local.json`.
+See [ADR-0019](./docs/adr/0019-private-release-gate-patterns-via-secret.md).
+
 See [ADR-0008](./docs/adr/0008-search-first-ai-instead-of-rag.md).
 
 ## Related

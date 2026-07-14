@@ -5,14 +5,13 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 
-/** 公开仓库硬门禁（不含内部品牌/插件名；扩展见 scripts/internal/release-gate.local.json）。 */
-const FORBIDDEN_PATTERNS = [
-  /Bearer\s+sk-/i,
-  /21\.99\.196\./,
-  /1258344700/,
-  /jinmian_/i,
-  /keymonzhang/i,
-];
+/**
+ * 公开仓库硬门禁（仅通用泄露形态，不含内部标识）。
+ * 私有关键词：
+ *   - 本地：`scripts/internal/release-gate.local.json` → forbiddenPatternSources
+ *   - CI：环境变量 `STELA_RELEASE_FORBIDDEN_PATTERNS`（GitHub Secret）
+ */
+const FORBIDDEN_PATTERNS = [/Bearer\s+sk-/i];
 
 const ALLOWED_PLUGIN_DIRS = new Set([
   "connector-mysql",
@@ -68,13 +67,63 @@ function loadLocalGate() {
   }
 }
 
+/**
+ * GitHub Secret / env：JSON 数组，或按行分隔的 regex source（一律加 `i`）。
+ * 例：`["acme_","corp-internal"]` 或换行列表。
+ */
+function loadEnvForbiddenSources() {
+  const raw = process.env.STELA_RELEASE_FORBIDDEN_PATTERNS?.trim();
+  if (!raw) return [];
+  if (raw.startsWith("[")) {
+    let arr;
+    try {
+      arr = JSON.parse(raw);
+    } catch {
+      console.error(
+        "STELA_RELEASE_FORBIDDEN_PATTERNS must be JSON array or newline-separated regex sources",
+      );
+      process.exit(1);
+    }
+    if (!Array.isArray(arr)) {
+      console.error("STELA_RELEASE_FORBIDDEN_PATTERNS JSON must be an array of strings");
+      process.exit(1);
+    }
+    return arr.filter((s) => typeof s === "string" && s.length > 0);
+  }
+  return raw
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function compileSources(sources, origin) {
+  return sources.map((src, i) => {
+    try {
+      return new RegExp(src, "i");
+    } catch {
+      console.error(`Invalid forbidden regex in ${origin} (entry #${i + 1})`);
+      process.exit(1);
+    }
+  });
+}
+
 const localGate = loadLocalGate();
-const LOCAL_FORBIDDEN = localGate.forbiddenPatternSources.map(
-  (src) => new RegExp(src, "i"),
+const LOCAL_FORBIDDEN = compileSources(
+  localGate.forbiddenPatternSources,
+  "scripts/internal/release-gate.local.json",
 );
-const ALL_FORBIDDEN = [...FORBIDDEN_PATTERNS, ...LOCAL_FORBIDDEN];
+const ENV_FORBIDDEN = compileSources(
+  loadEnvForbiddenSources(),
+  "STELA_RELEASE_FORBIDDEN_PATTERNS",
+);
+const ALL_FORBIDDEN = [...FORBIDDEN_PATTERNS, ...LOCAL_FORBIDDEN, ...ENV_FORBIDDEN];
 const PRIVATE_PLUGIN_DIRS = new Set(localGate.privatePluginDirs);
 const SKIP_PATH_PREFIXES = localGate.skipPathPrefixes;
+
+/** Windows `path.relative` 用 `\`；门禁路径一律按 POSIX `/` 比对。 */
+function toPosixRel(rel) {
+  return rel.replace(/\\/g, "/");
+}
 
 function shouldSkipPath(rel) {
   if (rel === "scripts/internal" || rel.startsWith("scripts/internal/")) {
@@ -89,7 +138,7 @@ function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
     if (SKIP_DIRS.has(name)) continue;
     const p = path.join(dir, name);
-    const rel = path.relative(repoRoot, p);
+    const rel = toPosixRel(path.relative(repoRoot, p));
     if (shouldSkipPath(rel)) continue;
     const st = statSync(p);
     if (st.isDirectory()) {
@@ -104,12 +153,15 @@ function walk(dir, out = []) {
 function checkForbiddenText() {
   const failures = [];
   for (const file of walk(repoRoot)) {
-    const rel = path.relative(repoRoot, file);
+    const rel = toPosixRel(path.relative(repoRoot, file));
+    // 脚本自身可能含「如何配置 secret」的说明文字；不把门禁文件当扫描目标。
     if (rel === "scripts/check-public-release.mjs") continue;
     const text = readFileSync(file, "utf-8");
     for (const pattern of ALL_FORBIDDEN) {
       if (pattern.test(text)) {
-        failures.push(`${rel}: matches ${pattern}`);
+        // ponytail: 不回显 pattern，避免 CI 日志把 GitHub Secret 内容打出来
+        failures.push(`${rel}: matches a forbidden pattern`);
+        break;
       }
     }
   }

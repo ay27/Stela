@@ -71,3 +71,4 @@ proposed → active → superseded
 | [0016](0016-agent-chat-references-and-add-to-chat.md) | Agent chat references and Add to Chat | active |
 | [0017](0017-user-cancelled-agent-runs.md) | User-cancelled agent runs instead of iteration limits | active |
 | [0018](0018-pi-ai-agent-harness.md) | pi-ai transport and AgentHarness for AI provider and agent loop | active |
+| [0019](0019-private-release-gate-patterns-via-secret.md) | Private release-gate patterns via env secret, not source | active |

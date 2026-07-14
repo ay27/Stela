@@ -32,6 +32,8 @@ jobs:
         run: npm test
 
       - name: Run public release gate
+        env:
+          STELA_RELEASE_FORBIDDEN_PATTERNS: ${{ secrets.STELA_RELEASE_FORBIDDEN_PATTERNS }}
         run: npm run check:release
 
       - name: Typecheck and build
