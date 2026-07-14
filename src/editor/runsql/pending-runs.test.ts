@@ -91,7 +91,11 @@ const results: Check[] = [];
 }
 
 {
-  const source = readFileSync(new URL("./execution.ts", import.meta.url), "utf8");
+  // Windows CI 可能 checkout 成 CRLF；源码扫描按 LF 比对。
+  const source = readFileSync(new URL("./execution.ts", import.meta.url), "utf8").replace(
+    /\r\n/g,
+    "\n",
+  );
   const successDetailStart = source.indexOf("const detail: DetailMeta = {");
   const successDetailDispatch = source.indexOf(
     "setAttrs(view, getPos, {\n        detail,",
