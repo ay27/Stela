@@ -532,7 +532,7 @@
   "git.automation.title": "Automation",
   "git.automation.description": "Automatic commit / push / pull in the background reduces manual sync work.",
   "git.autoCommit": "Auto commit",
-  "git.autoCommit.description": "After edits are saved or execution completes, commit a checkpoint after about 10 seconds of idle time.",
+  "git.autoCommit.description": "After edits are saved or execution completes, commit a checkpoint after about 2 minutes of idle time.",
   "git.autoPush": "Auto push",
   "git.autoPush.description": "Push to the remote after an automatic commit.",
   "git.autoPull": "Auto pull",

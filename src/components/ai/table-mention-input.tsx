@@ -24,6 +24,9 @@ const TABLE_TRIGGER = "@";
 const TABLE_MARKUP = "@[__display__](__id__)";
 const NOTE_TRIGGER = "[[";
 const NOTE_MARKUP = "[[__display__]](__id__)";
+const NOTE_MENTION_COLOR = "hsl(48 96% 89%)";
+const PORTAL_GAP_PX = 4;
+const PORTAL_MARGIN_PX = 8;
 
 export interface TableMentionInputValue {
   text: string;
@@ -75,6 +78,111 @@ function hasVisibleMentionList(): boolean {
   ).some((el) => el.getClientRects().length > 0);
 }
 
+/** Clamp/flip mentions portal so the list stays inside the app window. */
+function clampMentionsPortal(
+  portal: HTMLElement,
+  caretBottomAnchor: { current: number | null },
+  resetAnchor: boolean,
+): void {
+  const rect = portal.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  let top = Number.parseFloat(portal.style.top);
+  let left = Number.parseFloat(portal.style.left);
+  if (!Number.isFinite(top)) top = rect.top;
+  if (!Number.isFinite(left)) left = rect.left;
+
+  // Library places portal at caret.bottom + GAP. Remember that anchor so resize
+  // after a flip does not treat the flipped top as a new caret position.
+  if (resetAnchor || caretBottomAnchor.current == null) {
+    caretBottomAnchor.current = top - PORTAL_GAP_PX;
+  }
+  const caretBottom = caretBottomAnchor.current;
+  const spaceBelow = vh - caretBottom - PORTAL_MARGIN_PX;
+  if (rect.height > spaceBelow && caretBottom - PORTAL_GAP_PX - rect.height >= PORTAL_MARGIN_PX) {
+    top = caretBottom - PORTAL_GAP_PX - rect.height;
+  } else {
+    top = Math.min(caretBottom + PORTAL_GAP_PX, vh - rect.height - PORTAL_MARGIN_PX);
+    top = Math.max(PORTAL_MARGIN_PX, top);
+  }
+
+  left = Math.min(left, vw - rect.width - PORTAL_MARGIN_PX);
+  left = Math.max(PORTAL_MARGIN_PX, left);
+
+  if (portal.style.top !== `${top}px`) portal.style.top = `${top}px`;
+  if (portal.style.left !== `${left}px`) portal.style.left = `${left}px`;
+}
+
+function attachMentionsPortalClamp(): () => void {
+  let cancelled = false;
+  let portal: HTMLElement | null = null;
+  let resizeObserver: ResizeObserver | null = null;
+  let styleObserver: MutationObserver | null = null;
+  let clampRaf = 0;
+  let findRaf = 0;
+  let attempts = 0;
+  const caretBottomAnchor: { current: number | null } = { current: null };
+  let pendingResetAnchor = true;
+
+  const runClamp = () => {
+    if (!portal || cancelled) return;
+    const reset = pendingResetAnchor;
+    pendingResetAnchor = false;
+    // Avoid MutationObserver feedback while we rewrite top/left.
+    styleObserver?.disconnect();
+    try {
+      clampMentionsPortal(portal, caretBottomAnchor, reset);
+    } finally {
+      if (portal && !cancelled) {
+        styleObserver?.observe(portal, { attributes: true, attributeFilter: ["style"] });
+      }
+    }
+  };
+
+  const scheduleClamp = (resetAnchor = false) => {
+    if (!portal || cancelled) return;
+    if (resetAnchor) pendingResetAnchor = true;
+    if (clampRaf) cancelAnimationFrame(clampRaf);
+    clampRaf = requestAnimationFrame(() => {
+      clampRaf = 0;
+      runClamp();
+    });
+  };
+
+  const bindPortal = (el: HTMLElement) => {
+    portal = el;
+    resizeObserver = new ResizeObserver(() => scheduleClamp(false));
+    resizeObserver.observe(el);
+    styleObserver = new MutationObserver(() => scheduleClamp(true));
+    styleObserver.observe(el, { attributes: true, attributeFilter: ["style"] });
+    scheduleClamp(true);
+  };
+
+  const findAndBind = () => {
+    if (cancelled || portal) return;
+    const el = document.querySelector<HTMLElement>("[data-mentions-portal]");
+    if (el) {
+      bindPortal(el);
+      return;
+    }
+    if (++attempts < 30) {
+      findRaf = requestAnimationFrame(findAndBind);
+    }
+  };
+
+  findAndBind();
+
+  return () => {
+    cancelled = true;
+    if (clampRaf) cancelAnimationFrame(clampRaf);
+    if (findRaf) cancelAnimationFrame(findRaf);
+    resizeObserver?.disconnect();
+    styleObserver?.disconnect();
+  };
+}
+
 function serializeMarkup(markup: string, triggers: TriggerConfig[]): TableMentionInputValue {
   const segments = parseMarkup(markup, triggers);
   const text = segments
@@ -120,6 +228,7 @@ export const TableMentionInput = forwardRef<TableMentionInputHandle, TableMentio
     const mentionsRef = useRef<MentionsHandle>(null);
     const composingRef = useRef(false);
     const openRef = useRef(false);
+    const clampCleanupRef = useRef<(() => void) | null>(null);
     const tableNamesRef = useRef<string[]>(getTableNamesCached?.() ?? []);
     const valueRef = useRef<TableMentionInputValue>({
       text: initialValue.trim(),
@@ -127,6 +236,7 @@ export const TableMentionInput = forwardRef<TableMentionInputHandle, TableMentio
       referencedNotes: [],
       isEmpty: initialValue.trim().length === 0,
     });
+    const portalContainer = typeof document !== "undefined" ? document.body : undefined;
 
     useEffect(() => {
       let cancelled = false;
@@ -140,6 +250,14 @@ export const TableMentionInput = forwardRef<TableMentionInputHandle, TableMentio
         cancelled = true;
       };
     }, [getTableNamesCached, getTableNames]);
+
+    useEffect(
+      () => () => {
+        clampCleanupRef.current?.();
+        clampCleanupRef.current = null;
+      },
+      [],
+    );
 
     const triggers = useMemo<TriggerConfig[]>(
       () => [
@@ -167,7 +285,7 @@ export const TableMentionInput = forwardRef<TableMentionInputHandle, TableMentio
                 minChars: 0,
                 debounce: 80,
                 maxSuggestions: 12,
-                color: "hsl(var(--accent) / 0.55)",
+                color: NOTE_MENTION_COLOR,
                 data: (query: string) => getNoteCandidates(query),
               },
             ]
@@ -262,10 +380,14 @@ export const TableMentionInput = forwardRef<TableMentionInputHandle, TableMentio
           onOpen={() => {
             openRef.current = true;
             onOpenChange?.(true);
+            clampCleanupRef.current?.();
+            clampCleanupRef.current = attachMentionsPortalClamp();
           }}
           onClose={() => {
             openRef.current = false;
             onOpenChange?.(false);
+            clampCleanupRef.current?.();
+            clampCleanupRef.current = null;
           }}
         >
           <Mentions.Editor
@@ -273,7 +395,7 @@ export const TableMentionInput = forwardRef<TableMentionInputHandle, TableMentio
             placeholder={placeholder}
             disabled={disabled}
           />
-          <Mentions.Portal>
+          <Mentions.Portal container={portalContainer}>
             <Mentions.List className="stela-table-mention__list">
               <Mentions.Empty className="stela-table-mention__empty">—</Mentions.Empty>
               <Mentions.Item

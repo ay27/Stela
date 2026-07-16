@@ -249,7 +249,7 @@ Stela replaces the earlier COS object-storage sync model with **Git-native vault
 - `.stela.sqlite*` and `recent-files.local.json` are gitignored
 - `electron/services/sync-orchestrator.ts` coordinates pull → JSONL import → index refresh
 - `electron/services/git/` provides status, commit, push, pull, conflict handling
-- AutoGit (`src/services/auto-git.ts`) checkpoints on idle/inactive
+- AutoGit (`src/services/auto-git.ts`) checkpoints on idle/inactive; main also runs a commit-only flush on quit (`sync-orchestrator.flushAutoCommitOnQuit`) so a long debounce window does not drop the last checkpoint
 
 See [ADR-0007](./adr/0007-git-sync-over-cloud-storage.md).
 

@@ -89,6 +89,8 @@ function buildSystemPrompt(
     "Use search_vault/list_vault_files/read_note for business definitions in notes. read_note supports offset/maxChars for paging through large notes.",
     "Never assume schema or row values you haven't fetched with a tool.",
     "SQL row limits are enforced automatically; you don't need to add LIMIT yourself.",
+    "In vault Markdown, executable SQL blocks MUST use fenced ```runsql``` — ```sql``` is a plain code fence and will not become a RunSQL node.",
+    "A runsql fence will be followed by an HTML <detail> block: that is the latest successful-run summary plus result-ref-id, written by the execution pipeline. When proposing edits, do not invent, delete, or rewrite <detail> unless the user explicitly asks; preserve existing detail text as-is.",
     "Mutating SQL and note edits always require explicit user approval via the tool itself — don't tell the user you already did it until the tool result confirms it.",
     "When you have a final answer, respond with plain text (no further tool calls). Keep it concise and reference the concrete numbers/tables you found.",
   ]

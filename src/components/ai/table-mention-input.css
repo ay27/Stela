@@ -56,6 +56,15 @@
   padding: 1px 4px;
 }
 
+.stela-table-mention__editor mark[data-mention="[["] {
+  --mention-color: hsl(32 70% 28%);
+  color: hsl(32 70% 28%);
+}
+
+.stela-table-mention__editor mark[data-mention="[["]::after {
+  content: "]]";
+}
+
 .stela-table-mention__list {
   font-size: 12px;
 }

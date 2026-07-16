@@ -15,10 +15,11 @@ import { registerAllHandlers } from "./handlers";
 import { applyCsp, applySecurityDefaults } from "./security";
 import { createMainWindow, resolveAssetPath } from "./window";
 import { assertAllRegistered, unregisterAll } from "./ipc-router";
-import { shutdownVaultContext } from "./vault-context";
+import { getCurrentVault, shutdownVaultContext } from "./vault-context";
 import * as connectorRegistry from "../services/connectors/registry";
 import * as resultStore from "../services/result-store";
 import * as sqlIndex from "../services/sql-index";
+import * as syncOrchestrator from "../services/sync-orchestrator";
 import * as vaultIndex from "../services/vault-index";
 import * as vaultWatcher from "../services/vault-watcher";
 import { bootstrapFromLegacyIfFresh } from "../services/user-cache-store";
@@ -172,14 +173,34 @@ if (!gotLock) {
     }
   });
 
-  app.on("before-quit", () => {
-    try {
-      unregisterAll();
-      shutdownVaultContext();
-      connectorRegistry.shutdown();
-      resultStore.close();
-    } catch (err) {
-      log.error("shutdown error", err);
+  // First before-quit: flush AutoGit checkpoint, then re-enter quit.
+  // Second pass (isQuitting): tear down IPC / vault / connectors.
+  let isQuitting = false;
+  app.on("before-quit", (event) => {
+    if (isQuitting) {
+      try {
+        unregisterAll();
+        shutdownVaultContext();
+        connectorRegistry.shutdown();
+        resultStore.close();
+      } catch (err) {
+        log.error("shutdown error", err);
+      }
+      return;
     }
+    event.preventDefault();
+    void (async () => {
+      try {
+        const vaultPath = getCurrentVault();
+        if (vaultPath) {
+          await syncOrchestrator.flushAutoCommitOnQuit(vaultPath);
+        }
+      } catch (err) {
+        log.error("quit auto-commit failed", err);
+      } finally {
+        isQuitting = true;
+        app.quit();
+      }
+    })();
   });
 }

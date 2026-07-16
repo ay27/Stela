@@ -14,6 +14,7 @@ import { getLogger } from "./logger";
 import * as deviceProfile from "./device-profile";
 import * as git from "./git";
 import * as journal from "./history-journal";
+import * as settingsStore from "./settings-store";
 import * as vaultIndex from "./vault-index";
 
 const log = getLogger("sync");
@@ -56,6 +57,17 @@ async function autoMessage(vaultPath: string): Promise<string> {
     // fall through to timestamp
   }
   return timestampMessage();
+}
+
+/**
+ * App 退出前的最后一次 checkpoint：仅 commit，不 push（避免 credential
+ * prompt 卡住退出）。尊重 git.enabled + autoCommit；无 vault / 未开自动
+ * 提交时 no-op。
+ */
+export async function flushAutoCommitOnQuit(vaultPath: string): Promise<void> {
+  const settings = await settingsStore.loadAppSettings(vaultPath);
+  if (!settings.git.enabled || !settings.git.autoCommit) return;
+  await syncPush(vaultPath, undefined, { push: false });
 }
 
 /**

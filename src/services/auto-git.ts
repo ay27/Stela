@@ -4,6 +4,8 @@
  * 设计：
  *   - 编辑保存 / runsql 完成 / 文件树操作 → 防抖后自动 `git commit`（含 JSONL），
  *     若 settings.git.autoPush 开启则顺带 push。
+ *   - App 退出时 main 再做一次 commit-only flush（见 sync-orchestrator.flushAutoCommitOnQuit），
+ *     避免 2 分钟防抖窗口内退出丢掉 checkpoint；退出路径不 push，以免卡在凭据提示。
  *   - 自动 pull 由定时器驱动（settings.git.autoPull + interval），不抢占用户
  *     正在编辑的脏 buffer——冲突时交给状态栏冲突流程处理。
  *   - 单 inflight：debounce 到达时若上次还在跑，则不并发。
@@ -18,8 +20,8 @@ import { useSettings } from "@/state/settings";
 import { useGitStore } from "@/state/git";
 import { useWorkspace } from "@/state/workspace";
 
-/** 防抖窗口：兼顾打字节奏与崩溃容忍。 */
-const DEBOUNCE_MS = 10_000;
+/** 防抖窗口：编辑停手后多久自动 commit。 */
+const DEBOUNCE_MS = 120_000;
 const SUCCESS_DISPLAY_MS = 2_500;
 
 /** auto-pull 去抖：focus / interval 共享，避免频繁拉取。手动 pull 不走这里。 */

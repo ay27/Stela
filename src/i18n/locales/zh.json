@@ -532,7 +532,7 @@
   "git.automation.title": "自动化",
   "git.automation.description": "后台自动提交 / 推送 / 拉取，降低手动同步负担",
   "git.autoCommit": "自动提交",
-  "git.autoCommit.description": "编辑保存 / 执行完成后，空闲约 10 秒自动 checkpoint 提交",
+  "git.autoCommit.description": "编辑保存 / 执行完成后，空闲约 2 分钟自动 checkpoint 提交",
   "git.autoPush": "自动推送",
   "git.autoPush.description": "自动提交后顺带 push 到远端",
   "git.autoPull": "自动拉取",

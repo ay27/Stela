@@ -196,7 +196,7 @@ export function createAgentTools(options: {
       name: "propose_edit",
       label: "Propose edit",
       description:
-        "Propose editing a note. Use newContent to replace the whole file, or oldText/newText for one exact local replacement in long files. This never writes to disk directly — it shows the user a diff and waits for approval.",
+        "Propose editing a note. Use newContent to replace the whole file, or oldText/newText for one exact local replacement in long files. This never writes to disk directly — it shows the user a diff and waits for approval. Executable SQL in notes must use ```runsql``` fences (not ```sql```). Do not invent, delete, or rewrite trailing <detail> blocks unless the user explicitly asks.",
       parameters: Type.Object({
         path: Type.String(),
         newContent: Type.Optional(
