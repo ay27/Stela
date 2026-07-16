@@ -190,7 +190,8 @@ export function renderMarkdown(markdown: string): ReactNode {
       i += 1;
       continue;
     }
-    if (/^\|.+\|$/.test(line) && /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(lines[i + 1] ?? "")) {
+    // ponytail: accept 2+ dashes — models often emit |:--| which fails strict GFM (≥3)
+    if (/^\|.+\|$/.test(line) && /^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?$/.test(lines[i + 1] ?? "")) {
       const header = splitTableRow(line);
       i += 2;
       const rows: string[][] = [];
@@ -234,7 +235,15 @@ export function renderMarkdown(markdown: string): ReactNode {
     }
     const para: string[] = [line];
     i += 1;
-    while (i < lines.length && (lines[i] ?? "").trim() && !/^```/.test(lines[i] ?? "") && !/^(#{1,3})\s+/.test(lines[i] ?? "") && !/^[-*]\s+/.test(lines[i] ?? "") && !/^>\s?/.test(lines[i] ?? "")) {
+    while (
+      i < lines.length &&
+      (lines[i] ?? "").trim() &&
+      !/^```/.test(lines[i] ?? "") &&
+      !/^(#{1,3})\s+/.test(lines[i] ?? "") &&
+      !/^[-*]\s+/.test(lines[i] ?? "") &&
+      !/^>\s?/.test(lines[i] ?? "") &&
+      !/^\|.+\|$/.test(lines[i] ?? "")
+    ) {
       para.push(lines[i] ?? "");
       i += 1;
     }

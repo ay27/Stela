@@ -292,7 +292,7 @@ flowchart TB
   CTX["context-builder + schema-context\n+ redaction"]
   PROV["provider.ts → pi-ai Models"]
   HARNESS["agent.ts → AgentHarness\n+ compact / overflow recovery"]
-  TOOLS["agent-tools → sequential AgentTool\n→ connectors / search / vault-fs"]
+  TOOLS["agent-tools → parallel except\npropose_edit sequential\n→ connectors / search / vault-fs"]
   GUARD["sql-guard + proposal IPC"]
 
   UI --> PRE
@@ -307,7 +307,7 @@ flowchart TB
 ```
 
 1. **Action complete** — one-shot `AiActionKind` (rewrite-sql, ask-sql, explain-result, explain-table, …). Prompt assembled in main; returns text + optional extracted SQL. UI: RunSQL inline panel, AI modal, schema browser actions. ([ADR-0018](./adr/0018-pi-ai-agent-harness.md))
-2. **Harness agent** — `AgentHarness` tool loop with streaming `ai:agent-event`. Tools browse schema, run SQL, search/read notes, propose edits. Mutations and note writes wait for user approve. Agent chat accepts `@table` mentions, `[[note]]` references, a default current-note reference, and Add to Chat content attachments. Runs continue until the model finishes, errors, or the user cancels. Compacts when near `ai.contextWindow` budget and once on provider context overflow; Panel shows approximate usage + compacting status. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md), [ADR-0016](./adr/0016-agent-chat-references-and-add-to-chat.md), [ADR-0017](./adr/0017-user-cancelled-agent-runs.md), [ADR-0018](./adr/0018-pi-ai-agent-harness.md))
+2. **Harness agent** — `AgentHarness` tool loop with streaming `ai:agent-event`. Tools browse schema, run SQL, search/read notes, propose edits. Same-turn tools may run in parallel except `propose_edit` (sequential). Mutations and note writes wait for user approve. Agent chat accepts `@table` mentions, `[[note]]` references, a default current-note reference, and Add to Chat content attachments. Runs continue until the model finishes, errors, or the user cancels. Compacts when near `ai.contextWindow` budget and once on provider context overflow; Panel shows approximate usage + compacting status. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md), [ADR-0016](./adr/0016-agent-chat-references-and-add-to-chat.md), [ADR-0017](./adr/0017-user-cancelled-agent-runs.md), [ADR-0018](./adr/0018-pi-ai-agent-harness.md), [ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md))
 3. **SQL query parse** — model only emits a `SqlIndexFilter`; hits always come from deterministic `sql-index`.
 
 ### Context pipeline
@@ -326,6 +326,7 @@ Before any action prompt leaves the machine ([ADR-0014](./adr/0014-ai-context-re
 - Multi-statement SQL blocked
 - Mutations require `agentAllowMutations` **and** `ai:agent-respond-proposal`
 - `propose_edit` never writes until approved
+- Same-turn tool batches may run in parallel; only `propose_edit` is sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md))
 - Agent runs are stopped by model completion, errors, or explicit user cancellation; legacy iteration/time settings are ignored
 - Session history is in-memory `Session` / `InMemorySessionStorage` by `sessionId` (not persisted)
 - Compaction: proactive `shouldCompact` against `ai.contextWindow`, plus one overflow recovery compact + continue; additive `context_usage` / `compaction` events on `ai:agent-event`
@@ -342,7 +343,7 @@ Before any action prompt leaves the machine ([ADR-0014](./adr/0014-ai-context-re
 | `electron/services/ai/prompt-builder.ts` | action prompts |
 | `electron/services/ai/redaction.ts` | secret scrubbing |
 | `electron/services/ai/agent.ts` | AgentHarness + session memory + compaction |
-| `electron/services/ai/agent-tools.ts` | sequential AgentTool wrappers + dispatch |
+| `electron/services/ai/agent-tools.ts` | AgentTool wrappers (parallel except sequential `propose_edit`) + dispatch |
 | `electron/services/ai/sql-guard.ts` | read-only vs mutation classification |
 | `src/components/ai/` | modal, inline panel, agent panel, `@table` / `[[note]]` input, Add to Chat |
 

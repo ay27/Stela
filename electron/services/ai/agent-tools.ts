@@ -82,8 +82,13 @@ export interface AgentToolContext {
 }
 
 /**
- * Build sequential pi AgentTool wrappers around {@link dispatchTool}.
- * Proposal gating stays inside dispatch; harness receives thrown errors as isError results.
+ * Build pi AgentTool wrappers around {@link dispatchTool}.
+ *
+ * Tools use `executionMode: "parallel"` so one assistant turn can fan out
+ * schema/vault/SQL lookups. `propose_edit` stays sequential (ordered note
+ * proposal UX). `run_sql` is parallel: sql-guard blocks writes by default and
+ * mutations still wait on proposal. Pi rule: if any call in a batch is
+ * sequential, the whole batch runs sequentially.
  */
 export function createAgentTools(options: {
   ctx: Omit<AgentToolContext, "requestProposal">;
@@ -96,7 +101,7 @@ export function createAgentTools(options: {
       label: "List databases",
       description: "List databases/schemas visible through the current data connection.",
       parameters: Type.Object({}),
-      executionMode: "sequential",
+      executionMode: "parallel",
       execute: (toolCallId) => runTool("list_databases", toolCallId, {}, ctx, requestProposal),
     },
     {
@@ -106,7 +111,7 @@ export function createAgentTools(options: {
       parameters: Type.Object({
         database: Type.Optional(Type.String({ description: "Database name; omit to use the connector default." })),
       }),
-      executionMode: "sequential",
+      executionMode: "parallel",
       execute: (toolCallId, params) => runTool("list_tables", toolCallId, params, ctx, requestProposal),
     },
     {
@@ -120,7 +125,7 @@ export function createAgentTools(options: {
         }),
         limit: Type.Optional(Type.Number({ description: "Optional max candidate tables to return. Defaults to 10." })),
       }),
-      executionMode: "sequential",
+      executionMode: "parallel",
       execute: (toolCallId, params) => runTool("search_tables", toolCallId, params, ctx, requestProposal),
     },
     {
@@ -132,7 +137,7 @@ export function createAgentTools(options: {
           description: "Table names, optionally qualified as db.table.",
         }),
       }),
-      executionMode: "sequential",
+      executionMode: "parallel",
       execute: (toolCallId, params) => runTool("get_table_schema", toolCallId, params, ctx, requestProposal),
     },
     {
@@ -143,7 +148,7 @@ export function createAgentTools(options: {
       parameters: Type.Object({
         sql: Type.String(),
       }),
-      executionMode: "sequential",
+      executionMode: "parallel",
       execute: (toolCallId, params) => runTool("run_sql", toolCallId, params, ctx, requestProposal),
     },
     {
@@ -160,7 +165,7 @@ export function createAgentTools(options: {
         ),
         maxHits: Type.Optional(Type.Number({ description: "Max total hits to return. Defaults to 100." })),
       }),
-      executionMode: "sequential",
+      executionMode: "parallel",
       execute: (toolCallId, params) => runTool("search_vault", toolCallId, params, ctx, requestProposal),
     },
     {
@@ -171,7 +176,7 @@ export function createAgentTools(options: {
       parameters: Type.Object({
         maxFiles: Type.Optional(Type.Number({ description: "Max files to return. Defaults to 200." })),
       }),
-      executionMode: "sequential",
+      executionMode: "parallel",
       execute: (toolCallId, params) => runTool("list_vault_files", toolCallId, params, ctx, requestProposal),
     },
     {
@@ -189,7 +194,7 @@ export function createAgentTools(options: {
           }),
         ),
       }),
-      executionMode: "sequential",
+      executionMode: "parallel",
       execute: (toolCallId, params) => runTool("read_note", toolCallId, params, ctx, requestProposal),
     },
     {

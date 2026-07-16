@@ -16,6 +16,7 @@ import {
 import type { AgentAttachment } from "@shared/types";
 import type { MentionItem } from "@skyastrall/mentions-react";
 
+import { ProposalLineDiff } from "./proposal-diff";
 import { i18n } from "@/i18n";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
@@ -604,21 +605,11 @@ function ProposalCard({
       {entry.payload.notePath ? (
         <div className="mb-2 text-[11px] text-muted-foreground">{entry.payload.notePath}</div>
       ) : null}
-      {entry.payload.oldContent || entry.payload.newContent ? (
-        <div className="mb-2 grid gap-2 text-[11px] md:grid-cols-2">
-          <div>
-            <div className="mb-1 font-medium text-muted-foreground">{t("agent.panel.proposal.before")}</div>
-            <pre className="max-h-48 overflow-auto rounded bg-muted p-2 font-mono">
-              {entry.payload.oldContent ?? ""}
-            </pre>
-          </div>
-          <div>
-            <div className="mb-1 font-medium text-muted-foreground">{t("agent.panel.proposal.after")}</div>
-            <pre className="max-h-48 overflow-auto rounded bg-muted p-2 font-mono">
-              {entry.payload.newContent ?? ""}
-            </pre>
-          </div>
-        </div>
+      {entry.payload.oldContent != null || entry.payload.newContent != null ? (
+        <ProposalLineDiff
+          oldContent={entry.payload.oldContent ?? ""}
+          newContent={entry.payload.newContent ?? ""}
+        />
       ) : null}
       {resolved ? (
         <div className="text-xs text-muted-foreground">
