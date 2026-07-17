@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type WheelEvent } from "react";
 import {
   Bot,
+  Brain,
   CheckCircle2,
   ChevronDown,
   FileText,
@@ -20,6 +21,7 @@ import { ProposalLineDiff } from "./proposal-diff";
 import { i18n } from "@/i18n";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
+import { splitAssistantThinking } from "@/lib/split-assistant-thinking";
 import { getRunContext } from "@/editor/runsql/run-context";
 import {
   ensureAutocompleteFor,
@@ -506,13 +508,11 @@ function TimelineItem({
         </div>
       );
     case "assistant":
-      return (
-        <div className="stela-ai-markdown text-sm leading-6">{renderMarkdown(entry.content)}</div>
-      );
+      return <AssistantMessage content={entry.content} />;
     case "final":
       return (
         <div className="rounded-lg border border-border bg-card/40 p-3">
-          <div className="stela-ai-markdown text-sm leading-6">{renderMarkdown(entry.content)}</div>
+          <AssistantMessage content={entry.content} />
         </div>
       );
     case "error":
@@ -528,6 +528,44 @@ function TimelineItem({
     case "proposal":
       return <ProposalCard entry={entry} onRespond={onRespond} />;
   }
+}
+
+function AssistantMessage({ content }: { content: string }) {
+  const { thinking, body } = splitAssistantThinking(content);
+  if (!thinking && !body) return null;
+  return (
+    <div className="space-y-2">
+      {thinking ? <ThinkingChip thinking={thinking} /> : null}
+      {body ? (
+        <div className="stela-ai-markdown text-sm leading-6">{renderMarkdown(body)}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function ThinkingChip({ thinking }: { thinking: string }) {
+  const t = useT();
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="rounded-md border border-border/60 bg-muted/20 text-xs">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-muted-foreground"
+      >
+        <Brain className="h-3 w-3 flex-none" />
+        <span>{t("agent.panel.thought")}</span>
+        <ChevronDown
+          className={cn("ml-auto h-3 w-3 transition-transform", expanded && "rotate-180")}
+        />
+      </button>
+      {expanded ? (
+        <div className="border-t border-border/60 px-3 py-2 whitespace-pre-wrap text-[11px] leading-5 text-muted-foreground">
+          {thinking}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function ToolChip({ entry }: { entry: Extract<AgentTimelineEntry, { kind: "tool" }> }) {

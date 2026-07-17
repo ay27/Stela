@@ -185,10 +185,13 @@ function attachMentionsPortalClamp(): () => void {
 
 function serializeMarkup(markup: string, triggers: TriggerConfig[]): TableMentionInputValue {
   const segments = parseMarkup(markup, triggers);
+  // 表 → `@id`；笔记 → `[[id]]`（id 即 vault 路径）。必须上屏，否则用户以为没发出去。
+  // 正文仍不嵌文件内容——路径走 referencedNotes，由模型 read_note（ADR-0016）。
   const text = segments
     .map((segment) => {
       if (segment.type !== "mention") return segment.text;
       if (segment.trigger === TABLE_TRIGGER) return `${segment.trigger}${segment.id}`;
+      if (segment.trigger === NOTE_TRIGGER) return `[[${segment.id}]]`;
       return "";
     })
     .join("")
@@ -204,7 +207,12 @@ function serializeMarkup(markup: string, triggers: TriggerConfig[]): TableMentio
       .filter((item) => item.trigger === NOTE_TRIGGER)
       .map((item) => item.id),
   );
-  return { text, mentionedTables, referencedNotes, isEmpty: text.length === 0 };
+  return {
+    text,
+    mentionedTables,
+    referencedNotes,
+    isEmpty: text.length === 0 && referencedNotes.length === 0,
+  };
 }
 
 export const TableMentionInput = forwardRef<TableMentionInputHandle, TableMentionInputProps>(

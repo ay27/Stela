@@ -117,6 +117,7 @@
   "agent.panel.empty": "让 agent 分析笔记、查询数据、或撰写总结。",
   "agent.panel.placeholder": "让 agent 做点什么…",
   "agent.panel.thinking": "思考中…",
+  "agent.panel.thought": "思考过程",
   "agent.panel.contextUsage": "Context ~{{percent}}%",
   "agent.panel.compacting": "正在压缩上下文…",
   "agent.panel.send": "发送",

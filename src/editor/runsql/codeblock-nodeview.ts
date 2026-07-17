@@ -891,8 +891,12 @@ export class CodeBlockNodeView implements NodeView {
       pmSel.to !== selTo
     ) {
       const tr = this.view.state.tr;
+      // fromA 是 CM 变更前文档的绝对坐标；每应用一步 PM 文档长度会变，
+      // 必须累加 (newLen - oldLen)，否则像 Cmd+/ 多行注释这种「一次多处插入」
+      // 会把后续行写到错误位置（看起来像随机挑几行加了 --）。
+      // 公式对齐 https://prosemirror.net/examples/codemirror/
       let off = start;
-      update.changes.iterChanges((fromA, toA, _fromB, toB, text) => {
+      update.changes.iterChanges((fromA, toA, fromB, toB, text) => {
         if (text.length) {
           tr.replaceWith(
             off + fromA,
@@ -902,7 +906,7 @@ export class CodeBlockNodeView implements NodeView {
         } else {
           tr.delete(off + fromA, off + toA);
         }
-        off += toB - (toA - fromA) - (toB - fromA);
+        off += toB - fromB - (toA - fromA);
       });
       try {
         tr.setSelection(TextSelection.create(tr.doc, selFrom, selTo));

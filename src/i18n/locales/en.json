@@ -117,6 +117,7 @@
   "agent.panel.empty": "Ask the agent to analyze notes, query data, or draft a summary.",
   "agent.panel.placeholder": "Ask the agent to do something…",
   "agent.panel.thinking": "Thinking…",
+  "agent.panel.thought": "Thought",
   "agent.panel.contextUsage": "Context ~{{percent}}%",
   "agent.panel.compacting": "Compacting context…",
   "agent.panel.send": "Send",
