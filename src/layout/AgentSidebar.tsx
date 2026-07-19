@@ -8,6 +8,9 @@
  * 默认折叠（避免常驻占用太多屏幕宽度），可通过 Mod+Shift+A / TabBar 右侧图标 /
  * 面板内按钮 / 命令面板展开或收起，宽度可拖拽调整（持久化到 localStorage，逻辑与
  * 左侧 Sidebar 对称）。
+ *
+ * 折叠时必须卸掉 AgentPanel（与左侧 Sidebar 一致）：子树里有 min-w-[104px] /
+ * w-8 等控件，flex 子项默认 min-width:auto，会把 width:0 顶成一条可见竖缝。
  */
 
 import { AgentPanel } from "@/components/ai/agent-panel";
@@ -26,11 +29,11 @@ export function AgentSidebar() {
       style={collapsed ? { width: 0 } : { width }}
       className={cn(
         "relative flex h-full flex-none flex-col border-l border-border bg-background text-foreground transition-[width] duration-150",
-        collapsed && "overflow-hidden border-l-0",
+        collapsed && "min-w-0 overflow-hidden border-l-0",
       )}
     >
       {collapsed ? null : <AgentPanelResizer />}
-      <AgentPanel />
+      {collapsed ? null : <AgentPanel />}
     </aside>
   );
 }

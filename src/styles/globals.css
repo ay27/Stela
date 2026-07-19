@@ -90,12 +90,11 @@
     height: 100%;
   }
 
+  /*
+   * Electron 壳本身 overflow:hidden，滚动在内部面板里；html 层勿用 stable gutter，
+   * 否则（尤其 mac / Win frameless）会在窗口最右侧永久留一条空白竖缝。
+   */
   html {
-    scrollbar-gutter: stable;
-  }
-
-  /* Win frameless：stable gutter + w-screen 会在最右侧挤出一条竖向空白 */
-  :root[data-platform="win"] {
     scrollbar-gutter: auto;
   }
 
