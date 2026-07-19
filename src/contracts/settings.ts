@@ -77,8 +77,20 @@ export type AiProviderMode = "disabled" | "openai-compatible" | "cloud";
 
 export type AiContextWindow = 64_000 | 128_000 | 200_000 | 256_000 | 1_000_000;
 
+export interface AiProviderProfile {
+  id: string;
+  name: string;
+  vendorId: string;
+  model: string;
+  baseUrl: string;
+  contextWindow: AiContextWindow;
+  hasApiKey: boolean;
+}
+
 export interface AiSettings {
   providerMode: AiProviderMode;
+  activeProfileId: string;
+  profiles: AiProviderProfile[];
   baseUrl: string;
   model: string;
   hasApiKey: boolean;
@@ -128,6 +140,18 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   },
   ai: {
     providerMode: "disabled",
+    activeProfileId: "default",
+    profiles: [
+      {
+        id: "default",
+        name: "Default",
+        vendorId: "custom",
+        model: "gpt-4o-mini",
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 128_000,
+        hasApiKey: false,
+      },
+    ],
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4o-mini",
     hasApiKey: false,

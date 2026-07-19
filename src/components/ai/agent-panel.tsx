@@ -36,6 +36,7 @@ import {
 import { useLayout } from "@/state/layout";
 import { useConnections } from "@/state/connections";
 import { useWorkspace } from "@/state/workspace";
+import { useSettings } from "@/state/settings";
 import { firstConnectionName } from "@/services/connections";
 import { ConnectionPicker } from "@/components/connection-picker";
 
@@ -188,6 +189,8 @@ export function AgentPanel() {
   const compacting = activeTab.compacting;
   const vaultPath = useWorkspace((s) => s.vaultPath);
   const focusToken = useLayout((s) => s.agentFocusToken);
+  const aiSettings = useSettings((s) => s.settings.ai);
+  const patchSettings = useSettings((s) => s.patch);
   const switchTab = useAgentPanel((s) => s.switchTab);
   const start = useAgentPanel((s) => s.start);
   const cancel = useAgentPanel((s) => s.cancel);
@@ -423,8 +426,30 @@ export function AgentPanel() {
           onSubmit={send}
         />
 
-        {/* 独立一行放操作按钮——未来还会加别的面板级功能按钮，Send/Stop 先占最右。 */}
-        <div className="mt-1.5 flex items-center justify-end gap-1.5">
+        {/* 独立一行放操作按钮——左侧切 AI 配置档，Send/Stop 占最右。 */}
+        <div className="mt-1.5 flex items-center justify-between gap-1.5">
+          {aiSettings.profiles.length > 0 ? (
+            <select
+              value={aiSettings.activeProfileId}
+              disabled={busy}
+              title={t("agent.panel.provider")}
+              onChange={(e) => {
+                const id = e.target.value;
+                void patchSettings({ ai: { activeProfileId: id } });
+                void window.stela.ai.configure({ activeProfileId: id });
+              }}
+              className="max-w-[55%] truncate rounded-md border border-border bg-background px-1.5 py-1.5 text-[11px] text-foreground disabled:opacity-40"
+            >
+              {aiSettings.profiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.name}
+                  {profile.model ? ` · ${profile.model}` : ""}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span />
+          )}
           {busy ? (
             <button
               type="button"
@@ -502,7 +527,7 @@ function TimelineItem({
     case "user":
       return (
         <div className="flex justify-end">
-          <div className="max-w-[80%] rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground">
+          <div className="max-w-[80%] rounded-lg bg-muted px-3 py-2 text-sm text-foreground">
             {entry.content}
           </div>
         </div>

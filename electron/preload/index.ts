@@ -290,8 +290,10 @@ const stela = {
     configure: (
       settings: Partial<Omit<AiSettings, "hasApiKey">>,
       apiKey?: string | null,
-    ) => call<AiProviderStatus>(IPC.AI_CONFIGURE, { settings, apiKey }),
-    clearApiKey: () => call<AiProviderStatus>(IPC.AI_CLEAR_API_KEY, {}),
+      profileId?: string | null,
+    ) => call<AiProviderStatus>(IPC.AI_CONFIGURE, { settings, apiKey, profileId }),
+    clearApiKey: (profileId?: string | null) =>
+      call<AiProviderStatus>(IPC.AI_CLEAR_API_KEY, { profileId }),
     complete: (request: AiCompleteRequest) =>
       call<AiCompleteResponse>(IPC.AI_COMPLETE, { request }),
     parseSqlQuery: (request: AiParseSqlQueryRequest) =>

@@ -273,12 +273,12 @@ Stela AI is **search-first and provider-backed**, not on-device RAG. Retrieval u
 
 | Concern | Implementation |
 |---------|----------------|
-| Chat / agent transport | `@earendil-works/pi-ai` custom OpenAI-compatible provider (`completeSimple` / AgentHarness streams) |
+| Chat / agent transport | `@earendil-works/pi-ai` — built-in provider factories by `vendorId`, or `createProvider` + `openAICompletionsApi` for `custom` ([ADR-0022](./adr/0022-ai-multi-provider-profiles.md)) |
 | Agent loop | `@earendil-works/pi-agent-core` `AgentHarness` + in-memory `Session` |
-| API key | `{vault}/.stela/secrets/ai_{deviceSlug}.json` via `safeStorage` (injected into pi `CredentialStore`; not pi `auth.json`) |
-| Settings | vault `.stela/settings.json` → `ai.*` (`hasApiKey` only, never the key; `contextWindow` presets for compaction) |
+| API key | `{vault}/.stela/secrets/ai_{deviceSlug}_{profileId}.json` via `safeStorage` (injected into pi `CredentialStore`; not pi `auth.json`) |
+| Settings | vault `.stela/settings.json` → `ai.profiles` + `ai.activeProfileId` (+ policy flags); keys never in settings |
 
-No cloud FIM / ghost-text inline completion — removed for latency ([ADR-0018](./adr/0018-pi-ai-agent-harness.md) supersedes [ADR-0015](./adr/0015-openai-compatible-provider-without-fim.md) / [ADR-0011](./adr/0011-openai-compatible-provider-and-fim.md)). RunSQL still has local schema/keyword autocomplete.
+Agent Panel and Settings share `activeProfileId`. Vendor dropdown lists every pi built-in provider (no Stela allowlist) plus Custom. No cloud FIM / ghost-text inline completion — removed for latency ([ADR-0018](./adr/0018-pi-ai-agent-harness.md)). RunSQL still has local schema/keyword autocomplete.
 
 ### Two surfaces (+ one translator)
 
@@ -336,7 +336,7 @@ Before any action prompt leaves the machine ([ADR-0014](./adr/0014-ai-context-re
 
 | Path | Role |
 |------|------|
-| `electron/services/ai/provider.ts` | API key shards, pi-ai Models / OpenAI-compatible transport |
+| `electron/services/ai/provider.ts` | Profile key shards, pi builtin / custom transport |
 | `electron/services/ai/index.ts` | complete / parseSqlQuery entry |
 | `electron/services/ai/context-builder.ts` | bounded context + related runs |
 | `electron/services/ai/schema-context.ts` | table/DDL enrichment |

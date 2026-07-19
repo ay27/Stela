@@ -30,7 +30,7 @@ import * as connectorRegistry from "../connectors/registry";
 import { getLogger } from "../logger";
 import * as settingsStore from "../settings-store";
 import { createAgentTools, type ProposalRequest } from "./agent-tools";
-import { createStelaTransport, loadApiKey } from "./provider";
+import { createTransportForProfile, getActiveProfile, loadApiKey } from "./provider";
 
 const log = getLogger("ai.agent");
 const AGENT_ATTACHMENT_CHAR_BUDGET = 30_000;
@@ -236,9 +236,10 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
       onEvent({ type: "error", runId, message: "AI provider is disabled. Enable it in Settings → AI." });
       return;
     }
-    const apiKey = await loadApiKey(vaultPath, slug);
+    const profile = getActiveProfile(settings.ai, request.profileId);
+    const apiKey = await loadApiKey(vaultPath, slug, profile.id);
     const { connection, dialect } = await resolveConnection(vaultPath, slug, request.connectionName);
-    const { models, model } = createStelaTransport(settings.ai, apiKey);
+    const { models, model } = createTransportForProfile(settings.ai, apiKey, profile.id);
     const contextWindow = model.contextWindow;
     const session = getOrCreateSession(request.sessionId ?? undefined);
 

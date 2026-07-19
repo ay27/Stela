@@ -23,8 +23,12 @@ import {
   callChatCompletions,
   clearApiKey,
   configureProvider,
+  createTransportForProfile,
+  getActiveProfile,
   getProviderStatus,
   loadApiKey,
+  deleteProfile,
+  upsertProfile,
 } from "./provider";
 
 const log = getLogger("ai");
@@ -128,16 +132,36 @@ export async function configure(
   slug: string,
   settings: Partial<Omit<AiSettings, "hasApiKey">>,
   apiKey?: string | null,
+  profileId?: string | null,
 ): Promise<AiProviderStatus> {
-  return configureProvider(vaultPath, slug, settings, apiKey);
+  return configureProvider(vaultPath, slug, settings, apiKey, profileId);
 }
 
 export async function clearSecret(
   vaultPath: string,
   slug: string,
+  profileId?: string | null,
 ): Promise<AiProviderStatus> {
-  await clearApiKey(vaultPath, slug);
+  await clearApiKey(vaultPath, slug, profileId);
   return getProviderStatus(vaultPath);
+}
+
+export async function saveProfile(
+  vaultPath: string,
+  slug: string,
+  profile: Parameters<typeof upsertProfile>[2],
+  apiKey?: string | null,
+  makeActive = true,
+): Promise<AiProviderStatus> {
+  return upsertProfile(vaultPath, slug, profile, apiKey, makeActive);
+}
+
+export async function removeProfile(
+  vaultPath: string,
+  slug: string,
+  profileId: string,
+): Promise<AiProviderStatus> {
+  return deleteProfile(vaultPath, slug, profileId);
 }
 
 export async function complete(
@@ -154,12 +178,14 @@ export async function complete(
   );
   const prompt = buildPrompt(bundle);
   log.info("\n" + formatPromptDebugLog(bundle, prompt));
-  const apiKey = await loadApiKey(vaultPath, slug);
+  const profile = getActiveProfile(settings.ai);
+  const apiKey = await loadApiKey(vaultPath, slug, profile.id);
   const text = await callChatCompletions({
     settings: settings.ai,
     apiKey,
     system: prompt.system,
     user: prompt.user,
+    profileId: profile.id,
   });
   return {
     action: schemaRequest.action,
@@ -180,7 +206,8 @@ export async function parseSqlQuery(
   request: AiParseSqlQueryRequest,
 ): Promise<AiParseSqlQueryResponse> {
   const settings = await settingsStore.loadAppSettings(vaultPath);
-  const apiKey = await loadApiKey(vaultPath, slug);
+  const profile = getActiveProfile(settings.ai);
+  const apiKey = await loadApiKey(vaultPath, slug, profile.id);
   const facetsData = await sqlIndex.facets();
   const locale = request.locale ?? "zh";
   const { system, instructions } = buildSqlQueryParsePrompt(facetsData, locale);
@@ -189,6 +216,7 @@ export async function parseSqlQuery(
     apiKey,
     system: `${system}\n\n${instructions}`,
     user: request.question,
+    profileId: profile.id,
   });
   try {
     const { filter, warnings } = parseModelFilterOutput(text);
@@ -204,3 +232,6 @@ export async function parseSqlQuery(
     );
   }
 }
+
+// re-export for tests / callers that need transport helpers
+export { createTransportForProfile, getActiveProfile };

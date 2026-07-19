@@ -22,6 +22,7 @@ import type {
   RecentFileEntry,
   ThemeMode,
   EditorWidth,
+  AiProviderProfile,
 } from "@shared/types";
 
 import { atomicWriteFile } from "./atomic-write";
@@ -48,18 +49,106 @@ const GIT_DEFAULT: GitSettings = {
 
 const AI_CONTEXT_WINDOWS = new Set([64_000, 128_000, 200_000, 256_000, 1_000_000]);
 
-const AI_DEFAULT: AiSettings = {
+const DEFAULT_PROFILE_ID = "default";
+
+function snapContextWindow(value: unknown, fallback: AiSettings["contextWindow"]): AiSettings["contextWindow"] {
+  if (typeof value === "number" && AI_CONTEXT_WINDOWS.has(Math.floor(value))) {
+    return Math.floor(value) as AiSettings["contextWindow"];
+  }
+  return fallback;
+}
+
+function guessVendorId(baseUrl: string): string {
+  const u = baseUrl.toLowerCase();
+  if (u.includes("deepseek")) return "deepseek";
+  if (u.includes("minimaxi.com") || u.includes("minimax.cn")) return "minimax-cn";
+  if (u.includes("minimax")) return "minimax";
+  if (u.includes("openai.com")) return "openai";
+  if (u.includes("moonshot")) return "moonshotai";
+  return "custom";
+}
+
+function sanitizeProfile(input: unknown, fallbackHasKey: boolean): AiProviderProfile | null {
+  if (!input || typeof input !== "object") return null;
+  const r = input as Record<string, unknown>;
+  const id = typeof r.id === "string" && r.id.trim() ? r.id.trim() : "";
+  if (!id) return null;
+  const vendorId =
+    typeof r.vendorId === "string" && r.vendorId.trim() ? r.vendorId.trim() : "custom";
+  const model = typeof r.model === "string" ? r.model.trim() : "";
+  const baseUrl = typeof r.baseUrl === "string" ? r.baseUrl.trim() : "";
+  const name =
+    typeof r.name === "string" && r.name.trim()
+      ? r.name.trim()
+      : vendorId === "custom"
+        ? "Custom"
+        : vendorId;
+  return {
+    id,
+    name,
+    vendorId,
+    model: model || "gpt-4o-mini",
+    baseUrl: baseUrl || (vendorId === "custom" ? "https://api.openai.com/v1" : ""),
+    contextWindow: snapContextWindow(r.contextWindow, 128_000),
+    hasApiKey: r.hasApiKey === true || fallbackHasKey,
+  };
+}
+
+function syncActiveMirrors(ai: Omit<AiSettings, "baseUrl" | "model" | "hasApiKey" | "contextWindow"> & {
+  baseUrl?: string;
+  model?: string;
+  hasApiKey?: boolean;
+  contextWindow?: AiSettings["contextWindow"];
+}): AiSettings {
+  const active =
+    ai.profiles.find((p) => p.id === ai.activeProfileId) ?? ai.profiles[0] ?? null;
+  const activeProfileId = active?.id ?? DEFAULT_PROFILE_ID;
+  const profiles =
+    ai.profiles.length > 0
+      ? ai.profiles
+      : [
+          {
+            id: DEFAULT_PROFILE_ID,
+            name: "Default",
+            vendorId: "custom",
+            model: "gpt-4o-mini",
+            baseUrl: "https://api.openai.com/v1",
+            contextWindow: 128_000 as AiSettings["contextWindow"],
+            hasApiKey: false,
+          },
+        ];
+  const profile = profiles.find((p) => p.id === activeProfileId) ?? profiles[0];
+  return {
+    ...ai,
+    activeProfileId: profile.id,
+    profiles,
+    baseUrl: profile.baseUrl,
+    model: profile.model,
+    hasApiKey: profile.hasApiKey,
+    contextWindow: profile.contextWindow,
+  };
+}
+
+const AI_DEFAULT: AiSettings = syncActiveMirrors({
   providerMode: "disabled",
-  baseUrl: "https://api.openai.com/v1",
-  model: "gpt-4o-mini",
-  hasApiKey: false,
+  activeProfileId: DEFAULT_PROFILE_ID,
+  profiles: [
+    {
+      id: DEFAULT_PROFILE_ID,
+      name: "Default",
+      vendorId: "custom",
+      model: "gpt-4o-mini",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 128_000,
+      hasApiKey: false,
+    },
+  ],
   sendResultSamples: true,
   maxSampleRows: 20,
-  contextWindow: 128_000,
   agentMaxIterations: 200,
   agentWallClockMs: 300_000,
   agentAllowMutations: false,
-};
+});
 
 /** 单次查询默认最多保存/展示的结果行数；`0` = 不限制。 */
 const EXECUTION_DEFAULT: ExecutionSettings = { onError: "continue", maxRows: 1000 };
@@ -81,7 +170,7 @@ interface RawSettings {
   persistence?: { cleanupMonths?: number };
   ui?: { defaultPageSize?: number; editorWidth?: EditorWidth };
   git?: Partial<GitSettings>;
-  ai?: Partial<AiSettings>;
+  ai?: Record<string, unknown>;
 }
 
 function sanitizeAi(input: unknown): AiSettings {
@@ -91,8 +180,6 @@ function sanitizeAi(input: unknown): AiSettings {
     r.providerMode === "openai-compatible" || r.providerMode === "cloud"
       ? r.providerMode
       : "disabled";
-  const baseUrl = typeof r.baseUrl === "string" ? r.baseUrl.trim() : "";
-  const model = typeof r.model === "string" ? r.model.trim() : "";
   const maxSampleRows =
     typeof r.maxSampleRows === "number" && Number.isFinite(r.maxSampleRows)
       ? Math.min(100, Math.max(0, Math.floor(r.maxSampleRows)))
@@ -105,25 +192,54 @@ function sanitizeAi(input: unknown): AiSettings {
     typeof r.agentWallClockMs === "number" && Number.isFinite(r.agentWallClockMs)
       ? Math.min(600_000, Math.max(5_000, Math.floor(r.agentWallClockMs)))
       : AI_DEFAULT.agentWallClockMs;
-  const contextWindow =
-    typeof r.contextWindow === "number" && AI_CONTEXT_WINDOWS.has(Math.floor(r.contextWindow))
-      ? (Math.floor(r.contextWindow) as AiSettings["contextWindow"])
-      : AI_DEFAULT.contextWindow;
-  return {
+
+  const legacyHasKey = r.hasApiKey === true;
+  let profiles: AiProviderProfile[] = [];
+  if (Array.isArray(r.profiles)) {
+    for (const item of r.profiles) {
+      const profile = sanitizeProfile(item, false);
+      if (profile) profiles.push(profile);
+    }
+  }
+  if (profiles.length === 0) {
+    const baseUrl =
+      typeof r.baseUrl === "string" && r.baseUrl.trim()
+        ? r.baseUrl.trim()
+        : AI_DEFAULT.baseUrl;
+    const model =
+      typeof r.model === "string" && r.model.trim() ? r.model.trim() : AI_DEFAULT.model;
+    const vendorId = guessVendorId(baseUrl);
+    profiles = [
+      {
+        id: DEFAULT_PROFILE_ID,
+        name: vendorId === "custom" ? "Default" : vendorId,
+        vendorId,
+        model,
+        baseUrl: vendorId === "custom" ? baseUrl : baseUrl,
+        contextWindow: snapContextWindow(r.contextWindow, AI_DEFAULT.contextWindow),
+        hasApiKey: legacyHasKey,
+      },
+    ];
+  }
+
+  const activeProfileId =
+    typeof r.activeProfileId === "string" && r.activeProfileId.trim()
+      ? r.activeProfileId.trim()
+      : profiles[0]?.id ?? DEFAULT_PROFILE_ID;
+
+  return syncActiveMirrors({
     providerMode,
-    baseUrl: baseUrl || AI_DEFAULT.baseUrl,
-    model: model || AI_DEFAULT.model,
-    hasApiKey: r.hasApiKey === true,
+    activeProfileId,
+    profiles,
     sendResultSamples:
       r.sendResultSamples === undefined
         ? AI_DEFAULT.sendResultSamples
         : r.sendResultSamples === true,
     maxSampleRows,
-    contextWindow,
     agentMaxIterations,
     agentWallClockMs,
     agentAllowMutations: r.agentAllowMutations === true,
-  };
+  });
 }
 
 function sanitizeExecution(input: unknown): ExecutionSettings {

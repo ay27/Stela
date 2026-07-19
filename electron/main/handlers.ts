@@ -441,20 +441,26 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
     {
       settings: Partial<Omit<AiSettings, "hasApiKey">>;
       apiKey?: string | null;
+      profileId?: string | null;
     },
     AiProviderStatus
-  >(IPC.AI_CONFIGURE, async ({ settings, apiKey }) =>
+  >(IPC.AI_CONFIGURE, async ({ settings, apiKey, profileId }) =>
     ai.configure(
       requireVault(),
       (await deviceProfile.loadDeviceProfile()).slug,
       settings,
       apiKey,
+      profileId,
     ),
   );
-  registerHandler<Record<string, never>, AiProviderStatus>(
+  registerHandler<{ profileId?: string | null }, AiProviderStatus>(
     IPC.AI_CLEAR_API_KEY,
-    async () =>
-      ai.clearSecret(requireVault(), (await deviceProfile.loadDeviceProfile()).slug),
+    async ({ profileId }) =>
+      ai.clearSecret(
+        requireVault(),
+        (await deviceProfile.loadDeviceProfile()).slug,
+        profileId,
+      ),
   );
   registerHandler<{ request: AiCompleteRequest }, AiCompleteResponse>(
     IPC.AI_COMPLETE,

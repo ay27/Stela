@@ -202,8 +202,9 @@ interface StelaBridge {
     configure: (
       settings: Partial<Omit<AiSettings, "hasApiKey">>,
       apiKey?: string | null,
+      profileId?: string | null,
     ) => Promise<AiProviderStatus>;
-    clearApiKey: () => Promise<AiProviderStatus>;
+    clearApiKey: (profileId?: string | null) => Promise<AiProviderStatus>;
     complete: (request: AiCompleteRequest) => Promise<AiCompleteResponse>;
     parseSqlQuery: (
       request: AiParseSqlQueryRequest,

@@ -1,6 +1,8 @@
 /**
- * OpenAI-compatible LLM transport via `@earendil-works/pi-ai`.
+ * LLM transport via `@earendil-works/pi-ai`.
  *
+ * - Builtin vendors: pi provider factories (catalog + native API).
+ * - Custom: createProvider + openAICompletionsApi (arbitrary OpenAI-compatible gateways).
  * Credentials stay Stela-owned (safeStorage shards). pi's auth.json is not used.
  */
 
@@ -11,18 +13,23 @@ import {
   type CredentialStore,
   type Model,
   type Models,
+  type Provider,
 } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 import { AppError } from "@shared/errors";
 import type {
+  AiProviderProfile,
   AiProviderStatus,
   AiSettings,
+  AiVendorInfo,
   PartialAppSettings,
 } from "@shared/types";
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 import { atomicWriteFile } from "../atomic-write";
 import * as secrets from "../secrets";
@@ -31,19 +38,28 @@ import * as settingsStore from "../settings-store";
 
 const SECRETS_DIR = "secrets";
 const AI_SECRET_FILE_PREFIX = "ai_";
-const STELA_PROVIDER_ID = "stela-openai-compatible";
+const CUSTOM_VENDOR_ID = "custom";
+const CUSTOM_PROVIDER_ID = "stela-custom";
 
 interface AiSecretShard {
   apiKey?: string;
 }
 
-function shardPath(vaultPath: string, slug: string): string {
+function legacyShardPath(vaultPath: string, slug: string): string {
   return path.join(vaultConfigDir(vaultPath), SECRETS_DIR, `${AI_SECRET_FILE_PREFIX}${slug}.json`);
 }
 
-async function readShard(vaultPath: string, slug: string): Promise<AiSecretShard> {
+function shardPath(vaultPath: string, slug: string, profileId: string): string {
+  return path.join(
+    vaultConfigDir(vaultPath),
+    SECRETS_DIR,
+    `${AI_SECRET_FILE_PREFIX}${slug}_${profileId}.json`,
+  );
+}
+
+async function readShardFile(filePath: string): Promise<AiSecretShard> {
   try {
-    const buf = await fs.readFile(shardPath(vaultPath, slug), "utf-8");
+    const buf = await fs.readFile(filePath, "utf-8");
     return JSON.parse(buf) as AiSecretShard;
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
@@ -52,74 +68,250 @@ async function readShard(vaultPath: string, slug: string): Promise<AiSecretShard
   }
 }
 
-async function writeShard(
-  vaultPath: string,
-  slug: string,
-  shard: AiSecretShard,
-): Promise<void> {
-  await atomicWriteFile(shardPath(vaultPath, slug), JSON.stringify(shard, null, 2));
+async function writeShardFile(filePath: string, shard: AiSecretShard): Promise<void> {
+  await atomicWriteFile(filePath, JSON.stringify(shard, null, 2));
+}
+
+let cachedBuiltinProviders: Provider[] | undefined;
+
+function allBuiltinProviders(): Provider[] {
+  // ponytail: cache once; catalog is static for process lifetime
+  return (cachedBuiltinProviders ??= builtinProviders());
+}
+
+export function listAiVendors(): AiVendorInfo[] {
+  const builtins = allBuiltinProviders().map((provider) => ({
+    id: provider.id,
+    name: provider.name,
+    models: provider.getModels().map((model) => ({
+      id: model.id,
+      name: model.name,
+      contextWindow: model.contextWindow,
+    })),
+  }));
+  return [
+    ...builtins,
+    { id: CUSTOM_VENDOR_ID, name: "Custom (OpenAI-compatible)", models: [] },
+  ];
+}
+
+function resolvePiProvider(vendorId: string): Provider | undefined {
+  return allBuiltinProviders().find((provider) => provider.id === vendorId);
+}
+
+export function getActiveProfile(ai: AiSettings, profileId?: string | null): AiProviderProfile {
+  const id = profileId?.trim() || ai.activeProfileId;
+  const found = ai.profiles.find((p) => p.id === id);
+  if (found) return found;
+  if (ai.profiles[0]) return ai.profiles[0];
+  throw new AppError("ai_missing_profile", "No AI provider profile is configured.");
 }
 
 export async function loadApiKey(
   vaultPath: string,
   slug: string,
+  profileId: string,
 ): Promise<string> {
-  const shard = await readShard(vaultPath, slug);
-  return shard.apiKey ? secrets.decryptToken(shard.apiKey) : "";
+  const primary = await readShardFile(shardPath(vaultPath, slug, profileId));
+  if (primary.apiKey) return secrets.decryptToken(primary.apiKey);
+  // ponytail: one-shot legacy migrate from ai_{slug}.json
+  const legacy = await readShardFile(legacyShardPath(vaultPath, slug));
+  if (!legacy.apiKey) return "";
+  const decrypted = secrets.decryptToken(legacy.apiKey);
+  await saveApiKey(vaultPath, slug, profileId, decrypted);
+  return decrypted;
 }
 
 export async function saveApiKey(
   vaultPath: string,
   slug: string,
+  profileId: string,
   apiKey: string,
 ): Promise<void> {
-  await writeShard(vaultPath, slug, { apiKey: secrets.encryptToken(apiKey) });
+  await writeShardFile(shardPath(vaultPath, slug, profileId), {
+    apiKey: secrets.encryptToken(apiKey),
+  });
 }
 
-export async function clearApiKey(vaultPath: string, slug: string): Promise<void> {
-  await writeShard(vaultPath, slug, {});
+export async function clearApiKey(
+  vaultPath: string,
+  slug: string,
+  profileId?: string | null,
+): Promise<void> {
   const settings = await settingsStore.loadAppSettings(vaultPath);
+  const profile = getActiveProfile(settings.ai, profileId);
+  await writeShardFile(shardPath(vaultPath, slug, profile.id), {});
+  const profiles = settings.ai.profiles.map((item) =>
+    item.id === profile.id ? { ...item, hasApiKey: false } : item,
+  );
   await settingsStore.patchAppSettings(vaultPath, {
-    ai: { ...settings.ai, hasApiKey: false },
+    ai: {
+      ...settings.ai,
+      profiles,
+      activeProfileId: settings.ai.activeProfileId,
+      hasApiKey: false,
+    },
   });
+}
+
+function withUpdatedProfile(
+  ai: AiSettings,
+  profileId: string,
+  patch: Partial<AiProviderProfile>,
+): AiProviderProfile[] {
+  return ai.profiles.map((item) =>
+    item.id === profileId ? { ...item, ...patch, id: item.id } : item,
+  );
 }
 
 export async function configureProvider(
   vaultPath: string,
   slug: string,
-  settingsPatch: Partial<Omit<AiSettings, "hasApiKey">>,
+  settingsPatch: Partial<Omit<AiSettings, "hasApiKey" | "baseUrl" | "model" | "contextWindow">> & {
+    baseUrl?: string;
+    model?: string;
+    contextWindow?: AiSettings["contextWindow"];
+    hasApiKey?: boolean;
+  },
   apiKey?: string | null,
+  profileId?: string | null,
 ): Promise<AiProviderStatus> {
   const current = await settingsStore.loadAppSettings(vaultPath);
-  let hasApiKey = current.ai.hasApiKey;
+  let nextAi: AiSettings = { ...current.ai, ...settingsPatch } as AiSettings;
+
+  if (settingsPatch.profiles) {
+    nextAi = {
+      ...nextAi,
+      profiles: settingsPatch.profiles,
+      activeProfileId: settingsPatch.activeProfileId ?? nextAi.activeProfileId,
+    };
+  }
+
+  const target = getActiveProfile(
+    {
+      ...nextAi,
+      profiles: nextAi.profiles.length > 0 ? nextAi.profiles : current.ai.profiles,
+    },
+    profileId ?? settingsPatch.activeProfileId,
+  );
+
+  // Flat field patches apply to the target profile (settings UI / legacy).
+  const profilePatch: Partial<AiProviderProfile> = {};
+  if (settingsPatch.model !== undefined) profilePatch.model = settingsPatch.model;
+  if (settingsPatch.baseUrl !== undefined) profilePatch.baseUrl = settingsPatch.baseUrl;
+  if (settingsPatch.contextWindow !== undefined) {
+    profilePatch.contextWindow = settingsPatch.contextWindow;
+  }
+
+  let profiles = nextAi.profiles.length > 0 ? [...nextAi.profiles] : [...current.ai.profiles];
+  if (!profiles.some((p) => p.id === target.id)) {
+    profiles = [...profiles, target];
+  }
+  if (Object.keys(profilePatch).length > 0) {
+    profiles = withUpdatedProfile({ ...nextAi, profiles }, target.id, profilePatch);
+  }
+
+  let hasApiKey = profiles.find((p) => p.id === target.id)?.hasApiKey ?? false;
   if (apiKey !== undefined && apiKey !== null) {
     const trimmed = apiKey.trim();
     if (trimmed.length > 0) {
-      await saveApiKey(vaultPath, slug, trimmed);
+      await saveApiKey(vaultPath, slug, target.id, trimmed);
       hasApiKey = true;
     }
   }
+  profiles = withUpdatedProfile({ ...nextAi, profiles }, target.id, { hasApiKey });
+
   const patch: PartialAppSettings = {
     ai: {
-      ...settingsPatch,
-      hasApiKey,
+      providerMode: settingsPatch.providerMode ?? current.ai.providerMode,
+      sendResultSamples: settingsPatch.sendResultSamples ?? current.ai.sendResultSamples,
+      maxSampleRows: settingsPatch.maxSampleRows ?? current.ai.maxSampleRows,
+      agentMaxIterations: settingsPatch.agentMaxIterations ?? current.ai.agentMaxIterations,
+      agentWallClockMs: settingsPatch.agentWallClockMs ?? current.ai.agentWallClockMs,
+      agentAllowMutations: settingsPatch.agentAllowMutations ?? current.ai.agentAllowMutations,
+      activeProfileId: settingsPatch.activeProfileId ?? target.id,
+      profiles,
     },
   };
   await settingsStore.patchAppSettings(vaultPath, patch);
   return getProviderStatus(vaultPath);
 }
 
-export async function getProviderStatus(
+export async function upsertProfile(
   vaultPath: string,
+  slug: string,
+  profile: Omit<AiProviderProfile, "hasApiKey"> & { hasApiKey?: boolean },
+  apiKey?: string | null,
+  makeActive = true,
 ): Promise<AiProviderStatus> {
+  const current = await settingsStore.loadAppSettings(vaultPath);
+  const id = profile.id.trim() || randomUUID();
+  let hasApiKey = profile.hasApiKey === true;
+  if (apiKey !== undefined && apiKey !== null && apiKey.trim()) {
+    await saveApiKey(vaultPath, slug, id, apiKey.trim());
+    hasApiKey = true;
+  } else {
+    const existing = await loadApiKey(vaultPath, slug, id);
+    hasApiKey = hasApiKey || existing.length > 0;
+  }
+  const nextProfile: AiProviderProfile = {
+    id,
+    name: profile.name.trim() || profile.vendorId,
+    vendorId: profile.vendorId.trim() || CUSTOM_VENDOR_ID,
+    model: profile.model.trim(),
+    baseUrl: profile.baseUrl.trim(),
+    contextWindow: profile.contextWindow,
+    hasApiKey,
+  };
+  const profiles = current.ai.profiles.some((p) => p.id === id)
+    ? current.ai.profiles.map((p) => (p.id === id ? nextProfile : p))
+    : [...current.ai.profiles, nextProfile];
+  await settingsStore.patchAppSettings(vaultPath, {
+    ai: {
+      ...current.ai,
+      profiles,
+      activeProfileId: makeActive ? id : current.ai.activeProfileId,
+    },
+  });
+  return getProviderStatus(vaultPath);
+}
+
+export async function deleteProfile(
+  vaultPath: string,
+  slug: string,
+  profileId: string,
+): Promise<AiProviderStatus> {
+  const current = await settingsStore.loadAppSettings(vaultPath);
+  if (current.ai.profiles.length <= 1) {
+    throw new AppError("ai_last_profile", "Cannot delete the last AI provider profile.");
+  }
+  const profiles = current.ai.profiles.filter((p) => p.id !== profileId);
+  const activeProfileId =
+    current.ai.activeProfileId === profileId ? profiles[0].id : current.ai.activeProfileId;
+  try {
+    await fs.unlink(shardPath(vaultPath, slug, profileId));
+  } catch {
+    // ignore missing shard
+  }
+  await settingsStore.patchAppSettings(vaultPath, {
+    ai: { ...current.ai, profiles, activeProfileId },
+  });
+  return getProviderStatus(vaultPath);
+}
+
+export async function getProviderStatus(vaultPath: string): Promise<AiProviderStatus> {
   const settings = await settingsStore.loadAppSettings(vaultPath);
+  const active = getActiveProfile(settings.ai);
   return {
     enabled: settings.ai.providerMode !== "disabled",
     providerMode: settings.ai.providerMode,
-    model: settings.ai.model,
-    baseUrl: settings.ai.baseUrl,
-    hasApiKey: settings.ai.hasApiKey,
+    model: active.model,
+    baseUrl: active.baseUrl,
+    hasApiKey: active.hasApiKey,
     credentialBackend: secrets.isAvailable() ? "safeStorage" : "plain",
+    activeProfileId: active.id,
+    profiles: settings.ai.profiles,
+    vendors: listAiVendors(),
   };
 }
 
@@ -142,10 +334,10 @@ export function createStelaCredentialStore(apiKey: string): CredentialStore {
   };
 }
 
-function createStelaProvider() {
+function createCustomProvider(): Provider<"openai-completions"> {
   return createProvider<"openai-completions">({
-    id: STELA_PROVIDER_ID,
-    name: "Stela OpenAI-compatible",
+    id: CUSTOM_PROVIDER_ID,
+    name: "Custom OpenAI-compatible",
     auth: {
       apiKey: {
         name: "Stela API key",
@@ -163,14 +355,14 @@ function createStelaProvider() {
   });
 }
 
-export function buildOpenAiCompatibleModel(settings: AiSettings): Model<"openai-completions"> {
-  const contextWindow = settings.contextWindow || 128_000;
+function buildCustomModel(profile: AiProviderProfile): Model<"openai-completions"> {
+  const contextWindow = profile.contextWindow || 128_000;
   return {
-    id: settings.model,
-    name: settings.model,
+    id: profile.model,
+    name: profile.model,
     api: "openai-completions",
-    provider: STELA_PROVIDER_ID,
-    baseUrl: settings.baseUrl.replace(/\/+$/, ""),
+    provider: CUSTOM_PROVIDER_ID,
+    baseUrl: profile.baseUrl.replace(/\/+$/, ""),
     reasoning: false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -184,25 +376,62 @@ export function buildOpenAiCompatibleModel(settings: AiSettings): Model<"openai-
 }
 
 /** Shared Models + Model for one-shot actions and AgentHarness. */
-export function createStelaTransport(settings: AiSettings, apiKey: string): {
+export function createTransportForProfile(
+  ai: AiSettings,
+  apiKey: string,
+  profileId?: string | null,
+): {
   models: Models;
-  model: Model<"openai-completions">;
+  model: Model;
+  profile: AiProviderProfile;
 } {
-  if (settings.providerMode === "disabled") {
+  if (ai.providerMode === "disabled") {
     throw new AppError("ai_disabled", "AI provider is disabled.");
   }
   if (!apiKey) {
     throw new AppError("ai_missing_api_key", "AI provider API key is not configured.");
   }
-  if (!settings.model.trim()) {
+  const profile = getActiveProfile(ai, profileId);
+  if (!profile.model.trim()) {
     throw new AppError("ai_missing_model", "AI provider model is not configured.");
   }
-  if (!settings.baseUrl.trim()) {
-    throw new AppError("ai_missing_base_url", "AI provider base URL is not configured.");
+
+  const credentials = createStelaCredentialStore(apiKey);
+  const models = createModels({ credentials });
+
+  if (profile.vendorId === CUSTOM_VENDOR_ID) {
+    if (!profile.baseUrl.trim()) {
+      throw new AppError("ai_missing_base_url", "AI provider base URL is not configured.");
+    }
+    models.setProvider(createCustomProvider());
+    return { models, model: buildCustomModel(profile), profile };
   }
-  const models = createModels({ credentials: createStelaCredentialStore(apiKey) });
-  models.setProvider(createStelaProvider());
-  return { models, model: buildOpenAiCompatibleModel(settings) };
+
+  const provider = resolvePiProvider(profile.vendorId);
+  if (!provider) {
+    throw new AppError(
+      "ai_unknown_vendor",
+      `Unknown AI vendor "${profile.vendorId}". Pick another vendor or use Custom.`,
+    );
+  }
+  models.setProvider(provider);
+  const model = models.getModel(provider.id, profile.model);
+  if (!model) {
+    throw new AppError(
+      "ai_unknown_model",
+      `Model "${profile.model}" is not in the ${provider.name} catalog.`,
+    );
+  }
+  return { models, model, profile };
+}
+
+/** @deprecated use createTransportForProfile */
+export function createStelaTransport(settings: AiSettings, apiKey: string): {
+  models: Models;
+  model: Model;
+} {
+  const { models, model } = createTransportForProfile(settings, apiKey);
+  return { models, model };
 }
 
 function assistantText(message: { content: Array<{ type: string; text?: string }> }): string {
@@ -217,13 +446,15 @@ export async function callChatCompletions({
   apiKey,
   system,
   user,
+  profileId,
 }: {
   settings: AiSettings;
   apiKey: string;
   system: string;
   user: string;
+  profileId?: string | null;
 }): Promise<string> {
-  const { models, model } = createStelaTransport(settings, apiKey);
+  const { models, model } = createTransportForProfile(settings, apiKey, profileId);
   const message = await models.completeSimple(model, {
     systemPrompt: system,
     messages: [

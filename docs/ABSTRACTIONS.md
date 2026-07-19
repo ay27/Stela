@@ -327,21 +327,34 @@ Canonical types live in `electron/shared/types.ts`. Secrets and HTTP stay in `el
 ```typescript
 type AiProviderMode = "disabled" | "openai-compatible" | "cloud";
 
-interface AiSettings {
-  providerMode: AiProviderMode;
-  baseUrl: string;                 // chat/agent endpoint root
+interface AiProviderProfile {
+  id: string;
+  name: string;
+  vendorId: string;                // pi-ai provider id, or "custom"
   model: string;
+  baseUrl: string;                 // required for custom; unused for builtins
+  contextWindow: 64_000 | 128_000 | 200_000 | 256_000 | 1_000_000;
   hasApiKey: boolean;              // never the raw key
+}
+
+interface AiSettings {
+  providerMode: AiProviderMode;    // global on/off (+ legacy cloud alias)
+  activeProfileId: string;
+  profiles: AiProviderProfile[];
+  // mirrors of the active profile (compat)
+  baseUrl: string;
+  model: string;
+  hasApiKey: boolean;
+  contextWindow: 64_000 | 128_000 | 200_000 | 256_000 | 1_000_000;
   sendResultSamples: boolean;
   maxSampleRows: number;
-  contextWindow: 64_000 | 128_000 | 200_000 | 256_000 | 1_000_000; // compaction budget
-  agentMaxIterations: number;      // legacy compatibility; ignored by harness agent
-  agentWallClockMs: number;        // legacy compatibility; ignored by harness agent
+  agentMaxIterations: number;      // legacy; ignored by harness agent
+  agentWallClockMs: number;        // legacy; ignored by harness agent
   agentAllowMutations: boolean;    // still requires per-call user approve
 }
 ```
 
-API key shard: `{vault}/.stela/secrets/ai_{deviceSlug}.json` (safeStorage-wrapped). Transport: `@earendil-works/pi-ai` custom OpenAI-compatible provider; agent loop: `AgentHarness` ([ADR-0018](./adr/0018-pi-ai-agent-harness.md)).
+API key shard: `{vault}/.stela/secrets/ai_{deviceSlug}_{profileId}.json` (safeStorage-wrapped). Transport: pi-ai built-in provider for `vendorId`, or `createProvider` for `custom` ([ADR-0022](./adr/0022-ai-multi-provider-profiles.md)); agent loop: `AgentHarness` ([ADR-0018](./adr/0018-pi-ai-agent-harness.md)).
 
 ### Action complete
 

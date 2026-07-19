@@ -74,3 +74,4 @@ proposed → active → superseded
 | [0019](0019-private-release-gate-patterns-via-secret.md) | Private release-gate patterns via env secret, not source | active |
 | [0020](0020-parallel-readonly-agent-tools.md) | Parallel read-only agent tools; sequential for SQL and proposals | superseded → [0021](0021-parallel-agent-tools-except-propose-edit.md) |
 | [0021](0021-parallel-agent-tools-except-propose-edit.md) | Parallel agent tools except propose_edit | active |
+| [0022](0022-ai-multi-provider-profiles.md) | AI multi-provider profiles via pi-ai builtins + custom createProvider | active |

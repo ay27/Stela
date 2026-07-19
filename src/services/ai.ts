@@ -14,8 +14,9 @@ export function getAiStatus(): Promise<AiProviderStatus> {
 export function configureAi(
   settings: Partial<Omit<AiSettings, "hasApiKey">>,
   apiKey?: string | null,
+  profileId?: string | null,
 ): Promise<AiProviderStatus> {
-  return window.stela.ai.configure(settings, apiKey);
+  return window.stela.ai.configure(settings, apiKey, profileId);
 }
 
 export function completeAi(

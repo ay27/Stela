@@ -199,23 +199,47 @@ export const AI_CONTEXT_WINDOW_OPTIONS = [
 ] as const;
 export type AiContextWindow = (typeof AI_CONTEXT_WINDOW_OPTIONS)[number];
 
+/** One configured LLM endpoint / vendor (pi builtin id or custom). */
+export interface AiProviderProfile {
+  id: string;
+  name: string;
+  /** pi-ai provider id, or `"custom"` for createProvider openai-compatible. */
+  vendorId: string;
+  model: string;
+  /** Used when vendorId is custom; ignored for builtins. */
+  baseUrl: string;
+  contextWindow: AiContextWindow;
+  hasApiKey: boolean;
+}
+
+export interface AiVendorModelInfo {
+  id: string;
+  name: string;
+  contextWindow: number;
+}
+
+export interface AiVendorInfo {
+  id: string;
+  name: string;
+  models: AiVendorModelInfo[];
+}
+
 export interface AiSettings {
   providerMode: AiProviderMode;
-  /** OpenAI-compatible endpoint. Empty means use the provider default. */
+  activeProfileId: string;
+  profiles: AiProviderProfile[];
+  /**
+   * Mirrors of the active profile (compat for callers / migration).
+   * Always rewritten from `profiles[activeProfileId]` on sanitize.
+   */
   baseUrl: string;
-  /** Model name passed to the provider. */
   model: string;
-  /** Whether this vault has a device-local API key saved via safeStorage. */
   hasApiKey: boolean;
+  contextWindow: AiContextWindow;
   /** Allow sampled result rows to be sent to the provider. Full result sets are never sent. */
   sendResultSamples: boolean;
   /** Per-request row sample cap. */
   maxSampleRows: number;
-  /**
-   * Declared model context window (tokens). Used for AgentHarness compaction
-   * budgeting; OpenAI-compatible endpoints do not advertise this reliably.
-   */
-  contextWindow: AiContextWindow;
   /** Agent harness: max tool-call iterations before forcing a final answer. */
   agentMaxIterations: number;
   /** Agent harness: wall-clock budget in ms before forcing a final answer. */
@@ -446,6 +470,9 @@ export interface AiProviderStatus {
   baseUrl: string;
   hasApiKey: boolean;
   credentialBackend: "safeStorage" | "plain";
+  activeProfileId: string;
+  profiles: AiProviderProfile[];
+  vendors: AiVendorInfo[];
 }
 
 // ---------- Harness agent ----------
@@ -495,6 +522,8 @@ export interface AgentRunRequest {
   attachments?: AgentAttachment[];
   notePath?: string | null;
   locale?: AiPromptLocale;
+  /** Optional override; defaults to settings.ai.activeProfileId. */
+  profileId?: string | null;
 }
 
 /** 单次工具调用的审计记录，供前端 timeline 渲染。 */
