@@ -1219,6 +1219,12 @@
   padding: 4px 7px;
 }
 
+.stela-cb__cm .cm-stela-inline-completion-ghost {
+  color: hsl(var(--muted-foreground) / 0.55);
+  white-space: pre;
+  pointer-events: none;
+}
+
 .stela-cb__cm .cm-stela-ai-added-line {
   background: hsl(var(--primary) / 0.09);
 }

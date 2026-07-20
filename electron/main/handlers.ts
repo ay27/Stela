@@ -21,6 +21,8 @@ import type {
   AgentRunRequest,
   AiCompleteRequest,
   AiCompleteResponse,
+  AiInlineCompletionEvent,
+  AiInlineCompletionRequest,
   AiParseSqlQueryRequest,
   AiParseSqlQueryResponse,
   AiProviderStatus,
@@ -95,6 +97,7 @@ import * as sqlIndex from "../services/sql-index";
 import * as autoUpdate from "../services/auto-updater";
 import * as ai from "../services/ai";
 import * as agent from "../services/ai/agent";
+import { runInlineCompletion } from "../services/ai/inline-completion";
 
 /** 共用：所有 vault-级 handler 的入口拿当前 vault；没有时按 IPC 错误返回。 */
 function requireVault(): string {
@@ -110,6 +113,7 @@ function requireVault(): string {
 
 /** runId -> 该次 agent run 的 AbortController，供 AI_AGENT_CANCEL 查找。 */
 const agentRunControllers = new Map<string, AbortController>();
+const inlineCompletionControllers = new Map<string, AbortController>();
 
 const STARTUP_UPDATE_CHECK_DELAY_MS = 10_000;
 const UPDATE_CHECK_THROTTLE_MS = 24 * 60 * 60 * 1000;
@@ -479,6 +483,65 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
         (await deviceProfile.loadDeviceProfile()).slug,
         request,
       ),
+  );
+  registerHandler<
+    { request: AiInlineCompletionRequest },
+    { requestId: string }
+  >(IPC.AI_INLINE_COMPLETION_START, ({ request }, handlerCtx) => {
+    const vaultPath = requireVault();
+    inlineCompletionControllers.get(request.requestId)?.abort();
+    const controller = new AbortController();
+    inlineCompletionControllers.set(request.requestId, controller);
+    const sender = handlerCtx.event.sender;
+    const onDestroyed = () => controller.abort();
+    sender.once("destroyed", onDestroyed);
+    const onEvent = (event: AiInlineCompletionEvent) => {
+      if (inlineCompletionControllers.get(request.requestId) !== controller) return;
+      if (sender.isDestroyed()) {
+        controller.abort();
+        return;
+      }
+      try {
+        sender.send(IPC_EVENTS.AI_INLINE_COMPLETION_EVENT, event);
+      } catch (err) {
+        controller.abort();
+        getLogger("ai.inline-completion").warn("send inline completion event failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    };
+
+    void (async () => {
+      const slug = (await deviceProfile.loadDeviceProfile()).slug;
+      await runInlineCompletion(vaultPath, slug, request, controller.signal, onEvent);
+    })()
+      .catch((err) => {
+        if (controller.signal.aborted) {
+          onEvent({ type: "cancelled", requestId: request.requestId });
+        } else {
+          onEvent({
+            type: "error",
+            requestId: request.requestId,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })
+      .finally(() => {
+        sender.removeListener("destroyed", onDestroyed);
+        if (inlineCompletionControllers.get(request.requestId) === controller) {
+          inlineCompletionControllers.delete(request.requestId);
+        }
+      });
+    return { requestId: request.requestId };
+  });
+  registerHandler<{ requestId: string }, { cancelled: boolean }>(
+    IPC.AI_INLINE_COMPLETION_CANCEL,
+    ({ requestId }) => {
+      const controller = inlineCompletionControllers.get(requestId);
+      if (!controller) return { cancelled: false };
+      controller.abort();
+      return { cancelled: true };
+    },
   );
 
   // ---------- Harness agent ----------

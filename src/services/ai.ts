@@ -1,6 +1,8 @@
 import type {
   AiCompleteRequest,
   AiCompleteResponse,
+  AiInlineCompletionEvent,
+  AiInlineCompletionRequest,
   AiParseSqlQueryRequest,
   AiParseSqlQueryResponse,
   AiProviderStatus,
@@ -30,4 +32,22 @@ export function parseSqlQueryAi(
   request: AiParseSqlQueryRequest,
 ): Promise<AiParseSqlQueryResponse> {
   return window.stela.ai.parseSqlQuery(request);
+}
+
+export function startInlineCompletion(
+  request: AiInlineCompletionRequest,
+): Promise<{ requestId: string }> {
+  return window.stela.ai.startInlineCompletion(request);
+}
+
+export function cancelInlineCompletion(
+  requestId: string,
+): Promise<{ cancelled: boolean }> {
+  return window.stela.ai.cancelInlineCompletion(requestId);
+}
+
+export function onInlineCompletionEvent(
+  callback: (event: AiInlineCompletionEvent) => void,
+): () => void {
+  return window.stela.ai.onInlineCompletionEvent(callback);
 }

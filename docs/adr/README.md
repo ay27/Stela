@@ -70,8 +70,9 @@ proposed → active → superseded
 | [0015](0015-openai-compatible-provider-without-fim.md) | OpenAI-compatible chat provider without FIM inline completion | superseded → [0018](0018-pi-ai-agent-harness.md) |
 | [0016](0016-agent-chat-references-and-add-to-chat.md) | Agent chat references and Add to Chat | active |
 | [0017](0017-user-cancelled-agent-runs.md) | User-cancelled agent runs instead of iteration limits | active |
-| [0018](0018-pi-ai-agent-harness.md) | pi-ai transport and AgentHarness for AI provider and agent loop | active |
+| [0018](0018-pi-ai-agent-harness.md) | pi-ai transport and AgentHarness for AI provider and agent loop | superseded → [0023](0023-streamed-chat-sql-inline-completion.md) |
 | [0019](0019-private-release-gate-patterns-via-secret.md) | Private release-gate patterns via env secret, not source | active |
 | [0020](0020-parallel-readonly-agent-tools.md) | Parallel read-only agent tools; sequential for SQL and proposals | superseded → [0021](0021-parallel-agent-tools-except-propose-edit.md) |
 | [0021](0021-parallel-agent-tools-except-propose-edit.md) | Parallel agent tools except propose_edit | active |
 | [0022](0022-ai-multi-provider-profiles.md) | AI multi-provider profiles via pi-ai builtins + custom createProvider | active |
+| [0023](0023-streamed-chat-sql-inline-completion.md) | Streamed chat-model SQL inline completion | active |

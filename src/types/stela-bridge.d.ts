@@ -12,6 +12,8 @@ import type {
   AgentRunRequest,
   AiCompleteRequest,
   AiCompleteResponse,
+  AiInlineCompletionEvent,
+  AiInlineCompletionRequest,
   AiParseSqlQueryRequest,
   AiParseSqlQueryResponse,
   AiProviderStatus,
@@ -209,6 +211,15 @@ interface StelaBridge {
     parseSqlQuery: (
       request: AiParseSqlQueryRequest,
     ) => Promise<AiParseSqlQueryResponse>;
+    startInlineCompletion: (
+      request: AiInlineCompletionRequest,
+    ) => Promise<{ requestId: string }>;
+    cancelInlineCompletion: (
+      requestId: string,
+    ) => Promise<{ cancelled: boolean }>;
+    onInlineCompletionEvent: (
+      callback: (event: AiInlineCompletionEvent) => void,
+    ) => () => void;
   };
   agent: {
     run: (request: AgentRunRequest) => Promise<{ runId: string }>;

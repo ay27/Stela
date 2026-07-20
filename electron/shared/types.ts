@@ -228,6 +228,10 @@ export interface AiSettings {
   providerMode: AiProviderMode;
   activeProfileId: string;
   profiles: AiProviderProfile[];
+  /** Inline SQL completion is enabled only when completionProfileId names an existing profile. */
+  inlineCompletionEnabled: boolean;
+  /** Dedicated profile for inline SQL completion; independent of activeProfileId. */
+  completionProfileId: string | null;
   /**
    * Mirrors of the active profile (compat for callers / migration).
    * Always rewritten from `profiles[activeProfileId]` on sanitize.
@@ -449,6 +453,22 @@ export interface AiCompleteResponse {
   warnings: string[];
   contextSummary: string[];
 }
+
+export interface AiInlineCompletionRequest {
+  requestId: string;
+  prefix: string;
+  suffix: string;
+  /** Other RunSQL blocks in the same note, ordered nearest-first. */
+  siblingSqls: string[];
+  connectionName: string | null;
+}
+
+export type AiInlineCompletionEvent =
+  | { type: "started"; requestId: string }
+  | { type: "delta"; requestId: string; text: string }
+  | { type: "final"; requestId: string }
+  | { type: "error"; requestId: string; message: string }
+  | { type: "cancelled"; requestId: string };
 
 export interface AiParseSqlQueryRequest {
   /** 用户输入的自然语言问题,例如"orders 表的 insert 语句" */

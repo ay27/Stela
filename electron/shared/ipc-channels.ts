@@ -91,6 +91,8 @@ export const IPC = {
   AI_CLEAR_API_KEY: "ai:clear-api-key",
   AI_COMPLETE: "ai:complete",
   AI_PARSE_SQL_QUERY: "ai:parse-sql-query",
+  AI_INLINE_COMPLETION_START: "ai:inline-completion-start",
+  AI_INLINE_COMPLETION_CANCEL: "ai:inline-completion-cancel",
 
   // Harness agent（原生 function-calling 循环，见 electron/services/ai/agent.ts）
   AI_AGENT_RUN: "ai:agent-run",

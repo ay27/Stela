@@ -2,8 +2,9 @@
 type: ADR
 id: "0018"
 title: "pi-ai transport and AgentHarness for AI provider and agent loop"
-status: active
+status: superseded
 date: 2026-07-13
+superseded_by: "0023"
 ---
 
 ## Context

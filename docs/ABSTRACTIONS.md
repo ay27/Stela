@@ -341,6 +341,8 @@ interface AiSettings {
   providerMode: AiProviderMode;    // global on/off (+ legacy cloud alias)
   activeProfileId: string;
   profiles: AiProviderProfile[];
+  inlineCompletionEnabled: boolean;
+  completionProfileId: string | null; // independent of activeProfileId
   // mirrors of the active profile (compat)
   baseUrl: string;
   model: string;
@@ -354,7 +356,7 @@ interface AiSettings {
 }
 ```
 
-API key shard: `{vault}/.stela/secrets/ai_{deviceSlug}_{profileId}.json` (safeStorage-wrapped). Transport: pi-ai built-in provider for `vendorId`, or `createProvider` for `custom` ([ADR-0022](./adr/0022-ai-multi-provider-profiles.md)); agent loop: `AgentHarness` ([ADR-0018](./adr/0018-pi-ai-agent-harness.md)).
+API key shard: `{vault}/.stela/secrets/ai_{deviceSlug}_{profileId}.json` (safeStorage-wrapped). Transport: pi-ai built-in provider for `vendorId`, or `createProvider` for `custom` ([ADR-0022](./adr/0022-ai-multi-provider-profiles.md)); agent loop: `AgentHarness` ([ADR-0023](./adr/0023-streamed-chat-sql-inline-completion.md)). Inline completion is enabled only when `completionProfileId` names an existing profile.
 
 ### Action complete
 
@@ -391,7 +393,28 @@ interface AiCompleteRequest {
 }
 ```
 
-Pipeline: enrich schema → cap sizes → optional samples → `redactForPrompt` → action prompt → pi-ai `completeSimple`. See [ADR-0018](./adr/0018-pi-ai-agent-harness.md), [ADR-0014](./adr/0014-ai-context-redaction-and-schema-enrichment.md).
+Pipeline: enrich schema → cap sizes → optional samples → `redactForPrompt` → action prompt → pi-ai `completeSimple`. See [ADR-0023](./adr/0023-streamed-chat-sql-inline-completion.md), [ADR-0014](./adr/0014-ai-context-redaction-and-schema-enrichment.md).
+
+### SQL inline completion
+
+```typescript
+interface AiInlineCompletionRequest {
+  requestId: string;
+  prefix: string;
+  suffix: string;
+  siblingSqls: string[]; // same-note RunSQL blocks, nearest first
+  connectionName: string | null;
+}
+
+type AiInlineCompletionEvent =
+  | { type: "started"; requestId: string }
+  | { type: "delta"; requestId: string; text: string }
+  | { type: "final"; requestId: string }
+  | { type: "error"; requestId: string; message: string }
+  | { type: "cancelled"; requestId: string };
+```
+
+IPC uses `AI_INLINE_COMPLETION_START`, `AI_INLINE_COMPLETION_CANCEL`, and push event `ai:inline-completion-event`; preload exposes `window.stela.ai.startInlineCompletion`, `cancelInlineCompletion`, and `onInlineCompletionEvent`. Completion uses `completionProfileId` independently of chat/agent `activeProfileId`, simulates FIM over pi-ai `streamSimple`, and includes only referenced-table DDL found in the connection's local `schemaDir`—missing snapshots never fall back to connector list/execute calls. Other RunSQL blocks in the same note are sent as bounded reference context, ordered by document distance from the current block and capped at 8K characters. RunSQL debounces requests by 120 ms, rejects stale `requestId`/cursor context, cancels on replacement, Escape, blur, composition start, or destroy, and accepts visible ghost text with Tab; an open native completion popup or active IME composition suppresses ghost completion.
 
 ### SQL query parse (NL → filter)
 

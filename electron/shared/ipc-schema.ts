@@ -101,6 +101,8 @@ const partialSettingsSchema = z
         agentMaxIterations: z.number().int().min(1).max(10_000),
         agentWallClockMs: z.number().int().min(5_000).max(600_000),
         agentAllowMutations: z.boolean(),
+        inlineCompletionEnabled: z.boolean(),
+        completionProfileId: z.string().min(1).max(128).nullable(),
       })
       .partial()
       .optional(),
@@ -317,6 +319,8 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
           agentMaxIterations: z.number().int().min(1).max(10_000).optional(),
           agentWallClockMs: z.number().int().min(5_000).max(600_000).optional(),
           agentAllowMutations: z.boolean().optional(),
+          inlineCompletionEnabled: z.boolean().optional(),
+          completionProfileId: z.string().min(1).max(128).nullable().optional(),
           activeProfileId: z.string().min(1).max(128).optional(),
           profiles: z
             .array(
@@ -457,6 +461,22 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
         })
         .strict(),
     })
+    .strict(),
+  [IPC.AI_INLINE_COMPLETION_START]: z
+    .object({
+      request: z
+        .object({
+          requestId: z.string().min(1).max(128),
+          prefix: z.string().max(20_000),
+          suffix: z.string().max(20_000),
+          siblingSqls: z.array(z.string().max(8_000)).max(16),
+          connectionName: z.string().min(1).max(256).nullable(),
+        })
+        .strict(),
+    })
+    .strict(),
+  [IPC.AI_INLINE_COMPLETION_CANCEL]: z
+    .object({ requestId: z.string().min(1).max(128) })
     .strict(),
 
   [IPC.AI_AGENT_RUN]: z

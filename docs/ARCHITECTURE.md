@@ -276,17 +276,18 @@ Stela AI is **search-first and provider-backed**, not on-device RAG. Retrieval u
 | Chat / agent transport | `@earendil-works/pi-ai` — built-in provider factories by `vendorId`, or `createProvider` + `openAICompletionsApi` for `custom` ([ADR-0022](./adr/0022-ai-multi-provider-profiles.md)) |
 | Agent loop | `@earendil-works/pi-agent-core` `AgentHarness` + in-memory `Session` |
 | API key | `{vault}/.stela/secrets/ai_{deviceSlug}_{profileId}.json` via `safeStorage` (injected into pi `CredentialStore`; not pi `auth.json`) |
-| Settings | vault `.stela/settings.json` → `ai.profiles` + `ai.activeProfileId` (+ policy flags); keys never in settings |
+| Settings | vault `.stela/settings.json` → shared `ai.profiles`, chat/agent `activeProfileId`, independent inline `completionProfileId` (+ policy flags); keys never in settings |
 
-Agent Panel and Settings share `activeProfileId`. Vendor dropdown lists every pi built-in provider (no Stela allowlist) plus Custom. No cloud FIM / ghost-text inline completion — removed for latency ([ADR-0018](./adr/0018-pi-ai-agent-harness.md)). RunSQL still has local schema/keyword autocomplete.
+Agent Panel and Settings share `activeProfileId`. SQL inline completion independently selects `completionProfileId` from the same profiles and simulates FIM over pi-ai `streamSimple`; changing the active chat profile does not change completion. Inline schema context reads only the connection's local `schemaDir` and never falls back to connector access ([ADR-0023](./adr/0023-streamed-chat-sql-inline-completion.md)). Vendor dropdown lists every pi built-in provider (no Stela allowlist) plus Custom.
 
-### Two surfaces (+ one translator)
+### Three surfaces (+ one translator)
 
 ```mermaid
 flowchart TB
   UI["Renderer UI\nRunSQL panel / AI modal / AgentSidebar"]
   PRE["window.stela.ai.* / agent.*"]
   ACT["ai:complete\naction + AiRequestContext"]
+  INLINE["dedicated inline start/cancel/event\nprefix + suffix + local schemaDir"]
   PARSE["ai:parse-sql-query\nNL → SqlIndexFilter only"]
   AGENT["ai:agent-run\nAgentHarness loop"]
   CTX["context-builder + schema-context\n+ redaction"]
@@ -297,6 +298,7 @@ flowchart TB
 
   UI --> PRE
   PRE --> ACT
+  PRE --> INLINE --> PROV
   PRE --> PARSE
   PRE --> AGENT
   ACT --> CTX --> PROV
@@ -306,9 +308,10 @@ flowchart TB
   TOOLS --> GUARD
 ```
 
-1. **Action complete** — one-shot `AiActionKind` (rewrite-sql, ask-sql, explain-result, explain-table, …). Prompt assembled in main; returns text + optional extracted SQL. UI: RunSQL inline panel, AI modal, schema browser actions. ([ADR-0018](./adr/0018-pi-ai-agent-harness.md))
-2. **Harness agent** — `AgentHarness` tool loop with streaming `ai:agent-event`. Tools browse schema, run SQL, search/read notes, propose edits. Same-turn tools may run in parallel except `propose_edit` (sequential). Mutations and note writes wait for user approve. Agent chat accepts `@table` mentions, `[[note]]` references, a default current-note reference, and Add to Chat content attachments. Runs continue until the model finishes, errors, or the user cancels. Compacts when near `ai.contextWindow` budget and once on provider context overflow; Panel shows approximate usage + compacting status. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md), [ADR-0016](./adr/0016-agent-chat-references-and-add-to-chat.md), [ADR-0017](./adr/0017-user-cancelled-agent-runs.md), [ADR-0018](./adr/0018-pi-ai-agent-harness.md), [ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md))
-3. **SQL query parse** — model only emits a `SqlIndexFilter`; hits always come from deterministic `sql-index`.
+1. **Action complete** — one-shot `AiActionKind` (rewrite-sql, ask-sql, explain-result, explain-table, …). Prompt assembled in main; returns text + optional extracted SQL. UI: RunSQL inline panel, AI modal, schema browser actions. ([ADR-0023](./adr/0023-streamed-chat-sql-inline-completion.md))
+2. **SQL inline completion** — `AI_INLINE_COMPLETION_START` / `AI_INLINE_COMPLETION_CANCEL` invoke channels and the `ai:inline-completion-event` push channel stream insertion text correlated by `requestId`; preload exposes `window.stela.ai.startInlineCompletion`, `cancelInlineCompletion`, and `onInlineCompletionEvent`. The selected completion profile's model receives bounded prefix/suffix sections, up to 8K characters of nearest-first sibling RunSQL blocks, plus DDL for referenced tables found in the connection's local `schemaDir`, via pi-ai `streamSimple`; this path does not use AgentHarness or fall back to connector list/execute calls. RunSQL waits 120 ms after edits, cancels stale requests, accepts ghost text with Tab, and dismisses/cancels it with Escape; native completion popups and IME composition suppress ghost completion, and editor destruction cancels outstanding work. ([ADR-0023](./adr/0023-streamed-chat-sql-inline-completion.md))
+3. **Harness agent** — `AgentHarness` tool loop with streaming `ai:agent-event`. Tools browse schema, run SQL, search/read notes, propose edits. Same-turn tools may run in parallel except `propose_edit` (sequential). Mutations and note writes wait for user approve. Agent chat accepts `@table` mentions, `[[note]]` references, a default current-note reference, and Add to Chat content attachments. Runs continue until the model finishes, errors, or the user cancels. Compacts when near `ai.contextWindow` budget and once on provider context overflow; Panel shows approximate usage + compacting status. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md), [ADR-0016](./adr/0016-agent-chat-references-and-add-to-chat.md), [ADR-0017](./adr/0017-user-cancelled-agent-runs.md), [ADR-0023](./adr/0023-streamed-chat-sql-inline-completion.md), [ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md))
+4. **SQL query parse** — model only emits a `SqlIndexFilter`; hits always come from deterministic `sql-index`.
 
 ### Context pipeline
 
@@ -359,7 +362,7 @@ Before any action prompt leaves the machine ([ADR-0014](./adr/0014-ai-context-re
 ### Event channels (main → renderer, push-only)
 
 - `electron/shared/ipc-events.ts`
-- `vault:external-change`, `index:changed`, `sql-index:changed`, `ai:agent-event`
+- `vault:external-change`, `index:changed`, `sql-index:changed`, `ai:agent-event`, and `ai:inline-completion-event`
 
 ### Preload API shape
 
@@ -373,7 +376,7 @@ window.stela.connector.*      — execute + plugin management
 window.stela.search.*         — vault search + file list
 window.stela.git.*            — Git operations
 window.stela.journal.*          — JSONL history import/export
-window.stela.ai.* / agent.*   — completion, agent harness
+window.stela.ai.* / agent.*   — actions; start/cancel/subscribe inline completion; agent harness
 window.stela.index.*          — vault wiki index
 window.stela.sqlIndex.*       — SQL fact index
 window.stela.export.*         — export markdown with results

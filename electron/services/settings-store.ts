@@ -143,6 +143,8 @@ const AI_DEFAULT: AiSettings = syncActiveMirrors({
       hasApiKey: false,
     },
   ],
+  inlineCompletionEnabled: false,
+  completionProfileId: null,
   sendResultSamples: true,
   maxSampleRows: 20,
   agentMaxIterations: 200,
@@ -226,11 +228,23 @@ function sanitizeAi(input: unknown): AiSettings {
     typeof r.activeProfileId === "string" && r.activeProfileId.trim()
       ? r.activeProfileId.trim()
       : profiles[0]?.id ?? DEFAULT_PROFILE_ID;
+  const requestedCompletionProfileId =
+    typeof r.completionProfileId === "string" && r.completionProfileId.trim()
+      ? r.completionProfileId.trim()
+      : null;
+  const completionProfileId =
+    requestedCompletionProfileId !== null &&
+    profiles.some((profile) => profile.id === requestedCompletionProfileId)
+      ? requestedCompletionProfileId
+      : null;
 
   return syncActiveMirrors({
     providerMode,
     activeProfileId,
     profiles,
+    inlineCompletionEnabled:
+      r.inlineCompletionEnabled === true && completionProfileId !== null,
+    completionProfileId,
     sendResultSamples:
       r.sendResultSamples === undefined
         ? AI_DEFAULT.sendResultSamples

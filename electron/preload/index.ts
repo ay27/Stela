@@ -24,6 +24,8 @@ import type {
   AgentRunRequest,
   AiCompleteRequest,
   AiCompleteResponse,
+  AiInlineCompletionEvent,
+  AiInlineCompletionRequest,
   AiProviderStatus,
   AiSettings,
   AppSettings,
@@ -298,6 +300,22 @@ const stela = {
       call<AiCompleteResponse>(IPC.AI_COMPLETE, { request }),
     parseSqlQuery: (request: AiParseSqlQueryRequest) =>
       call<AiParseSqlQueryResponse>(IPC.AI_PARSE_SQL_QUERY, { request }),
+    startInlineCompletion: (request: AiInlineCompletionRequest) =>
+      call<{ requestId: string }>(IPC.AI_INLINE_COMPLETION_START, { request }),
+    cancelInlineCompletion: (requestId: string) =>
+      call<{ cancelled: boolean }>(IPC.AI_INLINE_COMPLETION_CANCEL, { requestId }),
+    onInlineCompletionEvent: (
+      callback: (event: AiInlineCompletionEvent) => void,
+    ) => {
+      const handler = (
+        _ev: Electron.IpcRendererEvent,
+        event: AiInlineCompletionEvent,
+      ) => callback(event);
+      ipcRenderer.on(IPC_EVENTS.AI_INLINE_COMPLETION_EVENT, handler);
+      return () => {
+        ipcRenderer.removeListener(IPC_EVENTS.AI_INLINE_COMPLETION_EVENT, handler);
+      };
+    },
   },
 
   agent: {

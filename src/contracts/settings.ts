@@ -91,6 +91,8 @@ export interface AiSettings {
   providerMode: AiProviderMode;
   activeProfileId: string;
   profiles: AiProviderProfile[];
+  inlineCompletionEnabled: boolean;
+  completionProfileId: string | null;
   baseUrl: string;
   model: string;
   hasApiKey: boolean;
@@ -152,6 +154,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
         hasApiKey: false,
       },
     ],
+    inlineCompletionEnabled: false,
+    completionProfileId: null,
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4o-mini",
     hasApiKey: false,

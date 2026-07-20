@@ -75,7 +75,7 @@ export function AiTab() {
   const [draft, setDraft] = useState<AiProviderProfile | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState<
-    "save" | "clear" | "delete" | "activate" | null
+    "save" | "clear" | "delete" | "activate" | "inline" | null
   >(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -84,6 +84,9 @@ export function AiTab() {
   const profiles = status?.profiles ?? settings.profiles ?? [];
   const activeProfileId = status?.activeProfileId ?? settings.activeProfileId;
   const aiEnabled = settings.providerMode !== "disabled";
+  const completionProfile = profiles.find(
+    (profile) => profile.id === settings.completionProfileId,
+  );
   const isDraftUnsaved = Boolean(draft && !profiles.some((p) => p.id === draft.id));
   const isCustom = draft?.vendorId === "custom";
 
@@ -151,7 +154,13 @@ export function AiTab() {
     });
   };
 
-  const syncSettings = async (next: AiProviderStatus) => {
+  const syncSettings = async (
+    next: AiProviderStatus,
+    completion?: {
+      inlineCompletionEnabled: boolean;
+      completionProfileId: string | null;
+    },
+  ) => {
     await patch({
       ai: {
         providerMode: next.providerMode,
@@ -162,8 +171,28 @@ export function AiTab() {
         baseUrl: next.baseUrl,
         contextWindow: next.profiles.find((p) => p.id === next.activeProfileId)
           ?.contextWindow,
+        ...completion,
       },
     });
+  };
+
+  const setInlineCompletion = async (
+    completion: {
+      inlineCompletionEnabled: boolean;
+      completionProfileId: string | null;
+    },
+  ) => {
+    setBusy("inline");
+    setError(null);
+    try {
+      const next = await window.stela.ai.configure(completion);
+      await syncSettings(next, completion);
+      setStatus(next);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
   };
 
   const save = async () => {
@@ -290,7 +319,17 @@ export function AiTab() {
         profiles: nextProfiles,
         activeProfileId: nextActive,
       });
-      await syncSettings(next);
+      const deletedCompletionProfile =
+        settings.completionProfileId === draft.id;
+      await syncSettings(
+        next,
+        deletedCompletionProfile
+          ? {
+              completionProfileId: null,
+              inlineCompletionEnabled: false,
+            }
+          : undefined,
+      );
       setStatus(next);
       setDraft(
         next.profiles.find((p) => p.id === next.activeProfileId) ??
@@ -326,6 +365,65 @@ export function AiTab() {
       <Section title={t("ai.title")} description={t("ai.description")}>
         <Row label={t("ai.enabled.label")} description={t("ai.enabled.description")}>
           <Toggle checked={aiEnabled} onChange={setEnabled} />
+        </Row>
+      </Section>
+
+      <Section
+        title={t("ai.inlineCompletion.title")}
+        description={t("ai.inlineCompletion.description")}
+      >
+        <Row
+          label={t("ai.inlineCompletion.enabled.label")}
+          description={t("ai.inlineCompletion.enabled.description")}
+        >
+          <Toggle
+            checked={settings.inlineCompletionEnabled}
+            disabled={
+              busy !== null ||
+              (!settings.inlineCompletionEnabled &&
+                (profiles.length === 0 || !completionProfile))
+            }
+            onChange={(enabled) => {
+              if (enabled && !completionProfile) return;
+              void setInlineCompletion({
+                inlineCompletionEnabled: enabled,
+                completionProfileId: completionProfile?.id ?? null,
+              });
+            }}
+          />
+        </Row>
+        <Row
+          label={t("ai.inlineCompletion.profile.label")}
+          description={
+            completionProfile?.hasApiKey
+              ? t("ai.inlineCompletion.profile.ready")
+              : t("ai.inlineCompletion.profile.noKey")
+          }
+        >
+          <select
+            value={completionProfile?.id ?? ""}
+            disabled={busy !== null || profiles.length === 0}
+            onChange={(event) => {
+              const completionProfileId = event.target.value || null;
+              void setInlineCompletion({
+                completionProfileId,
+                inlineCompletionEnabled:
+                  completionProfileId !== null &&
+                  settings.inlineCompletionEnabled,
+              });
+            }}
+            className="w-52 rounded-md border border-border bg-background px-2 py-1.5 text-[12px]"
+          >
+            <option value="" disabled>
+              {t("ai.inlineCompletion.profile.placeholder")}
+            </option>
+            {profiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.name}
+                {profile.hasApiKey ? "" : ` · ${t("ai.profile.noKey")}`}
+              </option>
+            ))}
+          </select>
         </Row>
       </Section>
 

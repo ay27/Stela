@@ -18,7 +18,7 @@ import {
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
-import { AppError } from "@shared/errors";
+import { AppError, isAppError } from "@shared/errors";
 import type {
   AiProviderProfile,
   AiProviderStatus,
@@ -229,6 +229,12 @@ export async function configureProvider(
       agentMaxIterations: settingsPatch.agentMaxIterations ?? current.ai.agentMaxIterations,
       agentWallClockMs: settingsPatch.agentWallClockMs ?? current.ai.agentWallClockMs,
       agentAllowMutations: settingsPatch.agentAllowMutations ?? current.ai.agentAllowMutations,
+      inlineCompletionEnabled:
+        settingsPatch.inlineCompletionEnabled ?? current.ai.inlineCompletionEnabled,
+      completionProfileId:
+        settingsPatch.completionProfileId === undefined
+          ? current.ai.completionProfileId
+          : settingsPatch.completionProfileId,
       activeProfileId: settingsPatch.activeProfileId ?? target.id,
       profiles,
     },
@@ -288,13 +294,23 @@ export async function deleteProfile(
   const profiles = current.ai.profiles.filter((p) => p.id !== profileId);
   const activeProfileId =
     current.ai.activeProfileId === profileId ? profiles[0].id : current.ai.activeProfileId;
+  const deletedCompletionProfile = current.ai.completionProfileId === profileId;
   try {
     await fs.unlink(shardPath(vaultPath, slug, profileId));
   } catch {
     // ignore missing shard
   }
   await settingsStore.patchAppSettings(vaultPath, {
-    ai: { ...current.ai, profiles, activeProfileId },
+    ai: {
+      ...current.ai,
+      profiles,
+      activeProfileId,
+      completionProfileId: deletedCompletionProfile
+        ? null
+        : current.ai.completionProfileId,
+      inlineCompletionEnabled:
+        !deletedCompletionProfile && current.ai.inlineCompletionEnabled,
+    },
   });
   return getProviderStatus(vaultPath);
 }
@@ -480,4 +496,57 @@ export async function callChatCompletions({
     throw new AppError("ai_empty_response", "AI provider returned an empty response.");
   }
   return content;
+}
+
+export async function streamChatCompletions({
+  settings,
+  apiKey,
+  system,
+  user,
+  profileId,
+  signal,
+  onDelta,
+}: {
+  settings: AiSettings;
+  apiKey: string;
+  system: string;
+  user: string;
+  profileId: string;
+  signal: AbortSignal;
+  onDelta: (text: string) => void;
+}): Promise<void> {
+  try {
+    if (signal.aborted) {
+      throw new AppError("ai_aborted", "AI request was aborted.");
+    }
+    const { models, model } = createTransportForProfile(settings, apiKey, profileId);
+    const stream = models.streamSimple(
+      model,
+      {
+        systemPrompt: system,
+        messages: [{ role: "user", content: user, timestamp: Date.now() }],
+      },
+      { signal, temperature: 0.2, maxTokens: 96 },
+    );
+    for await (const event of stream) {
+      if (event.type === "text_delta" && event.delta) onDelta(event.delta);
+    }
+    const message = await stream.result();
+    if (message.stopReason === "aborted") {
+      throw new AppError("ai_aborted", message.errorMessage ?? "AI request was aborted.");
+    }
+    if (message.stopReason === "error") {
+      throw new AppError(
+        "ai_provider_failed",
+        message.errorMessage ?? "AI provider returned an error.",
+      );
+    }
+  } catch (err) {
+    if (isAppError(err)) throw err;
+    if (signal.aborted) throw new AppError("ai_aborted", "AI request was aborted.");
+    throw new AppError(
+      "ai_provider_failed",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 }

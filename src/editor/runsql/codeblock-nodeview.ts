@@ -75,6 +75,7 @@ import { useWorkspace } from "@/state/workspace";
 import { renderMermaid } from "@/editor/mermaid/render";
 import { i18n } from "@/i18n";
 import { isRunsqlBlockPending } from "./pending-runs";
+import { sqlInlineCompletionExtension } from "./sql-inline-completion";
 
 export const RUNSQL_LANGUAGE = "runsql";
 export const MERMAID_LANGUAGE = "mermaid";
@@ -548,6 +549,16 @@ export class CodeBlockNodeView implements NodeView {
             this.ensureColumnsFor(db, table),
           dialect: resolveEditorDialect(getRunContext()?.connectionName),
         }),
+        ...(language === RUNSQL_LANGUAGE
+          ? [
+              sqlInlineCompletionExtension({
+                getConnectionName: () =>
+                  getRunContext()?.connectionName ?? null,
+                getSiblingSqls: () => this.collectNearbySiblingSqls(),
+                canRequest: () => !this.pendingAiRewrite,
+              }),
+            ]
+          : []),
         // 长行自动折行：嵌在 markdown 正文里的 SQL 块宽度受限，长 SELECT /
         // 长字符串不 wrap 就会出横向滚动条，既丑又把行号 gutter 推走。放在
         // languageExtension 里走 languageCompartment，这样语言改成普通 code
@@ -572,6 +583,31 @@ export class CodeBlockNodeView implements NodeView {
       const text = n.textContent.trim();
       if (text) out.push(text);
     });
+    return out;
+  }
+
+  /** AI 补全上下文按与当前 block 的文档距离排序，并限制总字符数。 */
+  private collectNearbySiblingSqls(maxChars = 8_000, maxBlocks = 16): string[] {
+    const selfPos = this.getPos();
+    if (selfPos === undefined) return [];
+    const candidates: Array<{ distance: number; text: string }> = [];
+    this.view.state.doc.descendants((node, pos) => {
+      if (node.type.name !== "code_block") return;
+      if (node.attrs.language !== RUNSQL_LANGUAGE || pos === selfPos) return;
+      const text = node.textContent.trim();
+      if (text) candidates.push({ distance: Math.abs(pos - selfPos), text });
+    });
+    candidates.sort((a, b) => a.distance - b.distance);
+
+    let remaining = maxChars;
+    const out: string[] = [];
+    for (const candidate of candidates) {
+      if (remaining <= 0 || out.length >= maxBlocks) break;
+      const text = candidate.text.slice(0, remaining);
+      out.push(text);
+      remaining -= text.length;
+      if (text.length < candidate.text.length) break;
+    }
     return out;
   }
 

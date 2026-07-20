@@ -197,6 +197,65 @@ async function loadSchemaDirCatalog(
   return out;
 }
 
+export async function loadSchemaDirTableSchemas({
+  connectionName,
+  schemaDir,
+  tableNames,
+}: {
+  connectionName: string;
+  schemaDir: string | undefined;
+  tableNames: string[];
+}): Promise<AiSchemaTargetContext[]> {
+  if (!schemaDir) return [];
+  const qualified = new Set<string>();
+  const unqualified = new Set<string>();
+  for (const name of tableNames) {
+    const parsed = splitQualifiedName(name);
+    if (parsed.database) {
+      qualified.add(normalizeName(qualifiedName(parsed.database, parsed.table)));
+    } else {
+      unqualified.add(normalizeName(parsed.table));
+    }
+  }
+  if (qualified.size === 0 && unqualified.size === 0) return [];
+
+  let files: string[];
+  try {
+    files = await fs.readdir(schemaDir);
+  } catch {
+    return [];
+  }
+
+  const out: AiSchemaTargetContext[] = [];
+  for (const fileName of files) {
+    const parsed = parseSchemaFileName(fileName);
+    if (
+      !parsed ||
+      (!unqualified.has(normalizeName(parsed.table)) &&
+        !qualified.has(normalizeName(qualifiedName(parsed.database, parsed.table))))
+    ) {
+      continue;
+    }
+    try {
+      const ddl = extractDdl(await fs.readFile(path.join(schemaDir, fileName), "utf-8"));
+      out.push({
+        connectionName,
+        database: parsed.database,
+        table: parsed.table,
+        columns: ddl ? parseColumnsFromDdl(ddl) : [],
+        ddlSnippet: ddl ? truncate(ddl, MAX_DDL_CHARS) : null,
+        source: "schema-dir",
+        matchReason: "explicit SQL table",
+        score: 100,
+      });
+    } catch {
+      // Missing or unreadable snapshots are optional context.
+    }
+    if (out.length >= MAX_SCHEMA_TARGETS) break;
+  }
+  return out;
+}
+
 async function loadConnectorCatalog(
   connectionName: string,
   connection: ConnectionEntry,
