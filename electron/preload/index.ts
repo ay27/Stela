@@ -412,6 +412,13 @@ const stela = {
 
   app: {
     rendererReady: () => call<void>(IPC.APP_RENDERER_READY, {}),
+    onQuitCheckpointStarted: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(IPC_EVENTS.APP_QUIT_CHECKPOINT_STARTED, handler);
+      return () => {
+        ipcRenderer.removeListener(IPC_EVENTS.APP_QUIT_CHECKPOINT_STARTED, handler);
+      };
+    },
   },
 
   window: {
@@ -476,6 +483,20 @@ const stela = {
         IPC.EXPORT_SAVE_MARKDOWN,
         { suggestedName, content, title: opts.title },
       ),
+    saveFile: (
+      suggestedName: string,
+      content: string,
+      opts: {
+        title?: string;
+        filters: Array<{ name: string; extensions: string[] }>;
+      },
+    ) =>
+      call<{ canceled: boolean; path: string | null; revealToken: string | null }>(
+        IPC.EXPORT_SAVE_FILE,
+        { suggestedName, content, ...opts },
+      ),
+    revealSavedFile: (revealToken: string) =>
+      call<void>(IPC.EXPORT_REVEAL_SAVED_FILE, { revealToken }),
   },
 
 };

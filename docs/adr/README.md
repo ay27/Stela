@@ -75,4 +75,6 @@ proposed → active → superseded
 | [0020](0020-parallel-readonly-agent-tools.md) | Parallel read-only agent tools; sequential for SQL and proposals | superseded → [0021](0021-parallel-agent-tools-except-propose-edit.md) |
 | [0021](0021-parallel-agent-tools-except-propose-edit.md) | Parallel agent tools except propose_edit | active |
 | [0022](0022-ai-multi-provider-profiles.md) | AI multi-provider profiles via pi-ai builtins + custom createProvider | active |
-| [0023](0023-streamed-chat-sql-inline-completion.md) | Streamed chat-model SQL inline completion | active |
+| [0023](0023-streamed-chat-sql-inline-completion.md) | Streamed chat-model SQL inline completion | superseded → [0024](0024-conservative-streamed-sql-inline-completion.md) |
+| [0024](0024-conservative-streamed-sql-inline-completion.md) | Conservative streamed SQL inline completion | active |
+| [0025](0025-quit-checkpoint-and-export-reveal.md) | Quit checkpoint feedback and restricted export reveal | active |

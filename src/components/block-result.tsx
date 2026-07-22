@@ -13,6 +13,7 @@ import {
   ChevronDown,
   ChevronRight,
   AlertCircle,
+  CheckCircle2,
   ChevronLeft,
   ChevronsLeft,
   ChevronsRight,
@@ -32,7 +33,6 @@ import {
   buildCsvContent,
   buildExcelXmlContent,
   buildJsonContent,
-  triggerDownload,
 } from "@/components/result-export";
 import { MiniSelect, type MiniSelectOption } from "@/components/ui/mini-select";
 import { electronStorage } from "@/services/storage/electron-storage";
@@ -137,12 +137,22 @@ export function BlockResult({
   const [exporting, setExporting] = useState<null | "csv" | "excel" | "json">(
     null,
   );
+  const [exportedFile, setExportedFile] = useState<{
+    name: string;
+    revealToken: string;
+  } | null>(null);
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [diffState, setDiffState] = useState<DiffState | null>(null);
   const reqIdRef = useRef(0);
   const diffReqIdRef = useRef(0);
 
   const inCompare = viewState.mode === "compare";
+
+  useEffect(() => {
+    if (!exportedFile) return;
+    const timer = window.setTimeout(() => setExportedFile(null), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [exportedFile]);
   // 浏览模式下实际查看的 run：activeRunId 优先，否则最新
   const effectiveRunId = viewState.activeRunId ?? runId;
   const activeRun = runs.find((r) => r.runId === effectiveRunId) ?? null;
@@ -396,34 +406,38 @@ export function BlockResult({
           detail?.runDate?.replace(/[^\d]/g, "").slice(0, 14) ??
           Date.now().toString();
         const base = `stela-result-${effectiveRunId.slice(0, 8)}-${ts}`;
-        if (fmt === "csv") {
-          triggerDownload(
-            `${base}.csv`,
-            buildCsvContent(state.schema, allRows),
-            "text/csv;charset=utf-8",
-          );
-          return;
+        const file =
+          fmt === "csv"
+            ? {
+                name: `${base}.csv`,
+                content: buildCsvContent(state.schema, allRows),
+                filter: { name: "CSV", extensions: ["csv"] },
+              }
+            : fmt === "json"
+              ? {
+                  name: `${base}.json`,
+                  content: buildJsonContent(state.schema, allRows),
+                  filter: { name: "JSON", extensions: ["json"] },
+                }
+              : {
+                  name: `${base}.xls`,
+                  content: buildExcelXmlContent(state.schema, allRows),
+                  filter: { name: "Excel", extensions: ["xls"] },
+                };
+        const saved = await window.stela.export.saveFile(file.name, file.content, {
+          title: t("blockResult.exporting"),
+          filters: [file.filter],
+        });
+        if (!saved.canceled && saved.revealToken) {
+          setExportedFile({ name: file.name, revealToken: saved.revealToken });
         }
-        if (fmt === "json") {
-          triggerDownload(
-            `${base}.json`,
-            buildJsonContent(state.schema, allRows),
-            "application/json;charset=utf-8",
-          );
-          return;
-        }
-        triggerDownload(
-          `${base}.xls`,
-          buildExcelXmlContent(state.schema, allRows),
-          "application/vnd.ms-excel;charset=utf-8",
-        );
       } catch (err) {
         console.error("[stela] export failed", err);
       } finally {
         setExporting(null);
       }
     },
-    [state, effectiveRunId, detail?.runDate],
+    [state, effectiveRunId, detail?.runDate, t],
   );
 
   // 底部版本栏的 tab 列表：「最新」在首位，其余按时间倒序
@@ -637,6 +651,30 @@ export function BlockResult({
               onToggleSelect={toggleCompareSelect}
             />
           ) : null}
+        </div>
+      ) : null}
+      {exportedFile ? (
+        <div className="fixed bottom-5 right-5 z-[150] max-w-[min(32rem,calc(100vw-2.5rem))] rounded-lg border border-border bg-popover px-3 py-2 shadow-lg">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 flex-none text-emerald-500" aria-hidden="true" />
+            <span className="flex-none text-sm font-medium">{t("common.saved")}</span>
+            <button
+              type="button"
+              onClick={() => void window.stela.export.revealSavedFile(exportedFile.revealToken)}
+              className="min-w-0 truncate text-left text-sm text-foreground underline decoration-primary underline-offset-2 transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              title={exportedFile.name}
+            >
+              {exportedFile.name}
+            </button>
+            <button
+              type="button"
+              onClick={() => setExportedFile(null)}
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              aria-label={t("exportNote.close")}
+            >
+              ×
+            </button>
+          </div>
         </div>
       ) : null}
     </div>

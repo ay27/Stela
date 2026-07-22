@@ -526,7 +526,7 @@ export async function streamChatCompletions({
         systemPrompt: system,
         messages: [{ role: "user", content: user, timestamp: Date.now() }],
       },
-      { signal, temperature: 0.2, maxTokens: 96 },
+      { signal, temperature: 0.2, maxTokens: 48 },
     );
     for await (const event of stream) {
       if (event.type === "text_delta" && event.delta) onDelta(event.delta);

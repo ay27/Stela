@@ -27,8 +27,8 @@ import { useSettings } from "@/state/settings";
 const DEBOUNCE_MS = 120;
 const MAX_PREFIX_CHARS = 12_000;
 const MAX_SUFFIX_CHARS = 8_000;
-const MAX_GHOST_LINES = 8;
-const MAX_GHOST_CHARS = 800;
+const MAX_GHOST_LINES = 1;
+const MAX_GHOST_CHARS = 240;
 
 interface CompletionContext {
   pos: number;
@@ -46,10 +46,21 @@ type EventHandler = (event: AiInlineCompletionEvent) => void;
 const eventHandlers = new Map<string, EventHandler>();
 let eventSubscriptionReady = false;
 
+function debug(message: string, details?: Record<string, unknown>): void {
+  if (!import.meta.env.DEV) return;
+  console.info("[stela][inline-completion]", message, details ?? "");
+}
+
 function ensureEventSubscription(): void {
   if (eventSubscriptionReady) return;
   eventSubscriptionReady = true;
   onInlineCompletionEvent((event) => {
+    debug("received IPC event", {
+      requestId: event.requestId,
+      type: event.type,
+      textLength: event.type === "delta" ? event.text.length : undefined,
+      message: event.type === "error" ? event.message : undefined,
+    });
     eventHandlers.get(event.requestId)?.(event);
     if (
       event.type === "final" ||
@@ -129,6 +140,8 @@ function getContext(view: EditorView): CompletionContext | null {
   const selection = view.state.selection.main;
   if (!selection.empty) return null;
   const pos = selection.head;
+  const line = view.state.doc.lineAt(pos);
+  if (view.state.doc.sliceString(pos, line.to).trim()) return null;
   const prefix = view.state.doc.sliceString(
     Math.max(0, pos - MAX_PREFIX_CHARS),
     pos,
@@ -144,6 +157,20 @@ function getContext(view: EditorView): CompletionContext | null {
   };
 }
 
+function getContextBlockReason(view: EditorView): string | null {
+  const selection = view.state.selection.main;
+  if (!selection.empty) return "selection is not empty";
+  const line = view.state.doc.lineAt(selection.head);
+  if (view.state.doc.sliceString(selection.head, line.to).trim()) {
+    return "cursor is not at line end";
+  }
+  const prefix = view.state.doc.sliceString(
+    Math.max(0, selection.head - MAX_PREFIX_CHARS),
+    selection.head,
+  );
+  return prefix.replace(/\s/g, "").length < 3 ? "SQL prefix is too short" : null;
+}
+
 function stripRepeatedPrefix(text: string, prefix: string): string {
   if (text.startsWith(prefix)) return text.slice(prefix.length);
   const currentLine = prefix.slice(prefix.lastIndexOf("\n") + 1);
@@ -155,6 +182,20 @@ function stripRepeatedPrefix(text: string, prefix: string): string {
     if (text.startsWith(prefix.slice(-length))) return text.slice(length);
   }
   return text;
+}
+
+function addRequiredLeadingSpace(text: string, prefix: string): string {
+  if (!text || /^\s/.test(text)) return text;
+  const beforeCursor = prefix.at(-1);
+  const firstSuggestionChar = text[0];
+  if (
+    !beforeCursor ||
+    !/[\p{L}\p{N}_\])]/u.test(beforeCursor) ||
+    !/[\p{L}\p{N}_$`"'[*]/u.test(firstSuggestionChar)
+  ) {
+    return text;
+  }
+  return ` ${text}`;
 }
 
 function normalizeSuggestion(
@@ -191,6 +232,7 @@ function normalizeSuggestion(
       break;
     }
   }
+  out = addRequiredLeadingSpace(out, prefix);
   out = out.split("\n").slice(0, MAX_GHOST_LINES).join("\n");
   return out.slice(0, MAX_GHOST_CHARS);
 }
@@ -222,6 +264,8 @@ export function sqlInlineCompletionExtension({
       private timeout: ReturnType<typeof setTimeout> | null = null;
       private requestId: string | null = null;
       private composing = false;
+      private inputDuringComposition = false;
+      private pendingEdit = false;
       private rawText = "";
       private context: CompletionContext | null = null;
       private scheduledAt = 0;
@@ -230,22 +274,38 @@ export function sqlInlineCompletionExtension({
 
       constructor(private readonly view: EditorView) {
         this.settingsUnsubscribe = useSettings.subscribe(() => {
-          if (this.canStart()) this.schedule();
-          else this.reset();
+          if (!this.canStart()) this.reset();
         });
-        this.schedule();
       }
 
       update(update: ViewUpdate): void {
-        if (update.docChanged || update.selectionSet) {
-          this.schedule();
+        if (update.docChanged) {
+          debug("document change observed", {
+            composing: this.composing,
+            selectionEmpty: update.state.selection.main.empty,
+          });
+          if (this.composing) {
+            this.inputDuringComposition = true;
+            this.reset();
+          } else {
+            this.pendingEdit = true;
+            this.schedule();
+          }
+          return;
+        }
+        if (update.selectionSet) {
+          this.pendingEdit = false;
+          this.reset();
           return;
         }
         const before = completionStatus(update.startState);
         const after = completionStatus(update.state);
-        if (before !== after) {
-          if (after !== null) this.reset();
-          else this.schedule();
+        if (before === after) return;
+        if (after !== null) {
+          this.reset();
+        } else if (this.pendingEdit) {
+          debug("native completion popup closed; rescheduling pending edit");
+          this.schedule();
         }
       }
 
@@ -254,22 +314,23 @@ export function sqlInlineCompletionExtension({
         this.reset();
       }
 
-      focus(): void {
-        this.schedule();
-      }
-
       blur(): void {
         this.reset();
       }
 
       compositionStart(): void {
         this.composing = true;
+        this.inputDuringComposition = false;
         this.reset();
       }
 
       compositionEnd(): void {
         this.composing = false;
-        this.schedule();
+        if (this.inputDuringComposition) {
+          this.inputDuringComposition = false;
+          this.pendingEdit = true;
+          this.schedule();
+        }
       }
 
       clearGhost(): boolean {
@@ -282,26 +343,36 @@ export function sqlInlineCompletionExtension({
       }
 
       private canStart(): boolean {
+        return this.getStartBlockReason() === null;
+      }
+
+      private getStartBlockReason(): string | null {
         const ai = useSettings.getState().settings.ai;
         const profile = ai.profiles.find(
           (item) => item.id === ai.completionProfileId,
         );
-        return (
-          ai.providerMode !== "disabled" &&
-          ai.inlineCompletionEnabled &&
-          Boolean(profile?.hasApiKey) &&
-          !this.composing &&
-          this.view.hasFocus &&
-          completionStatus(this.view.state) === null &&
-          canRequest() &&
-          getContext(this.view) !== null
-        );
+        if (ai.providerMode === "disabled") return "AI provider is disabled";
+        if (!ai.inlineCompletionEnabled) return "inline completion is disabled";
+        if (!profile) return "completion profile is missing";
+        if (!profile.hasApiKey) return "completion profile has no API key";
+        if (this.composing) return "IME composition is active";
+        if (!this.view.hasFocus) return "editor is not focused";
+        if (completionStatus(this.view.state) !== null) {
+          return "native completion popup is open";
+        }
+        if (!canRequest()) return "another RunSQL AI operation is pending";
+        return getContextBlockReason(this.view);
       }
 
       private schedule(): void {
         this.reset();
         this.scheduledAt = performance.now();
-        if (!this.canStart()) return;
+        const blockReason = this.getStartBlockReason();
+        if (blockReason) {
+          debug("request not scheduled", { reason: blockReason });
+          return;
+        }
+        debug("request scheduled", { debounceMs: DEBOUNCE_MS });
         this.timeout = setTimeout(() => {
           this.timeout = null;
           void this.request();
@@ -325,7 +396,9 @@ export function sqlInlineCompletionExtension({
       }
 
       private async request(): Promise<void> {
-        if (!this.canStart()) {
+        const blockReason = this.getStartBlockReason();
+        if (blockReason) {
+          debug("request cancelled before IPC", { reason: blockReason });
           this.reset();
           return;
         }
@@ -335,9 +408,15 @@ export function sqlInlineCompletionExtension({
         this.requestId = requestId;
         this.context = context;
         this.rawText = "";
+        this.pendingEdit = false;
         this.performanceLogged = false;
         eventHandlers.set(requestId, (event) => this.onEvent(event));
         try {
+          debug("starting IPC request", {
+            requestId,
+            prefixLength: context.prefix.length,
+            suffixLength: context.suffix.length,
+          });
           await startInlineCompletion({
             requestId,
             prefix: context.prefix,
@@ -345,13 +424,24 @@ export function sqlInlineCompletionExtension({
             siblingSqls: getSiblingSqls(),
             connectionName: getConnectionName(),
           });
-        } catch {
+        } catch (err) {
+          debug("IPC request failed", {
+            requestId,
+            error: err instanceof Error ? err.message : String(err),
+          });
           if (this.requestId === requestId) this.reset();
         }
       }
 
       private onEvent(event: AiInlineCompletionEvent): void {
-        if (event.requestId !== this.requestId || !this.context) return;
+        if (event.requestId !== this.requestId || !this.context) {
+          debug("ignored stale completion event", {
+            requestId: event.requestId,
+            activeRequestId: this.requestId,
+            type: event.type,
+          });
+          return;
+        }
         if (event.type === "delta") {
           this.rawText += event.text;
           this.showNormalized(false);
@@ -395,6 +485,10 @@ export function sqlInlineCompletionExtension({
           final,
         );
         if (!text.trim()) {
+          debug("suggestion is empty after normalization", {
+            final,
+            rawTextLength: this.rawText.length,
+          });
           setGhost(this.view, null);
           return;
         }
@@ -414,9 +508,6 @@ export function sqlInlineCompletionExtension({
         },
         compositionend(_event, view) {
           view.plugin(plugin)?.compositionEnd();
-        },
-        focus(_event, view) {
-          view.plugin(plugin)?.focus();
         },
         blur(_event, view) {
           view.plugin(plugin)?.blur();

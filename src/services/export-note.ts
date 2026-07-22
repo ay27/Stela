@@ -109,7 +109,7 @@ export interface ExportNoteOpts {
       suggestedName: string,
       content: string,
       opts?: { title?: string },
-    ) => Promise<{ canceled: boolean; path: string | null }>;
+    ) => Promise<{ canceled: boolean; path: string | null; revealToken?: string | null }>;
   };
   saveDialogTitle?: string;
   labels?: ExportMarkdownLabels;
@@ -118,6 +118,7 @@ export interface ExportNoteOpts {
 export interface ExportNoteResult {
   canceled: boolean;
   savedPath: string | null;
+  revealToken: string | null;
   /** 导出时有数据拉取失败的块数（已保留原 <detail>） */
   failedBlocks: number;
 }
@@ -533,7 +534,12 @@ export async function exportNoteToMarkdown(
       finalizeExportMarkdown(md),
       { title: opts.saveDialogTitle },
     );
-    return { canceled: result.canceled, savedPath: result.path, failedBlocks: 0 };
+    return {
+      canceled: result.canceled,
+      savedPath: result.path,
+      revealToken: result.revealToken ?? null,
+      failedBlocks: 0,
+    };
   }
 
   // 每个 block 产出替换片段；并发上限 4
@@ -583,6 +589,7 @@ export async function exportNoteToMarkdown(
   return {
     canceled: result.canceled,
     savedPath: result.path,
+    revealToken: result.revealToken ?? null,
     failedBlocks,
   };
 }

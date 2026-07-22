@@ -6,6 +6,7 @@ import type {
 } from "@shared/types";
 
 import * as connectionsStore from "../connections-store";
+import { getLogger } from "../logger";
 import * as settingsStore from "../settings-store";
 import { loadApiKey, streamChatCompletions } from "./provider";
 import { redactForPrompt } from "./redaction";
@@ -17,12 +18,15 @@ const MAX_SUFFIX_CHARS = 8_000;
 const MAX_SIBLING_SQL_CHARS = 8_000;
 const MAX_SCHEMA_CHARS = 12_000;
 const MAX_TABLES = 5;
+const log = getLogger("ai.inline-completion");
 
 const SYSTEM_PROMPT = `Complete SQL at the cursor.
 Output only the exact text to insert.
+Output at most one line.
 Never repeat the prefix or suffix.
 Do not use Markdown fences or explanations.
 Preserve the indentation established by the prefix.
+Include required leading whitespace; never concatenate separate SQL tokens.
 Use nearby RunSQL blocks only as reference; do not continue or repeat them.
 Stop as soon as the existing suffix can continue naturally.`;
 
@@ -57,6 +61,13 @@ export async function runInlineCompletion(
   signal: AbortSignal,
   onEvent: (event: AiInlineCompletionEvent) => void,
 ): Promise<void> {
+  log.info("request received", {
+    requestId: request.requestId,
+    connectionName: request.connectionName,
+    prefixLength: request.prefix.length,
+    suffixLength: request.suffix.length,
+    siblingCount: request.siblingSqls.length,
+  });
   onEvent({ type: "started", requestId: request.requestId });
   try {
     const settings = await settingsStore.loadAppSettings(vaultPath);
@@ -80,6 +91,10 @@ export async function runInlineCompletion(
         "The AI inline completion profile no longer exists.",
       );
     }
+    log.info("request validated", {
+      requestId: request.requestId,
+      profileId: profile.id,
+    });
 
     const connections = await connectionsStore.loadConnections(vaultPath, slug);
     const connection = request.connectionName
@@ -105,6 +120,12 @@ export async function runInlineCompletion(
             tableNames: tables,
           })
         : [];
+    log.info("context prepared", {
+      requestId: request.requestId,
+      connectionFound: Boolean(connection),
+      tableCount: tables.length,
+      schemaCount: schemas.length,
+    });
 
     const schemaText = [
       tables.length > 0 ? `Referenced tables: ${tables.join(", ")}` : "Referenced tables: none",
@@ -150,12 +171,18 @@ ${safe.suffix}`;
       onDelta: (text) =>
         onEvent({ type: "delta", requestId: request.requestId, text }),
     });
+    log.info("stream completed", { requestId: request.requestId });
     onEvent({ type: "final", requestId: request.requestId });
   } catch (err) {
     if (isCancellation(err, signal)) {
+      log.info("request cancelled", { requestId: request.requestId });
       onEvent({ type: "cancelled", requestId: request.requestId });
       return;
     }
+    log.warn("request failed", {
+      requestId: request.requestId,
+      error: err instanceof Error ? err.message : String(err),
+    });
     onEvent({
       type: "error",
       requestId: request.requestId,

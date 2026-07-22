@@ -644,6 +644,25 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
       title: z.string().min(1).max(256).optional(),
     })
     .strict(),
+  [IPC.EXPORT_SAVE_FILE]: z
+    .object({
+      suggestedName: z.string().min(1).max(255),
+      content: z.string(),
+      title: z.string().min(1).max(256).optional(),
+      filters: z
+        .array(
+          z.object({
+            name: z.string().min(1).max(128),
+            extensions: z.array(z.string().min(1).max(32)).min(1).max(16),
+          }).strict(),
+        )
+        .min(1)
+        .max(8),
+    })
+    .strict(),
+  [IPC.EXPORT_REVEAL_SAVED_FILE]: z
+    .object({ revealToken: z.string().uuid() })
+    .strict(),
 
 };
 

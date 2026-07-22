@@ -166,6 +166,8 @@ export const IPC = {
 
   // Export
   EXPORT_SAVE_MARKDOWN: "export:save-markdown",
+  EXPORT_SAVE_FILE: "export:save-file",
+  EXPORT_REVEAL_SAVED_FILE: "export:reveal-saved-file",
 
 } as const;
 

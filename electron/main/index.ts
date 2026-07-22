@@ -14,7 +14,7 @@ import path from "node:path";
 import { registerAllHandlers } from "./handlers";
 import { applyCsp, applySecurityDefaults } from "./security";
 import { createMainWindow, resolveAssetPath } from "./window";
-import { assertAllRegistered, unregisterAll } from "./ipc-router";
+import { assertAllRegistered } from "./ipc-router";
 import { getCurrentVault, shutdownVaultContext } from "./vault-context";
 import * as connectorRegistry from "../services/connectors/registry";
 import * as resultStore from "../services/result-store";
@@ -179,7 +179,6 @@ if (!gotLock) {
   app.on("before-quit", (event) => {
     if (isQuitting) {
       try {
-        unregisterAll();
         shutdownVaultContext();
         connectorRegistry.shutdown();
         resultStore.close();
@@ -189,6 +188,7 @@ if (!gotLock) {
       return;
     }
     event.preventDefault();
+    mainWindow?.webContents.send(IPC_EVENTS.APP_QUIT_CHECKPOINT_STARTED);
     void (async () => {
       try {
         const vaultPath = getCurrentVault();

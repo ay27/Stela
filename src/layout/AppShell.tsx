@@ -1,4 +1,5 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { CheckCircle2, Loader2 } from "lucide-react";
 
 import { WindowsTitleBar } from "./WindowsTitleBar";
 import { Sidebar } from "./Sidebar";
@@ -29,8 +30,15 @@ import { useFindState } from "@/editor/find-in-file";
 import { insertRunSqlIntoActiveEditor } from "@/editor/active-editor";
 import { useHotkeys, type HotkeyBinding } from "@/lib/hotkeys";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/use-t";
 
 export function AppShell() {
+  const t = useT();
+  const [quitting, setQuitting] = useState(false);
+  const [exportToast, setExportToast] = useState<{
+    fileName: string;
+    revealToken: string;
+  } | null>(null);
   const initialize = useWorkspace((s) => s.initialize);
   const vaultPath = useWorkspace((s) => s.vaultPath);
   const chooseVault = useWorkspace((s) => s.chooseVault);
@@ -60,6 +68,17 @@ export function AppShell() {
   useEffect(() => {
     void initialize();
   }, [initialize]);
+
+  useEffect(
+    () => window.stela.app.onQuitCheckpointStarted(() => setQuitting(true)),
+    [],
+  );
+
+  useEffect(() => {
+    if (!exportToast) return;
+    const timer = window.setTimeout(() => setExportToast(null), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [exportToast]);
 
   // 全局拦截外部链接点击，交给 Tauri opener 插件；否则在 WebView 里 <a target="_blank">
   // 不会有任何反应（Milkdown link-preview 小弹窗里的链接、正文 [text](url) 都会失灵）
@@ -323,9 +342,42 @@ export function AppShell() {
       <ExportNoteDialog
         filePath={exportNoteFilePath}
         onClose={closeExportNote}
+        onSaved={(fileName, revealToken) => setExportToast({ fileName, revealToken })}
       />
       <TabSwitcher />
       <AiModal />
+      {quitting ? (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-background/70 backdrop-blur-sm">
+          <div className="flex items-center gap-3 rounded-lg border border-border bg-popover px-5 py-4 text-sm shadow-xl">
+            <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden="true" />
+            <span>{t("app.quitCheckpoint")}</span>
+          </div>
+        </div>
+      ) : null}
+      {exportToast ? (
+        <div className="fixed bottom-5 right-5 z-[150] max-w-[min(32rem,calc(100vw-2.5rem))] rounded-lg border border-border bg-popover px-3 py-2 shadow-lg">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 flex-none text-emerald-500" aria-hidden="true" />
+            <span className="flex-none text-sm font-medium">{t("common.saved")}</span>
+            <button
+              type="button"
+              onClick={() => void window.stela.export.revealSavedFile(exportToast.revealToken)}
+              className="min-w-0 truncate text-left text-sm text-foreground underline decoration-primary underline-offset-2 transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              title={exportToast.fileName}
+            >
+              {exportToast.fileName}
+            </button>
+            <button
+              type="button"
+              onClick={() => setExportToast(null)}
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              aria-label={t("exportNote.close")}
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

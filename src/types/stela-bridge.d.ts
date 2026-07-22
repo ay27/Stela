@@ -287,12 +287,30 @@ interface StelaBridge {
       suggestedName: string,
       content: string,
       opts?: { title?: string },
-    ) => Promise<{ canceled: boolean; path: string | null }>;
+    ) => Promise<{
+      canceled: boolean;
+      path: string | null;
+      revealToken: string | null;
+    }>;
+    saveFile: (
+      suggestedName: string,
+      content: string,
+      opts: {
+        title?: string;
+        filters: Array<{ name: string; extensions: string[] }>;
+      },
+    ) => Promise<{
+      canceled: boolean;
+      path: string | null;
+      revealToken: string | null;
+    }>;
+    revealSavedFile: (revealToken: string) => Promise<void>;
   };
   /** OS 平台标识，渲染器据此切换菜单文案 / 快捷键提示。 */
   platform: "darwin" | "win32" | "linux";
   app: {
     rendererReady: () => Promise<void>;
+    onQuitCheckpointStarted: (callback: () => void) => () => void;
   };
   window: {
     syncTitleBarTheme: (

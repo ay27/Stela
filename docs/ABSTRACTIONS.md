@@ -356,7 +356,7 @@ interface AiSettings {
 }
 ```
 
-API key shard: `{vault}/.stela/secrets/ai_{deviceSlug}_{profileId}.json` (safeStorage-wrapped). Transport: pi-ai built-in provider for `vendorId`, or `createProvider` for `custom` ([ADR-0022](./adr/0022-ai-multi-provider-profiles.md)); agent loop: `AgentHarness` ([ADR-0023](./adr/0023-streamed-chat-sql-inline-completion.md)). Inline completion is enabled only when `completionProfileId` names an existing profile.
+API key shard: `{vault}/.stela/secrets/ai_{deviceSlug}_{profileId}.json` (safeStorage-wrapped). Transport: pi-ai built-in provider for `vendorId`, or `createProvider` for `custom` ([ADR-0022](./adr/0022-ai-multi-provider-profiles.md)); agent loop: `AgentHarness` ([ADR-0024](./adr/0024-conservative-streamed-sql-inline-completion.md)). Inline completion is enabled only when `completionProfileId` names an existing profile.
 
 ### Action complete
 
@@ -393,7 +393,7 @@ interface AiCompleteRequest {
 }
 ```
 
-Pipeline: enrich schema → cap sizes → optional samples → `redactForPrompt` → action prompt → pi-ai `completeSimple`. See [ADR-0023](./adr/0023-streamed-chat-sql-inline-completion.md), [ADR-0014](./adr/0014-ai-context-redaction-and-schema-enrichment.md).
+Pipeline: enrich schema → cap sizes → optional samples → `redactForPrompt` → action prompt → pi-ai `completeSimple`. See [ADR-0024](./adr/0024-conservative-streamed-sql-inline-completion.md), [ADR-0014](./adr/0014-ai-context-redaction-and-schema-enrichment.md).
 
 ### SQL inline completion
 
@@ -414,7 +414,7 @@ type AiInlineCompletionEvent =
   | { type: "cancelled"; requestId: string };
 ```
 
-IPC uses `AI_INLINE_COMPLETION_START`, `AI_INLINE_COMPLETION_CANCEL`, and push event `ai:inline-completion-event`; preload exposes `window.stela.ai.startInlineCompletion`, `cancelInlineCompletion`, and `onInlineCompletionEvent`. Completion uses `completionProfileId` independently of chat/agent `activeProfileId`, simulates FIM over pi-ai `streamSimple`, and includes only referenced-table DDL found in the connection's local `schemaDir`—missing snapshots never fall back to connector list/execute calls. Other RunSQL blocks in the same note are sent as bounded reference context, ordered by document distance from the current block and capped at 8K characters. RunSQL debounces requests by 120 ms, rejects stale `requestId`/cursor context, cancels on replacement, Escape, blur, composition start, or destroy, and accepts visible ghost text with Tab; an open native completion popup or active IME composition suppresses ghost completion.
+IPC uses `AI_INLINE_COMPLETION_START`, `AI_INLINE_COMPLETION_CANCEL`, and push event `ai:inline-completion-event`; preload exposes `window.stela.ai.startInlineCompletion`, `cancelInlineCompletion`, and `onInlineCompletionEvent`. Completion uses `completionProfileId` independently of chat/agent `activeProfileId`, simulates FIM over pi-ai `streamSimple`, and includes only referenced-table DDL found in the connection's local `schemaDir`—missing snapshots never fall back to connector list/execute calls. Other RunSQL blocks in the same note are sent as bounded reference context, ordered by document distance from the current block and capped at 8K characters. RunSQL starts only after an edit has been idle for 600 ms at a line tail, rejects stale `requestId`/cursor context, and displays at most one ghost-text line. Focus, click, selection movement, and settings changes do not start requests. A native completion popup takes priority; after it closes, a pending edited context is scheduled again. Before display and Tab acceptance, deterministic normalization removes repeated text and suffix overlap, and restores a missing leading space at an identifier boundary. Replacement, Escape, blur, composition start, popup opening, or destroy cancels active requests. Tab accepts visible ghost text.
 
 ### SQL query parse (NL → filter)
 
@@ -503,6 +503,10 @@ interface IpcErrorPayload {
 ```
 
 Renderer parsing: `src/lib/ipc-error.ts`. IPC rejections carry `[code] message` in the Error message string — not Error class instances.
+
+## Export bridge
+
+`window.stela.export.saveMarkdown()` and `saveFile()` open a native save dialog in main and return the chosen path plus an ephemeral `revealToken`. The renderer may pass that token only to `revealSavedFile()` to select the just-saved file in Finder, Explorer, or the platform file manager. The token is process-local and avoids extending the vault-only shell bridge to arbitrary filesystem paths.
 
 ## Renderer State Stores
 

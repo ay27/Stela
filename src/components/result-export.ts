@@ -11,7 +11,6 @@ function normalizeCell(value: unknown): string | number | boolean | null {
     return String(value);
   }
 }
-
 function csvEscape(value: string | number | boolean | null): string {
   if (value === null) return "";
   const raw = String(value);
@@ -93,17 +92,4 @@ export function buildExcelXmlContent(columns: ColumnDef[], rows: unknown[][]): s
   </Table>
  </Worksheet>
 </Workbook>`;
-}
-
-export function triggerDownload(filename: string, content: string, mimeType: string): void {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.style.display = "none";
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
 }

@@ -2,8 +2,9 @@
 type: ADR
 id: "0023"
 title: "Streamed chat-model SQL inline completion"
-status: active
+status: superseded
 date: 2026-07-20
+superseded_by: "0024"
 ---
 
 ## Context

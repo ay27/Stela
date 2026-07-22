@@ -42,6 +42,7 @@ function selectValueToRunScope(v: string): ExportRunScope {
 interface ExportNoteDialogProps {
   filePath: string | null;
   onClose: () => void;
+  onSaved: (fileName: string, revealToken: string) => void;
 }
 
 type ExportState = "idle" | "counting" | "exporting" | "done" | "error";
@@ -50,7 +51,7 @@ function basename(p: string): string {
   return p.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? p;
 }
 
-export function ExportNoteDialog({ filePath, onClose }: ExportNoteDialogProps) {
+export function ExportNoteDialog({ filePath, onClose, onSaved }: ExportNoteDialogProps) {
   const t = useT();
   const open = filePath !== null;
 
@@ -182,13 +183,8 @@ export function ExportNoteDialog({ filePath, onClose }: ExportNoteDialogProps) {
       const fileName = result.savedPath
         ? basename(result.savedPath)
         : t("exportNote.status.fileFallback");
-      const warn = result.failedBlocks > 0
-        ? t("exportNote.status.failedBlocks", {
-            count: result.failedBlocks,
-          })
-        : "";
-      setExportState("done");
-      setStatusMsg(t("exportNote.status.saved", { fileName, warn }));
+      if (result.revealToken) onSaved(fileName, result.revealToken);
+      onClose();
     } catch (err) {
       setExportState("error");
       setStatusMsg(
@@ -204,6 +200,8 @@ export function ExportNoteDialog({ filePath, onClose }: ExportNoteDialogProps) {
     exportState,
     t,
     exportMarkdownLabels,
+    onClose,
+    onSaved,
   ]);
 
   const handleOpenChange = (nextOpen: boolean) => {

@@ -10,8 +10,9 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
-import { BrowserWindow, app, dialog } from "electron";
+import { BrowserWindow, app, dialog, shell } from "electron";
 
 import { IPC } from "@shared/ipc-channels";
 import { IPC_EVENTS } from "@shared/ipc-events";
@@ -114,6 +115,17 @@ function requireVault(): string {
 /** runId -> 该次 agent run 的 AbortController，供 AI_AGENT_CANCEL 查找。 */
 const agentRunControllers = new Map<string, AbortController>();
 const inlineCompletionControllers = new Map<string, AbortController>();
+const savedExportPaths = new Map<string, string>();
+
+function rememberSavedExport(filePath: string): string {
+  const revealToken = randomUUID();
+  savedExportPaths.set(revealToken, filePath);
+  if (savedExportPaths.size > 64) {
+    const oldest = savedExportPaths.keys().next().value;
+    if (oldest) savedExportPaths.delete(oldest);
+  }
+  return revealToken;
+}
 
 const STARTUP_UPDATE_CHECK_DELAY_MS = 10_000;
 const UPDATE_CHECK_THROTTLE_MS = 24 * 60 * 60 * 1000;
@@ -833,7 +845,7 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
   // ---------- Export ----------
   registerHandler<
     { suggestedName: string; content: string; title?: string },
-    { canceled: boolean; path: string | null }
+    { canceled: boolean; path: string | null; revealToken: string | null }
   >(IPC.EXPORT_SAVE_MARKDOWN, async ({ suggestedName, content, title }) => {
     const win = ctx.getMainWindow();
     const defaultPath = path.join(app.getPath("documents"), suggestedName);
@@ -845,8 +857,52 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
     const r = win
       ? await dialog.showSaveDialog(win, opts)
       : await dialog.showSaveDialog(opts);
-    if (r.canceled || !r.filePath) return { canceled: true, path: null };
+    if (r.canceled || !r.filePath) {
+      return { canceled: true, path: null, revealToken: null };
+    }
     await fs.writeFile(r.filePath, content, "utf-8");
-    return { canceled: false, path: r.filePath };
+    return {
+      canceled: false,
+      path: r.filePath,
+      revealToken: rememberSavedExport(r.filePath),
+    };
   });
+  registerHandler<
+    {
+      suggestedName: string;
+      content: string;
+      title?: string;
+      filters: Electron.FileFilter[];
+    },
+    { canceled: boolean; path: string | null; revealToken: string | null }
+  >(IPC.EXPORT_SAVE_FILE, async ({ suggestedName, content, title, filters }) => {
+    const win = ctx.getMainWindow();
+    const opts: Electron.SaveDialogOptions = {
+      title: title ?? "Export File",
+      defaultPath: path.join(app.getPath("documents"), suggestedName),
+      filters,
+    };
+    const r = win
+      ? await dialog.showSaveDialog(win, opts)
+      : await dialog.showSaveDialog(opts);
+    if (r.canceled || !r.filePath) {
+      return { canceled: true, path: null, revealToken: null };
+    }
+    await fs.writeFile(r.filePath, content, "utf-8");
+    return {
+      canceled: false,
+      path: r.filePath,
+      revealToken: rememberSavedExport(r.filePath),
+    };
+  });
+  registerHandler<{ revealToken: string }, void>(
+    IPC.EXPORT_REVEAL_SAVED_FILE,
+    ({ revealToken }) => {
+      const filePath = savedExportPaths.get(revealToken);
+      if (!filePath) {
+        throw new AppError("export_file_not_found", "saved export is no longer available");
+      }
+      shell.showItemInFolder(filePath);
+    },
+  );
 }

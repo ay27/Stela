@@ -148,6 +148,7 @@ export function FileTree({ rootPath }: { rootPath: string }) {
 
   const [draft, setDraft] = useState<DraftAction | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const [contextTarget, setContextTarget] = useState<FileNode | null>(null);
 
   // 过滤态 derived sets。filter 为空时 visible / forceExpanded 是 null，渲染层
   // 走原始懒加载路径。filter 非空时，visible 包含命中节点 + 它们的所有祖先目录
@@ -462,31 +463,121 @@ export function FileTree({ rootPath }: { rootPath: string }) {
     );
   }
 
+  const handleContextMenuCapture = (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = (event.target as HTMLElement).closest<HTMLElement>(
+      "[data-filetree-path]",
+    );
+    if (!target?.dataset.filetreePath) return;
+    useFileTree.getState().setSelected(target.dataset.filetreePath);
+    setContextTarget({
+      path: target.dataset.filetreePath,
+      name: target.dataset.filetreeName ?? basename(target.dataset.filetreePath),
+      isDir: target.dataset.filetreeDir === "true",
+    });
+  };
+
+  const target = contextTarget ?? {
+    path: rootPath,
+    name: basename(rootPath),
+    isDir: true,
+  };
+
   return (
-    <DirSubtree
-      dirPath={rootPath}
-      depth={0}
-      isRoot
-      rootPath={rootPath}
-      draft={draft}
-      draftRowForDir={draftRow}
-      onToggle={toggle}
-      onContextNew={{
-        note: startNewNote,
-        dir: startNewDir,
-      }}
-      onRename={startRename}
-      onDelete={onDelete}
-      onCommitDraft={commitDraft}
-      onCancelDraft={cancelDraft}
-      onDropTo={onDropTo}
-      onDropExternal={onDropExternal}
-      dropTarget={dropTarget}
-      setDropTarget={setDropTarget}
-      visible={visible}
-      forceExpanded={forceExpanded}
-      filterActive={filter.trim().length > 0}
-    />
+    <ContextMenu.Root>
+      <ContextMenu.Trigger asChild>
+        <div className="h-full" onContextMenuCapture={handleContextMenuCapture}>
+          <DirSubtree
+            dirPath={rootPath}
+            depth={0}
+            isRoot
+            rootPath={rootPath}
+            draft={draft}
+            draftRowForDir={draftRow}
+            onToggle={toggle}
+            onContextNew={{
+              note: startNewNote,
+              dir: startNewDir,
+            }}
+            onRename={startRename}
+            onDelete={onDelete}
+            onCommitDraft={commitDraft}
+            onCancelDraft={cancelDraft}
+            onDropTo={onDropTo}
+            onDropExternal={onDropExternal}
+            dropTarget={dropTarget}
+            setDropTarget={setDropTarget}
+            visible={visible}
+            forceExpanded={forceExpanded}
+            filterActive={filter.trim().length > 0}
+          />
+        </div>
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content
+          className="z-[60] min-w-[180px] overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
+          onCloseAutoFocus={(event) => event.preventDefault()}
+        >
+          {target.isDir ? (
+            <>
+              <CtxItem
+                icon={<NotebookPen className="h-3.5 w-3.5" />}
+                label={t("fileTree.newNote")}
+                hotkey="Mod+N"
+                onSelect={() => startNewNote(target.path)}
+              />
+              <CtxItem
+                icon={<FolderPlus className="h-3.5 w-3.5" />}
+                label={t("fileTree.newFolder")}
+                onSelect={() => startNewDir(target.path)}
+              />
+              <ContextMenu.Separator className="my-1 h-px bg-border" />
+            </>
+          ) : null}
+          <CtxItem
+            icon={<ExternalLink className="h-3.5 w-3.5" />}
+            label={revealMenuLabel(t)}
+            onSelect={() => {
+              const op = target.isDir
+                ? window.stela.shell.openPath(target.path)
+                : window.stela.shell.showItemInFolder(target.path);
+              void op.catch((err) => {
+                window.alert(
+                  t("fileTree.openFailed", {
+                    message: err instanceof Error ? err.message : String(err),
+                  }),
+                );
+              });
+            }}
+          />
+          {!target.isDir && endsWithStelaExtension(target.path) ? (
+            <>
+              <ContextMenu.Separator className="my-1 h-px bg-border" />
+              <CtxItem
+                icon={<Download className="h-3.5 w-3.5" />}
+                label={t("fileTree.exportMarkdown")}
+                onSelect={() => useDialogs.getState().openExportNote(target.path)}
+              />
+            </>
+          ) : null}
+          {target.path !== rootPath ? (
+            <>
+              <ContextMenu.Separator className="my-1 h-px bg-border" />
+              <CtxItem
+                icon={<Pencil className="h-3.5 w-3.5" />}
+                label={t("fileTree.rename")}
+                onSelect={() => startRename(target)}
+              />
+              <CtxItem
+                icon={<Trash2 className="h-3.5 w-3.5" />}
+                label={t("fileTree.moveToTrash")}
+                destructive
+                onSelect={() => onDelete(target)}
+              />
+            </>
+          ) : null}
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }
 
@@ -536,7 +627,6 @@ function DirSubtree(props: SubtreeProps) {
     onDropExternal,
     dropTarget,
     setDropTarget,
-    onContextNew,
     visible,
   } = props;
   const list = useFileTree((s) => s.children[dirPath]);
@@ -579,17 +669,18 @@ function DirSubtree(props: SubtreeProps) {
   };
 
   return (
-    <ContextMenu.Root>
-      <ContextMenu.Trigger asChild>
-        <div
-          className={cn(
-            isRoot && "h-full overflow-y-auto py-1",
-            dropTarget === dirPath && "rounded-sm ring-1 ring-primary/40",
-          )}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-        >
+    <div
+      data-filetree-path={dirPath}
+      data-filetree-name={basename(dirPath)}
+      data-filetree-dir="true"
+      className={cn(
+        isRoot && "h-full overflow-y-auto py-1",
+        dropTarget === dirPath && "rounded-sm ring-1 ring-primary/40",
+      )}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
           {filteredList?.map((n) => (
             <TreeRow key={n.path} {...props} node={n} depth={depth} />
           ))}
@@ -616,31 +707,7 @@ function DirSubtree(props: SubtreeProps) {
               {t("fileTree.emptyFilter")}
             </div>
           ) : null}
-        </div>
-      </ContextMenu.Trigger>
-      <ContextMenu.Portal>
-        <ContextMenu.Content
-          className="z-[60] min-w-[180px] overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
-          // 阻止 Radix 关闭菜单后把焦点 "恢复" 到 trigger（被右键的行）。
-          // 否则我们的 inline 输入框会在 mount 后立刻被 blur，触发空名提交 → 静默
-          // 取消，整条菜单项看起来 "没反应"。新建笔记 / 新建子目录 / 重命名都
-          // 依赖输入框拿到焦点，这里统一 preventDefault。
-          onCloseAutoFocus={(e) => e.preventDefault()}
-        >
-          <CtxItem
-            icon={<NotebookPen className="h-3.5 w-3.5" />}
-            label={t("fileTree.newNote")}
-            hotkey="Mod+N"
-            onSelect={() => onContextNew.note(dirPath)}
-          />
-          <CtxItem
-            icon={<FolderPlus className="h-3.5 w-3.5" />}
-            label={t("fileTree.newFolder")}
-            onSelect={() => onContextNew.dir(dirPath)}
-          />
-        </ContextMenu.Content>
-      </ContextMenu.Portal>
-    </ContextMenu.Root>
+    </div>
   );
 }
 
@@ -655,9 +722,6 @@ function TreeRow({
   const {
     draft,
     onToggle,
-    onContextNew,
-    onRename,
-    onDelete,
     onDropTo,
     onDropExternal,
     onCommitDraft,
@@ -760,21 +824,22 @@ function TreeRow({
 
   return (
     <div>
-      <ContextMenu.Root>
-        <ContextMenu.Trigger asChild>
-          <div
-            draggable={!isRenaming}
-            onDragStart={handleDragStart}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-          >
-            <button
-              type="button"
-              onClick={onClick}
-              onDoubleClick={onDoubleClick}
-              data-filetree-row={node.path}
-              className={cn(
+      <div
+        data-filetree-path={node.path}
+        data-filetree-name={node.name}
+        data-filetree-dir={String(node.isDir)}
+        draggable={!isRenaming}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        <button
+          type="button"
+          onClick={onClick}
+          onDoubleClick={onDoubleClick}
+          data-filetree-row={node.path}
+          className={cn(
                 "relative flex w-full items-center gap-1.5 rounded-sm px-1.5 py-[3px] text-[13px] text-left",
                 "hover:bg-sidebar-hover",
                 // 选中（点击过但非当前 active tab）：浅色背景，区别于 active 的 primary
@@ -783,9 +848,9 @@ function TreeRow({
                 isActive &&
                   "bg-primary/10 text-primary font-medium before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-4 before:w-[2px] before:rounded-r before:bg-primary",
                 isDropHere && "ring-1 ring-primary/50",
-              )}
-              style={{ paddingLeft: 6 + depth * 14 }}
-            >
+          )}
+          style={{ paddingLeft: 6 + depth * 14 }}
+        >
               {node.isDir ? (
                 expanded ? (
                   <ChevronDown className="h-3.5 w-3.5 flex-none text-muted-foreground" />
@@ -818,75 +883,8 @@ function TreeRow({
               ) : (
                 <span className="truncate">{node.name}</span>
               )}
-            </button>
-          </div>
-        </ContextMenu.Trigger>
-        <ContextMenu.Portal>
-          <ContextMenu.Content
-            className="z-[60] min-w-[180px] overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
-            // 同 DirSubtree 的根菜单：阻止焦点回到 trigger，避免 inline 输入框
-            // 立刻被 blur。新建笔记 / 新建子目录 / 重命名 都依赖此项才能拿到焦点。
-            onCloseAutoFocus={(e) => e.preventDefault()}
-          >
-            {node.isDir ? (
-              <>
-                <CtxItem
-                  icon={<NotebookPen className="h-3.5 w-3.5" />}
-                  label={t("fileTree.newNote")}
-                  hotkey="Mod+N"
-                  onSelect={() => onContextNew.note(node.path)}
-                />
-                <CtxItem
-                  icon={<FolderPlus className="h-3.5 w-3.5" />}
-                  label={t("fileTree.newFolder")}
-                  onSelect={() => onContextNew.dir(node.path)}
-                />
-                <ContextMenu.Separator className="my-1 h-px bg-border" />
-              </>
-            ) : null}
-            <CtxItem
-              icon={<ExternalLink className="h-3.5 w-3.5" />}
-              label={revealMenuLabel(t)}
-              onSelect={() => {
-                const op = node.isDir
-                  ? window.stela.shell.openPath(node.path)
-                  : window.stela.shell.showItemInFolder(node.path);
-                void op.catch((err) => {
-                  window.alert(
-                    t("fileTree.openFailed", {
-                      message: err instanceof Error ? err.message : String(err),
-                    }),
-                  );
-                });
-              }}
-            />
-            {!node.isDir && endsWithStelaExtension(node.path) ? (
-              <>
-                <ContextMenu.Separator className="my-1 h-px bg-border" />
-                <CtxItem
-                  icon={<Download className="h-3.5 w-3.5" />}
-                  label={t("fileTree.exportMarkdown")}
-                  onSelect={() =>
-                    useDialogs.getState().openExportNote(node.path)
-                  }
-                />
-              </>
-            ) : null}
-            <ContextMenu.Separator className="my-1 h-px bg-border" />
-            <CtxItem
-              icon={<Pencil className="h-3.5 w-3.5" />}
-              label={t("fileTree.rename")}
-              onSelect={() => onRename(node)}
-            />
-            <CtxItem
-              icon={<Trash2 className="h-3.5 w-3.5" />}
-              label={t("fileTree.moveToTrash")}
-              destructive
-              onSelect={() => onDelete(node)}
-            />
-          </ContextMenu.Content>
-        </ContextMenu.Portal>
-      </ContextMenu.Root>
+        </button>
+      </div>
 
       {node.isDir && expanded ? (
         loading ? (

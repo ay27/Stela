@@ -128,15 +128,18 @@ export function WelcomeView() {
     // drag region」滚到底后 hit-test 会坏掉，整页点不了（侧栏/DockBar 不在
     // 该区域内所以仍可点）。拖窗只放在不可滚动的顶条；内容区正常滚动点击。
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-background">
-      {sidebarCollapsed ? (
-        <div className="stela-app-drag stela-titlebar-safe-left absolute inset-x-0 top-0 z-10 flex h-9 items-center">
-          <TitlebarNavButtons />
-        </div>
-      ) : null}
       <div
         className={cn(
-          "min-h-0 flex-1 overflow-auto px-10 py-10",
-          sidebarCollapsed && "pt-12",
+          "stela-app-drag absolute inset-x-0 top-0 z-10 flex h-9 items-center",
+          sidebarCollapsed && "stela-titlebar-safe-left",
+          window.stela.platform === "linux" && "stela-titlebar-safe-right",
+        )}
+      >
+        {sidebarCollapsed ? <TitlebarNavButtons /> : null}
+      </div>
+      <div
+        className={cn(
+          "min-h-0 flex-1 overflow-auto px-10 py-10 pt-12",
         )}
       >
         <div className="mx-auto w-full max-w-3xl">
