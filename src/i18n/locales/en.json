@@ -421,7 +421,7 @@
   "schema.copyName": "Copy name",
   "schema.copySelect": "Copy SELECT",
   "welcome.title": "Welcome to Stela",
-  "welcome.slogan": "Run SQL in Markdown. Track data in Stela.",
+  "welcome.slogan": "Run SQL in Markdown. Analyze data in Stela.",
   "welcome.currentVault": "Current vault",
   "welcome.switchVault": "Switch…",
   "welcome.noVault.title": "No vault opened yet",

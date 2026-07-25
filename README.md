@@ -5,7 +5,7 @@
 <h1 align="center">Stela</h1>
 
 <p align="center">
-  <strong>把数据库装进 Markdown 笔记的 AI 数据分析工作台</strong>
+  <strong>Run SQL in Markdown. Analyze data in Stela.</strong>
 </p>
 
 <p align="center">
