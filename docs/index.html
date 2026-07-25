@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Stela is a local-first AI data workspace for Markdown notes and SQL."
+    />
+    <title>Stela — Data analysis workspace</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --background: hsl(0 0% 100%);
+        --foreground: hsl(222 15% 15%);
+        --muted: hsl(220 14% 96%);
+        --muted-foreground: hsl(220 8% 46%);
+        --primary: hsl(214 100% 52%);
+        --border: hsl(220 13% 91%);
+        --sidebar: hsl(220 16% 98%);
+        --radius: 8px;
+        --shadow: 0 10px 15px -3px hsl(222 15% 15% / 0.08),
+          0 4px 6px -4px hsl(222 15% 15% / 0.08);
+        --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          "PingFang SC", "Microsoft YaHei", sans-serif;
+        --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Monaco,
+          Consolas, "Liberation Mono", monospace;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --background: hsl(222 18% 11%);
+          --foreground: hsl(220 14% 92%);
+          --muted: hsl(222 16% 16%);
+          --muted-foreground: hsl(220 9% 65%);
+          --primary: hsl(210 100% 60%);
+          --border: hsl(222 15% 22%);
+          --sidebar: hsl(222 18% 9%);
+          --shadow: 0 12px 28px hsl(222 20% 3% / 0.28);
+        }
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        background: var(--background);
+        color: var(--foreground);
+        font-family: var(--font-sans);
+        line-height: 1.55;
+      }
+      a { color: inherit; }
+      button { font: inherit; }
+      :focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+
+      .site-header {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        border-bottom: 1px solid var(--border);
+        background: color-mix(in srgb, var(--background) 94%, transparent);
+        backdrop-filter: blur(12px);
+      }
+      .nav, .content { width: min(1120px, calc(100% - 40px)); margin: 0 auto; }
+      .nav {
+        height: 56px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        text-decoration: none;
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+      }
+      .brand img {
+        width: 22px;
+        height: 22px;
+        object-fit: contain;
+      }
+      .nav-actions, .language-switcher { display: flex; align-items: center; gap: 8px; }
+      .nav-link {
+        color: var(--muted-foreground);
+        font-size: 13px;
+        text-decoration: none;
+      }
+      .language-switcher {
+        padding: 3px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--muted);
+      }
+      .language-switcher button {
+        border: 0;
+        border-radius: 4px;
+        padding: 3px 7px;
+        cursor: pointer;
+        background: transparent;
+        color: var(--muted-foreground);
+        font-size: 12px;
+      }
+      .language-switcher button[aria-pressed="true"] {
+        background: var(--background);
+        color: var(--foreground);
+        box-shadow: 0 1px 2px hsl(222 15% 15% / 0.08);
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(280px, 1fr) minmax(0, 1.15fr);
+        align-items: center;
+        gap: clamp(32px, 5vw, 72px);
+        padding: clamp(36px, 5vw, 72px) 0 56px;
+      }
+      .hero-text {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 16px;
+        max-width: 34rem;
+      }
+      .hero-brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 14px;
+      }
+      .hero-brand img {
+        width: clamp(64px, 8vw, 80px);
+        height: clamp(64px, 8vw, 80px);
+        object-fit: contain;
+      }
+      .hero-brand-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .hero-brand strong {
+        font-size: clamp(36px, 4.5vw, 48px);
+        font-weight: 700;
+        letter-spacing: -0.045em;
+        line-height: 1;
+      }
+      .eyebrow {
+        margin: 0;
+        color: var(--muted-foreground);
+        font-size: 14px;
+        font-weight: 500;
+        line-height: 1.3;
+      }
+      h1 {
+        margin: 0;
+        font-size: clamp(18px, 2.1vw, 22px);
+        font-weight: 500;
+        line-height: 1.4;
+        letter-spacing: -0.02em;
+        color: var(--foreground);
+      }
+      .hero-copy {
+        margin: 0;
+        color: var(--muted-foreground);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+      .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 38px;
+        padding: 0 14px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--background);
+        color: var(--foreground);
+        font-size: 13px;
+        font-weight: 600;
+        line-height: 1;
+        white-space: nowrap;
+        text-decoration: none;
+      }
+      .button.primary { border-color: var(--primary); background: var(--primary); color: white; }
+      .button:hover { filter: brightness(0.97); }
+
+      .editor-card {
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--sidebar);
+        box-shadow: var(--shadow);
+      }
+      .editor-titlebar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 34px;
+        padding: 0 12px;
+        border-bottom: 1px solid var(--border);
+        color: var(--muted-foreground);
+        font-family: var(--font-mono);
+        font-size: 11px;
+      }
+      .traffic-lights { display: flex; gap: 5px; }
+      .traffic-lights i { width: 7px; height: 7px; border: 1px solid var(--border); border-radius: 50%; }
+      .markdown-preview {
+        padding: 20px 20px 8px;
+        background: var(--background);
+      }
+      .markdown-preview h3 {
+        margin: 0 0 4px;
+        font-size: 15px;
+        letter-spacing: -0.02em;
+      }
+      .markdown-preview p {
+        margin: 0;
+        color: var(--muted-foreground);
+        font-size: 12px;
+      }
+      .runsql-demo {
+        margin: 8px 20px 20px;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--background);
+      }
+      .runsql-header {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 24px;
+        padding: 2px 5px 2px 8px;
+        border-bottom: 1px solid var(--border);
+        background: var(--muted);
+        color: var(--muted-foreground);
+        font-family: var(--font-mono);
+        font-size: 10px;
+      }
+      .db-dot {
+        width: 10px;
+        height: 10px;
+        border: 1.5px solid currentColor;
+        border-radius: 50%;
+        opacity: 0.8;
+      }
+      .runsql-label { color: var(--foreground); font-weight: 600; }
+      .block-actions { display: flex; gap: 4px; margin-left: auto; }
+      .block-action {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 2px 5px;
+        background: var(--background);
+        color: var(--muted-foreground);
+        font-family: var(--font-sans);
+        font-size: 10px;
+        line-height: 1;
+      }
+      .block-action span { color: var(--primary); font-size: 11px; }
+      .sql-source {
+        margin: 0;
+        padding: 10px 12px;
+        overflow: auto;
+        color: var(--foreground);
+        font-family: var(--font-mono);
+        font-size: 11px;
+        line-height: 1.7;
+      }
+      .token { color: var(--primary); }
+      .comment { color: var(--muted-foreground);}
+      .ghost {
+        color: var(--muted-foreground);
+        opacity: 0.52;
+      }
+      .ghost::before {
+        content: "";
+        display: inline-block;
+        height: 1.15em;
+        margin-right: 2px;
+        border-left: 1.5px solid var(--foreground);
+        vertical-align: -0.22em;
+        animation: cursor-blink 1s step-end infinite;
+      }
+      @keyframes cursor-blink { 50% { opacity: 0; } }
+      .result-summary {
+        display: flex;
+        justify-content: space-between;
+        padding: 4px 8px;
+        border-top: 1px solid var(--border);
+        color: var(--muted-foreground);
+        background: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 10px;
+      }
+      .result-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 10px; }
+      .result-table th, .result-table td { padding: 4px 8px; text-align: left; border-top: 1px solid var(--border); }
+      .result-table th { color: var(--muted-foreground); background: var(--muted); font-weight: 400; }
+      .result-table td + td, .result-table th + th { border-left: 1px solid var(--border); }
+      .run-history {
+        display: grid;
+        grid-template-columns: auto repeat(3, 1fr);
+        border-top: 1px solid var(--border);
+        font-family: var(--font-mono);
+        font-size: 10px;
+      }
+      .run-history span { padding: 4px 8px; color: var(--muted-foreground); text-align: center; }
+      .run-history span + span { border-left: 1px solid var(--border); }
+      .run-history .history-active { position: relative; color: var(--foreground); background: var(--background); }
+      .run-history .history-active::after { content: ""; position: absolute; right: 0; bottom: 0; left: 0; height: 2px; background: var(--primary); }
+
+      .overview { padding: 36px 0 96px; }
+      .overview img {
+        display: block;
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+      }
+      .section-heading { max-width: 620px; margin: 0 0 30px; }
+      .section-heading h2 { margin: 0; font-size: 28px; letter-spacing: -0.04em; }
+      .section-heading p { margin: 10px 0 0; color: var(--muted-foreground); }
+      .features {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+        margin-bottom: 96px;
+      }
+      .feature { min-height: 190px; padding: 28px; background: var(--background); }
+      .feature:nth-child(odd) { border-right: 1px solid var(--border); }
+      .feature:nth-child(n + 3) { border-top: 1px solid var(--border); }
+      .feature-index { color: var(--primary); font-family: var(--font-mono); font-size: 12px; }
+      .feature h3 { margin: 18px 0 8px; font-size: 16px; letter-spacing: -0.02em; }
+      .feature p { margin: 0; color: var(--muted-foreground); font-size: 14px; }
+
+      .closing {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 28px;
+        margin-bottom: 72px;
+        padding: 32px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--muted);
+      }
+      .closing h2 { margin: 0 0 6px; font-size: 21px; letter-spacing: -0.03em; }
+      .closing p { margin: 0; color: var(--muted-foreground); font-size: 14px; }
+      footer { border-top: 1px solid var(--border); color: var(--muted-foreground); font-size: 12px; }
+      footer .content { display: flex; justify-content: space-between; padding: 22px 0; }
+
+      @media (max-width: 760px) {
+        .nav, .content { width: min(100% - 28px, 1120px); }
+        .nav-link { display: none; }
+        .hero { grid-template-columns: 1fr; padding: 28px 0 40px; }
+        .hero-text { max-width: none; gap: 14px; }
+        .overview { padding-bottom: 64px; }
+        .features { grid-template-columns: 1fr; margin-bottom: 64px; }
+        .feature:nth-child(odd), .feature:nth-child(n + 3) { border: 0; }
+        .feature + .feature { border-top: 1px solid var(--border); }
+        .closing { display: block; margin-bottom: 48px; padding: 26px; }
+        .closing .button { margin-top: 20px; }
+        footer .content { align-items: start; flex-direction: column; gap: 6px; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="site-header">
+      <nav class="nav" aria-label="Primary navigation">
+        <a class="brand" href="#top" aria-label="Stela home"><img src="stela_icon_rounded.png" alt="" />Stela</a>
+        <div class="nav-actions">
+          <a class="nav-link" href="https://github.com/ay27/Stela" target="_blank" rel="noreferrer">GitHub</a>
+          <div class="language-switcher" aria-label="Language">
+            <button type="button" data-language="zh" aria-pressed="false">中</button>
+            <button type="button" data-language="en" aria-pressed="false">EN</button>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main id="top" class="content">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-text">
+          <div class="hero-brand">
+            <img src="stela_icon_rounded.png" alt="" />
+            <div class="hero-brand-copy">
+              <strong>Stela</strong>
+              <p class="eyebrow" data-i18n="eyebrow"></p>
+            </div>
+          </div>
+          <h1 id="hero-title" data-i18n="title"></h1>
+          <p class="hero-copy" data-i18n="intro"></p>
+          <div class="actions">
+            <a class="button primary" href="https://github.com/ay27/Stela/releases/latest" target="_blank" rel="noreferrer" data-i18n="download"></a>
+            <a class="button" href="https://github.com/ay27/Stela" target="_blank" rel="noreferrer" data-i18n="source"></a>
+          </div>
+        </div>
+        <div class="editor-card" aria-label="Markdown note with an executable SQL block">
+          <div class="editor-titlebar"><span>weekly-analysis.md</span><span class="traffic-lights"><i></i><i></i><i></i></span></div>
+          <div class="markdown-preview">
+            <h3>Weekly task status</h3>
+            <p>Check the distribution before sharing the update.</p>
+          </div>
+          <div class="runsql-demo">
+            <div class="runsql-header">
+              <span class="db-dot"></span><span>analytics</span><span class="runsql-label">runsql</span>
+              <span class="block-actions"><button class="block-action" type="button"><span>✦</span>Rewrite</button><button class="block-action" type="button"><span>✦</span>Ask</button></span>
+            </div>
+            <pre class="sql-source"><code><span class="comment">-- Show the current task distribution</span>
+<span class="token">SELECT</span> status, <span class="token">COUNT</span>(*) <span class="token">AS</span> total
+<span class="token">FROM</span> tasks
+<span class="ghost">GROUP BY status ORDER BY total DESC;</span></code></pre>
+            <div class="result-summary"><span>2 rows · 18ms</span><span>Latest result</span></div>
+            <table class="result-table"><thead><tr><th>status</th><th>total</th></tr></thead><tbody><tr><td>open</td><td>42</td></tr><tr><td>done</td><td>18</td></tr></tbody></table>
+            <div class="run-history"><span>⇄ Compare</span><span class="history-active">Latest</span><span>15:42</span><span>Yesterday</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="overview" aria-labelledby="overview-title">
+        <div class="section-heading">
+          <h2 id="overview-title" data-i18n="overviewTitle"></h2>
+          <p data-i18n="overviewBody"></p>
+        </div>
+        <img src="assets/showall.png" data-i18n-alt="overviewAlt" alt="" />
+      </section>
+
+      <section aria-labelledby="features-title">
+        <div class="section-heading">
+          <h2 id="features-title" data-i18n="featuresTitle"></h2>
+          <p data-i18n="featuresBody"></p>
+        </div>
+        <div class="features">
+          <article class="feature"><span class="feature-index">01</span><h3 data-i18n="feature1Title"></h3><p data-i18n="feature1Body"></p></article>
+          <article class="feature"><span class="feature-index">02</span><h3 data-i18n="feature2Title"></h3><p data-i18n="feature2Body"></p></article>
+          <article class="feature"><span class="feature-index">03</span><h3 data-i18n="feature3Title"></h3><p data-i18n="feature3Body"></p></article>
+          <article class="feature"><span class="feature-index">04</span><h3 data-i18n="feature4Title"></h3><p data-i18n="feature4Body"></p></article>
+        </div>
+      </section>
+
+      <section class="closing" aria-labelledby="closing-title">
+        <div><h2 id="closing-title" data-i18n="closingTitle"></h2><p data-i18n="closingBody"></p></div>
+        <a class="button primary" href="https://github.com/ay27/Stela/releases/latest" target="_blank" rel="noreferrer" data-i18n="download"></a>
+      </section>
+    </main>
+
+    <footer><div class="content"><span>Stela</span><span data-i18n="footer"></span></div></footer>
+
+    <script>
+const copy = {
+  zh: {
+    eyebrow: "本地优先的 AI 数据工作台",
+    title: "Markdown 写查询，Stela 做分析。",
+    intro: "不用切换工具，在笔记里直接跑 SQL，让 AI 辅助分析。",
+    download: "下载 Stela",
+    source: "查看源码",
+    overviewTitle: "分析工作，无需切换工具。",
+    overviewBody: "Markdown 编辑器、数据库结构、查询结果和 AI 助手并排协作，让数据问题从想法到答案始终连贯。",
+    overviewAlt: "Stela 数据分析工作台总览",
+    featuresTitle: "为可复用的分析而设计。",
+    featuresBody: "问题、查询、结果和上下文属于同一份笔记，也属于你自己的文件夹。",
+    feature1Title: "在 Markdown 中运行 SQL",
+    feature1Body: "在 `runsql` 代码块中直接执行查询，让说明、SQL 和结果完整地保留在一起。",
+    feature2Title: "AI 辅助数据分析",
+    feature2Body: "Data Agent 理解你的表结构和历史笔记，帮你编写 SQL、解读结果和发现异常，让分析更高效。",
+    feature3Title: "连接任意数据源",
+    feature3Body: "内置 MySQL 和 PostgreSQL 连接器，通过插件系统支持更多数据源，所有连接统一管理。",
+    feature4Title: "本地优先，随时迁移",
+    feature4Body: "笔记是标准 Markdown 文件，执行历史为 JSONL 格式，无供应商锁定，可用任意编辑器打开，数据随时可迁移。",
+    closingTitle: "从问题开始，留下完整分析。",
+    closingBody: "下载 Stela，在自己的 Markdown 工作区中连接数据并开始探索。无需云端，无锁定。",
+    footer: "本地优先 · 开源 · Markdown 数据笔记"
+  },
+  en: {
+    eyebrow: "A local-first AI data workspace",
+    title: "Run SQL in Markdown. Analyze data in Stela.",
+    intro: "Write analysis in Markdown, run SQL, and let AI assist—all in one local workspace.",
+    download: "Download Stela",
+    source: "View source",
+    overviewTitle: "Analysis without context switching.",
+    overviewBody: "Your Markdown editor, database schemas, query results, and an AI agent work side by side. Start with a question, explore your data, and capture the full story without leaving your workspace.",
+    overviewAlt: "Stela data analysis workspace overview",
+    featuresTitle: "Built for reusable analysis.",
+    featuresBody: "The question, query, result, and context belong in the same note—and in a folder you own.",
+    feature1Title: "SQL in Markdown",
+    feature1Body: "Run queries directly in `runsql` blocks and keep the narrative, SQL, and result together.",
+    feature2Title: "AI-powered data assistance",
+    feature2Body: "The Data Agent understands your schema and past notes to help write SQL, interpret results, and spot anomalies—spend less time typing queries, more time understanding data.",
+    feature3Title: "Connect to any data source",
+    feature3Body: "Bundled with MySQL and PostgreSQL connectors, plus a plugin system to add more. All connections managed from one workspace.",
+    feature4Title: "Local-first, always portable",
+    feature4Body: "Notes are plain Markdown files; execution history is JSONL. No vendor lock-in—open your notes in any editor, move your data anytime.",
+    closingTitle: "Start with a question, end with insight.",
+    closingBody: "Download Stela and start exploring your data inside a Markdown workspace you own. No cloud required, no lock-in.",
+    footer: "Local-first · Open source · Data notebooks in Markdown"
+  }
+};
+
+      function setLanguage(language) {
+        const selected = copy[language] ? language : "en";
+        document.documentElement.lang = selected === "zh" ? "zh-CN" : "en";
+        document.querySelectorAll("[data-i18n]").forEach((element) => {
+          element.textContent = copy[selected][element.dataset.i18n];
+        });
+        document.querySelectorAll("[data-i18n-alt]").forEach((element) => {
+          element.alt = copy[selected][element.dataset.i18nAlt];
+        });
+        document.querySelectorAll("[data-language]").forEach((button) => {
+          button.setAttribute("aria-pressed", String(button.dataset.language === selected));
+        });
+        localStorage.setItem("stela-pages-language", selected);
+      }
+
+      const savedLanguage = localStorage.getItem("stela-pages-language");
+      const browserLanguage = navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
+      setLanguage(savedLanguage || browserLanguage);
+      document.querySelectorAll("[data-language]").forEach((button) => {
+        button.addEventListener("click", () => setLanguage(button.dataset.language));
+      });
+    </script>
+  </body>
+</html>
