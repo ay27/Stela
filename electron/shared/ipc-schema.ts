@@ -471,6 +471,31 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
           suffix: z.string().max(20_000),
           siblingSqls: z.array(z.string().max(8_000)).max(16),
           connectionName: z.string().min(1).max(256).nullable(),
+          tableSchemas: z
+            .array(
+              z
+                .object({
+                  database: z.string().max(256).nullable().optional(),
+                  table: z.string().max(256).nullable().optional(),
+                  columns: z
+                    .array(
+                      z
+                        .object({
+                          name: z.string().max(256),
+                          typeName: z.string().max(256),
+                          comment: z.string().max(1_000).optional(),
+                        })
+                        .strict(),
+                    )
+                    .max(200)
+                    .optional(),
+                })
+                .strict(),
+            )
+            .max(8)
+            .optional(),
+          heading: z.string().max(500).nullable().optional(),
+          prose: z.string().max(2_000).nullable().optional(),
         })
         .strict(),
     })
@@ -524,6 +549,8 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
     runId: stringMin1.max(128),
     callId: stringMin1.max(256),
     approve: z.boolean(),
+    /** `question` kind 的自由文本答案；approve=false 时忽略。 */
+    answer: z.string().max(4_000).optional(),
   }),
 
   // Git 版本控制

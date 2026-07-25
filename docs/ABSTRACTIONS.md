@@ -356,7 +356,7 @@ interface AiSettings {
 }
 ```
 
-API key shard: `{vault}/.stela/secrets/ai_{deviceSlug}_{profileId}.json` (safeStorage-wrapped). Transport: pi-ai built-in provider for `vendorId`, or `createProvider` for `custom` ([ADR-0022](./adr/0022-ai-multi-provider-profiles.md)); agent loop: `AgentHarness` ([ADR-0024](./adr/0024-conservative-streamed-sql-inline-completion.md)). Inline completion is enabled only when `completionProfileId` names an existing profile.
+API key shard: `{vault}/.stela/secrets/ai_{deviceSlug}_{profileId}.json` (safeStorage-wrapped). Transport: pi-ai built-in provider for `vendorId`, or `createProvider` for `custom` ([ADR-0022](./adr/0022-ai-multi-provider-profiles.md)); agent loop: `AgentHarness` ([ADR-0018](./adr/0018-pi-ai-agent-harness.md)). Inline completion is enabled only when `completionProfileId` names an existing profile.
 
 ### Action complete
 
@@ -393,7 +393,7 @@ interface AiCompleteRequest {
 }
 ```
 
-Pipeline: enrich schema → cap sizes → optional samples → `redactForPrompt` → action prompt → pi-ai `completeSimple`. See [ADR-0024](./adr/0024-conservative-streamed-sql-inline-completion.md), [ADR-0014](./adr/0014-ai-context-redaction-and-schema-enrichment.md).
+Pipeline: enrich schema → cap sizes → optional samples → `redactForPrompt` → action prompt → pi-ai `completeSimple`. See [ADR-0014](./adr/0014-ai-context-redaction-and-schema-enrichment.md).
 
 ### SQL inline completion
 
@@ -404,6 +404,9 @@ interface AiInlineCompletionRequest {
   suffix: string;
   siblingSqls: string[]; // same-note RunSQL blocks, nearest first
   connectionName: string | null;
+  tableSchemas?: AiSchemaTargetContext[]; // already-cached renderer columns, ≤8 tables
+  heading?: string | null;                // nearest heading above the block
+  prose?: string | null;                  // ≤500 chars between heading and block
 }
 
 type AiInlineCompletionEvent =
@@ -414,7 +417,11 @@ type AiInlineCompletionEvent =
   | { type: "cancelled"; requestId: string };
 ```
 
-IPC uses `AI_INLINE_COMPLETION_START`, `AI_INLINE_COMPLETION_CANCEL`, and push event `ai:inline-completion-event`; preload exposes `window.stela.ai.startInlineCompletion`, `cancelInlineCompletion`, and `onInlineCompletionEvent`. Completion uses `completionProfileId` independently of chat/agent `activeProfileId`, simulates FIM over pi-ai `streamSimple`, and includes only referenced-table DDL found in the connection's local `schemaDir`—missing snapshots never fall back to connector list/execute calls. Other RunSQL blocks in the same note are sent as bounded reference context, ordered by document distance from the current block and capped at 8K characters. RunSQL starts only after an edit has been idle for 600 ms at a line tail, rejects stale `requestId`/cursor context, and displays at most one ghost-text line. Focus, click, selection movement, and settings changes do not start requests. A native completion popup takes priority; after it closes, a pending edited context is scheduled again. Before display and Tab acceptance, deterministic normalization removes repeated text and suffix overlap, and restores a missing leading space at an identifier boundary. Replacement, Escape, blur, composition start, popup opening, or destroy cancels active requests. Tab accepts visible ghost text.
+IPC uses `AI_INLINE_COMPLETION_START`, `AI_INLINE_COMPLETION_CANCEL`, and push event `ai:inline-completion-event`; preload exposes `window.stela.ai.startInlineCompletion`, `cancelInlineCompletion`, and `onInlineCompletionEvent`. Completion uses `completionProfileId` independently of chat/agent `activeProfileId` and simulates FIM over pi-ai `streamSimple`.
+
+Schema context comes from two sources ([ADR-0028](./adr/0028-inline-completion-schema-and-note-context.md)): `tableSchemas` carries columns the renderer already holds in `column-cache` for tables in the cursor's FROM/JOIN scope, and main adds DDL for referenced tables found in the connection's local `schemaDir`. Per table, renderer columns win; a table with a DDL snippet contributes only that snippet to the prompt, and a cache-only table contributes its column list. The request never triggers a column probe — probes are warmed when a RunSQL block gains focus. Missing snapshots never fall back to connector list/execute calls.
+
+Other RunSQL blocks in the same note are sent as bounded reference context, ordered by document distance from the current block and capped at 8K characters; `heading` and `prose` add the surrounding section's intent. RunSQL starts only after an edit has been idle for 120 ms at a line tail, rejects stale `requestId`/cursor context, and displays at most one ghost-text line. Focus, click, selection movement, and settings changes do not start requests. A native completion popup takes priority; after it closes, a pending edited context is scheduled again. Before display and Tab acceptance, deterministic normalization removes repeated text and suffix overlap, and restores a missing leading space at an identifier boundary. Replacement, Escape, blur, composition start, popup opening, or destroy cancels active requests. Tab accepts visible ghost text; accept and dismiss write a dev-only log line.
 
 ### SQL query parse (NL → filter)
 
@@ -437,9 +444,30 @@ Hits always come from deterministic `sql-index` intersection — the model must 
 ```typescript
 type AgentToolName =
   | "list_databases" | "list_tables" | "search_tables" | "get_table_schema"
-  | "run_sql"
+  | "run_sql" | "search_sql_usage"
   | "search_vault" | "list_vault_files" | "read_note"
-  | "propose_edit";
+  | "propose_edit" | "ask_user";
+
+type AgentProposalKind = "edit_note" | "mutation_sql" | "question";
+
+interface AgentProposalPayload {
+  description: string;
+  // edit_note / mutation_sql
+  notePath?: string;
+  oldContent?: string;
+  newContent?: string;
+  sql?: string;
+  // question
+  question?: string;
+  options?: string[];   // ≤6 clickable answers; free text always allowed
+}
+
+interface AgentProposalResponse {
+  runId: string;
+  callId: string;
+  approve: boolean;
+  answer?: string;      // question kind; approve=false means declined to answer
+}
 
 interface AgentRunRequest {
   runId: string;
@@ -461,7 +489,7 @@ type AgentEvent =
   | { type: "assistant_message"; runId: string; content: string }
   | { type: "tool_call"; runId: string; call: AgentToolCallInfo }
   | { type: "tool_result"; runId: string; callId: string; ok: boolean; summary: string }
-  | { type: "proposal"; runId: string; callId: string; kind: "edit_note" | "mutation_sql"; payload: AgentProposalPayload }
+  | { type: "proposal"; runId: string; callId: string; kind: AgentProposalKind; payload: AgentProposalPayload }
   | { type: "context_usage"; runId: string; usedTokens: number; contextWindow: number; estimated: boolean }
   | { type: "compaction"; runId: string; phase: "started" | "completed" }
   | { type: "final"; runId: string; content: string }
@@ -478,6 +506,33 @@ Safety ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md)):
 - Compaction uses `ai.contextWindow` + one overflow recovery ([ADR-0018](./adr/0018-pi-ai-agent-harness.md))
 - Note references are paths only; the agent should call `read_note` before relying on note contents
 - Selection / RunSQL attachments are bounded and included only on the user turn that added them
+- `ask_user` blocks on the same handshake with `kind: "question"`, resolving to the answer string; ≤3 questions per run, enforced in the tool ([ADR-0027](./adr/0027-agent-ask-user-clarification.md))
+- Final answers follow a fixed contract: conclusion, evidence (table · column · SQL), key numbers, assumptions made, remaining uncertainty
+
+Retrieval results ([ADR-0026](./adr/0026-ranked-lexical-retrieval-for-agent.md)):
+
+```typescript
+interface NoteSearchHit {
+  path: string;
+  title: string;
+  score: number;
+  matchCount: number;
+  matchedKeywords: string[];
+  matchedHeadings: string[];
+  bestSnippet: string;
+  bestLine: number;
+}
+
+interface NoteSearchResult {
+  notes: NoteSearchHit[];
+  scannedNotes: number;
+  totalMatchedNotes: number;
+  returned: number;
+  truncated: boolean;
+}
+```
+
+`search_vault` returns this note-level shape (full scan, then rank, then truncate); the line-level `SearchHit` from `searchVault` stays with the UI search panel. `search_tables` candidates additionally carry `vaultUsage` (notes, blocks, last run date), which the model reads but which never enters the score.
 
 ### UI entry points
 

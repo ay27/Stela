@@ -13,7 +13,14 @@ import type { SqlSymbols } from "./sql-symbols";
 
 const MAX_SCHEMA_TARGETS = 5;
 const MAX_DDL_CHARS = 4_000;
-const MAX_SCHEMA_FILES = 500;
+/**
+ * schemaDir 里的表数量上限。真实 vault 已有 900+ 张表，旧上限 500 会按 readdir
+ * 顺序静默切掉近一半——和「搜索满 cap 就 return」是同一类任意截断 bug。
+ *
+ * ponytail: 天花板是「每次调用都重读整个目录」，5000 个小文件约 200ms（有 OS
+ * page cache 时更快）。真到万级表再加按目录 mtime 失效的内存 catalog 缓存。
+ */
+const MAX_SCHEMA_FILES = 5_000;
 const TOKEN_MIN_LENGTH = 2;
 const QUERY_STOPWORDS = new Set([
   "as",
@@ -96,6 +103,34 @@ function qualifiedName(database: string | null, table: string): string {
   return database ? `${database}.${table}` : table;
 }
 
+const CJK_RUN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+/gu;
+
+/**
+ * 中日韩文字没有词边界，`[\p{L}\p{N}_]+` 会把「按月统计pbr通过率」整段吃成
+ * **一个** token，之后任何 `includes` 都不可能命中——中文查询因此几乎零召回。
+ *
+ * 用字符 bigram 切开（"通过率" → "通过" / "过率"），与 SQLite FTS5 trigram
+ * tokenizer 同思路但只需十几行。同时把 CJK 串里夹着的 ascii 片段单独抽出来，
+ * 这样「pbr通过率」既产出 `pbr` 也产出中文 bigram。
+ */
+function expandCjk(token: string): string[] {
+  const out: string[] = [];
+  const runs = token.match(CJK_RUN);
+  if (!runs) return out;
+  for (const run of runs) {
+    if (run.length === 1) {
+      out.push(run);
+      continue;
+    }
+    for (let i = 0; i + 1 < run.length; i++) out.push(run.slice(i, i + 2));
+  }
+  // CJK 串之间的 ascii/数字片段（"pbr"、"v2"）也要成为独立 token。
+  for (const piece of token.split(CJK_RUN)) {
+    if (piece.length >= TOKEN_MIN_LENGTH) out.push(piece);
+  }
+  return out;
+}
+
 function tokenize(
   values: Array<string | null | undefined>,
   options?: { filterStopwords?: boolean },
@@ -110,6 +145,9 @@ function tokenize(
     for (const token of matches ?? []) {
       if (token.length >= TOKEN_MIN_LENGTH && (!filterStopwords || !QUERY_STOPWORDS.has(token))) {
         tokens.add(token);
+      }
+      for (const gram of expandCjk(token)) {
+        if (!filterStopwords || !QUERY_STOPWORDS.has(gram)) tokens.add(gram);
       }
     }
   }
@@ -135,6 +173,21 @@ function extractDdl(markdown: string): string | null {
   return markdown.trim() || null;
 }
 
+/**
+ * 列注释：MySQL 用 `COMMENT '...'`，StarRocks/Doris 用 `COMMENT "..."`。
+ * 两种都要认——真实 vault 里 900+ 张表用的是双引号风格。
+ */
+const COLUMN_COMMENT_RE = /\bcomment\s+(?:'((?:[^']|'')*)'|"((?:[^"]|"")*)")/i;
+
+function extractColumnComment(line: string): string | undefined {
+  const m = COLUMN_COMMENT_RE.exec(line);
+  if (!m) return undefined;
+  const raw = m[1] ?? m[2];
+  if (raw === undefined) return undefined;
+  const text = raw.replace(/''/g, "'").replace(/""/g, '"').trim();
+  return text.length > 0 ? text : undefined;
+}
+
 export function parseColumnsFromDdl(ddl: string): AiSchemaColumnContext[] {
   const columns: AiSchemaColumnContext[] = [];
   const seen = new Set<string>();
@@ -142,20 +195,32 @@ export function parseColumnsFromDdl(ddl: string): AiSchemaColumnContext[] {
     const line = rawLine.trim().replace(/,$/, "");
     if (/^create\s+table\b/i.test(line) || line === "(" || line === ")") continue;
     if (/^\)/.test(line)) continue;
-    if (/^(primary|unique|foreign)\s+key\b/i.test(line)) continue;
+    if (/^(primary|unique|foreign|duplicate|aggregate)\s+key\b/i.test(line)) continue;
     if (/^(key|index|constraint)\b/i.test(line)) continue;
+    // StarRocks/Doris 的表尾子句，否则 `DUPLICATE KEY(...)` 会被当成一列。
+    if (/^(partition|order|distributed)\s+by\b/i.test(line)) continue;
+    if (/^comment\b/i.test(line)) continue;
     if (/^engine\s*=/i.test(line)) continue;
     if (/^distributed\b/i.test(line)) continue;
     if (/^properties\s*\(/i.test(line)) continue;
     const match = /^[`"]?([A-Za-z_][\w$]*)[`"]?\s+([A-Za-z][\w() ,]*)/i.exec(line);
     if (!match) continue;
     const name = match[1] ?? "";
-    const typeName = (match[2] ?? "").trim();
+    // 类型只到修饰符为止：`bigint NOT NULL COMMENT "主键"` 的类型是 `bigint`，
+    // 把 `NOT NULL COMMENT` 一起塞进 typeName 会污染所有下游（prompt、
+    // search_tables 输出）。
+    const typeName = (match[2] ?? "")
+      .replace(
+        /\s+(not\s+null|null|default|comment|auto_increment|generated|as|collate|primary|unique|key)\b.*$/i,
+        "",
+      )
+      .trim();
     const lowerName = name.toLowerCase();
     if (!name || seen.has(lowerName)) continue;
     if (["primary", "unique", "key", "constraint", "index"].includes(lowerName)) continue;
     seen.add(lowerName);
-    columns.push({ name, typeName });
+    const comment = extractColumnComment(line);
+    columns.push(comment ? { name, typeName, comment } : { name, typeName });
     if (columns.length >= 80) break;
   }
   return columns;
@@ -293,6 +358,45 @@ function explicitTableSet(symbols: SqlSymbols): Set<string> {
   return set;
 }
 
+/**
+ * 单条目的关键词打分。两个 rank 入口共用，避免权重在两处漂移。
+ *
+ * 权重意图：表名命中最强；列注释次之——业务词（尤其中文 bigram）唯一能落地的
+ * 位置就是注释，若只给它 DDL 全文的 +3，中文查询会被表名 substring 噪声压死；
+ * DDL 全文兜底最弱（注释已单独计分，这里只捕捉类型/属性等剩余文本）。
+ */
+function scoreEntryTerms(
+  entry: SchemaCatalogEntry,
+  terms: string[],
+): { score: number; reasons: string[] } {
+  let score = 0;
+  const reasons: string[] = [];
+  const tableName = normalizeName(entry.table);
+  const qName = normalizeName(entry.qualifiedName);
+  const comments = entry.columns
+    .map((column) => column.comment?.toLowerCase())
+    .filter((text): text is string => Boolean(text));
+  for (const term of terms) {
+    if (tableName.includes(term) || qName.includes(term)) {
+      score += 16;
+      reasons.push(`table match:${term}`);
+    }
+    if (entry.columns.some((column) => normalizeName(column.name).includes(term))) {
+      score += 8;
+      reasons.push(`column match:${term}`);
+    }
+    if (comments.some((text) => text.includes(term))) {
+      score += 6;
+      reasons.push(`comment match:${term}`);
+    }
+    if (entry.ddlSnippet?.toLowerCase().includes(term)) {
+      score += 1;
+      reasons.push(`ddl match:${term}`);
+    }
+  }
+  return { score, reasons };
+}
+
 function rankCatalog(
   catalog: SchemaCatalogEntry[],
   request: AiCompleteRequest,
@@ -322,21 +426,12 @@ function rankCatalog(
       if (explicit.size > 0) {
         return { ...entry, score, reasons };
       }
-      for (const term of terms) {
-        if (tableName.includes(term) || qName.includes(term)) {
-          score += 16;
-          reasons.push(`table match:${term}`);
-        }
-        if (entry.columns.some((column) => normalizeName(column.name).includes(term))) {
-          score += 8;
-          reasons.push(`column match:${term}`);
-        }
-        if (entry.ddlSnippet?.toLowerCase().includes(term)) {
-          score += 3;
-          reasons.push(`ddl match:${term}`);
-        }
-      }
-      return { ...entry, score, reasons };
+      const termScore = scoreEntryTerms(entry, terms);
+      return {
+        ...entry,
+        score: score + termScore.score,
+        reasons: [...reasons, ...termScore.reasons],
+      };
     })
     .filter((entry) => entry.score > 0)
     .sort(
@@ -352,27 +447,7 @@ function rankCatalogByKeywords(
 ): RankedSchemaEntry[] {
   const terms = tokenize(keywords, { filterStopwords: true });
   return catalog
-    .map((entry) => {
-      let score = 0;
-      const reasons: string[] = [];
-      const tableName = normalizeName(entry.table);
-      const qName = normalizeName(entry.qualifiedName);
-      for (const term of terms) {
-        if (tableName.includes(term) || qName.includes(term)) {
-          score += 16;
-          reasons.push(`table match:${term}`);
-        }
-        if (entry.columns.some((column) => normalizeName(column.name).includes(term))) {
-          score += 8;
-          reasons.push(`column match:${term}`);
-        }
-        if (entry.ddlSnippet?.toLowerCase().includes(term)) {
-          score += 3;
-          reasons.push(`ddl match:${term}`);
-        }
-      }
-      return { ...entry, score, reasons };
-    })
+    .map((entry) => ({ ...entry, ...scoreEntryTerms(entry, terms) }))
     .filter((entry) => entry.score > 0)
     .sort((a, b) => b.score - a.score || a.qualifiedName.localeCompare(b.qualifiedName));
 }

@@ -25,6 +25,7 @@ import {
   EditorState as CMState,
   Compartment,
   Prec,
+  type EditorState,
   type Extension,
   type Range,
 } from "@codemirror/state";
@@ -75,12 +76,14 @@ import { useWorkspace } from "@/state/workspace";
 import { renderMermaid } from "@/editor/mermaid/render";
 import { i18n } from "@/i18n";
 import { isRunsqlBlockPending } from "./pending-runs";
+import { extractScope } from "./sql-scope";
 import { sqlInlineCompletionExtension } from "./sql-inline-completion";
 
 export const RUNSQL_LANGUAGE = "runsql";
 export const MERMAID_LANGUAGE = "mermaid";
 
 const MERMAID_RENDER_DEBOUNCE_MS = 300;
+const MAX_PROSE_CHARS = 500;
 
 type RunStateValue = "idle" | "running" | "error";
 
@@ -549,12 +552,21 @@ export class CodeBlockNodeView implements NodeView {
             this.ensureColumnsFor(db, table),
           dialect: resolveEditorDialect(getRunContext()?.connectionName),
         }),
+        // 获得焦点就预热 FROM/JOIN 里那些表的列缓存。列探针有一次
+        // 100~300ms 往返，等到用户敲出 `alias.` 或触发 AI 补全时再拉就是
+        // 一次可感知的等待；此时拉则两边都已命中缓存。fire-and-forget，
+        // 失败在 column-cache 内部已降级为空列。
+        CMView.focusChangeEffect.of((state, focusing) => {
+          if (focusing) this.prewarmColumns(state);
+          return null;
+        }),
         ...(language === RUNSQL_LANGUAGE
           ? [
               sqlInlineCompletionExtension({
                 getConnectionName: () =>
                   getRunContext()?.connectionName ?? null,
                 getSiblingSqls: () => this.collectNearbySiblingSqls(),
+                getNoteContext: () => this.collectNoteContext(),
                 canRequest: () => !this.pendingAiRewrite,
               }),
             ]
@@ -609,6 +621,48 @@ export class CodeBlockNodeView implements NodeView {
       if (text.length < candidate.text.length) break;
     }
     return out;
+  }
+
+  /**
+   * 当前块所在小节的 heading + 紧随其后的一段散文。
+   *
+   * SQL 里的 `status = 3` 这类魔法值、口径定义、"只统计 xx"之类的约束，通常
+   * 写在小节标题和上方正文里而不在 SQL 注释里。补全看不到这些就只能猜。
+   */
+  private collectNoteContext(): { heading: string | null; prose: string | null } {
+    const selfPos = this.getPos();
+    if (selfPos === undefined) return { heading: null, prose: null };
+    let heading: string | null = null;
+    const prose: string[] = [];
+    this.view.state.doc.descendants((node, pos) => {
+      if (pos >= selfPos) return false;
+      if (node.type.name === "heading") {
+        heading = node.textContent.trim() || null;
+        prose.length = 0;
+        return false;
+      }
+      if (node.type.name === "paragraph") {
+        const text = node.textContent.trim();
+        if (text) prose.push(text);
+        return false;
+      }
+      return undefined;
+    });
+    return {
+      heading,
+      prose: prose.slice(-2).join("\n").slice(-MAX_PROSE_CHARS) || null,
+    };
+  }
+
+  /** 解析 state 里 FROM/JOIN 段的表，逐个 fire-and-forget 预热列缓存。 */
+  private prewarmColumns(state: EditorState): void {
+    if (!getRunContext()?.connectionName) return;
+    for (const path of extractScope(state, state.selection.main.head).tables) {
+      if (path.length === 0) continue;
+      const table = path[path.length - 1];
+      const db = path.length > 1 ? path[path.length - 2] : null;
+      void this.ensureColumnsFor(db, table);
+    }
   }
 
   /**

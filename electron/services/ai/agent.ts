@@ -12,7 +12,6 @@ import {
   Session,
   estimateContextTokens,
   shouldCompact,
-  type AgentMessage,
 } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { isContextOverflow, type AssistantMessage } from "@earendil-works/pi-ai";
@@ -21,24 +20,35 @@ import type {
   AgentEvent,
   AgentProposalResponse,
   AgentRunRequest,
-  AiPromptLocale,
   ConnectionEntry,
 } from "@shared/types";
 
 import * as connectionsStore from "../connections-store";
 import * as connectorRegistry from "../connectors/registry";
+import * as deviceProfile from "../device-profile";
+import * as journal from "../history-journal";
 import { getLogger } from "../logger";
+import * as resultStore from "../result-store";
 import * as settingsStore from "../settings-store";
-import { createAgentTools, type ProposalRequest } from "./agent-tools";
+import * as sqlIndex from "../sql-index";
+import { assistantText, buildSystemPrompt, buildUserContent } from "./agent-prompt";
+import {
+  createAgentTools,
+  type AgentRunRecorder,
+  type ProposalRequest,
+} from "./agent-tools";
 import { createTransportForProfile, getActiveProfile, loadApiKey } from "./provider";
 
 const log = getLogger("ai.agent");
-const AGENT_ATTACHMENT_CHAR_BUDGET = 30_000;
 const TOOL_RESULT_SUMMARY_CHARS = 12_000;
 const OVERFLOW_CONTINUE_PROMPT =
   "The previous request exceeded the model context window. Continue from the compacted history and finish the user's last request.";
 
-type ProposalResolver = (approve: boolean) => void;
+/**
+ * `question` kind 需要把答案文本带回工具，所以 resolve 类型从 `boolean`
+ * 放宽为 `boolean | string`：`false` = 拒绝，`true` = 同意，string = 答案。
+ */
+type ProposalResolver = (outcome: boolean | string) => void;
 
 /** runId -> callId -> resolver，供 IPC 层的 respondToProposal 查找。 */
 const activeProposals = new Map<string, Map<string, ProposalResolver>>();
@@ -58,80 +68,8 @@ export function respondToProposal(response: AgentProposalResponse): boolean {
   const resolver = pending?.get(response.callId);
   if (!resolver) return false;
   pending!.delete(response.callId);
-  resolver(response.approve);
+  resolver(response.approve && response.answer !== undefined ? response.answer : response.approve);
   return true;
-}
-
-function languageInstruction(locale: AiPromptLocale | undefined): string {
-  return locale === "zh" ? "Respond in Simplified Chinese." : "Respond in English.";
-}
-
-function buildSystemPrompt(
-  request: AgentRunRequest,
-  connection: ConnectionEntry | null,
-  dialect: string | null,
-): string {
-  return [
-    "You are Stela's data analysis agent, running inside a Markdown+SQL notes app.",
-    languageInstruction(request.locale),
-    "You have tools to browse the vault, inspect data schemas, run SQL, and propose note edits.",
-    connection
-      ? `The active data connection is "${request.connectionName}" (kind: ${connection.kind}${dialect ? `, dialect: ${dialect}` : ""}).`
-      : "No data connection is configured for the current note; SQL/schema tools will fail until one is set.",
-    request.mentionedTables && request.mentionedTables.length > 0
-      ? `The user explicitly mentioned these tables: ${request.mentionedTables.join(", ")}. Prefer get_table_schema for them before guessing schema.`
-      : null,
-    request.referencedNotes && request.referencedNotes.length > 0
-      ? `The user explicitly referenced these notes: ${request.referencedNotes.join(", ")}. Use read_note on these paths before relying on their contents; do not guess note text.`
-      : null,
-    "When you don't know which table to query, use search_tables with business keywords before guessing table names.",
-    "For data-analysis questions, follow this playbook: (1) identify candidate tables with mentioned tables, search_tables, and only then list_databases/list_tables; (2) inspect schemas before writing SQL; (3) if the user uses business terms such as pbr/coloring/status, map them to concrete columns by checking column names, DDL comments, vault notes, and small grouped samples; (4) run a small verification SQL first when field meaning is uncertain; (5) if results contradict the hypothesis, try the next plausible field and say what changed; (6) finish with the exact table, fields, SQL logic, and numbers used.",
-    "Use search_vault/list_vault_files/read_note for business definitions in notes. read_note supports offset/maxChars for paging through large notes.",
-    "Never assume schema or row values you haven't fetched with a tool.",
-    "SQL row limits are enforced automatically; you don't need to add LIMIT yourself.",
-    "In vault Markdown, executable SQL blocks MUST use fenced ```runsql``` — ```sql``` is a plain code fence and will not become a RunSQL node.",
-    "A runsql fence will be followed by an HTML <detail> block: that is the latest successful-run summary plus result-ref-id, written by the execution pipeline. When proposing edits, do not invent, delete, or rewrite <detail> unless the user explicitly asks; preserve existing detail text as-is.",
-    "Mutating SQL and note edits always require explicit user approval via the tool itself — don't tell the user you already did it until the tool result confirms it.",
-    "When you have a final answer, respond with plain text (no further tool calls). Keep it concise and reference the concrete numbers/tables you found.",
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-function truncateForAgentContext(text: string, remainingBudget: number): { text: string; remainingBudget: number } {
-  if (remainingBudget <= 0) return { text: "", remainingBudget: 0 };
-  if (text.length <= remainingBudget) return { text, remainingBudget: remainingBudget - text.length };
-  const omitted = text.length - remainingBudget;
-  return {
-    text: `${text.slice(0, Math.max(0, remainingBudget - 80))}\n\n[truncated ${omitted} chars]`,
-    remainingBudget: 0,
-  };
-}
-
-function buildUserContent(request: AgentRunRequest): string {
-  const parts = [request.prompt];
-  if (request.referencedNotes && request.referencedNotes.length > 0) {
-    parts.push(
-      [
-        "Referenced notes:",
-        ...request.referencedNotes.map((notePath: string) => `- ${notePath}`),
-        "Use read_note with these paths when their contents matter.",
-      ].join("\n"),
-    );
-  }
-
-  let remainingBudget = AGENT_ATTACHMENT_CHAR_BUDGET;
-  for (const attachment of request.attachments ?? []) {
-    const raw =
-      attachment.kind === "runsql"
-        ? `Attached RunSQL block: ${attachment.label}${attachment.sourcePath ? ` (${attachment.sourcePath})` : ""}\n\n\`\`\`sql\n${attachment.sql}\n\`\`\``
-        : `Attached selection: ${attachment.label}${attachment.sourcePath ? ` (${attachment.sourcePath})` : ""}\n\n${attachment.text}`;
-    const next = truncateForAgentContext(raw, remainingBudget);
-    if (!next.text) break;
-    parts.push(next.text);
-    remainingBudget = next.remainingBudget;
-  }
-  return parts.join("\n\n");
 }
 
 async function resolveConnection(
@@ -152,37 +90,51 @@ async function resolveConnection(
   }
 }
 
+/**
+ * agent 执行的 SQL 走与 RunSQL 完全相同的落盘路径：SQLite 缓存 + JSONL journal。
+ * 这样 Run History 能看到、Git 能同步、用户能复核 agent 究竟查了什么。
+ */
+function recordAgentRun(vaultPath: string): AgentRunRecorder {
+  return async (run) => {
+    resultStore.saveRun({
+      runId: run.runId,
+      blockId: run.blockId,
+      sql: run.sql,
+      status: run.status,
+      message: run.message,
+      startedAt: run.startedAt,
+      elapsedMs: run.elapsedMs,
+      rowCount: run.rowCount,
+      connectionName: run.connectionName,
+      notePath: run.notePath,
+    });
+    if (run.columns.length > 0) resultStore.saveSchema(run.runId, run.columns);
+    if (run.rows.length > 0) resultStore.saveRows(run.runId, run.rows, 0);
+    await journal.appendRunById(vaultPath, run.runId, await deviceProfile.loadDeviceProfile());
+  };
+}
+
 function makeRequestProposal(
   runId: string,
   callId: string,
   onEvent: (event: AgentEvent) => void,
   pending: Map<string, ProposalResolver>,
   signal: AbortSignal,
-): (proposal: ProposalRequest) => Promise<boolean> {
+): (proposal: ProposalRequest) => Promise<boolean | string> {
   return (proposal) => {
     onEvent({ type: "proposal", runId, callId, kind: proposal.kind, payload: proposal.payload });
-    return new Promise<boolean>((resolve) => {
+    return new Promise<boolean | string>((resolve) => {
       const onAbort = () => {
         pending.delete(callId);
         resolve(false);
       };
-      pending.set(callId, (approve) => {
+      pending.set(callId, (outcome) => {
         signal.removeEventListener("abort", onAbort);
-        resolve(approve);
+        resolve(outcome);
       });
       signal.addEventListener("abort", onAbort, { once: true });
     });
   };
-}
-
-function assistantText(message: AssistantMessage | AgentMessage): string {
-  if (!("content" in message) || typeof message.content === "string") {
-    return typeof message.content === "string" ? message.content : "";
-  }
-  return message.content
-    .filter((block): block is { type: "text"; text: string } => block.type === "text")
-    .map((block) => block.text)
-    .join("");
 }
 
 function toolResultSummary(result: unknown): string {
@@ -282,6 +234,9 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
             listTables: connectorRegistry.listTables,
             execute: connectorRegistry.execute,
           },
+          sqlIndex: { query: sqlIndex.query },
+          run: { runId, notePath: request.notePath ?? null, questionsAsked: 0 },
+          recordRun: recordAgentRun(vaultPath),
         },
         requestProposal: (toolCallId, proposal) =>
           makeRequestProposal(runId, toolCallId, onEvent, pending, signal)(proposal),

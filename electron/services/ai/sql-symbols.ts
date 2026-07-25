@@ -37,7 +37,9 @@ export function extractSqlSymbols(sql: string): SqlSymbols {
     ...collectAll(/\bjoin\s+([`"\[]?[\w.]+[`"\]]?)/gi, normalized),
     ...collectAll(/\bupdate\s+([`"\[]?[\w.]+[`"\]]?)/gi, normalized),
     ...collectAll(/\binto\s+([`"\[]?[\w.]+[`"\]]?)/gi, normalized),
-  ]);
+    // 光标正停在 `FROM ` 后面时，紧跟的下一个 token 是 suffix 的关键字
+    // （`FROM \nUNION SELECT ...`），别把它当表名塞进 prompt 或拿去查 schema。
+  ]).filter((name) => !SQL_KEYWORDS.has(name.toLowerCase()));
 
   const aliases: Record<string, string> = {};
   const aliasRegex = /\b(?:from|join)\s+([`"\[]?[\w.]+[`"\]]?)(?:\s+(?:as\s+)?([`"\[]?\w+[`"\]]?))?/gi;

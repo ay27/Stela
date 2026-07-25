@@ -2,7 +2,8 @@
 type: ADR
 id: "0024"
 title: "Conservative streamed SQL inline completion"
-status: active
+status: superseded
+superseded_by: "0028"
 date: 2026-07-21
 ---
 

@@ -14,14 +14,19 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { AppError } from "@shared/errors";
 import type {
   AgentToolName,
+  AgentProposalKind,
   AgentProposalPayload,
   AiSettings,
+  ColumnDef,
   ConnectionEntry,
   ConnectorKindMeta,
   QueryResult,
-  SearchHit,
+  SqlIndexFilter,
+  SqlIndexHit,
+  SqlIndexOperation,
 } from "@shared/types";
 
+import { getLogger } from "../logger";
 import * as search from "../search";
 import * as vaultFs from "../vault-fs";
 import { notifyFileChanged } from "../vault-watcher";
@@ -41,6 +46,36 @@ export interface AgentConnectorOps {
   execute(kind: string, config: unknown, sql: string): Promise<QueryResult>;
 }
 
+/**
+ * SQL 事实索引的最小依赖面。同样用注入而不是静态 import——`sql-index.ts` 会拉进
+ * connector registry（进而 `electron.app`），静态引入会让本文件在 plain Node 下加载失败。
+ */
+export interface AgentSqlIndexOps {
+  query(filter: SqlIndexFilter): Promise<SqlIndexHit[]>;
+}
+
+/**
+ * 把一次 agent SQL 执行落进执行历史。同样注入——写侧要 `deviceProfile`（electron `app`）。
+ *
+ * 存在的理由：agent 跑的 SQL 此前完全不入库，Run History 里看不到、Git 同步不到，
+ * 用户无从复核 agent 到底查了什么。这是数据丢失，不是优化。
+ */
+export type AgentRunRecorder = (run: {
+  runId: string;
+  blockId: string;
+  sql: string;
+  status: "ok" | "err";
+  message: string | null;
+  startedAt: number;
+  elapsedMs: number;
+  rowCount: number;
+  connectionName: string;
+  notePath: string | null;
+  columns: ColumnDef[];
+  rows: unknown[][];
+}) => Promise<void>;
+
+const log = getLogger("ai.agent-tools");
 const RESULT_CHAR_BUDGET = 30_000;
 
 function truncate(text: string, maxChars = RESULT_CHAR_BUDGET): string {
@@ -63,9 +98,15 @@ export interface ToolOutcome {
 }
 
 export interface ProposalRequest {
-  kind: "edit_note" | "mutation_sql";
+  kind: AgentProposalKind;
   payload: AgentProposalPayload;
 }
+
+/**
+ * 单次 run 的提问上限。硬限在工具侧而不是只写在 prompt 里——prompt 约束是建议，
+ * 这里是保证：模型再怎么犹豫也不会把对话变成问答轰炸。
+ */
+const MAX_QUESTIONS_PER_RUN = 3;
 
 /**
  * 工具执行上下文，由 [agent.ts](./agent.ts) 每次 run 构造一次。
@@ -78,7 +119,14 @@ export interface AgentToolContext {
   connection: ConnectionEntry | null;
   aiSettings: AiSettings;
   connector: AgentConnectorOps;
-  requestProposal: (proposal: ProposalRequest) => Promise<boolean>;
+  sqlIndex: AgentSqlIndexOps;
+  /**
+   * 单次 run 的可变状态：`runId` / `notePath` 用于给执行历史生成
+   * `agent:<runId>` 形式的 blockId；`questionsAsked` 由 `ask_user` 自增。
+   */
+  run: { runId: string; notePath: string | null; questionsAsked: number };
+  recordRun: AgentRunRecorder;
+  requestProposal: (proposal: ProposalRequest) => Promise<boolean | string>;
 }
 
 /**
@@ -92,7 +140,7 @@ export interface AgentToolContext {
  */
 export function createAgentTools(options: {
   ctx: Omit<AgentToolContext, "requestProposal">;
-  requestProposal: (toolCallId: string, proposal: ProposalRequest) => Promise<boolean>;
+  requestProposal: (toolCallId: string, proposal: ProposalRequest) => Promise<boolean | string>;
 }): AgentTool[] {
   const { ctx, requestProposal } = options;
   return [
@@ -118,7 +166,7 @@ export function createAgentTools(options: {
       name: "search_tables",
       label: "Search tables",
       description:
-        "Fuzzy-search for candidate tables by keywords (business terms, partial table names). Use this when you don't know the exact table name yet — it scores table names, columns, and documented DDL for matches.",
+        "Fuzzy-search for candidate tables by keywords (business terms, partial table names). Use this when you don't know the exact table name yet — it scores table names, column names, and Chinese/English DDL column comments. Each candidate also reports vaultUsage (how many notes and SQL blocks actually query it, and the last run date): prefer tables that are actually used over ones that merely look similar, and if the top candidates all have zero usage, say so rather than guessing.",
       parameters: Type.Object({
         keywords: Type.Array(Type.String(), {
           description: 'Keywords to match against table/column names and DDL, e.g. ["quarter", "revenue", "order"].',
@@ -155,18 +203,41 @@ export function createAgentTools(options: {
       name: "search_vault",
       label: "Search vault",
       description:
-        "Full-text search across the vault's Markdown notes. Accepts one keyword or several keywords; several keywords are searched independently and merged.",
+        "Full-text search across the vault's Markdown notes, returning ranked notes (not raw lines). Every keyword is scored in one pass and notes matching more of them rank higher, so pass all your keywords at once. The result reports totalMatches/truncated so you can tell whether you saw everything.",
       parameters: Type.Object({
         keyword: Type.Optional(Type.String({ description: "Single keyword for compatibility." })),
         keywords: Type.Optional(
           Type.Array(Type.String(), {
-            description: "Preferred: several business terms or identifiers to search independently.",
+            description: "Preferred: all business terms or identifiers to score together.",
           }),
         ),
-        maxHits: Type.Optional(Type.Number({ description: "Max total hits to return. Defaults to 100." })),
+        maxNotes: Type.Optional(Type.Number({ description: "Max notes to return. Defaults to 40." })),
       }),
       executionMode: "parallel",
       execute: (toolCallId, params) => runTool("search_vault", toolCallId, params, ctx, requestProposal),
+    },
+    {
+      name: "search_sql_usage",
+      label: "Search SQL usage",
+      description:
+        "Find which notes actually read or write a given table, from Stela's SQL AST index. This is an exact structural lookup — prefer it over search_vault when you already know a table name and want the notes that query it, or to learn how a table is normally joined and filtered.",
+      parameters: Type.Object({
+        readTable: Type.Optional(
+          Type.String({ description: "Table read by the SQL, as table or db.table." }),
+        ),
+        writeTable: Type.Optional(
+          Type.String({ description: "Table written by the SQL, as table or db.table." }),
+        ),
+        operations: Type.Optional(
+          Type.Array(Type.String(), {
+            description:
+              'Restrict to these SQL operations: select / insert / replace / update / delete / upsert / ddl / other.',
+          }),
+        ),
+        limit: Type.Optional(Type.Number({ description: "Max SQL blocks to inspect. Defaults to 60." })),
+      }),
+      executionMode: "parallel",
+      execute: (toolCallId, params) => runTool("search_sql_usage", toolCallId, params, ctx, requestProposal),
     },
     {
       name: "list_vault_files",
@@ -216,6 +287,26 @@ export function createAgentTools(options: {
       executionMode: "sequential",
       execute: (toolCallId, params) => runTool("propose_edit", toolCallId, params, ctx, requestProposal),
     },
+    {
+      name: "ask_user",
+      label: "Ask the user",
+      description:
+        `Ask the user one short question and wait for the answer. Use this instead of guessing when a business term maps to several plausible columns, when a metric definition is ambiguous, or when the vault gives contradictory definitions. First exhaust what you can check yourself (schemas, DDL comments, notes, a small GROUP BY sample); only ask what data cannot answer. At most ${MAX_QUESTIONS_PER_RUN} questions per run — spend them on the one thing that would change your answer.`,
+      parameters: Type.Object({
+        question: Type.String({ description: "One specific question, in the user's language." }),
+        options: Type.Optional(
+          Type.Array(Type.String(), {
+            description:
+              "Candidate answers to offer as buttons, e.g. the concrete columns you are choosing between. The user can still type a free-form answer.",
+          }),
+        ),
+        context: Type.Optional(
+          Type.String({ description: "One line on what you already checked and why you are stuck." }),
+        ),
+      }),
+      executionMode: "sequential",
+      execute: (toolCallId, params) => runTool("ask_user", toolCallId, params, ctx, requestProposal),
+    },
   ];
 }
 
@@ -224,7 +315,7 @@ async function runTool(
   toolCallId: string,
   params: unknown,
   baseCtx: Omit<AgentToolContext, "requestProposal">,
-  requestProposal: (toolCallId: string, proposal: ProposalRequest) => Promise<boolean>,
+  requestProposal: (toolCallId: string, proposal: ProposalRequest) => Promise<boolean | string>,
 ) {
   const outcome = await dispatchTool(name, JSON.stringify(params ?? {}), {
     ...baseCtx,
@@ -307,15 +398,46 @@ async function runSearchTables(args: { keywords?: unknown; limit?: unknown }, ct
   if (targets.length === 0) {
     return fail("No matching tables found. Try list_databases/list_tables, or broaden the keywords.");
   }
+  const usage = await Promise.all(
+    targets.map((target) => tableUsage(ctx, target.table)),
+  );
   return ok(
-    targets.map((t) => ({
+    targets.map((t, i) => ({
       database: t.database,
       table: t.table,
       matchReason: t.matchReason,
       score: t.score,
+      // 关键词分只说明「名字/注释像」，用不用过才说明「这张表是不是活的」。
+      // 刻意不折进 score：M1/M2 的 gold 正是由 runsql 块派生的，把它做成
+      // 打分信号就等于用答案给自己加分（见 ADR-0026 的评测铁律）。
+      vaultUsage: usage[i],
       columns: t.columns?.slice(0, 30),
     })),
   );
+}
+
+/** 该表在 vault 的 runsql 块里被读写过多少次、最近一次执行是什么时候。 */
+async function tableUsage(
+  ctx: AgentToolContext,
+  table: string | null | undefined,
+): Promise<{ notes: number; blocks: number; lastRunDate: string | null } | null> {
+  if (!table) return null;
+  try {
+    const [reads, writes] = await Promise.all([
+      ctx.sqlIndex.query({ readTable: table, maxHits: 100 }),
+      ctx.sqlIndex.query({ writeTable: table, maxHits: 100 }),
+    ]);
+    const hits = [...reads, ...writes];
+    if (hits.length === 0) return { notes: 0, blocks: 0, lastRunDate: null };
+    const notes = new Set(hits.map((hit) => hit.relPath));
+    const lastRunDate = hits.reduce<string | null>(
+      (best, hit) => (hit.runDate && (!best || hit.runDate > best) ? hit.runDate : best),
+      null,
+    );
+    return { notes: notes.size, blocks: hits.length, lastRunDate };
+  } catch {
+    return null;
+  }
 }
 
 async function runGetTableSchema(args: { tables?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
@@ -367,32 +489,164 @@ async function runSql(args: { sql?: string }, ctx: AgentToolContext): Promise<To
     if (!approved) return fail("The user rejected this SQL statement. Do not retry it as-is.");
   }
   // 行数上限已在 registry.execute 内核心层统一注入，这里不重复处理。
-  const result = await ctx.connector.execute(connection.kind, connection.config, sql);
+  const startedAt = Date.now();
+  let result: QueryResult;
+  try {
+    result = await ctx.connector.execute(connection.kind, connection.config, sql);
+  } catch (err) {
+    await recordAgentRun(ctx, sql, startedAt, null, err);
+    throw err;
+  }
+  await recordAgentRun(ctx, sql, startedAt, result, null);
   return ok(formatQueryResult(result));
 }
 
-async function runSearchVault(args: { keyword?: unknown; keywords?: unknown; maxHits?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
-  const keywords = [
-    ...(typeof args.keyword === "string" ? [args.keyword] : []),
-    ...stringList(args.keywords),
-  ].map((keyword) => keyword.trim()).filter(Boolean);
-  const uniqueKeywords = Array.from(new Set(keywords));
-  if (uniqueKeywords.length === 0) return fail("keyword or keywords must contain at least one non-empty string.");
-  const maxHits = boundedInt(args.maxHits, 100, 1, 300);
-  const perKeyword = Math.max(1, Math.ceil(maxHits / uniqueKeywords.length));
-  const merged = new Map<string, SearchHit & { keyword: string }>();
-  for (const keyword of uniqueKeywords) {
-    const hits = await search.searchVault(ctx.vaultPath, keyword, { maxHits: perKeyword });
-    for (const hit of hits) {
-      const key = `${hit.path}:${hit.line}:${hit.column}:${keyword}`;
-      merged.set(key, { ...hit, path: path.relative(ctx.vaultPath, hit.path), keyword });
-      if (merged.size >= maxHits) break;
-    }
-    if (merged.size >= maxHits) break;
+/** 记录失败不应影响 agent 继续工作——落盘异常只记日志。 */
+async function recordAgentRun(
+  ctx: AgentToolContext,
+  sql: string,
+  startedAt: number,
+  result: QueryResult | null,
+  err: unknown,
+): Promise<void> {
+  const elapsedMs = result?.elapsedMs ?? Date.now() - startedAt;
+  const isQuery = result?.kind === "query";
+  try {
+    await ctx.recordRun({
+      // 一次 agent run 可能跑多条 SQL，runId 必须唯一；blockId 保持同一个
+      // `agent:<agentRunId>`，这样一次对话里的所有执行归到同一"块"下。
+      runId: `${ctx.run.runId}-sql-${startedAt}`,
+      blockId: `agent:${ctx.run.runId}`,
+      sql,
+      status: result ? "ok" : "err",
+      message: result ? null : err instanceof Error ? err.message : String(err),
+      startedAt,
+      elapsedMs,
+      rowCount: isQuery ? result.rows.length : (result?.affectedRows ?? 0),
+      connectionName: ctx.connectionName ?? "",
+      notePath: ctx.run.notePath,
+      columns: isQuery ? result.columns : [],
+      rows: isQuery ? result.rows : [],
+    });
+  } catch (recordErr) {
+    log.warn("agent run_sql history write failed", {
+      err: recordErr instanceof Error ? recordErr.message : String(recordErr),
+    });
   }
-  const hits = Array.from(merged.values());
-  if (hits.length === 0) return fail(`No matches for ${uniqueKeywords.map((keyword) => `"${keyword}"`).join(", ")}.`);
-  return ok(hits);
+}
+
+async function runSearchVault(
+  args: { keyword?: unknown; keywords?: unknown; maxHits?: unknown; maxNotes?: unknown },
+  ctx: AgentToolContext,
+): Promise<ToolOutcome> {
+  const keywords = Array.from(
+    new Set(
+      [...(typeof args.keyword === "string" ? [args.keyword] : []), ...stringList(args.keywords)]
+        .map((keyword) => keyword.trim())
+        .filter(Boolean),
+    ),
+  );
+  if (keywords.length === 0) return fail("keyword or keywords must contain at least one non-empty string.");
+  // maxHits 是旧参数名，模型仍会传；两者都接受，语义统一成「返回多少篇笔记」。
+  const maxNotes = boundedInt(args.maxNotes ?? args.maxHits, 40, 1, 200);
+  const result = await search.searchVaultNotes(ctx.vaultPath, keywords, { maxNotes });
+  if (result.notes.length === 0) {
+    return fail(
+      `No notes match ${keywords.map((keyword) => `"${keyword}"`).join(", ")} ` +
+        `(scanned ${result.scannedNotes} notes). Try fewer or broader keywords, use search_sql_usage ` +
+        `if you already know a table name, or ask the user which wording they use.`,
+    );
+  }
+  return ok({
+    notes: result.notes,
+    totalMatches: result.totalMatchedNotes,
+    returned: result.returned,
+    truncated: result.truncated,
+    scannedNotes: result.scannedNotes,
+  });
+}
+
+const SQL_INDEX_OPERATIONS = new Set<SqlIndexOperation>([
+  "select",
+  "insert",
+  "replace",
+  "update",
+  "delete",
+  "upsert",
+  "ddl",
+  "other",
+]);
+
+/**
+ * 「哪些笔记查过表 X」由 AST 倒排精确回答，不再靠正文 substring 猜。
+ * 结果按笔记聚合：agent 关心的是「去读哪几篇」，不是「哪一行」。
+ */
+async function runSearchSqlUsage(
+  args: { readTable?: unknown; writeTable?: unknown; operations?: unknown; limit?: unknown },
+  ctx: AgentToolContext,
+): Promise<ToolOutcome> {
+  const readTable = typeof args.readTable === "string" ? args.readTable.trim() : "";
+  const writeTable = typeof args.writeTable === "string" ? args.writeTable.trim() : "";
+  const operations = stringList(args.operations)
+    .map((op) => op.toLowerCase())
+    .filter((op): op is SqlIndexOperation => SQL_INDEX_OPERATIONS.has(op as SqlIndexOperation));
+  if (!readTable && !writeTable && operations.length === 0) {
+    return fail("Provide at least one of readTable, writeTable or operations.");
+  }
+  const limit = boundedInt(args.limit, 60, 1, 300);
+
+  const hits = await ctx.sqlIndex.query({
+    ...(readTable ? { readTable } : {}),
+    ...(writeTable ? { writeTable } : {}),
+    ...(operations.length > 0 ? { operations } : {}),
+    maxHits: limit,
+  });
+  if (hits.length === 0) {
+    return fail(
+      "No indexed SQL block reads or writes that table. The table name may be spelled differently, " +
+        "or it is only mentioned in prose — try search_vault, or ask the user which table they mean.",
+    );
+  }
+
+  const byNote = new Map<
+    string,
+    { path: string; blocks: number; lastRunDate: string | null; operations: Set<string>; firstLine: number }
+  >();
+  for (const hit of hits) {
+    const existing = byNote.get(hit.relPath);
+    const entry =
+      existing ??
+      { path: hit.relPath, blocks: 0, lastRunDate: null, operations: new Set<string>(), firstLine: hit.line };
+    entry.blocks++;
+    if (hit.runDate && (!entry.lastRunDate || hit.runDate > entry.lastRunDate)) {
+      entry.lastRunDate = hit.runDate;
+    }
+    for (const op of hit.operations) entry.operations.add(op);
+    entry.firstLine = Math.min(entry.firstLine, hit.line);
+    byNote.set(hit.relPath, entry);
+  }
+
+  const notes = [...byNote.values()]
+    .sort(
+      (a, b) =>
+        (b.lastRunDate ?? "").localeCompare(a.lastRunDate ?? "") ||
+        b.blocks - a.blocks ||
+        a.path.localeCompare(b.path),
+    )
+    .map((entry) => ({
+      path: entry.path,
+      blocks: entry.blocks,
+      lastRunDate: entry.lastRunDate,
+      operations: [...entry.operations],
+      firstLine: entry.firstLine,
+    }));
+
+  return ok({
+    notes,
+    matchedBlocks: hits.length,
+    truncated: hits.length >= limit,
+    sampleSql: hits.slice(0, 3).map((hit) => ({ path: hit.relPath, line: hit.line, sql: hit.snippet })),
+  });
 }
 
 async function runListVaultFiles(args: { maxFiles?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
@@ -477,6 +731,38 @@ async function runProposeEdit(
   });
 }
 
+async function runAskUser(
+  args: { question?: unknown; options?: unknown; context?: unknown },
+  ctx: AgentToolContext,
+): Promise<ToolOutcome> {
+  const question = typeof args.question === "string" ? args.question.trim() : "";
+  if (!question) return fail("question must be a non-empty string.");
+  if (ctx.run.questionsAsked >= MAX_QUESTIONS_PER_RUN) {
+    return fail(
+      `You have already asked ${MAX_QUESTIONS_PER_RUN} questions in this run. ` +
+        "Pick the most defensible interpretation, state it explicitly as an assumption in your answer, and finish.",
+    );
+  }
+  ctx.run.questionsAsked++;
+
+  const options = stringList(args.options).slice(0, 6);
+  const context = typeof args.context === "string" ? args.context.trim() : "";
+  const outcome = await ctx.requestProposal({
+    kind: "question",
+    payload: {
+      description: context || question,
+      question,
+      ...(options.length > 0 ? { options } : {}),
+    },
+  });
+  if (typeof outcome === "string" && outcome.trim()) {
+    return ok({ question, answer: outcome.trim() });
+  }
+  return fail(
+    "The user did not answer. Choose the most defensible interpretation, state it as an explicit assumption, and continue.",
+  );
+}
+
 /** 把模型返回的 JSON 字符串参数安全 parse 成对象；失败时返回 `{}` 让工具自己报参数缺失。 */
 function parseArgs(raw: string): Record<string, unknown> {
   try {
@@ -508,12 +794,16 @@ export async function dispatchTool(
         return await runSql(args, ctx);
       case "search_vault":
         return await runSearchVault(args, ctx);
+      case "search_sql_usage":
+        return await runSearchSqlUsage(args, ctx);
       case "list_vault_files":
         return await runListVaultFiles(args, ctx);
       case "read_note":
         return await runReadNote(args, ctx);
       case "propose_edit":
         return await runProposeEdit(args, ctx);
+      case "ask_user":
+        return await runAskUser(args, ctx);
       default:
         return fail(`Unknown tool: ${name}`);
     }

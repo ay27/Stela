@@ -151,6 +151,36 @@ export interface SearchOptions {
   maxHits?: number;
 }
 
+/**
+ * 笔记级搜索命中。行级 `SearchHit` 服务于「跳到这一行」的 UI；agent 要回答的是
+ * 「该读哪几篇」，所以按笔记聚合并排名，并如实上报是否截断。
+ */
+export interface NoteSearchHit {
+  /** vault 根相对路径（POSIX） */
+  path: string;
+  title: string;
+  score: number;
+  /** 命中行数（同一行被多个关键词命中只算一次） */
+  matchCount: number;
+  /** 在该笔记里真正命中的关键词，供判断覆盖度 */
+  matchedKeywords: string[];
+  /** 命中所在的小节标题 */
+  matchedHeadings: string[];
+  bestSnippet: string;
+  /** bestSnippet 所在行号（1-based） */
+  bestLine: number;
+}
+
+export interface NoteSearchResult {
+  notes: NoteSearchHit[];
+  /** 扫过的笔记总数——证明没有提前 return */
+  scannedNotes: number;
+  /** 至少命中一个关键词的笔记总数 */
+  totalMatchedNotes: number;
+  returned: number;
+  truncated: boolean;
+}
+
 // ---------- Settings & connections (store) ----------
 
 export type ThemeMode = "light" | "dark" | "system";
@@ -386,6 +416,11 @@ export type AiContextSource = "runsql" | "result" | "editor" | "schema";
 export interface AiSchemaColumnContext {
   name: string;
   typeName: string;
+  /**
+   * DDL `COMMENT` 文本。业务语义（尤其中文）几乎只存在于这里，是关键词检索
+   * 能把业务词映射到具体列/表的主要依据，所以单独结构化保存而非留在 DDL 原文里。
+   */
+  comment?: string;
 }
 
 export interface AiSchemaTargetContext {
@@ -461,6 +496,21 @@ export interface AiInlineCompletionRequest {
   /** Other RunSQL blocks in the same note, ordered nearest-first. */
   siblingSqls: string[];
   connectionName: string | null;
+  /**
+   * Renderer 侧列缓存里**已经就绪**的表结构（见 ADR-0028）。
+   *
+   * 为什么要 renderer 传而不是 main 自己查：本地 popup 补全早就通过 `LIMIT 0`
+   * 探针拿到了真实列（含只存在于 connector、不在 schemaDir 文档里的表），
+   * 而 main 侧只读 schemaDir 的 DDL 文档。同一个编辑器里，popup 知道列名、
+   * AI 却在猜，这个缺口是幻觉列名的主要来源。
+   *
+   * 只带已缓存的，不为此发起新探针——否则会把网络往返加到首 token 延迟上。
+   */
+  tableSchemas?: AiSchemaTargetContext[];
+  /** 光标所在小节的最近 heading，给业务语义定调。 */
+  heading?: string | null;
+  /** heading 之后、当前块之前的一小段散文（口径说明常写在这里）。 */
+  prose?: string | null;
 }
 
 export type AiInlineCompletionEvent =
@@ -504,9 +554,11 @@ export type AgentToolName =
   | "get_table_schema"
   | "run_sql"
   | "search_vault"
+  | "search_sql_usage"
   | "list_vault_files"
   | "read_note"
-  | "propose_edit";
+  | "propose_edit"
+  | "ask_user";
 
 export type AgentAttachment =
   | {
@@ -559,6 +611,10 @@ export interface AgentProposalPayload {
   description: string;
   oldContent?: string;
   newContent?: string;
+  /** `question` kind：要问用户的具体问题。 */
+  question?: string;
+  /** `question` kind：可点选的候选答案；用户也可以自由输入。 */
+  options?: string[];
 }
 
 export type AgentEvent =
@@ -577,8 +633,8 @@ export type AgentEvent =
       type: "proposal";
       runId: string;
       callId: string;
-      kind: "edit_note" | "mutation_sql";
-      /** edit_note: notePath + diff 描述；mutation_sql: sql 文本。 */
+      kind: AgentProposalKind;
+      /** edit_note: notePath + diff 描述；mutation_sql: sql 文本；question: question + options。 */
       payload: AgentProposalPayload;
     }
   | {
@@ -598,10 +654,19 @@ export type AgentEvent =
   | { type: "error"; runId: string; message: string }
   | { type: "cancelled"; runId: string };
 
+/**
+ * 需要用户拍板的三种事：改笔记、跑改动 SQL、以及**回答一个问题**。
+ * 前两种是「同意 / 拒绝」的安全闸门，`question` 复用同一条阻塞通道来获取信息——
+ * 与其让 agent 在字段含义上猜，不如让它停下来问（见 ADR-0027）。
+ */
+export type AgentProposalKind = "edit_note" | "mutation_sql" | "question";
+
 export interface AgentProposalResponse {
   runId: string;
   callId: string;
   approve: boolean;
+  /** `question` kind 的答案文本。approve=false 表示用户拒绝回答。 */
+  answer?: string;
 }
 
 // ---------- Wiki / Vault index（v0.3 双链 M2/M3） ----------

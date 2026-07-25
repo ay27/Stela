@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronDown,
   FileText,
+  HelpCircle,
   Loader2,
   MessageSquareQuote,
   Plus,
@@ -520,7 +521,7 @@ function TimelineItem({
   onRespond,
 }: {
   entry: AgentTimelineEntry;
-  onRespond: (runId: string, callId: string, approve: boolean) => Promise<void>;
+  onRespond: (runId: string, callId: string, approve: boolean, answer?: string) => Promise<void>;
 }) {
   const t = useT();
   switch (entry.kind) {
@@ -633,15 +634,112 @@ function ToolChip({ entry }: { entry: Extract<AgentTimelineEntry, { kind: "tool"
   );
 }
 
+/**
+ * `question` kind：agent 停下来问一句，用户点候选或自由输入。
+ * 复用 proposal 的阻塞通道（见 ADR-0027），所以这里只换外观与提交语义。
+ */
+function QuestionCard({
+  entry,
+  onRespond,
+}: {
+  entry: Extract<AgentTimelineEntry, { kind: "proposal" }>;
+  onRespond: (runId: string, callId: string, approve: boolean, answer?: string) => Promise<void>;
+}) {
+  const t = useT();
+  const [draft, setDraft] = useState("");
+  const resolved = entry.resolution !== "pending";
+  const answer = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    void onRespond(entry.runId, entry.callId, true, trimmed);
+  };
+  return (
+    <div
+      className={cn(
+        "stela-agent-question rounded-lg border p-3 text-sm",
+        resolved ? "border-border bg-muted/30" : "border-sky-400/50 bg-sky-400/10",
+      )}
+    >
+      <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-sky-600">
+        <HelpCircle className="h-3.5 w-3.5" />
+        {t("agent.panel.proposal.question")}
+      </div>
+      <div className="mb-2 whitespace-pre-wrap text-foreground">
+        {entry.payload.question ?? entry.payload.description}
+      </div>
+      {entry.payload.question && entry.payload.description !== entry.payload.question ? (
+        <div className="mb-2 text-[11px] text-muted-foreground">{entry.payload.description}</div>
+      ) : null}
+      {resolved ? (
+        <div className="text-xs text-muted-foreground">
+          {entry.answer
+            ? t("agent.panel.proposal.answered", { answer: entry.answer })
+            : t("agent.panel.proposal.rejected")}
+        </div>
+      ) : (
+        <>
+          {entry.payload.options && entry.payload.options.length > 0 ? (
+            <div className="mb-2 flex flex-wrap gap-2">
+              {entry.payload.options.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => answer(option)}
+                  className="rounded-md border border-sky-400/50 bg-background px-2.5 py-1 text-xs hover:bg-accent"
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  answer(draft);
+                }
+              }}
+              placeholder={t("agent.panel.proposal.answerPlaceholder")}
+              className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-xs"
+            />
+            <button
+              type="button"
+              onClick={() => answer(draft)}
+              disabled={!draft.trim()}
+              className="rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground disabled:opacity-50"
+            >
+              {t("agent.panel.proposal.answerSend")}
+            </button>
+            <button
+              type="button"
+              onClick={() => void onRespond(entry.runId, entry.callId, false)}
+              className="rounded-md border border-border px-3 py-1 text-xs hover:bg-accent"
+            >
+              {t("agent.panel.proposal.answerSkip")}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ProposalCard({
   entry,
   onRespond,
 }: {
   entry: Extract<AgentTimelineEntry, { kind: "proposal" }>;
-  onRespond: (runId: string, callId: string, approve: boolean) => Promise<void>;
+  onRespond: (runId: string, callId: string, approve: boolean, answer?: string) => Promise<void>;
 }) {
   const t = useT();
   const resolved = entry.resolution !== "pending";
+  if (entry.proposalKind === "question") {
+    return <QuestionCard entry={entry} onRespond={onRespond} />;
+  }
   return (
     <div
       className={cn(

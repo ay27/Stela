@@ -3,6 +3,7 @@ import { resolveDialect } from "@shared/sql-dialect";
 import type {
   AiInlineCompletionEvent,
   AiInlineCompletionRequest,
+  AiSchemaTargetContext,
 } from "@shared/types";
 
 import * as connectionsStore from "../connections-store";
@@ -17,6 +18,7 @@ const MAX_PREFIX_CHARS = 12_000;
 const MAX_SUFFIX_CHARS = 8_000;
 const MAX_SIBLING_SQL_CHARS = 8_000;
 const MAX_SCHEMA_CHARS = 12_000;
+const MAX_PROSE_CHARS = 500;
 const MAX_TABLES = 5;
 const log = getLogger("ai.inline-completion");
 
@@ -52,6 +54,105 @@ function isCancellation(err: unknown, signal: AbortSignal): boolean {
     signal.aborted ||
     (err instanceof AppError && err.code === "ai_aborted")
   );
+}
+
+/** prefix/suffix 里出现过、且不是 CTE 别名的表名，最多 MAX_TABLES 个。 */
+export function referencedTableNames(request: AiInlineCompletionRequest): string[] {
+  const symbols = extractSqlSymbols(`${request.prefix}\n${request.suffix}`);
+  const ctes = new Set(symbols.ctes.map((name) => name.toLowerCase()));
+  return symbols.tables
+    .filter((name) => !ctes.has(name.toLowerCase()))
+    .slice(0, MAX_TABLES);
+}
+
+/**
+ * 纯函数版 prompt 组装。抽出来是为了让 `scripts/eval/run-completion.ts`
+ * 评测的就是产品实际发出的 prompt，不会各写一份然后漂移。
+ */
+export function buildInlineCompletionPrompt(input: {
+  request: AiInlineCompletionRequest;
+  dialect: string;
+  tables: string[];
+  schemas: AiSchemaTargetContext[];
+}): { system: string; user: string } {
+  const { request, dialect, tables, schemas } = input;
+  const schemaText = [
+    tables.length > 0 ? `Referenced tables: ${tables.join(", ")}` : "Referenced tables: none",
+    // renderer 的列缓存来自真实 `LIMIT 0` 探针，优先级高于 schemaDir 的 DDL 文档
+    // （后者可能过期，也可能根本没有这张表）。
+    ...mergeTableSchemas(request.tableSchemas ?? [], schemas)
+      .map(describeTable)
+      .filter(Boolean),
+  ].join("\n");
+  const redacted = redactForPrompt({
+    prefix: request.prefix,
+    suffix: request.suffix,
+    siblingSqls: request.siblingSqls,
+    schema: schemaText,
+  });
+  const safe = {
+    prefix: redacted.prefix.slice(-MAX_PREFIX_CHARS),
+    suffix: redacted.suffix.slice(0, MAX_SUFFIX_CHARS),
+    siblingSqls: joinSiblingSqls(redacted.siblingSqls),
+    schema: redacted.schema.slice(0, MAX_SCHEMA_CHARS),
+  };
+  const noteContext = [
+    request.heading ? `Section: ${request.heading}` : null,
+    request.prose ? `Notes: ${request.prose.slice(0, MAX_PROSE_CHARS)}` : null,
+  ].filter(Boolean);
+  const user = `Language: SQL
+Dialect: ${dialect}
+Schema:
+${safe.schema}
+${noteContext.length > 0 ? `\nSurrounding note context:\n${noteContext.join("\n")}\n` : ""}
+Nearby RunSQL blocks (nearest first):
+${safe.siblingSqls || "(none)"}
+
+Prefix:
+${safe.prefix}
+<CURSOR>
+Suffix:
+${safe.suffix}`;
+  return { system: SYSTEM_PROMPT, user };
+}
+
+function tableKey(schema: AiSchemaTargetContext): string {
+  return `${schema.database ?? ""}.${schema.table ?? ""}`.toLowerCase();
+}
+
+/** 同一张表两边都有时以 renderer 的实测列为准，schemaDir 只补它没覆盖的表。 */
+function mergeTableSchemas(
+  fromRenderer: AiSchemaTargetContext[],
+  fromSchemaDir: AiSchemaTargetContext[],
+): AiSchemaTargetContext[] {
+  const byKey = new Map(fromRenderer.map((schema) => [tableKey(schema), { ...schema }]));
+  for (const schema of fromSchemaDir) {
+    const key = tableKey(schema);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, schema);
+      continue;
+    }
+    // schemaDir 的 DDL 里有中文 COMMENT，`LIMIT 0` 探针拿不到，两边合起来才完整。
+    existing.ddlSnippet ??= schema.ddlSnippet;
+  }
+  return [...byKey.values()];
+}
+
+/**
+ * 有 DDL 就只给 DDL（它本身已含列与 COMMENT，再列一遍是白花预算）；
+ * 没有 DDL 的表——也就是只存在于 renderer 列缓存里的那些——才列列名。
+ */
+function describeTable(schema: AiSchemaTargetContext): string {
+  const name = `${schema.database ? `${schema.database}.` : ""}${schema.table ?? "?"}`;
+  if (schema.ddlSnippet) return `\nTable ${name}:\n${schema.ddlSnippet}`;
+  const columns = (schema.columns ?? [])
+    .map(
+      (column) =>
+        `  ${column.name} ${column.typeName}${column.comment ? ` -- ${column.comment}` : ""}`,
+    )
+    .join("\n");
+  return columns ? `\nTable ${name}:\n${columns}` : "";
 }
 
 export async function runInlineCompletion(
@@ -107,11 +208,7 @@ export async function runInlineCompletion(
         })
       : "Standard SQL";
 
-    const symbols = extractSqlSymbols(`${request.prefix}\n${request.suffix}`);
-    const ctes = new Set(symbols.ctes.map((name) => name.toLowerCase()));
-    const tables = symbols.tables
-      .filter((name) => !ctes.has(name.toLowerCase()))
-      .slice(0, MAX_TABLES);
+    const tables = referencedTableNames(request);
     const schemas =
       connection && request.connectionName
         ? await loadSchemaDirTableSchemas({
@@ -125,46 +222,22 @@ export async function runInlineCompletion(
       connectionFound: Boolean(connection),
       tableCount: tables.length,
       schemaCount: schemas.length,
+      rendererSchemaCount: request.tableSchemas?.length ?? 0,
+      hasHeading: Boolean(request.heading),
+      hasProse: Boolean(request.prose),
     });
 
-    const schemaText = [
-      tables.length > 0 ? `Referenced tables: ${tables.join(", ")}` : "Referenced tables: none",
-      ...schemas.flatMap((schema) =>
-        schema.ddlSnippet
-          ? [`\nTable ${schema.database ? `${schema.database}.` : ""}${schema.table}:\n${schema.ddlSnippet}`]
-          : [],
-      ),
-    ].join("\n");
-    const redacted = redactForPrompt({
-      prefix: request.prefix,
-      suffix: request.suffix,
-      siblingSqls: request.siblingSqls,
-      schema: schemaText,
+    const { system, user } = buildInlineCompletionPrompt({
+      request,
+      dialect,
+      tables,
+      schemas,
     });
-    const safe = {
-      prefix: redacted.prefix.slice(-MAX_PREFIX_CHARS),
-      suffix: redacted.suffix.slice(0, MAX_SUFFIX_CHARS),
-      siblingSqls: joinSiblingSqls(redacted.siblingSqls),
-      schema: redacted.schema.slice(0, MAX_SCHEMA_CHARS),
-    };
-    const user = `Language: SQL
-Dialect: ${dialect}
-Schema:
-${safe.schema}
-
-Nearby RunSQL blocks (nearest first):
-${safe.siblingSqls || "(none)"}
-
-Prefix:
-${safe.prefix}
-<CURSOR>
-Suffix:
-${safe.suffix}`;
     const apiKey = await loadApiKey(vaultPath, slug, profile.id);
     await streamChatCompletions({
       settings: settings.ai,
       apiKey,
-      system: SYSTEM_PROMPT,
+      system,
       user,
       profileId: profile.id,
       signal,

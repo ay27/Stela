@@ -16,7 +16,10 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 
-import type { AiInlineCompletionEvent } from "@shared/types";
+import type {
+  AiInlineCompletionEvent,
+  AiSchemaTargetContext,
+} from "@shared/types";
 import {
   cancelInlineCompletion,
   onInlineCompletionEvent,
@@ -24,11 +27,21 @@ import {
 } from "@/services/ai";
 import { useSettings } from "@/state/settings";
 
+import { useColumnCache } from "./column-cache";
+import { extractScope } from "./sql-scope";
+
+/**
+ * 与 ADR-0024 / docs 对齐的去抖间隔。原先代码里是 120ms 而文档写 600ms，
+ * 两边不一致；取 120ms 一侧并把文档改过来——ghost text 是可忽略的建议，
+ * 早出现晚出现都不打断输入，而 600ms 在实测里明显"慢半拍"。
+ */
 const DEBOUNCE_MS = 120;
 const MAX_PREFIX_CHARS = 12_000;
 const MAX_SUFFIX_CHARS = 8_000;
 const MAX_GHOST_LINES = 1;
 const MAX_GHOST_CHARS = 240;
+/** 与 inline-completion.ts 的 MAX_TABLES 同量级；prompt 里塞不下更多。 */
+const MAX_PREWARM_TABLES = 5;
 
 interface CompletionContext {
   pos: number;
@@ -245,16 +258,52 @@ function acceptCompletion(view: EditorView): boolean {
     selection: EditorSelection.cursor(ghost.pos + ghost.text.length),
     effects: setGhostEffect.of(null),
   });
+  debug("suggestion accepted", { chars: ghost.text.length });
   return true;
+}
+
+/**
+ * 光标所在语句 FROM/JOIN 段里的表，取列缓存中**已就绪**的那些。
+ *
+ * 只读缓存不触发探针：探针有 100~300ms 往返，加在补全请求前面就直接变成
+ * 首 token 延迟。预热由 block 获得焦点时的 fire-and-forget 负责（B1），
+ * 到用户真的敲到 SELECT 时缓存通常已经热了。
+ */
+function cachedTableSchemas(
+  view: EditorView,
+  connectionName: string | null,
+): AiSchemaTargetContext[] {
+  if (!connectionName) return [];
+  const cache = useColumnCache.getState();
+  const out: AiSchemaTargetContext[] = [];
+  for (const path of extractScope(view.state, view.state.selection.main.head).tables) {
+    if (path.length === 0) continue;
+    const table = path[path.length - 1];
+    const database = path.length > 1 ? path[path.length - 2] : null;
+    const status = cache.getStatus(connectionName, database, table);
+    if (status.kind !== "ready" || status.columns.length === 0) continue;
+    out.push({
+      database,
+      table,
+      columns: status.columns.map((column) => ({
+        name: column.name,
+        typeName: column.typeName,
+      })),
+    });
+  }
+  return out.slice(0, MAX_PREWARM_TABLES);
 }
 
 export function sqlInlineCompletionExtension({
   getConnectionName,
   getSiblingSqls,
+  getNoteContext,
   canRequest,
 }: {
   getConnectionName: () => string | null;
   getSiblingSqls: () => string[];
+  /** 当前块所在小节的 heading 与一段散文，口径说明常写在那里。 */
+  getNoteContext?: () => { heading: string | null; prose: string | null };
   canRequest: () => boolean;
 }): Extension {
   ensureEventSubscription();
@@ -334,10 +383,10 @@ export function sqlInlineCompletionExtension({
       }
 
       clearGhost(): boolean {
+        const ghost = currentGhost(this.view);
         const hadActivity =
-          currentGhost(this.view) !== null ||
-          this.requestId !== null ||
-          this.timeout !== null;
+          ghost !== null || this.requestId !== null || this.timeout !== null;
+        if (ghost) debug("suggestion rejected", { chars: ghost.text.length });
         if (hadActivity) this.reset();
         return hadActivity;
       }
@@ -411,18 +460,25 @@ export function sqlInlineCompletionExtension({
         this.pendingEdit = false;
         this.performanceLogged = false;
         eventHandlers.set(requestId, (event) => this.onEvent(event));
+        const connectionName = getConnectionName();
+        const tableSchemas = cachedTableSchemas(this.view, connectionName);
+        const noteContext = getNoteContext?.();
         try {
           debug("starting IPC request", {
             requestId,
             prefixLength: context.prefix.length,
             suffixLength: context.suffix.length,
+            cachedTables: tableSchemas.length,
           });
           await startInlineCompletion({
             requestId,
             prefix: context.prefix,
             suffix: context.suffix,
             siblingSqls: getSiblingSqls(),
-            connectionName: getConnectionName(),
+            connectionName,
+            tableSchemas,
+            heading: noteContext?.heading ?? null,
+            prose: noteContext?.prose ?? null,
           });
         } catch (err) {
           debug("IPC request failed", {

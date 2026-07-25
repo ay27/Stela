@@ -660,16 +660,32 @@ export async function query(filter: SqlIndexFilter): Promise<SqlIndexHit[]> {
 
   const docIds = postings.length > 0 ? intersectSorted(postings) : allDocIds(rt);
 
+  // docId 升序 ≈ 文件遍历顺序，与相关性无关；满 maxHits 就停会按目录名把结果
+  // 切掉。先按最近执行时间降序排，再截断——留下的是「最近跑过的块」。
+  const ranked: Array<{ docId: number; doc: BlockDoc }> = [];
+  for (const docId of docIds) {
+    const doc = rt.docs[docId];
+    if (doc) ranked.push({ docId, doc });
+  }
+  ranked.sort(
+    (a, b) => compareRunDateDesc(a.doc.runDate, b.doc.runDate) || a.docId - b.docId,
+  );
+
   const hits: SqlIndexHit[] = [];
   const fileCache = new Map<number, string | null>();
-  for (const docId of docIds) {
-    if (hits.length >= maxHits) break;
-    const doc = rt.docs[docId];
-    if (!doc) continue;
+  for (const { docId, doc } of ranked.slice(0, maxHits)) {
     const hit = await buildHit(rt, docId, doc, fileCache);
     if (hit) hits.push(hit);
   }
   return hits;
+}
+
+/** `run-date` 是 ISO 字符串，字典序即时间序。未执行过的块排最后。 */
+function compareRunDateDesc(a: string | null, b: string | null): number {
+  if (a === b) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return b.localeCompare(a);
 }
 
 function allDocIds(rt: Runtime): number[] {

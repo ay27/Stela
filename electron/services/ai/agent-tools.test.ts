@@ -43,6 +43,9 @@ try {
     connection: null,
     aiSettings: AI_SETTINGS,
     connector: fakeConnector,
+    sqlIndex: { query: async () => [] },
+    run: { runId: "test-run", notePath: null },
+    recordRun: async () => {},
     requestProposal: async () => true,
   };
 

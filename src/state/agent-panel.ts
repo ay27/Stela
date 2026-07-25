@@ -10,6 +10,7 @@ import { create } from "zustand";
 import type {
   AgentAttachment,
   AgentEvent,
+  AgentProposalKind,
   AgentProposalPayload,
   AgentToolCallInfo,
 } from "@shared/types";
@@ -50,9 +51,11 @@ export type AgentTimelineEntry =
       id: string;
       runId: string;
       callId: string;
-      proposalKind: "edit_note" | "mutation_sql";
+      proposalKind: AgentProposalKind;
       payload: AgentProposalPayload;
       resolution: "pending" | "approved" | "rejected";
+      /** `question` kind：用户实际给出的答案，供 timeline 回看。 */
+      answer?: string;
     }
   | { kind: "final"; id: string; content: string }
   | { kind: "error"; id: string; message: string }
@@ -98,7 +101,12 @@ interface AgentPanelState {
     locale?: "zh" | "en";
   }) => Promise<void>;
   cancel: () => Promise<void>;
-  respondProposal: (runId: string, callId: string, approve: boolean) => Promise<void>;
+  respondProposal: (
+    runId: string,
+    callId: string,
+    approve: boolean,
+    answer?: string,
+  ) => Promise<void>;
 }
 
 let entrySeq = 0;
@@ -336,7 +344,7 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
     if (!tab?.runId || tab.status !== "running") return;
     await cancelAgent(tab.runId).catch(() => {});
   },
-  async respondProposal(runId, callId, approve) {
+  async respondProposal(runId, callId, approve, answer) {
     const resolution: "approved" | "rejected" = approve ? "approved" : "rejected";
     set((s) => ({
       tabs: s.tabs.map((tab) =>
@@ -345,14 +353,19 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
               ...tab,
               timeline: tab.timeline.map((entry) =>
                 entry.kind === "proposal" && entry.callId === callId
-                  ? { ...entry, resolution }
+                  ? { ...entry, resolution, answer }
                   : entry,
               ),
             }
           : tab,
       ),
     }));
-    const response = await respondAgentProposal({ runId, callId, approve }).catch(() => ({ ok: false }));
+    const response = await respondAgentProposal({
+      runId,
+      callId,
+      approve,
+      ...(answer !== undefined ? { answer } : {}),
+    }).catch(() => ({ ok: false }));
     if (response.ok) return;
     set((s) => ({
       tabs: s.tabs.map((tab) =>
