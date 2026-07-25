@@ -26,10 +26,11 @@ ORDER BY status;
 
 <br />
 
-## SQL Autocomplete
+## Code Inline Completion With AI
 
 ```runsql
-SELECT * FROM de
+-- count tasks
+
 ```
 
 <br />

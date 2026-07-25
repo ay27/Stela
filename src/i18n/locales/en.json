@@ -151,7 +151,7 @@
   "agent.panel.newConversation": "New conversation",
   "agent.panel.closeTab": "Close tab",
   "agent.panel.empty": "Ask the agent to analyze notes, query data, or draft a summary.",
-  "agent.panel.placeholder": "Ask the agent to do something…",
+  "agent.panel.placeholder": "Type @ to reference data tables, [[note]] to reference notes.",
   "agent.panel.thinking": "Thinking…",
   "agent.panel.thought": "Thought",
   "agent.panel.contextUsage": "Context ~{{percent}}%",

@@ -4,15 +4,29 @@
   },
   "ai": {
     "providerMode": "openai-compatible",
+    "activeProfileId": "default",
+    "profiles": [
+      {
+        "id": "default",
+        "name": "deepseek",
+        "vendorId": "deepseek",
+        "model": "deepseek-v4-flash",
+        "baseUrl": "https://api.deepseek.com",
+        "contextWindow": 128000,
+        "hasApiKey": true
+      }
+    ],
+    "inlineCompletionEnabled": true,
+    "completionProfileId": "default",
+    "sendResultSamples": true,
+    "maxSampleRows": 20,
+    "agentMaxIterations": 200,
+    "agentWallClockMs": 300000,
+    "agentAllowMutations": true,
     "baseUrl": "https://api.deepseek.com",
     "model": "deepseek-v4-flash",
     "hasApiKey": true,
-    "sendResultSamples": true,
-    "maxSampleRows": 20,
-    "contextWindow": 128000,
-    "agentMaxIterations": 200,
-    "agentWallClockMs": 300000,
-    "agentAllowMutations": true
+    "contextWindow": 128000
   },
   "appearance": {
     "theme": "light"
