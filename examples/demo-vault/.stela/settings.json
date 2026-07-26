@@ -1,6 +1,6 @@
 {
   "ui": {
-    "editorWidth": "wide"
+    "editorWidth": "narrow"
   },
   "ai": {
     "providerMode": "openai-compatible",
@@ -8,11 +8,11 @@
     "profiles": [
       {
         "id": "default",
-        "name": "deepseek",
+        "name": "DeepSeek V4 Flash",
         "vendorId": "deepseek",
         "model": "deepseek-v4-flash",
-        "baseUrl": "https://api.deepseek.com",
-        "contextWindow": 128000,
+        "baseUrl": "",
+        "contextWindow": 1000000,
         "hasApiKey": true
       }
     ],
@@ -23,10 +23,10 @@
     "agentMaxIterations": 200,
     "agentWallClockMs": 300000,
     "agentAllowMutations": true,
-    "baseUrl": "https://api.deepseek.com",
+    "baseUrl": "",
     "model": "deepseek-v4-flash",
     "hasApiKey": true,
-    "contextWindow": 128000
+    "contextWindow": 1000000
   },
   "appearance": {
     "theme": "light"

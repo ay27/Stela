@@ -168,6 +168,16 @@
         line-height: 1.55;
       }
       .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+      .ph-badge {
+        display: inline-block;
+        margin-top: 4px;
+        line-height: 0;
+      }
+      .ph-badge img {
+        display: block;
+        width: 250px;
+        height: 54px;
+      }
       .button {
         display: inline-flex;
         align-items: center;
@@ -314,13 +324,39 @@
       .run-history .history-active { position: relative; color: var(--foreground); background: var(--background); }
       .run-history .history-active::after { content: ""; position: absolute; right: 0; bottom: 0; left: 0; height: 2px; background: var(--primary); }
 
-      .overview { padding: 36px 0 96px; }
-      .overview img {
+      .overview { padding: 36px 0 48px; }
+      .overview-hero {
         display: block;
         width: 100%;
         border: 1px solid var(--border);
         border-radius: var(--radius);
         box-shadow: var(--shadow);
+      }
+      .shot-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+        margin: 16px 0 96px;
+      }
+      .shot-card {
+        margin: 0;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--background);
+        box-shadow: var(--shadow);
+      }
+      .shot-card img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      .shot-card figcaption {
+        padding: 12px 14px 14px;
+        color: var(--muted-foreground);
+        font-size: 13px;
+        line-height: 1.4;
+        border-top: 1px solid var(--border);
       }
       .section-heading { max-width: 620px; margin: 0 0 30px; }
       .section-heading h2 { margin: 0; font-size: 28px; letter-spacing: -0.04em; }
@@ -361,7 +397,8 @@
         .nav-link { display: none; }
         .hero { grid-template-columns: 1fr; padding: 28px 0 40px; }
         .hero-text { max-width: none; gap: 14px; }
-        .overview { padding-bottom: 64px; }
+        .overview { padding-bottom: 24px; }
+        .shot-grid { grid-template-columns: 1fr; margin-bottom: 64px; }
         .features { grid-template-columns: 1fr; margin-bottom: 64px; }
         .feature:nth-child(odd), .feature:nth-child(n + 3) { border: 0; }
         .feature + .feature { border-top: 1px solid var(--border); }
@@ -401,6 +438,19 @@
             <a class="button primary" href="https://github.com/ay27/Stela/releases/latest" target="_blank" rel="noreferrer" data-i18n="download"></a>
             <a class="button" href="https://github.com/ay27/Stela" target="_blank" rel="noreferrer" data-i18n="source"></a>
           </div>
+          <a
+            class="ph-badge"
+            href="https://www.producthunt.com/products/stela-data-analysis-workspace?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-stela-data-analysis-workspace"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <img
+              alt="Stela — Data Analysis Workspace - Run SQL in Markdown. Analyze data in Stela. | Product Hunt"
+              width="250"
+              height="54"
+              src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1206754&amp;theme=light&amp;t=1785047121229"
+            />
+          </a>
         </div>
         <div class="editor-card" aria-label="Markdown note with an executable SQL block">
           <div class="editor-titlebar"><span>weekly-analysis.md</span><span class="traffic-lights"><i></i><i></i><i></i></span></div>
@@ -429,7 +479,27 @@
           <h2 id="overview-title" data-i18n="overviewTitle"></h2>
           <p data-i18n="overviewBody"></p>
         </div>
-        <img src="assets/showall.png" data-i18n-alt="overviewAlt" alt="" />
+        <img
+          class="overview-hero"
+          src="producthunt/p1.png"
+          data-i18n-alt="shot1Alt"
+          alt=""
+        />
+      </section>
+
+      <section class="shot-grid" aria-label="Product screenshots">
+        <figure class="shot-card">
+          <img src="producthunt/p2.png" data-i18n-alt="shot2Alt" alt="" />
+          <figcaption data-i18n="shot2Caption"></figcaption>
+        </figure>
+        <figure class="shot-card">
+          <img src="producthunt/p3.png" data-i18n-alt="shot3Alt" alt="" />
+          <figcaption data-i18n="shot3Caption"></figcaption>
+        </figure>
+        <figure class="shot-card">
+          <img src="producthunt/p4.png" data-i18n-alt="shot4Alt" alt="" />
+          <figcaption data-i18n="shot4Caption"></figcaption>
+        </figure>
       </section>
 
       <section aria-labelledby="features-title">
@@ -463,7 +533,13 @@ const copy = {
     source: "查看源码",
     overviewTitle: "分析工作，无需切换工具。",
     overviewBody: "Markdown 编辑器、数据库结构、查询结果和 AI 助手并排协作，让数据问题从想法到答案始终连贯。",
-    overviewAlt: "Stela 数据分析工作台总览",
+    shot1Alt: "在 Markdown 中运行 SQL，用 Stela 做分析",
+    shot2Alt: "AI 辅助数据分析",
+    shot2Caption: "AI 辅助数据分析 — Data Agent 读懂表结构与历史笔记，帮你写 SQL。",
+    shot3Alt: "经验知识沉淀",
+    shot3Caption: "经验知识沉淀 — 从过去的分析与文档中总结并维护可复用知识。",
+    shot4Alt: "连接数据源",
+    shot4Caption: "连接数据源 — 开箱支持 MySQL / PostgreSQL，可用插件扩展。",
     featuresTitle: "为可复用的分析而设计。",
     featuresBody: "问题、查询、结果和上下文属于同一份笔记，也属于你自己的文件夹。",
     feature1Title: "在 Markdown 中运行 SQL",
@@ -486,7 +562,13 @@ const copy = {
     source: "View source",
     overviewTitle: "Analysis without context switching.",
     overviewBody: "Your Markdown editor, database schemas, query results, and an AI agent work side by side. Start with a question, explore your data, and capture the full story without leaving your workspace.",
-    overviewAlt: "Stela data analysis workspace overview",
+    shot1Alt: "Run SQL in Markdown. Analyze data in Stela.",
+    shot2Alt: "AI-assisted data analysis",
+    shot2Caption: "AI-assisted data analysis — the Data Agent understands your schema and past notes.",
+    shot3Alt: "Experience knowledge that compounds",
+    shot3Caption: "Experience knowledge — summarize past work and notes, and keep that knowledge maintained.",
+    shot4Alt: "Connect to your data sources",
+    shot4Caption: "Connect to your data sources — MySQL and PostgreSQL out of the box, extend with plugins.",
     featuresTitle: "Built for reusable analysis.",
     featuresBody: "The question, query, result, and context belong in the same note—and in a folder you own.",
     feature1Title: "SQL in Markdown",

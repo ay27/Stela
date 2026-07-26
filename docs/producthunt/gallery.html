@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stela — Product Hunt gallery cards</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --stela-bg: #f5f7fa;
+        --stela-fg: hsl(222 15% 15%);
+        --stela-muted: hsl(220 8% 42%);
+        --stela-primary: hsl(214 100% 52%);
+        --stela-border: hsl(220 13% 91%);
+        --page-bg: #c8ced8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 48px 32px 80px;
+        background: var(--page-bg);
+        font-family: "DM Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+        color: var(--stela-fg);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .page-note {
+        max-width: 1270px;
+        margin: 0 auto 28px;
+        color: #3d4654;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .page-note code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        background: rgba(255, 255, 255, 0.55);
+        padding: 1px 6px;
+        border-radius: 4px;
+      }
+
+      .stack {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 48px;
+      }
+
+      /* Fixed Product Hunt gallery frame */
+      .artboard {
+        width: 1270px;
+        height: 760px;
+        position: relative;
+        overflow: hidden;
+        border-radius: 0;
+        background:
+          radial-gradient(
+            72% 58% at 50% 18%,
+            #ffffff 0%,
+            #f3f6fb 52%,
+            #e8eef6 100%
+          );
+        box-shadow: 0 18px 50px rgba(15, 23, 42, 0.18);
+      }
+
+      .artboard-inner {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 40px 88px 36px;
+      }
+
+      .brand-icon {
+        width: 52px;
+        height: 52px;
+        border-radius: 13px;
+        display: block;
+        box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1);
+      }
+
+      .slogan {
+        margin: 18px 0 0;
+        max-width: 960px;
+        text-align: center;
+        font-size: 36px;
+        font-weight: 700;
+        letter-spacing: -0.03em;
+        line-height: 1.18;
+        color: var(--stela-fg);
+      }
+
+      .caption {
+        margin: 12px 0 0;
+        max-width: 980px;
+        text-align: center;
+        font-size: 16px;
+        font-weight: 500;
+        line-height: 1.45;
+        color: var(--stela-muted);
+        text-wrap: balance;
+      }
+
+      .shot-frame {
+        margin-top: 28px;
+        width: min(980px, 100%);
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        border-radius: 12px;
+        overflow: hidden;
+        background: #fff;
+        border: 1px solid var(--stela-border);
+        box-shadow:
+          0 20px 40px rgba(15, 23, 42, 0.1),
+          0 4px 12px rgba(15, 23, 42, 0.05);
+      }
+
+      /* contain = show the whole screenshot; no side/bottom crop */
+      .shot-frame img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        object-position: top center;
+      }
+
+      @media print {
+        body {
+          background: #fff;
+          padding: 0;
+        }
+
+        .page-note {
+          display: none;
+        }
+
+        .stack {
+          gap: 0;
+        }
+
+        .artboard {
+          box-shadow: none;
+          break-after: page;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <p class="page-note">
+      Product Hunt gallery cards — open in Chrome, then capture each
+      <code>.artboard</code> (1270 × 760) one at a time. Source screenshots stay
+      in this folder; branding icon is <code>../stela_icon_rounded.png</code>.
+    </p>
+
+    <div class="stack">
+      <section class="artboard" aria-label="Gallery card 1">
+        <div class="artboard-inner">
+          <img
+            class="brand-icon"
+            src="../stela_icon_rounded.png"
+            alt="Stela"
+            width="56"
+            height="56"
+          />
+          <h1 class="slogan">Run SQL in Markdown. Analyze data in Stela.</h1>
+          <p class="caption">
+            Markdown notes, live SQL, and the Data Agent — one local workspace.
+          </p>
+          <div class="shot-frame">
+            <img src="showall.png" alt="Stela workspace with Markdown, RunSQL, and Agent" />
+          </div>
+        </div>
+      </section>
+
+      <section class="artboard" aria-label="Gallery card 2">
+        <div class="artboard-inner">
+          <img
+            class="brand-icon"
+            src="../stela_icon_rounded.png"
+            alt="Stela"
+            width="56"
+            height="56"
+          />
+          <h1 class="slogan">AI-assisted data analysis</h1>
+          <p class="caption">
+            Understands your schema, searches past notes, and helps you write SQL.
+          </p>
+          <div class="shot-frame">
+            <img src="edit_approve.png" alt="Data Agent proposing SQL for approval" />
+          </div>
+        </div>
+      </section>
+
+      <section class="artboard" aria-label="Gallery card 3">
+        <div class="artboard-inner">
+          <img
+            class="brand-icon"
+            src="../stela_icon_rounded.png"
+            alt="Stela"
+            width="56"
+            height="56"
+          />
+          <h1 class="slogan">Experience knowledge that compounds</h1>
+          <p class="caption">
+            The Data Agent summarizes past work and notes — and keeps that knowledge maintained.
+          </p>
+          <div class="shot-frame">
+            <img
+              src="knowledge_management.png"
+              alt="Experience Knowledge skill library"
+            />
+          </div>
+        </div>
+      </section>
+
+      <section class="artboard" aria-label="Gallery card 4">
+        <div class="artboard-inner">
+          <img
+            class="brand-icon"
+            src="../stela_icon_rounded.png"
+            alt="Stela"
+            width="56"
+            height="56"
+          />
+          <h1 class="slogan">Connect to your data sources</h1>
+          <p class="caption">
+            MySQL and PostgreSQL out of the box — extend with plugins as you need.
+          </p>
+          <div class="shot-frame">
+            <img
+              src="plugin_for_connector.png"
+              alt="Connections and connector plugins settings"
+            />
+          </div>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

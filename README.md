@@ -9,6 +9,10 @@
 </p>
 
 <p align="center">
+  <a href="https://www.producthunt.com/products/stela-data-analysis-workspace?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-stela-data-analysis-workspace" target="_blank" rel="noopener noreferrer"><img alt="Stela — Data Analysis Workspace - Run SQL in Markdown. Analyze data in Stela. | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1206754&amp;theme=light&amp;t=1785047121229"></a>
+</p>
+
+<p align="center">
   <a href="#english">English</a> · <a href="#中文">中文</a> · <a href="#screenshots--产品截图">Screenshots</a>
 </p>
 
@@ -67,45 +71,29 @@ For system design and contributor information, see [Architecture](./docs/ARCHITE
 
 ## Screenshots / 产品截图
 
-<p align="center">
-  <img src="./docs/assets/showall.png" alt="Stela overview" width="860" />
-</p>
-
 <table>
   <tr>
     <td width="50%">
-      <img src="./docs/assets/connections.png" alt="Database connections" />
+      <img src="./docs/producthunt/p1.png" alt="Run SQL in Markdown" />
       <br />
-      <strong>Database connections / 数据库连接</strong>
+      <strong>Run SQL in Markdown / 在 Markdown 中运行 SQL</strong>
     </td>
     <td width="50%">
-      <img src="./docs/assets/diff.png" alt="Result diff" />
+      <img src="./docs/producthunt/p2.png" alt="AI-assisted data analysis" />
       <br />
-      <strong>Execution history and diff / 执行历史与结果对比</strong>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <img src="./docs/assets/git.png" alt="Git repository settings" />
-      <br />
-      <strong>Git repository settings / Git 仓库设置</strong>
-    </td>
-    <td width="50%">
-      <img src="./docs/assets/git-sync.png" alt="Git sync history" />
-      <br />
-      <strong>Git sync and history / Git 同步与历史</strong>
+      <strong>AI-assisted data analysis / AI 辅助数据分析</strong>
     </td>
   </tr>
   <tr>
     <td width="50%">
-      <img src="./docs/assets/export.png" alt="Export options" />
+      <img src="./docs/producthunt/p3.png" alt="Experience knowledge that compounds" />
       <br />
-      <strong>Markdown export options / Markdown 导出选项</strong>
+      <strong>Experience knowledge / 经验知识沉淀</strong>
     </td>
     <td width="50%">
-      <img src="./docs/assets/export-result.png" alt="Exported Markdown result" />
+      <img src="./docs/producthunt/p4.png" alt="Connect to your data sources" />
       <br />
-      <strong>Exported Markdown result / 导出后的 Markdown 结果</strong>
+      <strong>Connect to your data sources / 连接数据源</strong>
     </td>
   </tr>
 </table>

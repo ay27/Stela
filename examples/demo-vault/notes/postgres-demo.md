@@ -3,10 +3,11 @@ type: stela-data-note
 connection_name: local-postgresql
 created_at: "2026-06-28T00:00:00.000Z"
 ---
-# PostgreSQL Demo
+# PostgreSQL quick start
 
 Run this block after starting the demo database. The `local-postgresql`
-connection is already defined in `.stela/connections.json`.
+connection is already defined in `.stela/connections.json`. For the full
+release investigation, open [[notes/weekly-release-health]].
 
 ```runsql
 SELECT status, COUNT(*) AS total
@@ -14,17 +15,6 @@ FROM demo_tasks
 GROUP BY status
 ORDER BY status;
 ```
-
-<detail>
-   <block-id>blk_mqxjigwm_yygucvsq</block-id>
-   <run-date>2026-06-28 16:41:50</run-date>
-   <elapsed>8ms</elapsed>
-   <row-count>2</row-count>
-   <first-row>{"status":"done","total":"1"}</first-row>
-   <result-ref-id>753f14d2-4716-444f-9579-02079645ebfa</result-ref-id>
-</detail>
-
-<br />
 
 ## Code Inline Completion With AI
 
@@ -37,4 +27,4 @@ ORDER BY status;
 
 ## Wiki Link Support
 
-\[\[notes/mysql-demo]]
+[[notes/mysql-demo]]
