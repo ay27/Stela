@@ -32,6 +32,14 @@ import * as vaultFs from "../vault-fs";
 import { notifyFileChanged } from "../vault-watcher";
 import { resolveNamedTableSchemas, searchTables } from "./schema-context";
 import { classifySql } from "./sql-guard";
+import {
+  archiveAgentSkill,
+  loadAgentSkills,
+  rankAgentSkills,
+  saveAgentSkill,
+  type AgentSkillMaintenanceRecord,
+  type LoadedAgentSkill,
+} from "./agent-skills";
 
 /**
  * Connector registry 的最小依赖面。用注入而不是静态 `import registry.ts`——
@@ -120,6 +128,9 @@ export interface AgentToolContext {
   aiSettings: AiSettings;
   connector: AgentConnectorOps;
   sqlIndex: AgentSqlIndexOps;
+  skills: LoadedAgentSkill[];
+  mode: "normal" | "maintenance";
+  onSkillMaintenance?: (record: AgentSkillMaintenanceRecord) => void;
   /**
    * 单次 run 的可变状态：`runId` / `notePath` 用于给执行历史生成
    * `agent:<runId>` 形式的 blockId；`questionsAsked` 由 `ask_user` 自增。
@@ -143,7 +154,7 @@ export function createAgentTools(options: {
   requestProposal: (toolCallId: string, proposal: ProposalRequest) => Promise<boolean | string>;
 }): AgentTool[] {
   const { ctx, requestProposal } = options;
-  return [
+  const tools: AgentTool[] = [
     {
       name: "list_databases",
       label: "List databases",
@@ -269,6 +280,45 @@ export function createAgentTools(options: {
       execute: (toolCallId, params) => runTool("read_note", toolCallId, params, ctx, requestProposal),
     },
     {
+      name: "load_skill",
+      label: "Load Skill",
+      description: "Load the complete instructions for one available Agent Skill by its exact name.",
+      parameters: Type.Object({ name: Type.String({ description: "Exact Skill name from search_skills or the available Skills list." }) }),
+      executionMode: "parallel",
+      execute: (toolCallId, params) => runTool("load_skill", toolCallId, params, ctx, requestProposal),
+    },
+    {
+      name: "search_skills",
+      label: "Search Skills",
+      description:
+        "Search the internal data-knowledge Skill library by business terms, tables, metrics, or SQL dialect. Returns concise metadata only; use load_skill with an exact name to read instructions.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Keywords describing the knowledge you need." }),
+        limit: Type.Optional(Type.Number({ description: "Max candidates to return. Defaults to 8." })),
+      }),
+      executionMode: "parallel",
+      execute: (toolCallId, params) => runTool("search_skills", toolCallId, params, ctx, requestProposal),
+    },
+    {
+      name: "save_skill",
+      label: "Save Skill",
+      description:
+        "Save a validated data-knowledge SKILL.md or archive an obsolete Skill. For a save, call once with name, content, and reason; action defaults to save. content must include YAML frontmatter with description, category, and inline tags. For archive, set action to archive and omit content. Use it when the user explicitly asks to remember reusable, verified knowledge, or during automatic maintenance. Never use it for user notes or arbitrary files.",
+      parameters: Type.Object({
+        action: Type.Optional(Type.Union([Type.Literal("save"), Type.Literal("archive")])),
+        name: Type.String({ description: "Required lowercase Skill directory name, e.g. postgresql-demo-tasks." }),
+        content: Type.Optional(
+          Type.String({
+            description:
+              "Required for save: complete SKILL.md, e.g. ---\\nname: postgresql-demo-tasks\\ndescription: Reusable PostgreSQL demo_tasks business definitions.\\ncategory: business-glossary\\ntags: [postgresql, demo-tasks]\\n---\\n\\n# Instructions",
+          }),
+        ),
+        reason: Type.String({ description: "Required short factual reason for saving or archiving." }),
+      }),
+      executionMode: "sequential",
+      execute: (toolCallId, params) => runTool("save_skill", toolCallId, params, ctx, requestProposal),
+    },
+    {
       name: "propose_edit",
       label: "Propose edit",
       description:
@@ -308,6 +358,10 @@ export function createAgentTools(options: {
       execute: (toolCallId, params) => runTool("ask_user", toolCallId, params, ctx, requestProposal),
     },
   ];
+  if (ctx.mode === "maintenance") {
+    return tools.filter((tool) => tool.name === "load_skill" || tool.name === "search_skills" || tool.name === "save_skill");
+  }
+  return tools;
 }
 
 async function runTool(
@@ -677,6 +731,50 @@ async function runReadNote(args: { path?: unknown; offset?: unknown; maxChars?: 
   }, fullRead ? Number.POSITIVE_INFINITY : maxChars + 2_000);
 }
 
+function runLoadSkill(args: { name?: unknown }, ctx: AgentToolContext): ToolOutcome {
+  const name = typeof args.name === "string" ? args.name.trim() : "";
+  const skill = ctx.skills.find((item) => item.metadata.name === name);
+  if (!skill) return fail(`No installed Skill named '${name}'. Use only names in the available Skills list.`);
+  return ok({ name: skill.metadata.name, content: skill.skill.content }, Number.POSITIVE_INFINITY);
+}
+
+function runSearchSkills(args: { query?: unknown; limit?: unknown }, ctx: AgentToolContext): ToolOutcome {
+  const query = typeof args.query === "string" ? args.query.trim() : "";
+  if (!query) return fail("query must be a non-empty string.");
+  const limit = boundedInt(args.limit, 8, 1, 20);
+  const skills = rankAgentSkills(ctx.skills, query, limit).map(({ metadata }) => ({
+    name: metadata.name,
+    description: metadata.description,
+    category: metadata.category,
+    tags: metadata.tags,
+  }));
+  return ok({ skills, totalSkills: ctx.skills.length, truncated: skills.length < ctx.skills.length });
+}
+
+async function runSaveSkill(
+  args: { action?: unknown; name?: unknown; content?: unknown; reason?: unknown },
+  ctx: AgentToolContext,
+): Promise<ToolOutcome> {
+  const action = args.action ?? "save";
+  const name = typeof args.name === "string" ? args.name : "";
+  const reason = typeof args.reason === "string" && args.reason.trim()
+    ? args.reason
+    : "Updated internal data knowledge.";
+  const record =
+    action === "save"
+      ? typeof args.content === "string"
+        ? await saveAgentSkill(ctx.vaultPath, name, args.content, reason)
+        : null
+      : action === "archive"
+        ? await archiveAgentSkill(ctx.vaultPath, name, reason)
+        : null;
+  if (!record) return fail("save requires content; action must be save or archive.");
+  const refreshed = await loadAgentSkills(ctx.vaultPath);
+  ctx.skills.splice(0, ctx.skills.length, ...refreshed.loaded);
+  ctx.onSkillMaintenance?.(record);
+  return ok(record);
+}
+
 async function runProposeEdit(
   args: { path?: unknown; newContent?: unknown; oldText?: unknown; newText?: unknown; description?: unknown },
   ctx: AgentToolContext,
@@ -800,6 +898,12 @@ export async function dispatchTool(
         return await runListVaultFiles(args, ctx);
       case "read_note":
         return await runReadNote(args, ctx);
+      case "load_skill":
+        return runLoadSkill(args, ctx);
+      case "search_skills":
+        return runSearchSkills(args, ctx);
+      case "save_skill":
+        return await runSaveSkill(args, ctx);
       case "propose_edit":
         return await runProposeEdit(args, ctx);
       case "ask_user":

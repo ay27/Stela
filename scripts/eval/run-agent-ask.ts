@@ -272,6 +272,8 @@ function buildToolContext(world: EvalWorld, runId: string, settings: AiSettings)
       execute: async (_kind: string, _config: unknown, sql: string) => fakeQueryResult(sql),
     },
     sqlIndex: corpusSqlIndex(world.blocks, world.vaultPath),
+    skills: [],
+    mode: "normal" as const,
     run: { runId, notePath: null, questionsAsked: 0 },
     recordRun: async () => {},
   };

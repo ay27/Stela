@@ -57,7 +57,16 @@ export type AgentTimelineEntry =
       /** `question` kind：用户实际给出的答案，供 timeline 回看。 */
       answer?: string;
     }
-  | { kind: "final"; id: string; content: string }
+  | {
+      kind: "final";
+      id: string;
+      content: string;
+      maintenance?: {
+        status: "working" | "updated" | "none";
+        actions: Array<{ action: "saved" | "archived"; name: string; path: string; reason: string }>;
+        summary?: string;
+      };
+    }
   | { kind: "error"; id: string; message: string }
   | { kind: "cancelled"; id: string };
 
@@ -155,6 +164,25 @@ function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTim
     case "context_usage":
     case "compaction":
       return timeline;
+    case "skill_maintenance_started":
+      return timeline.map((entry, index) =>
+        index === timeline.length - 1 && entry.kind === "final"
+          ? { ...entry, maintenance: { status: "working", actions: [] } }
+          : entry,
+      );
+    case "skill_maintenance":
+      return timeline.map((entry, index) =>
+        index === timeline.length - 1 && entry.kind === "final"
+          ? {
+              ...entry,
+              maintenance: {
+                status: event.actions.length > 0 ? "updated" : "none",
+                actions: event.actions,
+                summary: event.summary,
+              },
+            }
+          : entry,
+      );
     case "assistant_message":
       return [...timeline, { kind: "assistant", id: nextId(), content: event.content }];
     case "tool_call":

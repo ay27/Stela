@@ -8,6 +8,7 @@
 
 import type {
   AgentEvent,
+  AgentSkillListItem,
   AgentProposalResponse,
   AgentRunRequest,
   AiCompleteRequest,
@@ -223,6 +224,8 @@ interface StelaBridge {
   };
   agent: {
     run: (request: AgentRunRequest) => Promise<{ runId: string }>;
+    listSkills: () => Promise<AgentSkillListItem[]>;
+    removeSkill: (relativePath: string) => Promise<void>;
     cancel: (runId: string) => Promise<{ cancelled: boolean }>;
     respondProposal: (response: AgentProposalResponse) => Promise<{ ok: boolean }>;
     /** 订阅 agent 单步事件流；返回 unsubscribe 函数。 */

@@ -53,7 +53,7 @@ const UI_FILES_WITHOUT_HARDCODED_CHINESE = [
 ];
 
 const OLD_SLOGAN = "Markdown + SQL 数据笔记，所有操作都将刻印在石碑之上。";
-const CURRENT_SLOGAN = "Run SQL in Markdown. Track data in Stela.";
+const CURRENT_SLOGAN = "Run SQL in Markdown. Analyze data in Stela.";
 const SLOGAN_FILES = [
   "README.md",
   "src/views/WelcomeView.tsx",

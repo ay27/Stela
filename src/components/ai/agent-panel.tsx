@@ -255,7 +255,6 @@ export function AgentPanel() {
         label: candidate.detail,
       }));
   }, []);
-
   const onWheelScroll = useCallback((ev: WheelEvent<HTMLDivElement>) => {
     if (ev.deltaX === 0 && ev.deltaY !== 0) {
       ev.currentTarget.scrollLeft += ev.deltaY;
@@ -426,7 +425,6 @@ export function AgentPanel() {
           onChange={updatePromptDraft}
           onSubmit={send}
         />
-
         {/* 独立一行放操作按钮——左侧切 AI 配置档，Send/Stop 占最右。 */}
         <div className="mt-1.5 flex items-center justify-between gap-1.5">
           {aiSettings.profiles.length > 0 ? (
@@ -537,8 +535,9 @@ function TimelineItem({
       return <AssistantMessage content={entry.content} />;
     case "final":
       return (
-        <div className="rounded-lg border border-border bg-card/40 p-3">
+        <div className="relative rounded-lg border border-border bg-card/40 p-3 pb-6">
           <AssistantMessage content={entry.content} />
+          {entry.maintenance ? <SkillMaintenanceIndicator maintenance={entry.maintenance} /> : null}
         </div>
       );
     case "error":
@@ -554,6 +553,68 @@ function TimelineItem({
     case "proposal":
       return <ProposalCard entry={entry} onRespond={onRespond} />;
   }
+}
+
+function SkillMaintenanceIndicator({
+  maintenance,
+}: {
+  maintenance: NonNullable<Extract<AgentTimelineEntry, { kind: "final" }>["maintenance"]>;
+}) {
+  const t = useT();
+  const [expanded, setExpanded] = useState(false);
+  const working = maintenance.status === "working";
+  const updated = maintenance.status === "updated";
+  const names = maintenance.actions.map((action) => action.name).join("、");
+  const detail = working
+    ? t("agent.panel.skillWorking")
+    : updated
+      ? t("agent.panel.skillUpdated", { names })
+      : t("agent.panel.skillAllMaintained");
+  return (
+    <div
+      className="absolute bottom-1.5 right-2"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setExpanded(false);
+      }}
+    >
+      <button
+        type="button"
+        aria-label={detail}
+        title={detail}
+        onClick={() => setExpanded((value) => !value)}
+        className={cn(
+          "flex h-4 w-4 items-center justify-center rounded-full transition-colors",
+          working
+            ? "text-muted-foreground"
+            : updated
+              ? "bg-primary/10 text-primary hover:bg-primary/20"
+              : "text-muted-foreground/60 hover:bg-muted hover:text-muted-foreground",
+        )}
+      >
+        {working ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : (
+          <Brain className="h-3 w-3" />
+        )}
+      </button>
+      {expanded ? (
+        <div className="absolute bottom-6 right-0 z-10 w-64 rounded-md border border-border bg-popover p-2 text-[11px] text-popover-foreground shadow-md">
+          <div className="font-medium">{t("agent.panel.skillMaintenance")}</div>
+          <p className="mt-1 text-muted-foreground">{detail}</p>
+          {updated ? (
+            <div className="mt-2 space-y-1 border-t border-border pt-2">
+              {maintenance.actions.map((action) => (
+                <div key={`${action.action}-${action.path}`}>
+                  {action.action === "saved" ? t("agent.panel.skillSaved") : t("agent.panel.skillArchived")} · {action.name}
+                  <span className="text-muted-foreground"> — {action.reason}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function AssistantMessage({ content }: { content: string }) {

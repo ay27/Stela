@@ -446,7 +446,7 @@ type AgentToolName =
   | "list_databases" | "list_tables" | "search_tables" | "get_table_schema"
   | "run_sql" | "search_sql_usage"
   | "search_vault" | "list_vault_files" | "read_note"
-  | "propose_edit" | "ask_user";
+  | "search_skills" | "load_skill" | "save_skill" | "propose_edit" | "ask_user";
 
 type AgentProposalKind = "edit_note" | "mutation_sql" | "question";
 
@@ -508,6 +508,31 @@ Safety ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md)):
 - Selection / RunSQL attachments are bounded and included only on the user turn that added them
 - `ask_user` blocks on the same handshake with `kind: "question"`, resolving to the answer string; ≤3 questions per run, enforced in the tool ([ADR-0027](./adr/0027-agent-ask-user-clarification.md))
 - Final answers follow a fixed contract: conclusion, evidence (table · column · SQL), key numbers, assumptions made, remaining uncertainty
+
+### Agent Skills
+
+An Agent Skill is an internal, Vault-maintained pi-compatible `SKILL.md` below
+`{vault}/.stela/skills/<skill-name>/`. Its YAML frontmatter must include a
+non-empty `description`, a `category` from `sql-dialect`, `metric-definition`,
+`business-glossary`, `data-lineage`, or `analysis-runbook`, and a non-empty inline
+`tags` list; `name` defaults to the parent directory name. Local lexical ranking
+selects at most eight metadata records for the main system prompt.
+
+The model calls `search_skills(query)` for further metadata and
+`load_skill(name)` to add a matching Markdown body to the current tool loop. After
+each normal completion, a separate maintenance turn can use `save_skill` to write a
+complete validated `SKILL.md` or move an obsolete Skill under `.archive/`; it is
+limited to those Skill tools and cannot call SQL or edit notes. The normal Agent
+can also call `save_skill` when the user explicitly asks to retain verified reusable
+data knowledge. A `skill_maintenance` event contains only concise action metadata
+for a small status indicator inside the final-answer bubble, never a Skill body.
+An explicit write supplies that final-answer status directly and skips the redundant
+automatic maintenance turn. The bottom-bar Experience Knowledge entry opens an
+application-level dialog using `agent.listSkills()` to show metadata (name,
+description, category, tags, relative path, and active/archived status). After
+confirmation, `agent.removeSkill(relativePath)` may move only that listed Skill
+directory to the system trash; it cannot read bodies or mutate other Vault paths.
+Skills have no user-facing Settings or slash-command contract.
 
 Retrieval results ([ADR-0026](./adr/0026-ranked-lexical-retrieval-for-agent.md)):
 

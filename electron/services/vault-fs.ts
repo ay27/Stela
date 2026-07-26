@@ -188,6 +188,7 @@ export async function ensureWithinVault(
   vaultPath: string,
   target: string,
 ): Promise<string> {
+  const targetPath = path.isAbsolute(target) ? target : path.resolve(vaultPath, target);
   let vaultReal: string;
   try {
     vaultReal = await fs.realpath(vaultPath);
@@ -199,10 +200,10 @@ export async function ensureWithinVault(
   }
   let probe: string;
   try {
-    probe = await fs.realpath(target);
+    probe = await fs.realpath(targetPath);
   } catch {
     // walk up to first existing ancestor
-    let cursor = path.resolve(target);
+    let cursor = targetPath;
     const tail: string[] = [];
     while (true) {
       try {
@@ -212,7 +213,7 @@ export async function ensureWithinVault(
       } catch {
         const parent = path.dirname(cursor);
         if (parent === cursor) {
-          throw new AppError("invalid_path", `no existing ancestor for ${target}`);
+          throw new AppError("invalid_path", `no existing ancestor for ${targetPath}`);
         }
         tail.push(path.basename(cursor));
         cursor = parent;

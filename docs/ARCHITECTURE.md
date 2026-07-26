@@ -313,6 +313,33 @@ flowchart TB
 3. **Harness agent** — `AgentHarness` tool loop with streaming `ai:agent-event`. Tools browse schema, run SQL, search/read notes, search SQL usage, ask the user a question, propose edits. Same-turn tools may run in parallel except `propose_edit` (sequential). Mutations and note writes wait for user approve. Agent chat accepts `@table` mentions, `[[note]]` references, a default current-note reference, and Add to Chat content attachments. Runs continue until the model finishes, errors, or the user cancels. Compacts when near `ai.contextWindow` budget and once on provider context overflow; Panel shows approximate usage + compacting status. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md), [ADR-0016](./adr/0016-agent-chat-references-and-add-to-chat.md), [ADR-0017](./adr/0017-user-cancelled-agent-runs.md), [ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0026](./adr/0026-ranked-lexical-retrieval-for-agent.md), [ADR-0027](./adr/0027-agent-ask-user-clarification.md))
 4. **SQL query parse** — model only emits a `SqlIndexFilter`; hits always come from deterministic `sql-index`.
 
+### Agent Skills
+
+Skills are vault-scoped Markdown instructions at
+`{vault}/.stela/skills/<skill-name>/SKILL.md`, and therefore follow normal Git
+sync and review. Valid Skill frontmatter adds a controlled `category`
+(`sql-dialect`, `metric-definition`, `business-glossary`, `data-lineage`, or
+`analysis-runbook`) and non-empty `tags` to pi-agent-core's native `name` and
+required `description`.
+
+Local ranking injects only the eight metadata records most relevant to the user's
+request; the model uses `search_skills` to find further candidates and `load_skill`
+to read a body on demand. The bottom-bar **Experience Knowledge** entry opens an
+on-demand application dialog with active and archived Skill metadata through
+`window.stela.agent.listSkills()`. A confirmed `window.stela.agent.removeSkill()`
+operation can move only a listed Skill directory to the system trash; Skill bodies
+and arbitrary vault writes remain unavailable to the renderer.
+After a normal Agent completion, a restricted maintenance turn can use only these
+tools plus `save_skill` to save/update a validated Skill or archive an obsolete one
+under `.stela/skills/.archive/`. A normal Agent turn may also use `save_skill` when
+the user explicitly asks it to retain verified reusable data knowledge. Neither path
+can call SQL, edit notes, or write elsewhere through this capability, and writes
+appear as a compact status indicator inside the final-answer bubble; hover/click
+reveals the maintenance summary and any changes. An explicit successful write is the
+final answer's update result and skips the redundant post-run maintenance call. See
+[ADR-0033](./adr/0033-explicit-and-automatic-skill-maintenance.md),
+[ADR-0036](./adr/0036-user-deletion-of-experience-knowledge.md).
+
 ### Agent retrieval
 
 All retrieval is lexical and in-process — no embeddings, no FTS5 index ([ADR-0008](./adr/0008-search-first-ai-instead-of-rag.md), [ADR-0026](./adr/0026-ranked-lexical-retrieval-for-agent.md)):

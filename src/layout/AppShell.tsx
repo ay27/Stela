@@ -13,6 +13,7 @@ import { useDialogs } from "@/state/dialogs";
 import { useLayout } from "@/state/layout";
 import { useTabSwitcher } from "@/state/tab-switcher";
 import { ConnectionsDialog } from "@/components/connections-dialog";
+import { ExperienceKnowledgeDialog } from "@/components/experience-knowledge-dialog";
 import { ExportNoteDialog } from "@/components/export-note-dialog";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { AiModal } from "@/components/ai/ai-modal";
@@ -52,6 +53,8 @@ export function AppShell() {
   const setConnectionsOpen = useDialogs((s) => s.setConnections);
   const settingsOpen = useDialogs((s) => s.settingsOpen);
   const setSettingsOpen = useDialogs((s) => s.setSettings);
+  const experienceKnowledgeOpen = useDialogs((s) => s.experienceKnowledgeOpen);
+  const setExperienceKnowledgeOpen = useDialogs((s) => s.setExperienceKnowledge);
   const paletteOpen = useDialogs((s) => s.paletteOpen);
   const setPaletteOpen = useDialogs((s) => s.setPalette);
   const togglePalette = useDialogs((s) => s.togglePalette);
@@ -334,6 +337,10 @@ export function AppShell() {
         onOpenChange={setConnectionsOpen}
       />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <ExperienceKnowledgeDialog
+        open={experienceKnowledgeOpen}
+        onOpenChange={setExperienceKnowledgeOpen}
+      />
       <CommandPalette
         open={paletteOpen}
         onOpenChange={setPaletteOpen}

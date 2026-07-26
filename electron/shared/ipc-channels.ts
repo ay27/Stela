@@ -98,6 +98,8 @@ export const IPC = {
   AI_AGENT_RUN: "ai:agent-run",
   AI_AGENT_CANCEL: "ai:agent-cancel",
   AI_AGENT_RESPOND_PROPOSAL: "ai:agent-respond-proposal",
+  AI_SKILLS_LIST: "ai:skills-list",
+  AI_SKILLS_REMOVE: "ai:skills-remove",
 
   // Git 版本控制（替代 COS 同步；笔记 + JSONL 历史走 git remote）
   GIT_IS_REPO: "git:is-repo",

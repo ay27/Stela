@@ -545,6 +545,10 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
     })
     .strict(),
   [IPC.AI_AGENT_CANCEL]: z.object({ runId: stringMin1.max(128) }),
+  [IPC.AI_SKILLS_LIST]: z.object({}).strict(),
+  [IPC.AI_SKILLS_REMOVE]: z
+    .object({ relativePath: z.string().min(1).max(512) })
+    .strict(),
   [IPC.AI_AGENT_RESPOND_PROPOSAL]: z.object({
     runId: stringMin1.max(128),
     callId: stringMin1.max(256),

@@ -12,6 +12,7 @@ import {
   Session,
   estimateContextTokens,
   shouldCompact,
+  formatSkillsForSystemPrompt,
 } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { isContextOverflow, type AssistantMessage } from "@earendil-works/pi-ai";
@@ -32,6 +33,7 @@ import * as resultStore from "../result-store";
 import * as settingsStore from "../settings-store";
 import * as sqlIndex from "../sql-index";
 import { assistantText, buildSystemPrompt, buildUserContent } from "./agent-prompt";
+import { loadAgentSkills, rankAgentSkills, type AgentSkillMaintenanceRecord } from "./agent-skills";
 import {
   createAgentTools,
   type AgentRunRecorder,
@@ -43,6 +45,19 @@ const log = getLogger("ai.agent");
 const TOOL_RESULT_SUMMARY_CHARS = 12_000;
 const OVERFLOW_CONTINUE_PROMPT =
   "The previous request exceeded the model context window. Continue from the compacted history and finish the user's last request.";
+const SKILL_PROMPT_LIMIT = 8;
+const SKILL_MAINTENANCE_PROMPT = `You are Stela's internal experience-maintenance agent.
+Review the completed user request and final answer below. Preserve only durable, specific data-analysis knowledge that would prevent a future mistake or speed a future answer: SQL dialect constraints, metric definitions, business glossary mappings, data lineage, or analysis runbooks.
+
+First search existing Skills when relevant. Use save_skill only to save a complete validated SKILL.md or archive an obsolete/conflicting Skill. A saved file must use this frontmatter shape:
+---
+name: lowercase-hyphenated-name
+description: concise reusable purpose
+category: sql-dialect | metric-definition | business-glossary | data-lineage | analysis-runbook
+tags: [lowercase-tag, another-tag]
+---
+
+Do not save one-off answers, speculative claims, user-private data, credentials, SQL result rows, or instructions requiring tools Stela does not have. If there is no safe durable knowledge, make no tool call and reply with a one-sentence reason.`;
 
 /**
  * `question` kind 需要把答案文本带回工具，所以 resolve 类型从 `boolean`
@@ -161,6 +176,82 @@ function getOrCreateSession(sessionId: string | undefined): Session {
   return new Session(new InMemorySessionStorage());
 }
 
+async function runSkillMaintenance(options: {
+  vaultPath: string;
+  request: AgentRunRequest;
+  finalAnswer: string;
+  models: Awaited<ReturnType<typeof createTransportForProfile>>["models"];
+  model: Awaited<ReturnType<typeof createTransportForProfile>>["model"];
+  skills: Awaited<ReturnType<typeof loadAgentSkills>>;
+  connection: ConnectionEntry | null;
+  aiSettings: Awaited<ReturnType<typeof settingsStore.loadAppSettings>>["ai"];
+  onAbortHarness: (harness: AgentHarness) => void;
+  onEvent: (event: AgentEvent) => void;
+  signal: AbortSignal;
+}): Promise<void> {
+  const { vaultPath, request, finalAnswer, models, model, skills, connection, aiSettings, onAbortHarness, onEvent, signal } = options;
+  const actions: AgentSkillMaintenanceRecord[] = [];
+  onEvent({ type: "skill_maintenance_started", runId: request.runId });
+  const maintenanceHarness = new AgentHarness({
+    env: new NodeExecutionEnv({ cwd: vaultPath }),
+    session: new Session(new InMemorySessionStorage()),
+    models,
+    model,
+    thinkingLevel: "off",
+    systemPrompt: `${SKILL_MAINTENANCE_PROMPT}\n${formatSkillsForSystemPrompt(rankAgentSkills(skills.loaded, request.prompt, SKILL_PROMPT_LIMIT).map((item) => item.skill))}`,
+    resources: { skills: skills.loaded.map((item) => item.skill) },
+    tools: createAgentTools({
+      ctx: {
+        vaultPath,
+        connectionName: request.connectionName ?? null,
+        connection,
+        aiSettings,
+        connector: {
+          listKinds: connectorRegistry.listKinds,
+          listDatabases: connectorRegistry.listDatabases,
+          listTables: connectorRegistry.listTables,
+          execute: connectorRegistry.execute,
+        },
+        sqlIndex: { query: sqlIndex.query },
+        skills: skills.loaded,
+        mode: "maintenance",
+        run: { runId: request.runId, notePath: request.notePath ?? null, questionsAsked: 0 },
+        recordRun: recordAgentRun(vaultPath),
+        onSkillMaintenance: (record) => actions.push(record),
+      },
+      requestProposal: async () => false,
+    }),
+  });
+  onAbortHarness(maintenanceHarness);
+  try {
+    const result = await maintenanceHarness.prompt(
+      `Completed user request:\n${request.prompt}\n\nFinal answer:\n${finalAnswer}`,
+    );
+    if (signal.aborted || result.stopReason === "aborted") return;
+    onEvent({
+      type: "skill_maintenance",
+      runId: request.runId,
+      actions,
+      summary: actions.length > 0
+        ? `Updated ${actions.length} internal knowledge Skill${actions.length === 1 ? "" : "s"}.`
+        : assistantText(result).trim().slice(0, 120) || "No durable knowledge required a Skill update.",
+    });
+  } catch (err) {
+    log.warn("skill maintenance failed", {
+      runId: request.runId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    if (!signal.aborted) {
+      onEvent({
+        type: "skill_maintenance",
+        runId: request.runId,
+        actions,
+        summary: "Skill maintenance could not complete; the answer above is unaffected.",
+      });
+    }
+  }
+}
+
 export interface RunAgentOptions {
   vaultPath: string;
   slug: string;
@@ -177,6 +268,7 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
   onEvent({ type: "started", runId });
 
   let harness: AgentHarness | null = null;
+  const normalSkillActions: AgentSkillMaintenanceRecord[] = [];
   const onAbort = () => {
     void harness?.abort();
   };
@@ -191,6 +283,8 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
     const profile = getActiveProfile(settings.ai, request.profileId);
     const apiKey = await loadApiKey(vaultPath, slug, profile.id);
     const { connection, dialect } = await resolveConnection(vaultPath, slug, request.connectionName);
+    const skills = await loadAgentSkills(vaultPath);
+    const promptSkills = rankAgentSkills(skills.loaded, request.prompt, SKILL_PROMPT_LIMIT);
     const { models, model } = createTransportForProfile(settings.ai, apiKey, profile.id);
     const contextWindow = model.contextWindow;
     const session = getOrCreateSession(request.sessionId ?? undefined);
@@ -221,7 +315,11 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
       models,
       model,
       thinkingLevel: "off",
-      systemPrompt: buildSystemPrompt(request, connection, dialect),
+      systemPrompt:
+        `${buildSystemPrompt(request, connection, dialect)}\n` +
+        "Use search_skills before relying on domain knowledge that may exist in the internal Skill library.\n" +
+        formatSkillsForSystemPrompt(promptSkills.map((item) => item.skill)),
+      resources: { skills: promptSkills.map((item) => item.skill) },
       tools: createAgentTools({
         ctx: {
           vaultPath,
@@ -235,8 +333,11 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
             execute: connectorRegistry.execute,
           },
           sqlIndex: { query: sqlIndex.query },
+          skills: skills.loaded,
+          mode: "normal",
           run: { runId, notePath: request.notePath ?? null, questionsAsked: 0 },
           recordRun: recordAgentRun(vaultPath),
+          onSkillMaintenance: (record) => normalSkillActions.push(record),
         },
         requestProposal: (toolCallId, proposal) =>
           makeRequestProposal(runId, toolCallId, onEvent, pending, signal)(proposal),
@@ -334,7 +435,32 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
         return;
       }
 
-      onEvent({ type: "final", runId, content: assistantText(result) });
+      const finalAnswer = assistantText(result);
+      onEvent({ type: "final", runId, content: finalAnswer });
+      if (normalSkillActions.length > 0) {
+        onEvent({
+          type: "skill_maintenance",
+          runId,
+          actions: normalSkillActions,
+          summary: `Updated ${normalSkillActions.length} internal knowledge Skill${normalSkillActions.length === 1 ? "" : "s"}.`,
+        });
+      } else {
+        await runSkillMaintenance({
+          vaultPath,
+          request,
+          finalAnswer,
+          models,
+          model,
+          skills,
+          connection,
+          aiSettings: settings.ai,
+          onAbortHarness: (nextHarness) => {
+            harness = nextHarness;
+          },
+          onEvent,
+          signal,
+        });
+      }
     } finally {
       unsubscribe();
     }

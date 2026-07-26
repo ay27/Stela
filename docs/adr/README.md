@@ -81,3 +81,11 @@ proposed → active → superseded
 | [0026](0026-ranked-lexical-retrieval-for-agent.md) | Ranked lexical retrieval for agent tools | active |
 | [0027](0027-agent-ask-user-clarification.md) | Agent clarification questions as a third proposal kind | active |
 | [0028](0028-inline-completion-schema-and-note-context.md) | Inline completion reads renderer column cache and note context | active |
+| [0029](0029-vault-scoped-agent-skills.md) | Vault-scoped Markdown Skills for the agent | superseded → [0030](0030-data-knowledge-skills-only.md) |
+| [0030](0030-data-knowledge-skills-only.md) | Data-knowledge Skills only | superseded → [0031](0031-internal-agent-knowledge-skills.md) |
+| [0031](0031-internal-agent-knowledge-skills.md) | Internal agent knowledge Skills | superseded → [0032](0032-self-maintained-agent-knowledge-skills.md) |
+| [0032](0032-self-maintained-agent-knowledge-skills.md) | Self-maintained internal agent knowledge Skills | superseded → [0033](0033-explicit-and-automatic-skill-maintenance.md) |
+| [0033](0033-explicit-and-automatic-skill-maintenance.md) | Explicit and automatic Skill maintenance | active |
+| [0034](0034-read-only-experience-knowledge-library.md) | Read-only Experience Knowledge library | superseded → [0035](0035-experience-knowledge-dialog.md) |
+| [0035](0035-experience-knowledge-dialog.md) | Experience Knowledge dialog | superseded → [0036](0036-user-deletion-of-experience-knowledge.md) |
+| [0036](0036-user-deletion-of-experience-knowledge.md) | User deletion of Experience Knowledge | active |

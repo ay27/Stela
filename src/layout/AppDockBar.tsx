@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FolderSync, Link2, Settings as SettingsIcon, Tag } from "lucide-react";
+import { BookOpen, FolderSync, Link2, Settings as SettingsIcon, Tag } from "lucide-react";
 
 import type { UpdaterStatus } from "@shared/types";
 
@@ -88,6 +88,8 @@ export function AppDockBar() {
           <>
             <DockSep />
             <GitBadge showBranch className={`${dockItem} max-w-[120px]`} />
+            <DockSep />
+            <SkillLibraryButton />
           </>
         ) : null}
       </div>
@@ -105,6 +107,24 @@ export function AppDockBar() {
 <DockSep />
       <VersionBadge />
     </div>
+  );
+}
+
+function SkillLibraryButton() {
+  const t = useT();
+  const setExperienceKnowledge = useDialogs((s) => s.setExperienceKnowledge);
+  const title = t("skills.library.title");
+  return (
+    <button
+      type="button"
+      className={dockItem}
+      title={title}
+      aria-label={title}
+      onClick={() => setExperienceKnowledge(true)}
+    >
+      <BookOpen className="h-3.5 w-3.5 flex-none" />
+      <span className="whitespace-nowrap">{title}</span>
+    </button>
   );
 }
 

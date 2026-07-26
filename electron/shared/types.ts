@@ -557,8 +557,20 @@ export type AgentToolName =
   | "search_sql_usage"
   | "list_vault_files"
   | "read_note"
+  | "load_skill"
+  | "search_skills"
+  | "save_skill"
   | "propose_edit"
   | "ask_user";
+
+export interface AgentSkillListItem {
+  name: string;
+  description: string;
+  category: string | null;
+  tags: string[];
+  relativePath: string;
+  status: "active" | "archived";
+}
 
 export type AgentAttachment =
   | {
@@ -649,6 +661,21 @@ export type AgentEvent =
       type: "compaction";
       runId: string;
       phase: "started" | "completed";
+    }
+  | {
+      type: "skill_maintenance_started";
+      runId: string;
+    }
+  | {
+      type: "skill_maintenance";
+      runId: string;
+      actions: Array<{
+        action: "saved" | "archived";
+        name: string;
+        path: string;
+        reason: string;
+      }>;
+      summary: string;
     }
   | { type: "final"; runId: string; content: string }
   | { type: "error"; runId: string; message: string }

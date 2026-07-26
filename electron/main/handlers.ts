@@ -18,6 +18,7 @@ import { IPC } from "@shared/ipc-channels";
 import { IPC_EVENTS } from "@shared/ipc-events";
 import type {
   AgentEvent,
+  AgentSkillListItem,
   AgentProposalResponse,
   AgentRunRequest,
   AiCompleteRequest,
@@ -98,6 +99,7 @@ import * as sqlIndex from "../services/sql-index";
 import * as autoUpdate from "../services/auto-updater";
 import * as ai from "../services/ai";
 import * as agent from "../services/ai/agent";
+import * as agentSkills from "../services/ai/agent-skills";
 import { runInlineCompletion } from "../services/ai/inline-completion";
 
 /** 共用：所有 vault-级 handler 的入口拿当前 vault；没有时按 IPC 错误返回。 */
@@ -602,6 +604,14 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
   registerHandler<AgentProposalResponse, { ok: boolean }>(
     IPC.AI_AGENT_RESPOND_PROPOSAL,
     (response) => ({ ok: agent.respondToProposal(response) }),
+  );
+  registerHandler<Record<string, never>, AgentSkillListItem[]>(
+    IPC.AI_SKILLS_LIST,
+    () => agentSkills.listAgentSkills(requireVault()),
+  );
+  registerHandler<{ relativePath: string }, void>(
+    IPC.AI_SKILLS_REMOVE,
+    ({ relativePath }) => agentSkills.removeAgentSkill(requireVault(), relativePath),
   );
 
   // ---------- Git 版本控制 ----------
