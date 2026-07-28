@@ -33,7 +33,12 @@ import * as resultStore from "../result-store";
 import * as settingsStore from "../settings-store";
 import * as sqlIndex from "../sql-index";
 import { assistantText, buildSystemPrompt, buildUserContent } from "./agent-prompt";
-import { loadAgentSkills, rankAgentSkills, type AgentSkillMaintenanceRecord } from "./agent-skills";
+import {
+  AGENT_SKILL_LIMITS_PROMPT,
+  loadAgentSkills,
+  rankAgentSkills,
+  type AgentSkillMaintenanceRecord,
+} from "./agent-skills";
 import {
   createAgentTools,
   type AgentRunRecorder,
@@ -46,10 +51,11 @@ const TOOL_RESULT_SUMMARY_CHARS = 12_000;
 const OVERFLOW_CONTINUE_PROMPT =
   "The previous request exceeded the model context window. Continue from the compacted history and finish the user's last request.";
 const SKILL_PROMPT_LIMIT = 8;
+const SKILL_MAINTENANCE_ANSWER_CHARS = 2_400;
 const SKILL_MAINTENANCE_PROMPT = `You are Stela's internal experience-maintenance agent.
-Review the completed user request and final answer below. Preserve only durable, specific data-analysis knowledge that would prevent a future mistake or speed a future answer: SQL dialect constraints, metric definitions, business glossary mappings, data lineage, or analysis runbooks.
+Review the completed request and compact evidence summary below. Save nothing by default. Preserve only durable, specific data-analysis knowledge that is verified, applies beyond this request, and does not duplicate an existing Skill: SQL dialect constraints, metric definitions, business glossary mappings, data lineage, or analysis runbooks.
 
-First search existing Skills when relevant. Use save_skill only to save a complete validated SKILL.md or archive an obsolete/conflicting Skill. A saved file must use this frontmatter shape:
+First search existing Skills when relevant. Use save_skill only when all three conditions hold: reusable scope, evidence in the completed work, and no existing equivalent. Do not copy the answer or its SQL into a Skill. Keep a saved Skill to its scope, rule, and minimal verification or exception. Use save_skill only to save a compact validated SKILL.md or archive an obsolete/conflicting Skill. A saved file must use this frontmatter shape:
 ---
 name: lowercase-hyphenated-name
 description: concise reusable purpose
@@ -57,7 +63,9 @@ category: sql-dialect | metric-definition | business-glossary | data-lineage | a
 tags: [lowercase-tag, another-tag]
 ---
 
-Do not save one-off answers, speculative claims, user-private data, credentials, SQL result rows, or instructions requiring tools Stela does not have. If there is no safe durable knowledge, make no tool call and reply with a one-sentence reason.`;
+${AGENT_SKILL_LIMITS_PROMPT}
+
+Do not save one-off answers, speculative claims, user-private data, credentials, SQL result rows, analysis narration, or instructions requiring tools Stela does not have. If there is no safe durable knowledge, make no tool call and reply with a one-sentence reason.`;
 
 /**
  * `question` kind 需要把答案文本带回工具，所以 resolve 类型从 `boolean`
@@ -165,6 +173,18 @@ function toolResultSummary(result: unknown): string {
   return text.slice(0, TOOL_RESULT_SUMMARY_CHARS);
 }
 
+function buildSkillMaintenanceInput(request: AgentRunRequest, finalAnswer: string): string {
+  const answer = finalAnswer.trim();
+  const evidenceSummary = answer.length > SKILL_MAINTENANCE_ANSWER_CHARS
+    ? `${answer.slice(0, SKILL_MAINTENANCE_ANSWER_CHARS)}\n\n[truncated: do not infer or save omitted details]`
+    : answer;
+  return [
+    `Completed user request:\n${request.prompt}`,
+    "Evidence summary (extract only reusable verified facts; never copy this text verbatim):",
+    evidenceSummary || "No final-answer evidence was available.",
+  ].join("\n\n");
+}
+
 function getOrCreateSession(sessionId: string | undefined): Session {
   if (sessionId) {
     const existing = sessions.get(sessionId);
@@ -191,6 +211,7 @@ async function runSkillMaintenance(options: {
 }): Promise<void> {
   const { vaultPath, request, finalAnswer, models, model, skills, connection, aiSettings, onAbortHarness, onEvent, signal } = options;
   const actions: AgentSkillMaintenanceRecord[] = [];
+  const promptSkills = rankAgentSkills(skills.loaded, request.prompt, SKILL_PROMPT_LIMIT);
   onEvent({ type: "skill_maintenance_started", runId: request.runId });
   const maintenanceHarness = new AgentHarness({
     env: new NodeExecutionEnv({ cwd: vaultPath }),
@@ -198,8 +219,8 @@ async function runSkillMaintenance(options: {
     models,
     model,
     thinkingLevel: "off",
-    systemPrompt: `${SKILL_MAINTENANCE_PROMPT}\n${formatSkillsForSystemPrompt(rankAgentSkills(skills.loaded, request.prompt, SKILL_PROMPT_LIMIT).map((item) => item.skill))}`,
-    resources: { skills: skills.loaded.map((item) => item.skill) },
+    systemPrompt: `${SKILL_MAINTENANCE_PROMPT}\n${formatSkillsForSystemPrompt(promptSkills.map((item) => item.skill))}`,
+    resources: { skills: promptSkills.map((item) => item.skill) },
     tools: createAgentTools({
       ctx: {
         vaultPath,
@@ -224,9 +245,7 @@ async function runSkillMaintenance(options: {
   });
   onAbortHarness(maintenanceHarness);
   try {
-    const result = await maintenanceHarness.prompt(
-      `Completed user request:\n${request.prompt}\n\nFinal answer:\n${finalAnswer}`,
-    );
+    const result = await maintenanceHarness.prompt(buildSkillMaintenanceInput(request, finalAnswer));
     if (signal.aborted || result.stopReason === "aborted") return;
     onEvent({
       type: "skill_maintenance",
@@ -316,7 +335,7 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
       model,
       thinkingLevel: "off",
       systemPrompt:
-        `${buildSystemPrompt(request, connection, dialect)}\n` +
+        `${buildSystemPrompt(request, connection, dialect, AGENT_SKILL_LIMITS_PROMPT)}\n` +
         "Use search_skills before relying on domain knowledge that may exist in the internal Skill library.\n" +
         formatSkillsForSystemPrompt(promptSkills.map((item) => item.skill)),
       resources: { skills: promptSkills.map((item) => item.skill) },

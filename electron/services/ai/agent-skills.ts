@@ -19,6 +19,16 @@ export const AGENT_SKILL_CATEGORIES = [
   "data-lineage",
   "analysis-runbook",
 ] as const;
+export const AGENT_SKILL_LIMITS = {
+  maxChars: 6_000,
+  maxDescriptionChars: 160,
+  maxBodyLines: 80,
+  maxCodeBlocks: 2,
+  maxCodeLines: 20,
+} as const;
+export const MAX_AGENT_SKILL_CHARS = AGENT_SKILL_LIMITS.maxChars;
+export const AGENT_SKILL_LIMITS_PROMPT =
+  `Skill limits: full file <= ${AGENT_SKILL_LIMITS.maxChars} characters; description <= ${AGENT_SKILL_LIMITS.maxDescriptionChars} characters; body <= ${AGENT_SKILL_LIMITS.maxBodyLines} lines; at most ${AGENT_SKILL_LIMITS.maxCodeBlocks} code examples, each <= ${AGENT_SKILL_LIMITS.maxCodeLines} lines.`;
 
 export type AgentSkillCategory = (typeof AGENT_SKILL_CATEGORIES)[number];
 
@@ -110,13 +120,32 @@ function assertSkillName(name: string): string {
 }
 
 function validateSkillContent(name: string, content: string): AgentSkillMetadata {
-  if (content.length > 64_000) throw new AppError("invalid_skill", "Skill content must not exceed 64KB.");
-  const { frontmatter } = splitFrontmatter(content);
+  if (content.length > MAX_AGENT_SKILL_CHARS) {
+    throw new AppError("invalid_skill", `Skill content must not exceed ${MAX_AGENT_SKILL_CHARS} characters.`);
+  }
+  const { frontmatter, body } = splitFrontmatter(content);
   const description = parseFrontmatterField(frontmatter, "description");
   const frontmatterName = parseFrontmatterField(frontmatter, "name");
   const category = parseFrontmatterField(frontmatter, "category");
   const tags = parseTags(parseFrontmatterField(frontmatter, "tags"));
   if (!frontmatter || !description) throw new AppError("invalid_skill", "SKILL.md requires a non-empty description.");
+  if (!body.trim()) throw new AppError("invalid_skill", "Skill body must contain reusable guidance.");
+  if (description.length > AGENT_SKILL_LIMITS.maxDescriptionChars) {
+    throw new AppError("invalid_skill", `Skill description must be ${AGENT_SKILL_LIMITS.maxDescriptionChars} characters or fewer.`);
+  }
+  if (body.trim().split("\n").length > AGENT_SKILL_LIMITS.maxBodyLines) {
+    throw new AppError("invalid_skill", `Skill body must be ${AGENT_SKILL_LIMITS.maxBodyLines} lines or fewer; keep only reusable rules and checks.`);
+  }
+  const codeBlocks = Array.from(
+    body.matchAll(/^```[^\n]*\n([\s\S]*?)^```$/gm) as Iterable<RegExpMatchArray>,
+    (match) => match[1] ?? "",
+  );
+  if (codeBlocks.length > AGENT_SKILL_LIMITS.maxCodeBlocks) {
+    throw new AppError("invalid_skill", `Skill body may contain at most ${AGENT_SKILL_LIMITS.maxCodeBlocks} short code examples.`);
+  }
+  if (codeBlocks.some((block) => block.trim().split("\n").length > AGENT_SKILL_LIMITS.maxCodeLines)) {
+    throw new AppError("invalid_skill", `Each Skill code example must be ${AGENT_SKILL_LIMITS.maxCodeLines} lines or fewer.`);
+  }
   if (frontmatterName && assertSkillName(frontmatterName) !== name) {
     throw new AppError("invalid_skill", "Frontmatter name must match the Skill directory name.");
   }

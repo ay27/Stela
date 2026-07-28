@@ -85,7 +85,8 @@ proposed → active → superseded
 | [0030](0030-data-knowledge-skills-only.md) | Data-knowledge Skills only | superseded → [0031](0031-internal-agent-knowledge-skills.md) |
 | [0031](0031-internal-agent-knowledge-skills.md) | Internal agent knowledge Skills | superseded → [0032](0032-self-maintained-agent-knowledge-skills.md) |
 | [0032](0032-self-maintained-agent-knowledge-skills.md) | Self-maintained internal agent knowledge Skills | superseded → [0033](0033-explicit-and-automatic-skill-maintenance.md) |
-| [0033](0033-explicit-and-automatic-skill-maintenance.md) | Explicit and automatic Skill maintenance | active |
+| [0033](0033-explicit-and-automatic-skill-maintenance.md) | Explicit and automatic Skill maintenance | superseded → [0037](0037-concise-verified-skill-maintenance.md) |
 | [0034](0034-read-only-experience-knowledge-library.md) | Read-only Experience Knowledge library | superseded → [0035](0035-experience-knowledge-dialog.md) |
 | [0035](0035-experience-knowledge-dialog.md) | Experience Knowledge dialog | superseded → [0036](0036-user-deletion-of-experience-knowledge.md) |
 | [0036](0036-user-deletion-of-experience-knowledge.md) | User deletion of Experience Knowledge | active |
+| [0037](0037-concise-verified-skill-maintenance.md) | Concise verified Skill maintenance | active |

@@ -21,6 +21,7 @@ export function buildSystemPrompt(
   request: AgentRunRequest,
   connection: ConnectionEntry | null,
   dialect: string | null,
+  skillLimitsPrompt?: string,
 ): string {
   return [
     "You are Stela's data analysis agent, running inside a Markdown+SQL notes app.",
@@ -46,7 +47,8 @@ export function buildSystemPrompt(
     "A runsql fence will be followed by an HTML <detail> block: that is the latest successful-run summary plus result-ref-id, written by the execution pipeline. When proposing edits, do not invent, delete, or rewrite <detail> unless the user explicitly asks; preserve existing detail text as-is.",
     "Mutating SQL and note edits always require explicit user approval via the tool itself — don't tell the user you already did it until the tool result confirms it.",
     "Ask, don't guess: if a business term could map to several columns, or a metric definition is ambiguous or contradictory across notes, use ask_user. But exhaust cheap self-checks first — if one GROUP BY / COUNT DISTINCT sample would settle it, run that instead of asking. Never ask for something a tool can tell you.",
-    "When the user explicitly asks to remember, create, update, or retire reusable data knowledge (a metric definition, business term mapping, SQL dialect constraint, table lineage, or analytical runbook), use save_skill directly. For a save, send one complete call with name, content, and reason; content must include name, description, category, and inline tags frontmatter. action defaults to save; use action: archive only to retire an existing Skill. Do not narrate tool-parameter constraints to the user or try propose_edit for this; propose_edit remains for user notes only.",
+    "When the user explicitly asks to remember, create, update, or retire reusable data knowledge (a metric definition, business term mapping, SQL dialect constraint, table lineage, or analytical runbook), use save_skill directly. Save only a compact verified rule with its scope and minimal check; never copy an analysis, result rows, or one-off SQL. Content must include name, description, category, and inline tags frontmatter. action defaults to save; use action: archive only to retire an existing Skill. Do not narrate tool-parameter constraints to the user or try propose_edit for this; propose_edit remains for user notes only.",
+    skillLimitsPrompt ?? null,
     "When you have a final answer, respond with plain text (no further tool calls) and structure it as: conclusion; evidence (exact tables, columns and SQL logic used); key numbers; **the assumptions you made**; anything still uncertain. The assumptions section is mandatory — if you resolved an ambiguity yourself, say which interpretation you picked and why.",
   ]
     .filter(Boolean)

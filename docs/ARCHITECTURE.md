@@ -320,7 +320,9 @@ Skills are vault-scoped Markdown instructions at
 sync and review. Valid Skill frontmatter adds a controlled `category`
 (`sql-dialect`, `metric-definition`, `business-glossary`, `data-lineage`, or
 `analysis-runbook`) and non-empty `tags` to pi-agent-core's native `name` and
-required `description`.
+required `description`. Skill bodies are concise reusable guidance: scope, rule,
+and a minimal verification or exception. They do not contain analysis narration,
+result rows, or one-off SQL.
 
 Local ranking injects only the eight metadata records most relevant to the user's
 request; the model uses `search_skills` to find further candidates and `load_skill`
@@ -336,8 +338,10 @@ the user explicitly asks it to retain verified reusable data knowledge. Neither 
 can call SQL, edit notes, or write elsewhere through this capability, and writes
 appear as a compact status indicator inside the final-answer bubble; hover/click
 reveals the maintenance summary and any changes. An explicit successful write is the
-final answer's update result and skips the redundant post-run maintenance call. See
-[ADR-0033](./adr/0033-explicit-and-automatic-skill-maintenance.md),
+final answer's update result and skips the redundant post-run maintenance call.
+Automatic maintenance receives a bounded evidence summary and saves only knowledge
+with reusable scope, support in that work, and no equivalent existing Skill. See
+[ADR-0037](./adr/0037-concise-verified-skill-maintenance.md),
 [ADR-0036](./adr/0036-user-deletion-of-experience-knowledge.md).
 
 ### Agent retrieval

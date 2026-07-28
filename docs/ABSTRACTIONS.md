@@ -518,15 +518,23 @@ non-empty `description`, a `category` from `sql-dialect`, `metric-definition`,
 `tags` list; `name` defaults to the parent directory name. Local lexical ranking
 selects at most eight metadata records for the main system prompt.
 
+Its body is a bounded reusable knowledge unit: scope, rule, and minimal
+verification or exception. A Skill is at most 6,000 characters; its description is
+at most 160 characters; its body has at most 80 lines and two code examples of at
+most 20 lines each. Analysis narration, result rows, and one-off SQL belong to run
+history or Vault notes instead.
+
 The model calls `search_skills(query)` for further metadata and
 `load_skill(name)` to add a matching Markdown body to the current tool loop. After
 each normal completion, a separate maintenance turn can use `save_skill` to write a
-complete validated `SKILL.md` or move an obsolete Skill under `.archive/`; it is
-limited to those Skill tools and cannot call SQL or edit notes. The normal Agent
-can also call `save_skill` when the user explicitly asks to retain verified reusable
-data knowledge. A `skill_maintenance` event contains only concise action metadata
-for a small status indicator inside the final-answer bubble, never a Skill body.
-An explicit write supplies that final-answer status directly and skips the redundant
+validated `SKILL.md` or move an obsolete Skill under `.archive/`; it is limited to
+those Skill tools and cannot call SQL or edit notes. It receives only a bounded
+evidence summary, and writes only when the knowledge is reusable, supported by that
+work, and not equivalent to an existing Skill. The normal Agent can also call
+`save_skill` when the user explicitly asks to retain verified reusable data
+knowledge. A `skill_maintenance` event contains only concise action metadata for a
+small status indicator inside the final-answer bubble, never a Skill body. An
+explicit write supplies that final-answer status directly and skips the redundant
 automatic maintenance turn. The bottom-bar Experience Knowledge entry opens an
 application-level dialog using `agent.listSkills()` to show metadata (name,
 description, category, tags, relative path, and active/archived status). After

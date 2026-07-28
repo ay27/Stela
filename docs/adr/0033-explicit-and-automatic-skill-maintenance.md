@@ -2,8 +2,9 @@
 type: ADR
 id: "0033"
 title: "Explicit and automatic Skill maintenance"
-status: active
+status: superseded
 date: 2026-07-26
+superseded_by: "0037"
 ---
 
 ## Context

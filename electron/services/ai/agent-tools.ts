@@ -33,8 +33,10 @@ import { notifyFileChanged } from "../vault-watcher";
 import { resolveNamedTableSchemas, searchTables } from "./schema-context";
 import { classifySql } from "./sql-guard";
 import {
+  AGENT_SKILL_LIMITS_PROMPT,
   archiveAgentSkill,
   loadAgentSkills,
+  MAX_AGENT_SKILL_CHARS,
   rankAgentSkills,
   saveAgentSkill,
   type AgentSkillMaintenanceRecord,
@@ -282,7 +284,7 @@ export function createAgentTools(options: {
     {
       name: "load_skill",
       label: "Load Skill",
-      description: "Load the complete instructions for one available Agent Skill by its exact name.",
+      description: "Load the concise reusable guidance for one available Agent Skill by its exact name.",
       parameters: Type.Object({ name: Type.String({ description: "Exact Skill name from search_skills or the available Skills list." }) }),
       executionMode: "parallel",
       execute: (toolCallId, params) => runTool("load_skill", toolCallId, params, ctx, requestProposal),
@@ -303,14 +305,14 @@ export function createAgentTools(options: {
       name: "save_skill",
       label: "Save Skill",
       description:
-        "Save a validated data-knowledge SKILL.md or archive an obsolete Skill. For a save, call once with name, content, and reason; action defaults to save. content must include YAML frontmatter with description, category, and inline tags. For archive, set action to archive and omit content. Use it when the user explicitly asks to remember reusable, verified knowledge, or during automatic maintenance. Never use it for user notes or arbitrary files.",
+        `Save a compact validated data-knowledge SKILL.md or archive an obsolete Skill. Save only reusable, verified rules with their scope and minimal check; never copy an analysis, result rows, or one-off SQL. ${AGENT_SKILL_LIMITS_PROMPT} For a save, call once with name, content, and reason; action defaults to save. content must include YAML frontmatter with description, category, and inline tags. For archive, set action to archive and omit content. Never use it for user notes or arbitrary files.`,
       parameters: Type.Object({
         action: Type.Optional(Type.Union([Type.Literal("save"), Type.Literal("archive")])),
         name: Type.String({ description: "Required lowercase Skill directory name, e.g. postgresql-demo-tasks." }),
         content: Type.Optional(
           Type.String({
             description:
-              "Required for save: complete SKILL.md, e.g. ---\\nname: postgresql-demo-tasks\\ndescription: Reusable PostgreSQL demo_tasks business definitions.\\ncategory: business-glossary\\ntags: [postgresql, demo-tasks]\\n---\\n\\n# Instructions",
+              `Required for save: short SKILL.md with reusable scope, rule, and minimal verification. ${AGENT_SKILL_LIMITS_PROMPT} Example: ---\\nname: postgresql-demo-tasks\\ndescription: Reusable PostgreSQL demo_tasks business definitions.\\ncategory: business-glossary\\ntags: [postgresql, demo-tasks]\\n---\\n\\n# Task ownership\\n- Rule: owner is the responsible team.\\n- Verify: check demo_tasks.owner.`,
           }),
         ),
         reason: Type.String({ description: "Required short factual reason for saving or archiving." }),
@@ -735,7 +737,13 @@ function runLoadSkill(args: { name?: unknown }, ctx: AgentToolContext): ToolOutc
   const name = typeof args.name === "string" ? args.name.trim() : "";
   const skill = ctx.skills.find((item) => item.metadata.name === name);
   if (!skill) return fail(`No installed Skill named '${name}'. Use only names in the available Skills list.`);
-  return ok({ name: skill.metadata.name, content: skill.skill.content }, Number.POSITIVE_INFINITY);
+  const content = skill.skill.content;
+  const truncated = content.length > MAX_AGENT_SKILL_CHARS;
+  return ok({
+    name: skill.metadata.name,
+    content: truncated ? `${content.slice(0, MAX_AGENT_SKILL_CHARS)}\n\n[truncated: compact this Skill before updating it]` : content,
+    truncated,
+  }, MAX_AGENT_SKILL_CHARS + 100);
 }
 
 function runSearchSkills(args: { query?: unknown; limit?: unknown }, ctx: AgentToolContext): ToolOutcome {
