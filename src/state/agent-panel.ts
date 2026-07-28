@@ -10,6 +10,7 @@ import { create } from "zustand";
 import type {
   AgentAttachment,
   AgentEvent,
+  AgentPlanSnapshot,
   AgentProposalKind,
   AgentProposalPayload,
   AgentToolCallInfo,
@@ -37,7 +38,6 @@ export interface AgentDraft {
 
 export type AgentTimelineEntry =
   | { kind: "user"; id: string; content: string }
-  | { kind: "assistant"; id: string; content: string }
   | {
       kind: "tool";
       id: string;
@@ -87,6 +87,7 @@ export interface AgentTab {
     estimated: boolean;
   } | null;
   compacting: boolean;
+  plan: AgentPlanSnapshot | null;
 }
 
 interface AgentPanelState {
@@ -149,6 +150,7 @@ function newTab(): AgentTab {
     resetToken: 0,
     contextUsage: null,
     compacting: false,
+    plan: null,
   };
 }
 
@@ -161,6 +163,7 @@ function toolCallEntry(call: AgentToolCallInfo): AgentTimelineEntry {
 function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTimelineEntry[] {
   switch (event.type) {
     case "started":
+    case "plan_updated":
     case "context_usage":
     case "compaction":
       return timeline;
@@ -183,8 +186,6 @@ function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTim
             }
           : entry,
       );
-    case "assistant_message":
-      return [...timeline, { kind: "assistant", id: nextId(), content: event.content }];
     case "tool_call":
       return [...timeline, toolCallEntry(event.call)];
     case "tool_result":
@@ -331,6 +332,7 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
         title: current.timeline.length === 0 ? titleFromPrompt(prompt) : current.title,
         timeline: [...current.timeline, { kind: "user", id: nextId(), content: prompt }],
         draft: emptyDraft(),
+        plan: null,
         resetToken: current.resetToken + 1,
       })),
     );
@@ -433,6 +435,9 @@ onAgentEvent((event) => {
           contextWindow: event.contextWindow,
           estimated: event.estimated,
         };
+      }
+      if (event.type === "plan_updated") {
+        next.plan = event.plan;
       }
       if (event.type === "compaction") {
         next.compacting = event.phase === "started";

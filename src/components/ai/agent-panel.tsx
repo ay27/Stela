@@ -15,14 +15,13 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import type { AgentAttachment } from "@shared/types";
+import type { AgentAttachment, AgentPlanSnapshot } from "@shared/types";
 import type { MentionItem } from "@skyastrall/mentions-react";
 
 import { ProposalLineDiff } from "./proposal-diff";
 import { i18n } from "@/i18n";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
-import { splitAssistantThinking } from "@/lib/split-assistant-thinking";
 import { getRunContext } from "@/editor/runsql/run-context";
 import {
   ensureAutocompleteFor,
@@ -188,6 +187,7 @@ export function AgentPanel() {
   const connectionName = activeTab.connectionName;
   const contextUsage = activeTab.contextUsage;
   const compacting = activeTab.compacting;
+  const plan = activeTab.plan;
   const vaultPath = useWorkspace((s) => s.vaultPath);
   const focusToken = useLayout((s) => s.agentFocusToken);
   const aiSettings = useSettings((s) => s.settings.ai);
@@ -205,6 +205,10 @@ export function AgentPanel() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const promptInputRef = useRef<AiPromptInputHandle>(null);
   const busy = status === "running";
+  const toolEntries = timeline.filter(
+    (entry): entry is Extract<AgentTimelineEntry, { kind: "tool" }> => entry.kind === "tool",
+  );
+  const visibleTimeline = timeline.filter((entry) => entry.kind !== "tool");
 
   const connectionEntries = useConnections((s) => s.entries);
   const connectionsLoaded = useConnections((s) => s.loaded);
@@ -397,9 +401,13 @@ export function AgentPanel() {
         {timeline.length === 0 ? (
           <div className="text-[12px] text-muted-foreground">{t("agent.panel.empty")}</div>
         ) : (
-          timeline.map((entry) => (
+          <>
+            {plan ? <ExecutionPlanCard plan={plan} /> : null}
+            {visibleTimeline.map((entry) => (
             <TimelineItem key={entry.id} entry={entry} onRespond={respondProposal} />
-          ))
+            ))}
+            {toolEntries.length > 0 ? <ToolActivity key={activeTabId} entries={toolEntries} /> : null}
+          </>
         )}
         {busy ? (
           <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
@@ -531,8 +539,6 @@ function TimelineItem({
           </div>
         </div>
       );
-    case "assistant":
-      return <AssistantMessage content={entry.content} />;
     case "final":
       return (
         <div className="relative rounded-lg border border-border bg-card/40 p-3 pb-6">
@@ -618,39 +624,38 @@ function SkillMaintenanceIndicator({
 }
 
 function AssistantMessage({ content }: { content: string }) {
-  const { thinking, body } = splitAssistantThinking(content);
-  if (!thinking && !body) return null;
+  if (!content.trim()) return null;
+  return <div className="stela-ai-markdown text-sm leading-6">{renderMarkdown(content)}</div>;
+}
+
+function ExecutionPlanCard({ plan }: { plan: AgentPlanSnapshot }) {
+  const t = useT();
+  const completed = plan.steps.filter((step) => ["completed", "skipped"].includes(step.status)).length;
+  const current = plan.steps.find((step) => step.status === "running" || step.status === "blocked");
   return (
-    <div className="space-y-2">
-      {thinking ? <ThinkingChip thinking={thinking} /> : null}
-      {body ? (
-        <div className="stela-ai-markdown text-sm leading-6">{renderMarkdown(body)}</div>
-      ) : null}
+    <div className="rounded-lg border border-primary/20 bg-primary/5 p-2.5 text-xs">
+      <div className="flex items-center justify-between gap-2 font-medium">
+        <span>{t("agent.panel.planProgress", { completed, total: plan.steps.length })}</span>
+        <span className="text-muted-foreground">{current?.status === "blocked" ? t("agent.panel.blocked") : current?.title}</span>
+      </div>
     </div>
   );
 }
 
-function ThinkingChip({ thinking }: { thinking: string }) {
+function ToolActivity({ entries }: { entries: Array<Extract<AgentTimelineEntry, { kind: "tool" }>> }) {
   const t = useT();
   const [expanded, setExpanded] = useState(false);
   return (
     <div className="rounded-md border border-border/60 bg-muted/20 text-xs">
       <button
         type="button"
-        onClick={() => setExpanded((v) => !v)}
+        onClick={() => setExpanded((value) => !value)}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-muted-foreground"
       >
-        <Brain className="h-3 w-3 flex-none" />
-        <span>{t("agent.panel.thought")}</span>
-        <ChevronDown
-          className={cn("ml-auto h-3 w-3 transition-transform", expanded && "rotate-180")}
-        />
+        <span>{t("agent.panel.activity", { count: entries.length })}</span>
+        <ChevronDown className={cn("ml-auto h-3 w-3 transition-transform", expanded && "rotate-180")} />
       </button>
-      {expanded ? (
-        <div className="border-t border-border/60 px-3 py-2 whitespace-pre-wrap text-[11px] leading-5 text-muted-foreground">
-          {thinking}
-        </div>
-      ) : null}
+      {expanded ? <div className="space-y-1 border-t border-border/60 p-1.5">{entries.map((entry) => <ToolChip key={entry.id} entry={entry} />)}</div> : null}
     </div>
   );
 }

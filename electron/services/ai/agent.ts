@@ -15,10 +15,11 @@ import {
   formatSkillsForSystemPrompt,
 } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { isContextOverflow, type AssistantMessage } from "@earendil-works/pi-ai";
+import { isContextOverflow } from "@earendil-works/pi-ai";
 
 import type {
   AgentEvent,
+  AgentPlanSnapshot,
   AgentProposalResponse,
   AgentRunRequest,
   ConnectionEntry,
@@ -39,6 +40,7 @@ import {
   rankAgentSkills,
   type AgentSkillMaintenanceRecord,
 } from "./agent-skills";
+import { ExecutionPlanStore, formatExecutionPlan } from "./execution-plan";
 import {
   createAgentTools,
   type AgentRunRecorder,
@@ -47,7 +49,8 @@ import {
 import { createTransportForProfile, getActiveProfile, loadApiKey } from "./provider";
 
 const log = getLogger("ai.agent");
-const TOOL_RESULT_SUMMARY_CHARS = 12_000;
+const TOOL_RESULT_SUMMARY_CHARS = 480;
+const EXECUTION_PLAN_ENTRY = "execution_plan";
 const OVERFLOW_CONTINUE_PROMPT =
   "The previous request exceeded the model context window. Continue from the compacted history and finish the user's last request.";
 const SKILL_PROMPT_LIMIT = 8;
@@ -84,6 +87,7 @@ const activeProposals = new Map<string, Map<string, ProposalResolver>>();
  * 升级路径=加个数上限的 LRU，或在前端"新建对话"时清掉旧的 sessionId。
  */
 const sessions = new Map<string, Session>();
+const planEntryWrites = new WeakMap<Session, Promise<void>>();
 
 /** IPC 入口：用户在前端 approve/reject 一个 proposal 时调用。找不到（已超时/run 已结束）返回 false。 */
 export function respondToProposal(response: AgentProposalResponse): boolean {
@@ -185,15 +189,49 @@ function buildSkillMaintenanceInput(request: AgentRunRequest, finalAnswer: strin
   ].join("\n\n");
 }
 
+function createSession(): Session {
+  return new Session(new InMemorySessionStorage(), {
+    entryTransforms: [
+      (entries) => {
+        let latestPlan = -1;
+        entries.forEach((entry, index) => {
+          if (entry.type === "custom" && entry.customType === EXECUTION_PLAN_ENTRY) latestPlan = index;
+        });
+        return entries.filter(
+          (entry, index) =>
+            entry.type !== "custom" || entry.customType !== EXECUTION_PLAN_ENTRY || index === latestPlan,
+        );
+      },
+    ],
+    entryProjectors: {
+      [EXECUTION_PLAN_ENTRY]: (entry) => {
+        const data = entry.data as { plan?: AgentPlanSnapshot | null } | undefined;
+        return [{
+          role: "user",
+          content: `Current execution plan:\n${formatExecutionPlan(data?.plan ?? null)}`,
+          timestamp: Date.now(),
+        }];
+      },
+    },
+  });
+}
+
+function appendPlanEntry(session: Session, runId: string, plan: AgentPlanSnapshot | null): Promise<void> {
+  const pending = planEntryWrites.get(session) ?? Promise.resolve();
+  const next = pending.then(() => session.appendCustomEntry(EXECUTION_PLAN_ENTRY, { runId, plan }));
+  planEntryWrites.set(session, next.catch(() => {}));
+  return next;
+}
+
 function getOrCreateSession(sessionId: string | undefined): Session {
   if (sessionId) {
     const existing = sessions.get(sessionId);
     if (existing) return existing;
-    const created = new Session(new InMemorySessionStorage());
+    const created = createSession();
     sessions.set(sessionId, created);
     return created;
   }
-  return new Session(new InMemorySessionStorage());
+  return createSession();
 }
 
 async function runSkillMaintenance(options: {
@@ -215,7 +253,7 @@ async function runSkillMaintenance(options: {
   onEvent({ type: "skill_maintenance_started", runId: request.runId });
   const maintenanceHarness = new AgentHarness({
     env: new NodeExecutionEnv({ cwd: vaultPath }),
-    session: new Session(new InMemorySessionStorage()),
+    session: createSession(),
     models,
     model,
     thinkingLevel: "off",
@@ -307,6 +345,11 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
     const { models, model } = createTransportForProfile(settings.ai, apiKey, profile.id);
     const contextWindow = model.contextWindow;
     const session = getOrCreateSession(request.sessionId ?? undefined);
+    const plan = new ExecutionPlanStore(runId, (snapshot) => {
+      onEvent({ type: "plan_updated", runId, plan: snapshot });
+      void appendPlanEntry(session, runId, snapshot);
+    });
+    await appendPlanEntry(session, runId, null);
 
     const emitUsage = async (estimated: boolean) => {
       const context = await session.buildContext();
@@ -323,7 +366,9 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
     const compactOnce = async () => {
       if (!harness) return;
       onEvent({ type: "compaction", runId, phase: "started" });
-      await harness.compact();
+      await harness.compact(
+        "Preserve the current execution plan, completed evidence, the active step, and every blocked acceptance condition.",
+      );
       onEvent({ type: "compaction", runId, phase: "completed" });
       await emitUsage(true);
     };
@@ -355,6 +400,7 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
           skills: skills.loaded,
           mode: "normal",
           run: { runId, notePath: request.notePath ?? null, questionsAsked: 0 },
+          plan,
           recordRun: recordAgentRun(vaultPath),
           onSkillMaintenance: (record) => normalSkillActions.push(record),
         },
@@ -364,15 +410,6 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
     });
 
     const unsubscribe = harness.subscribe((event) => {
-      if (event.type === "message_end" && event.message.role === "assistant") {
-        const message = event.message as AssistantMessage;
-        const hasTools = message.content.some((block) => block.type === "toolCall");
-        const text = assistantText(message);
-        if (hasTools && text) {
-          onEvent({ type: "assistant_message", runId, content: text });
-        }
-        return;
-      }
       if (event.type === "tool_execution_start") {
         onEvent({
           type: "tool_call",
@@ -454,7 +491,12 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
         return;
       }
 
-      const finalAnswer = assistantText(result);
+      const finalAnswer = assistantText(result)
+        .replace(
+          /<\s*([A-Za-z][\w:.-]*(?:think|thinking|reasoning)[\w:.-]*)\b[^>]*>[\s\S]*?<\/\s*\1\s*>/gi,
+          "",
+        )
+        .trim();
       onEvent({ type: "final", runId, content: finalAnswer });
       if (normalSkillActions.length > 0) {
         onEvent({

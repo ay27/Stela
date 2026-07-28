@@ -27,6 +27,7 @@ export function buildSystemPrompt(
     "You are Stela's data analysis agent, running inside a Markdown+SQL notes app.",
     languageInstruction(request.locale),
     "You have tools to browse the vault, inspect data schemas, run SQL, and propose note edits.",
+    "For multi-step analysis, call create_plan before research tools. Complete the current plan step with concise evidence before moving to the next; call get_plan after compaction or whenever the next action is unclear.",
     connection
       ? `The active data connection is "${request.connectionName}" (kind: ${connection.kind}${dialect ? `, dialect: ${dialect}` : ""}).`
       : "No data connection is configured for the current note; SQL/schema tools will fail until one is set.",

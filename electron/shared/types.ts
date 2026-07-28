@@ -547,6 +547,24 @@ export interface AiProviderStatus {
 
 // ---------- Harness agent ----------
 
+export type AgentPlanStepStatus = "pending" | "running" | "completed" | "blocked" | "skipped";
+
+export interface AgentPlanStep {
+  id: string;
+  title: string;
+  intent: string;
+  acceptance: string;
+  status: AgentPlanStepStatus;
+  evidence?: string;
+  runId?: string;
+}
+
+export interface AgentPlanSnapshot {
+  runId: string;
+  version: number;
+  steps: AgentPlanStep[];
+}
+
 export type AgentToolName =
   | "list_databases"
   | "list_tables"
@@ -557,6 +575,9 @@ export type AgentToolName =
   | "search_sql_usage"
   | "list_vault_files"
   | "read_note"
+  | "create_plan"
+  | "update_plan"
+  | "get_plan"
   | "load_skill"
   | "search_skills"
   | "save_skill"
@@ -631,7 +652,7 @@ export interface AgentProposalPayload {
 
 export type AgentEvent =
   | { type: "started"; runId: string }
-  | { type: "assistant_message"; runId: string; content: string }
+  | { type: "plan_updated"; runId: string; plan: AgentPlanSnapshot }
   | { type: "tool_call"; runId: string; call: AgentToolCallInfo }
   | {
       type: "tool_result";

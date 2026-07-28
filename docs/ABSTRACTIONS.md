@@ -446,6 +446,7 @@ type AgentToolName =
   | "list_databases" | "list_tables" | "search_tables" | "get_table_schema"
   | "run_sql" | "search_sql_usage"
   | "search_vault" | "list_vault_files" | "read_note"
+  | "create_plan" | "update_plan" | "get_plan"
   | "search_skills" | "load_skill" | "save_skill" | "propose_edit" | "ask_user";
 
 type AgentProposalKind = "edit_note" | "mutation_sql" | "question";
@@ -484,9 +485,27 @@ interface AgentRunRequest {
   locale?: "zh" | "en";
 }
 
+type AgentPlanStepStatus = "pending" | "running" | "completed" | "blocked" | "skipped";
+
+interface AgentPlanStep {
+  id: string;
+  title: string;
+  intent: string;
+  acceptance: string;
+  status: AgentPlanStepStatus;
+  evidence?: string;
+  runId?: string;
+}
+
+interface AgentPlanSnapshot {
+  runId: string;
+  version: number;
+  steps: AgentPlanStep[];
+}
+
 type AgentEvent =
   | { type: "started"; runId: string }
-  | { type: "assistant_message"; runId: string; content: string }
+  | { type: "plan_updated"; runId: string; plan: AgentPlanSnapshot }
   | { type: "tool_call"; runId: string; call: AgentToolCallInfo }
   | { type: "tool_result"; runId: string; callId: string; ok: boolean; summary: string }
   | { type: "proposal"; runId: string; callId: string; kind: AgentProposalKind; payload: AgentProposalPayload }
@@ -504,6 +523,7 @@ Safety ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md)):
 - Runs continue until model completion, error, or explicit user cancellation ([ADR-0017](./adr/0017-user-cancelled-agent-runs.md))
 - Tools use `executionMode: "parallel"` except `propose_edit` (`"sequential"`) ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md)). NodeExecutionEnv is harness cwd only (not exposed as model tools)
 - Compaction uses `ai.contextWindow` + one overflow recovery ([ADR-0018](./adr/0018-pi-ai-agent-harness.md))
+- Execution plans are bounded, linear, main-process runtime state; the latest snapshot is a pi Session custom entry projected into every model context and is never persisted to the Vault ([ADR-0038](./adr/0038-runtime-agent-execution-plans.md))
 - Note references are paths only; the agent should call `read_note` before relying on note contents
 - Selection / RunSQL attachments are bounded and included only on the user turn that added them
 - `ask_user` blocks on the same handshake with `kind: "question"`, resolving to the answer string; ≤3 questions per run, enforced in the tool ([ADR-0027](./adr/0027-agent-ask-user-clarification.md))

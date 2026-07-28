@@ -7,6 +7,7 @@
  */
 
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -30,6 +31,7 @@ import { getLogger } from "../logger";
 import * as search from "../search";
 import * as vaultFs from "../vault-fs";
 import { notifyFileChanged } from "../vault-watcher";
+import { ExecutionPlanStore, type CreatePlanStep } from "./execution-plan";
 import { resolveNamedTableSchemas, searchTables } from "./schema-context";
 import { classifySql } from "./sql-guard";
 import {
@@ -138,6 +140,7 @@ export interface AgentToolContext {
    * `agent:<runId>` 形式的 blockId；`questionsAsked` 由 `ask_user` 自增。
    */
   run: { runId: string; notePath: string | null; questionsAsked: number };
+  plan?: ExecutionPlanStore;
   recordRun: AgentRunRecorder;
   requestProposal: (proposal: ProposalRequest) => Promise<boolean | string>;
 }
@@ -280,6 +283,46 @@ export function createAgentTools(options: {
       }),
       executionMode: "parallel",
       execute: (toolCallId, params) => runTool("read_note", toolCallId, params, ctx, requestProposal),
+    },
+    {
+      name: "create_plan",
+      label: "Create execution plan",
+      description:
+        "Create a concise linear execution plan before starting a multi-step analysis. Use 2-8 steps, each with a stable id, intent, and observable acceptance condition.",
+      parameters: Type.Object({
+        steps: Type.Array(
+          Type.Object({
+            id: Type.String(),
+            title: Type.String(),
+            intent: Type.String(),
+            acceptance: Type.String(),
+          }),
+        ),
+      }),
+      executionMode: "sequential",
+      execute: (toolCallId, params) => runTool("create_plan", toolCallId, params, ctx, requestProposal),
+    },
+    {
+      name: "update_plan",
+      label: "Update execution plan",
+      description:
+        "Complete, block, or skip the current execution-plan step. Completed steps require concise evidence; include runId when the evidence is a Stela SQL run.",
+      parameters: Type.Object({
+        stepId: Type.String(),
+        status: Type.Union([Type.Literal("completed"), Type.Literal("blocked"), Type.Literal("skipped")]),
+        evidence: Type.Optional(Type.String()),
+        runId: Type.Optional(Type.String()),
+      }),
+      executionMode: "sequential",
+      execute: (toolCallId, params) => runTool("update_plan", toolCallId, params, ctx, requestProposal),
+    },
+    {
+      name: "get_plan",
+      label: "Get execution plan",
+      description: "Read the current execution plan before choosing the next analysis action.",
+      parameters: Type.Object({}),
+      executionMode: "sequential",
+      execute: (toolCallId) => runTool("get_plan", toolCallId, {}, ctx, requestProposal),
     },
     {
       name: "load_skill",
@@ -553,8 +596,8 @@ async function runSql(args: { sql?: string }, ctx: AgentToolContext): Promise<To
     await recordAgentRun(ctx, sql, startedAt, null, err);
     throw err;
   }
-  await recordAgentRun(ctx, sql, startedAt, result, null);
-  return ok(formatQueryResult(result));
+  const runId = await recordAgentRun(ctx, sql, startedAt, result, null);
+  return ok({ runId, result: formatQueryResult(result) });
 }
 
 /** 记录失败不应影响 agent 继续工作——落盘异常只记日志。 */
@@ -564,14 +607,15 @@ async function recordAgentRun(
   startedAt: number,
   result: QueryResult | null,
   err: unknown,
-): Promise<void> {
+): Promise<string | null> {
   const elapsedMs = result?.elapsedMs ?? Date.now() - startedAt;
   const isQuery = result?.kind === "query";
+  const runId = `${ctx.run.runId}-sql-${randomUUID()}`;
   try {
     await ctx.recordRun({
       // 一次 agent run 可能跑多条 SQL，runId 必须唯一；blockId 保持同一个
       // `agent:<agentRunId>`，这样一次对话里的所有执行归到同一"块"下。
-      runId: `${ctx.run.runId}-sql-${startedAt}`,
+      runId,
       blockId: `agent:${ctx.run.runId}`,
       sql,
       status: result ? "ok" : "err",
@@ -584,10 +628,12 @@ async function recordAgentRun(
       columns: isQuery ? result.columns : [],
       rows: isQuery ? result.rows : [],
     });
+    return runId;
   } catch (recordErr) {
     log.warn("agent run_sql history write failed", {
       err: recordErr instanceof Error ? recordErr.message : String(recordErr),
     });
+    return null;
   }
 }
 
@@ -869,6 +915,37 @@ async function runAskUser(
   );
 }
 
+function runCreatePlan(args: { steps?: unknown }, ctx: AgentToolContext): ToolOutcome {
+  if (!ctx.plan) return fail("Execution plans are unavailable for this run.");
+  if (!Array.isArray(args.steps)) return fail("steps must be an array.");
+  return ok(ctx.plan.create(args.steps as CreatePlanStep[]));
+}
+
+function runUpdatePlan(
+  args: { stepId?: unknown; status?: unknown; evidence?: unknown; runId?: unknown },
+  ctx: AgentToolContext,
+): ToolOutcome {
+  if (!ctx.plan) return fail("Execution plans are unavailable for this run.");
+  if (typeof args.stepId !== "string") return fail("stepId must be a string.");
+  if (args.status !== "completed" && args.status !== "blocked" && args.status !== "skipped") {
+    return fail("status must be completed, blocked, or skipped.");
+  }
+  return ok(
+    ctx.plan.update({
+      stepId: args.stepId,
+      status: args.status,
+      ...(typeof args.evidence === "string" ? { evidence: args.evidence } : {}),
+      ...(typeof args.runId === "string" ? { runId: args.runId } : {}),
+    }),
+  );
+}
+
+function runGetPlan(ctx: AgentToolContext): ToolOutcome {
+  if (!ctx.plan) return fail("Execution plans are unavailable for this run.");
+  const snapshot = ctx.plan.get();
+  return snapshot ? ok(snapshot) : ok({ plan: null, instruction: ctx.plan.formatForContext() });
+}
+
 /** 把模型返回的 JSON 字符串参数安全 parse 成对象；失败时返回 `{}` 让工具自己报参数缺失。 */
 function parseArgs(raw: string): Record<string, unknown> {
   try {
@@ -906,6 +983,12 @@ export async function dispatchTool(
         return await runListVaultFiles(args, ctx);
       case "read_note":
         return await runReadNote(args, ctx);
+      case "create_plan":
+        return runCreatePlan(args, ctx);
+      case "update_plan":
+        return runUpdatePlan(args, ctx);
+      case "get_plan":
+        return runGetPlan(ctx);
       case "load_skill":
         return runLoadSkill(args, ctx);
       case "search_skills":

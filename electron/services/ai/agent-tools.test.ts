@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 
 import type { AiSettings } from "@shared/types";
 
+import { ExecutionPlanStore } from "./execution-plan";
 import { dispatchTool } from "./agent-tools";
 
 const AI_SETTINGS = {
@@ -47,6 +48,7 @@ try {
     run: { runId: "test-run", notePath: null },
     recordRun: async () => {},
     requestProposal: async () => true,
+    plan: new ExecutionPlanStore("test-run"),
   };
 
   // 无连接时数据库相关工具明确报错，引导模型走别的路径
@@ -119,6 +121,62 @@ try {
     // 越界路径被 ensureWithinVault 拦截
     const r = await dispatchTool("read_note", JSON.stringify({ path: "/etc/passwd" }), baseCtx);
     assert.equal(r.ok, false);
+  }
+
+  // 计划工具只能按顺序完成当前步骤，并要求完成证据。
+  {
+    const create = await dispatchTool(
+      "create_plan",
+      JSON.stringify({
+        steps: [
+          { id: "scope", title: "Scope", intent: "Define the metric", acceptance: "Definition found" },
+          { id: "trend", title: "Trend", intent: "Measure daily values", acceptance: "Result available" },
+        ],
+      }),
+      baseCtx,
+    );
+    assert.equal(create.ok, true);
+    const skipAhead = await dispatchTool(
+      "update_plan",
+      JSON.stringify({ stepId: "trend", status: "completed", evidence: "run_2" }),
+      baseCtx,
+    );
+    assert.equal(skipAhead.ok, false);
+    const complete = await dispatchTool(
+      "update_plan",
+      JSON.stringify({ stepId: "scope", status: "completed", evidence: "metrics.md" }),
+      baseCtx,
+    );
+    assert.equal(complete.ok, true);
+    const plan = await dispatchTool("get_plan", "{}", baseCtx);
+    assert.equal(plan.ok, true);
+    assert.match(plan.text, /"status": "running"/);
+  }
+
+  // 同一毫秒内并行 SQL 也必须有不同的审计 runId，才能作为计划证据引用。
+  {
+    const runIds: string[] = [];
+    const originalNow = Date.now;
+    Date.now = () => 1234;
+    try {
+      const ctx = {
+        ...withConnection,
+        connector: {
+          ...fakeConnector,
+          execute: async () => ({ kind: "query" as const, columns: [], rows: [], elapsedMs: 1 }),
+        },
+        recordRun: async (run: { runId: string }) => {
+          runIds.push(run.runId);
+        },
+      };
+      await Promise.all([
+        dispatchTool("run_sql", JSON.stringify({ sql: "SELECT 1" }), ctx),
+        dispatchTool("run_sql", JSON.stringify({ sql: "SELECT 2" }), ctx),
+      ]);
+    } finally {
+      Date.now = originalNow;
+    }
+    assert.equal(new Set(runIds).size, 2);
   }
 
   // propose_edit：reject 不写盘，approve 才写盘

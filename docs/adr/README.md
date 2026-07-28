@@ -90,3 +90,4 @@ proposed → active → superseded
 | [0035](0035-experience-knowledge-dialog.md) | Experience Knowledge dialog | superseded → [0036](0036-user-deletion-of-experience-knowledge.md) |
 | [0036](0036-user-deletion-of-experience-knowledge.md) | User deletion of Experience Knowledge | active |
 | [0037](0037-concise-verified-skill-maintenance.md) | Concise verified Skill maintenance | active |
+| [0038](0038-runtime-agent-execution-plans.md) | Runtime linear agent execution plans | active |
