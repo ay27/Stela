@@ -69,6 +69,41 @@ const DIALECT_TAG_ALIASES: Record<string, string> = {
   snowflake: "snowflake",
 };
 
+function toPosixPath(filePath: string): string {
+  return filePath.replace(/\\/g, "/");
+}
+
+function normalizeFileInfo<T extends { name: string; path: string }>(entry: T): T {
+  const normalizedPath = toPosixPath(entry.path);
+  return { ...entry, name: path.posix.basename(normalizedPath), path: normalizedPath };
+}
+
+class SkillExecutionEnv extends NodeExecutionEnv {
+  override async fileInfo(filePath: string) {
+    const result = await super.fileInfo(filePath);
+    return result.ok ? { ...result, value: normalizeFileInfo(result.value) } : result;
+  }
+
+  override async listDir(dirPath: string) {
+    const result = await super.listDir(dirPath);
+    return result.ok
+      ? {
+          ...result,
+          value: result.value.map(normalizeFileInfo),
+        }
+      : result;
+  }
+
+  override async canonicalPath(filePath: string) {
+    const result = await super.canonicalPath(filePath);
+    return result.ok ? { ...result, value: toPosixPath(result.value) } : result;
+  }
+}
+
+function skillEnv(vaultPath: string): SkillExecutionEnv {
+  return new SkillExecutionEnv({ cwd: vaultPath });
+}
+
 function skillDir(vaultPath: string): string {
   return path.join(vaultPath, AGENT_SKILLS_DIR);
 }
@@ -179,7 +214,7 @@ async function atomicWrite(target: string, content: string): Promise<void> {
 }
 
 export async function loadAgentSkills(vaultPath: string): Promise<LoadedAgentSkills> {
-  const result = await loadSkills(new NodeExecutionEnv({ cwd: vaultPath }), skillDir(vaultPath));
+  const result = await loadSkills(skillEnv(vaultPath), skillDir(vaultPath));
   const checked = await Promise.all(
     result.skills.map(async (skill) => {
       try {
@@ -203,7 +238,7 @@ export async function loadAgentSkills(vaultPath: string): Promise<LoadedAgentSki
 }
 
 export async function listAgentSkills(vaultPath: string): Promise<AgentSkillListItem[]> {
-  const env = new NodeExecutionEnv({ cwd: vaultPath });
+  const env = skillEnv(vaultPath);
   const [active, archived] = await Promise.all([
     loadSkills(env, skillDir(vaultPath)),
     loadSkills(env, path.join(skillDir(vaultPath), ".archive")),
