@@ -58,6 +58,18 @@ function first(sql: string, dialect = MySQL): StatementFacts {
 }
 
 {
+  const f = first("INSERT INTO render_task (id) SELECT id FROM source_candidates");
+  check(
+    "INSERT ... SELECT：目标表写入、FROM 源表读取",
+    f.writeTables.length === 1 &&
+      f.writeTables[0]!.table === "render_task" &&
+      f.readTables.length === 1 &&
+      f.readTables[0]!.table === "source_candidates",
+    JSON.stringify(f),
+  );
+}
+
+{
   const f = first("INSERT INTO orders SET id = 1, price = 2");
   check(
     "MySQL INSERT ... SET 形式：writeColumns=[id,price]",

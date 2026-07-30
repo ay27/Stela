@@ -42,6 +42,7 @@ export interface AgentSkillMetadata {
 
 export interface LoadedAgentSkills {
   loaded: LoadedAgentSkill[];
+  rejected: Array<{ relativePath: string; reason: string }>;
 }
 
 export interface LoadedAgentSkill {
@@ -55,6 +56,18 @@ export interface AgentSkillMaintenanceRecord {
   path: string;
   reason: string;
 }
+
+const DIALECT_TAG_ALIASES: Record<string, string> = {
+  postgres: "postgresql",
+  postgresql: "postgresql",
+  mysql: "mysql",
+  starrocks: "starrocks",
+  clickhouse: "clickhouse",
+  sqlite: "sqlite",
+  trino: "trino",
+  bigquery: "bigquery",
+  snowflake: "snowflake",
+};
 
 function skillDir(vaultPath: string): string {
   return path.join(vaultPath, AGENT_SKILLS_DIR);
@@ -77,13 +90,9 @@ async function metadataForSkill(skill: Skill, vaultPath: string): Promise<AgentS
   // pi-agent-core intentionally exposes the Markdown body as `skill.content`;
   // Stela's category/tags stay in the source file frontmatter.
   const raw = await fs.readFile(skill.filePath, "utf-8").catch(() => skill.content);
-  const { frontmatter } = splitFrontmatter(raw);
-  const category = parseFrontmatterField(frontmatter, "category") as AgentSkillCategory | null;
+  const metadata = validateSkillContent(skill.name, raw);
   return {
-    name: skill.name,
-    description: skill.description,
-    category: AGENT_SKILL_CATEGORIES.includes(category ?? "" as AgentSkillCategory) ? category : null,
-    tags: parseTags(parseFrontmatterField(frontmatter, "tags")),
+    ...metadata,
     relativePath: path.relative(vaultPath, skill.filePath).split(path.sep).join("/"),
   };
 }
@@ -106,6 +115,7 @@ export function rankAgentSkills(skills: LoadedAgentSkill[], query: string, limit
   const terms = normalizeQuery(query);
   return [...skills]
     .map((skill) => ({ skill, score: scoreSkill(skill, terms) }))
+    .filter(({ score }) => score > 0)
     .sort((a, b) => b.score - a.score || a.skill.metadata.name.localeCompare(b.skill.metadata.name))
     .slice(0, limit)
     .map(({ skill }) => skill);
@@ -170,13 +180,25 @@ async function atomicWrite(target: string, content: string): Promise<void> {
 
 export async function loadAgentSkills(vaultPath: string): Promise<LoadedAgentSkills> {
   const result = await loadSkills(new NodeExecutionEnv({ cwd: vaultPath }), skillDir(vaultPath));
+  const checked = await Promise.all(
+    result.skills.map(async (skill) => {
+      try {
+        return { skill, metadata: await metadataForSkill(skill, vaultPath) };
+      } catch (err) {
+        return {
+          rejected: {
+            relativePath: path.relative(vaultPath, skill.filePath).split(path.sep).join("/"),
+            reason: err instanceof Error ? err.message : String(err),
+          },
+        };
+      }
+    }),
+  );
   return {
-    loaded: await Promise.all(
-      result.skills.map(async (skill) => ({
-        skill,
-        metadata: await metadataForSkill(skill, vaultPath),
-      })),
-    ),
+    loaded: checked.filter((item): item is LoadedAgentSkill => "skill" in item),
+    rejected: checked
+      .filter((item): item is { rejected: { relativePath: string; reason: string } } => "rejected" in item)
+      .map((item) => item.rejected),
   };
 }
 
@@ -187,12 +209,15 @@ export async function listAgentSkills(vaultPath: string): Promise<AgentSkillList
     loadSkills(env, path.join(skillDir(vaultPath), ".archive")),
   ]);
   const toListItems = async (skills: Skill[], status: AgentSkillListItem["status"]) =>
-    Promise.all(
-      skills.map(async (skill) => ({
-        ...(await metadataForSkill(skill, vaultPath)),
-        status,
-      })),
-    );
+    (await Promise.all(
+      skills.map(async (skill) => {
+        try {
+          return { ...(await metadataForSkill(skill, vaultPath)), status };
+        } catch {
+          return null;
+        }
+      }),
+    )).filter((item): item is AgentSkillListItem => item !== null);
   return [
     ...(await toListItems(active.skills, "active")),
     ...(await toListItems(archived.skills, "archived")),
@@ -204,11 +229,25 @@ export async function saveAgentSkill(
   name: string,
   content: string,
   reason: string,
+  options: { overwrite?: boolean; dialect?: string | null } = {},
 ): Promise<AgentSkillMaintenanceRecord> {
   const skillName = assertSkillName(name);
   const metadata = validateSkillContent(skillName, content);
+  const activeDialect = options.dialect ? DIALECT_TAG_ALIASES[options.dialect.toLowerCase()] : null;
+  const mismatchedDialectTag = activeDialect
+    ? metadata.tags.find((tag) => DIALECT_TAG_ALIASES[tag] && DIALECT_TAG_ALIASES[tag] !== activeDialect)
+    : null;
+  if (mismatchedDialectTag) {
+    throw new AppError(
+      "invalid_skill",
+      `Skill tag '${mismatchedDialectTag}' does not match active SQL dialect '${activeDialect}'.`,
+    );
+  }
   const targetDir = await vaultFs.ensureWithinVault(vaultPath, path.join(skillDir(vaultPath), skillName));
   const target = await vaultFs.ensureWithinVault(vaultPath, path.join(targetDir, "SKILL.md"));
+  if (options.overwrite === false && await vaultFs.pathExists(target)) {
+    throw new AppError("invalid_skill", `Automatic maintenance cannot overwrite existing Skill '${skillName}'.`);
+  }
   await fs.mkdir(targetDir, { recursive: true });
   await atomicWrite(target, content.replace(/\r\n/g, "\n"));
   if ((await vaultFs.readFile(target)).replace(/\r\n/g, "\n") !== content.replace(/\r\n/g, "\n")) {

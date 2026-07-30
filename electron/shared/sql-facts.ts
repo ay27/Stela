@@ -225,6 +225,7 @@ function extractInsert(
 
   let writeColumns: ColumnRef[] = [];
   let columnsExplicit = false;
+  let readTables: TableRef[] = [];
   if (children[i]?.name === "Parens") {
     columnsExplicit = true;
     writeColumns = columnNamesFromParens(text, children[i]!).map((column) => ({
@@ -253,6 +254,12 @@ function extractInsert(
     if (w === "SELECT" || w === "WITH") {
       // INSERT ... SELECT：子查询整块在后面的 token 里，我们不解析它的投影列。
       if (!columnsExplicit) unresolved.push("columns-unknown");
+      const fromIdx = findKeywordIndex(text, children, i + 1, new Set(["from"]));
+      if (fromIdx >= 0) {
+        const stopAt = findKeywordIndex(text, children, fromIdx + 1, TABLE_SCAN_STOP_WORDS);
+        const end = stopAt < 0 ? children.length : stopAt;
+        readTables = scanTableRefs(text, children, fromIdx + 1, end, new Set()).tables;
+      }
       // 子查询会消费掉本语句剩余的大部分 token；upsert 尾巴在 INSERT...SELECT
       // 后面极罕见，不再继续找，直接结束扫描。
       i = children.length;
@@ -284,7 +291,7 @@ function extractInsert(
 
   return {
     operation: isUpsert ? "upsert" : operation,
-    readTables: [],
+    readTables,
     writeTables,
     writeColumns,
     unresolved,

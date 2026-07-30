@@ -526,6 +526,10 @@ type AgentEvent =
   | { type: "cancelled"; runId: string };
 ```
 
+`search_sql_usage({ table })` finds a table in either read or write position.
+`readTable` and `writeTable` remain available when the caller needs only one
+direction.
+
 Safety ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md)):
 
 - `sql-guard` classifies read-only vs mutation vs multi-statement
@@ -545,8 +549,9 @@ An Agent Skill is an internal, Vault-maintained pi-compatible `SKILL.md` below
 `{vault}/.stela/skills/<skill-name>/`. Its YAML frontmatter must include a
 non-empty `description`, a `category` from `sql-dialect`, `metric-definition`,
 `business-glossary`, `data-lineage`, or `analysis-runbook`, and a non-empty inline
-`tags` list; `name` defaults to the parent directory name. Local lexical ranking
-selects at most eight metadata records for the main system prompt.
+`tags` list; `name` defaults to the parent directory name. Loading applies the
+same validation as writes and local lexical ranking selects at most eight
+positive-match metadata records for the main system prompt.
 
 Its body is a bounded reusable knowledge unit: scope, rule, and minimal
 verification or exception. A Skill is at most 6,000 characters; its description is
@@ -556,11 +561,17 @@ history or Vault notes instead.
 
 The model calls `search_skills(query)` for further metadata and
 `load_skill(name)` to add a matching Markdown body to the current tool loop. After
-each normal completion, a separate maintenance turn can use `save_skill` to write a
-validated `SKILL.md` or move an obsolete Skill under `.archive/`; it is limited to
-those Skill tools and cannot call SQL or edit notes. It receives only a bounded
-evidence summary, and writes only when the knowledge is reusable, supported by that
-work, and not equivalent to an existing Skill. The normal Agent can also call
+a normal completion with successful tool evidence, a separate maintenance turn can
+use `save_skill` to create a validated new `SKILL.md`. SQL AST table references
+from that evidence scope its `search_sql_usage({ table })` calls, and only the
+first three notes returned by those calls may be read. Results are ordered by
+Markdown update time, newest first; the newest note takes precedence on conflicts.
+It cannot overwrite or
+archive existing Skills, call SQL, search the Vault broadly, or edit notes. It
+writes only when knowledge is reusable, supported across related records, and not
+equivalent to an existing Skill. Known SQL dialect tags must match the active
+connection dialect. Failed attempts require later successful evidence of their
+cause and replacement; transient failures are excluded. The normal Agent can also call
 `save_skill` when the user explicitly asks to retain verified reusable data
 knowledge. A `skill_maintenance` event contains only concise action metadata for a
 small status indicator inside the final-answer bubble, never a Skill body. An

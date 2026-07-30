@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import type { AiSettings } from "@shared/types";
 
 import { ExecutionPlanStore } from "./execution-plan";
-import { dispatchTool } from "./agent-tools";
+import { createAgentTools, dispatchTool } from "./agent-tools";
 
 const AI_SETTINGS = {
   providerMode: "openai-compatible",
@@ -45,7 +45,9 @@ try {
     aiSettings: AI_SETTINGS,
     connector: fakeConnector,
     sqlIndex: { query: async () => [] },
-    run: { runId: "test-run", notePath: null },
+    skills: [],
+    mode: "normal" as const,
+    run: { runId: "test-run", notePath: null, questionsAsked: 0 },
     recordRun: async () => {},
     requestProposal: async () => true,
     plan: new ExecutionPlanStore("test-run"),
@@ -61,6 +63,124 @@ try {
     const r = await dispatchTool("run_sql", JSON.stringify({ sql: "SELECT 1" }), baseCtx);
     assert.equal(r.ok, false);
     assert.match(r.text, /No data connection/);
+  }
+
+  {
+    const tools = createAgentTools({
+      ctx: { ...baseCtx, mode: "maintenance" as const },
+      requestProposal: async () => false,
+    });
+    assert.deepEqual(
+      tools.map((tool) => tool.name),
+      ["search_sql_usage", "read_note", "load_skill", "search_skills", "save_skill"],
+    );
+  }
+  {
+    const r = await dispatchTool(
+      "search_sql_usage",
+      JSON.stringify({ table: "threed.unrelated" }),
+      {
+        ...baseCtx,
+        mode: "maintenance" as const,
+        maintenanceTables: ["threed.evidenced"],
+        maintenanceRelatedNotes: { paths: new Set(), reads: 0 },
+      },
+    );
+    assert.equal(r.ok, false);
+    assert.match(r.text, /only for tables in this run's evidence/i);
+  }
+  {
+    const maintenanceRelatedNotes = { paths: new Set(["note.md"]), reads: 0 };
+    const ctx = { ...baseCtx, mode: "maintenance" as const, maintenanceRelatedNotes };
+    for (let index = 0; index < 3; index++) {
+      const r = await dispatchTool("read_note", JSON.stringify({ path: "note.md" }), ctx);
+      assert.equal(r.ok, true, r.text);
+    }
+    const r = await dispatchTool("read_note", JSON.stringify({ path: "note.md" }), ctx);
+    assert.equal(r.ok, false);
+    assert.match(r.text, /at most three notes/i);
+  }
+
+  // table 是“任意读写用法”快捷参数，必须分别查询读、写倒排后合并。
+  {
+    const filters: unknown[] = [];
+    const ctx = {
+      ...baseCtx,
+      sqlIndex: {
+        query: async (filter: unknown) => {
+          filters.push(filter);
+          return [{
+            path: join(root, "note.md"),
+            relPath: "note.md",
+            blockIndex: 0,
+            line: 1,
+            blockId: null,
+            connectionName: null,
+            dialect: null,
+            runDate: null,
+            operations: ["insert" as const],
+            snippet: "INSERT INTO target SELECT * FROM source",
+          }];
+        },
+      },
+    };
+    const r = await dispatchTool(
+      "search_sql_usage",
+      JSON.stringify({ table: "threed.source" }),
+      ctx,
+    );
+    assert.equal(r.ok, true);
+    assert.deepEqual(filters, [
+      { readTable: "threed.source", maxHits: 60 },
+      { writeTable: "threed.source", maxHits: 60 },
+    ]);
+    assert.match(r.text, /"matchedBlocks": 1/);
+  }
+  {
+    const olderPath = join(root, "a-older.md");
+    const newerPath = join(root, "z-newer.md");
+    await Promise.all([
+      writeFile(olderPath, "# Older\n"),
+      writeFile(newerPath, "# Newer\n"),
+    ]);
+    await Promise.all([
+      utimes(olderPath, new Date("2026-01-01"), new Date("2026-01-01")),
+      utimes(newerPath, new Date("2026-07-01"), new Date("2026-07-01")),
+    ]);
+    const ctx = {
+      ...baseCtx,
+      sqlIndex: {
+        query: async () => [
+          {
+            path: olderPath,
+            relPath: "a-older.md",
+            blockIndex: 0,
+            line: 1,
+            blockId: null,
+            connectionName: null,
+            dialect: null,
+            runDate: null,
+            operations: ["select" as const],
+            snippet: "SELECT * FROM threed.source",
+          },
+          {
+            path: newerPath,
+            relPath: "z-newer.md",
+            blockIndex: 0,
+            line: 1,
+            blockId: null,
+            connectionName: null,
+            dialect: null,
+            runDate: null,
+            operations: ["select" as const],
+            snippet: "SELECT * FROM threed.source",
+          },
+        ],
+      },
+    };
+    const r = await dispatchTool("search_sql_usage", JSON.stringify({ table: "threed.source" }), ctx);
+    assert.equal(r.ok, true);
+    assert.ok(r.text.indexOf('"path": "z-newer.md"') < r.text.indexOf('"path": "a-older.md"'), r.text);
   }
 
   // 有连接时，改动类语句默认直接拦截，不走 requestProposal / registry.execute
@@ -235,6 +355,50 @@ try {
     assert.equal(r.ok, true);
     const written = await dispatchTool("read_note", JSON.stringify({ path: join(root, "note.md") }), baseCtx);
     assert.match(written.text, /approved content/);
+  }
+
+  // 自动维护可创建新 Skill，但不能静默覆盖或归档已有知识。
+  {
+    const content = `---
+name: verified-gotcha
+description: Verified reusable SQL gotcha.
+category: sql-dialect
+tags: [sql, gotcha]
+---
+
+# Gotcha
+- Verify the live schema first.`;
+    const maintenanceCtx = { ...baseCtx, mode: "maintenance" as const, skills: [] };
+    const created = await dispatchTool(
+      "save_skill",
+      JSON.stringify({ name: "verified-gotcha", content, reason: "Verified by live schema." }),
+      maintenanceCtx,
+    );
+    assert.equal(created.ok, true);
+    const overwrite = await dispatchTool(
+      "save_skill",
+      JSON.stringify({ name: "verified-gotcha", content, reason: "Must not overwrite automatically." }),
+      maintenanceCtx,
+    );
+    assert.equal(overwrite.ok, false);
+    assert.match(overwrite.text, /cannot overwrite/i);
+    const archived = await dispatchTool(
+      "save_skill",
+      JSON.stringify({ action: "archive", name: "verified-gotcha", reason: "Must not archive automatically." }),
+      maintenanceCtx,
+    );
+    assert.equal(archived.ok, false);
+    assert.match(archived.text, /cannot archive/i);
+    const wrongDialect = await dispatchTool(
+      "save_skill",
+      JSON.stringify({
+        name: "wrong-dialect",
+        content: content.replace("verified-gotcha", "wrong-dialect").replace("[sql, gotcha]", "[postgresql, gotcha]"),
+      }),
+      { ...maintenanceCtx, maintenanceDialect: "starrocks" },
+    );
+    assert.equal(wrongDialect.ok, false);
+    assert.match(wrongDialect.text, /does not match active SQL dialect/i);
   }
 
   // 未知工具名不崩，返回错误文本

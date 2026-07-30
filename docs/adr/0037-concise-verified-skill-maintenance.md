@@ -2,7 +2,8 @@
 type: ADR
 id: "0037"
 title: "Concise verified Skill maintenance"
-status: active
+status: superseded
+superseded_by: "0043"
 date: 2026-07-27
 ---
 

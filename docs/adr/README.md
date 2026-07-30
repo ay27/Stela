@@ -89,9 +89,12 @@ proposed → active → superseded
 | [0034](0034-read-only-experience-knowledge-library.md) | Read-only Experience Knowledge library | superseded → [0035](0035-experience-knowledge-dialog.md) |
 | [0035](0035-experience-knowledge-dialog.md) | Experience Knowledge dialog | superseded → [0036](0036-user-deletion-of-experience-knowledge.md) |
 | [0036](0036-user-deletion-of-experience-knowledge.md) | User deletion of Experience Knowledge | active |
-| [0037](0037-concise-verified-skill-maintenance.md) | Concise verified Skill maintenance | active |
+| [0037](0037-concise-verified-skill-maintenance.md) | Concise verified Skill maintenance | superseded → [0043](0043-evidence-gated-skill-maintenance.md) |
 | [0038](0038-runtime-agent-execution-plans.md) | Runtime linear agent execution plans | active |
 | [0039](0039-concise-agent-final-answers.md) | Concise agent final answers | active |
 | [0040](0040-native-vault-watcher-backend.md) | Native vault watcher backend | active |
 | [0041](0041-agent-live-schema-authority.md) | Agent live schema authority | active |
 | [0042](0042-connector-describe-tables-api.md) | Connector describeTables API for live column COMMENT | active |
+| [0043](0043-evidence-gated-skill-maintenance.md) | Evidence-gated Skill maintenance | superseded → [0044](0044-associative-skill-distillation.md) |
+| [0044](0044-associative-skill-distillation.md) | Associative Skill distillation | superseded → [0045](0045-recency-ordered-skill-distillation.md) |
+| [0045](0045-recency-ordered-skill-distillation.md) | Recency-ordered Skill distillation | active |

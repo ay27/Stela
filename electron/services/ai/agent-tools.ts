@@ -8,6 +8,7 @@
 
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -145,6 +146,9 @@ export interface AgentToolContext {
   vaultPath: string;
   connectionName: string | null;
   connection: ConnectionEntry | null;
+  maintenanceDialect?: string | null;
+  maintenanceTables?: string[];
+  maintenanceRelatedNotes?: { paths: Set<string>; reads: number };
   aiSettings: AiSettings;
   connector: AgentConnectorOps;
   sqlIndex: AgentSqlIndexOps;
@@ -252,8 +256,11 @@ export function createAgentTools(options: {
       name: "search_sql_usage",
       label: "Search SQL usage",
       description:
-        "Find which notes actually read or write a given table, from Stela's SQL AST index. This is an exact structural lookup — prefer it over search_vault when you already know a table name and want the notes that query it, or to learn how a table is normally joined and filtered.",
+        "Find which notes use a table, from Stela's SQL AST index. Use table for any read or write usage; use readTable or writeTable only when direction matters. This is an exact structural lookup — prefer it over search_vault when you already know a table name and want the notes that query it, or to learn how a table is normally joined and filtered.",
       parameters: Type.Object({
+        table: Type.Optional(
+          Type.String({ description: "Table used by the SQL in either a read or write role, as table or db.table." }),
+        ),
         readTable: Type.Optional(
           Type.String({ description: "Table read by the SQL, as table or db.table." }),
         ),
@@ -364,7 +371,7 @@ export function createAgentTools(options: {
       name: "save_skill",
       label: "Save Skill",
       description:
-        `Save a compact validated data-knowledge SKILL.md or archive an obsolete Skill. Save only reusable, verified rules with their scope and minimal check; never copy an analysis, result rows, or one-off SQL. ${AGENT_SKILL_LIMITS_PROMPT} For a save, call once with name, content, and reason; action defaults to save. content must include YAML frontmatter with description, category, and inline tags. For archive, set action to archive and omit content. Never use it for user notes or arbitrary files.`,
+        `Save a compact validated data-knowledge SKILL.md or archive an obsolete Skill. Save only reusable, verified rules with their scope and minimal check; never copy an analysis, result rows, or one-off SQL. ${AGENT_SKILL_LIMITS_PROMPT} For a save, call once with name, content, and reason; action defaults to save. content must include YAML frontmatter with description, category, and inline tags. For archive, set action to archive and omit content. Automatic maintenance may create only a new Skill; it cannot overwrite or archive existing knowledge. Never use it for user notes or arbitrary files.`,
       parameters: Type.Object({
         action: Type.Optional(Type.Union([Type.Literal("save"), Type.Literal("archive")])),
         name: Type.String({ description: "Required lowercase Skill directory name, e.g. postgresql-demo-tasks." }),
@@ -420,7 +427,13 @@ export function createAgentTools(options: {
     },
   ];
   if (ctx.mode === "maintenance") {
-    return tools.filter((tool) => tool.name === "load_skill" || tool.name === "search_skills" || tool.name === "save_skill");
+    return tools.filter((tool) =>
+      tool.name === "search_sql_usage" ||
+      tool.name === "read_note" ||
+      tool.name === "load_skill" ||
+      tool.name === "search_skills" ||
+      tool.name === "save_skill",
+    );
   }
   return tools;
 }
@@ -714,29 +727,49 @@ const SQL_INDEX_OPERATIONS = new Set<SqlIndexOperation>([
  * 结果按笔记聚合：agent 关心的是「去读哪几篇」，不是「哪一行」。
  */
 async function runSearchSqlUsage(
-  args: { readTable?: unknown; writeTable?: unknown; operations?: unknown; limit?: unknown },
+  args: { table?: unknown; readTable?: unknown; writeTable?: unknown; operations?: unknown; limit?: unknown },
   ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
+  const table = typeof args.table === "string" ? args.table.trim() : "";
   const readTable = typeof args.readTable === "string" ? args.readTable.trim() : "";
   const writeTable = typeof args.writeTable === "string" ? args.writeTable.trim() : "";
   const operations = stringList(args.operations)
     .map((op) => op.toLowerCase())
     .filter((op): op is SqlIndexOperation => SQL_INDEX_OPERATIONS.has(op as SqlIndexOperation));
-  if (!readTable && !writeTable && operations.length === 0) {
-    return fail("Provide at least one of readTable, writeTable or operations.");
+  if (table && (readTable || writeTable)) {
+    return fail("table cannot be combined with readTable or writeTable; use one query direction.");
+  }
+  if (!table && !readTable && !writeTable && operations.length === 0) {
+    return fail("Provide at least one of table, readTable, writeTable or operations.");
+  }
+  if (ctx.mode === "maintenance") {
+    const requestedTables = [table, readTable, writeTable].filter(Boolean);
+    if (requestedTables.length !== 1 || !ctx.maintenanceTables?.includes(requestedTables[0]!)) {
+      return fail("Automatic maintenance may search SQL usage only for tables in this run's evidence.");
+    }
   }
   const limit = boundedInt(args.limit, 60, 1, 300);
 
-  const hits = await ctx.sqlIndex.query({
-    ...(readTable ? { readTable } : {}),
-    ...(writeTable ? { writeTable } : {}),
-    ...(operations.length > 0 ? { operations } : {}),
-    maxHits: limit,
-  });
+  const common = { ...(operations.length > 0 ? { operations } : {}), maxHits: limit };
+  const hits = table
+    ? Array.from(
+      new Map(
+        (await Promise.all([
+          ctx.sqlIndex.query({ ...common, readTable: table }),
+          ctx.sqlIndex.query({ ...common, writeTable: table }),
+        ])).flat().map((hit) => [`${hit.path}:${hit.blockIndex}`, hit]),
+      ).values(),
+    )
+    : await ctx.sqlIndex.query({
+      ...common,
+      ...(readTable ? { readTable } : {}),
+      ...(writeTable ? { writeTable } : {}),
+    });
   if (hits.length === 0) {
+    const scope = table ? `uses '${table}'` : readTable ? `reads '${readTable}'` : writeTable ? `writes '${writeTable}'` : "matches the filter";
     return fail(
-      "No indexed SQL block reads or writes that table. The table name may be spelled differently, " +
-        "or it is only mentioned in prose — try search_vault, or ask the user which table they mean.",
+      `No indexed SQL block ${scope}. The table name may be spelled differently, ` +
+        "or it may only be mentioned in prose — try search_vault, or ask the user which table they mean.",
     );
   }
 
@@ -758,20 +791,31 @@ async function runSearchSqlUsage(
     byNote.set(hit.relPath, entry);
   }
 
-  const notes = [...byNote.values()]
+  const notes = await Promise.all([...byNote.values()]
+    .map(async (entry) => {
+      const updatedAt = await fs.stat(path.join(ctx.vaultPath, entry.path))
+        .then((stat) => stat.mtime.toISOString())
+        .catch(() => null);
+      return {
+        path: entry.path,
+        blocks: entry.blocks,
+        lastRunDate: entry.lastRunDate,
+        updatedAt,
+        operations: [...entry.operations],
+        firstLine: entry.firstLine,
+      };
+    }));
+  notes
     .sort(
       (a, b) =>
+        (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "") ||
         (b.lastRunDate ?? "").localeCompare(a.lastRunDate ?? "") ||
         b.blocks - a.blocks ||
         a.path.localeCompare(b.path),
-    )
-    .map((entry) => ({
-      path: entry.path,
-      blocks: entry.blocks,
-      lastRunDate: entry.lastRunDate,
-      operations: [...entry.operations],
-      firstLine: entry.firstLine,
-    }));
+    );
+  if (ctx.mode === "maintenance") {
+    for (const note of notes) ctx.maintenanceRelatedNotes?.paths.add(note.path);
+  }
 
   return ok({
     notes,
@@ -794,13 +838,24 @@ async function runListVaultFiles(args: { maxFiles?: unknown }, ctx: AgentToolCon
 async function runReadNote(args: { path?: unknown; offset?: unknown; maxChars?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
   if (typeof args.path !== "string" || !args.path.trim()) return fail("path must be a non-empty string.");
   const target = await vaultFs.ensureWithinVault(ctx.vaultPath, resolveVaultTarget(ctx.vaultPath, args.path));
+  const canonicalVaultPath = await vaultFs.ensureWithinVault(ctx.vaultPath, ctx.vaultPath);
+  const relativePath = path.relative(canonicalVaultPath, target);
+  if (
+    ctx.mode === "maintenance" &&
+    (!ctx.maintenanceRelatedNotes?.paths.has(relativePath) || ctx.maintenanceRelatedNotes.reads >= 3)
+  ) {
+    return fail("Automatic maintenance may read at most three notes returned by its SQL-usage search.");
+  }
   const content = await vaultFs.readFile(target);
   const offset = boundedInt(args.offset, 0, 0, content.length);
-  const fullRead = args.maxChars === 0;
-  const maxChars = fullRead ? content.length - offset : boundedInt(args.maxChars, 50_000, 1, 120_000);
+  const fullRead = args.maxChars === 0 && ctx.mode !== "maintenance";
+  const maxChars = fullRead
+    ? content.length - offset
+    : boundedInt(args.maxChars, ctx.mode === "maintenance" ? 12_000 : 50_000, 1, ctx.mode === "maintenance" ? 12_000 : 120_000);
   const slice = fullRead ? content.slice(offset) : content.slice(offset, offset + maxChars);
+  if (ctx.mode === "maintenance") ctx.maintenanceRelatedNotes!.reads++;
   return ok({
-    path: path.relative(ctx.vaultPath, target),
+    path: relativePath,
     offset,
     charsReturned: slice.length,
     totalChars: content.length,
@@ -847,12 +902,23 @@ async function runSaveSkill(
   const record =
     action === "save"
       ? typeof args.content === "string"
-        ? await saveAgentSkill(ctx.vaultPath, name, args.content, reason)
+        ? await saveAgentSkill(ctx.vaultPath, name, args.content, reason, {
+          overwrite: ctx.mode !== "maintenance",
+          dialect: ctx.mode === "maintenance" ? ctx.maintenanceDialect : null,
+        })
         : null
       : action === "archive"
-        ? await archiveAgentSkill(ctx.vaultPath, name, reason)
+        ? ctx.mode === "maintenance"
+          ? null
+          : await archiveAgentSkill(ctx.vaultPath, name, reason)
         : null;
-  if (!record) return fail("save requires content; action must be save or archive.");
+  if (!record) {
+    return fail(
+      ctx.mode === "maintenance" && action === "archive"
+        ? "Automatic maintenance cannot archive existing Skills."
+        : "save requires content; action must be save or archive.",
+    );
+  }
   const refreshed = await loadAgentSkills(ctx.vaultPath);
   ctx.skills.splice(0, ctx.skills.length, ...refreshed.loaded);
   ctx.onSkillMaintenance?.(record);

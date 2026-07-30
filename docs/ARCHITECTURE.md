@@ -324,24 +324,33 @@ required `description`. Skill bodies are concise reusable guidance: scope, rule,
 and a minimal verification or exception. They do not contain analysis narration,
 result rows, or one-off SQL.
 
-Local ranking injects only the eight metadata records most relevant to the user's
-request; the model uses `search_skills` to find further candidates and `load_skill`
-to read a body on demand. The bottom-bar **Experience Knowledge** entry opens an
+Local ranking injects only the eight metadata records with a positive lexical
+match to the user's request; the model uses `search_skills` to find further
+candidates and `load_skill` to read a body on demand. Invalid on-disk Skills are
+excluded using the same validation as writes. The bottom-bar **Experience Knowledge** entry opens an
 on-demand application dialog with active and archived Skill metadata through
 `window.stela.agent.listSkills()`. A confirmed `window.stela.agent.removeSkill()`
 operation can move only a listed Skill directory to the system trash; Skill bodies
 and arbitrary vault writes remain unavailable to the renderer.
-After a normal Agent completion, a restricted maintenance turn can use only these
-tools plus `save_skill` to save/update a validated Skill or archive an obsolete one
-under `.stela/skills/.archive/`. A normal Agent turn may also use `save_skill` when
+After a normal Agent completion with successful tool evidence, a restricted
+maintenance turn can use only `search_sql_usage`, `read_note`, Skill retrieval,
+and `save_skill` to create a validated new Skill. SQL usage is restricted to
+tables extracted from this run's SQL evidence; it may read at most three notes
+returned by that lookup, ordered by document update time newest first. Conflicting
+guidance follows the newest note. It cannot run SQL, search the Vault broadly, overwrite,
+or archive an existing Skill. A normal Agent turn may also use `save_skill` when
 the user explicitly asks it to retain verified reusable data knowledge. Neither path
 can call SQL, edit notes, or write elsewhere through this capability, and writes
 appear as a compact status indicator inside the final-answer bubble; hover/click
 reveals the maintenance summary and any changes. An explicit successful write is the
 final answer's update result and skips the redundant post-run maintenance call.
-Automatic maintenance receives a bounded evidence summary and saves only knowledge
-with reusable scope, support in that work, and no equivalent existing Skill. See
-[ADR-0037](./adr/0037-concise-verified-skill-maintenance.md),
+Automatic maintenance receives bounded tool evidence and task background,
+including SQL AST table references. It saves only knowledge with reusable scope,
+direct cross-record support, and no equivalent existing Skill. Its known SQL
+dialect tags must match the active connection dialect. A failed attempt is retained
+only when later successful tool evidence explains its cause and replacement;
+transient failures are skipped. Live connector schema overrides any conflicting
+Skill. See [ADR-0045](./adr/0045-recency-ordered-skill-distillation.md),
 [ADR-0036](./adr/0036-user-deletion-of-experience-knowledge.md).
 
 ### Agent retrieval
@@ -350,7 +359,7 @@ All retrieval is lexical and in-process — no embeddings, no FTS5 index ([ADR-0
 
 - `search_vault` calls `searchVaultNotes`, which scans every note, then sorts, then truncates. Results are note-level (`path`, `title`, `score`, `matchCount`, `matchedKeywords`, `matchedHeadings`, `bestSnippet`) and report `scannedNotes / totalMatchedNotes / returned / truncated`. Scoring: title or path 40, heading 12 (≤3 per keyword), body line 1 (≤10 per keyword), multiplied by distinct keywords matched. The line-level `searchVault` remains for the UI.
 - `search_tables` ranks the live connector catalog by table name plus column COMMENT, the latter via the connector's optional `describeTables` API (one batched call per lookup, see [ADR-0042](./adr/0042-connector-describe-tables-api.md)). CJK runs are expanded into bigrams so Chinese business terms match. Each candidate also carries `vaultUsage` (notes, blocks, last run date) as information for the model — usage never enters the score. The agent retrieves live DDL or columns with `get_table_schema` when it needs structure ([ADR-0041](./adr/0041-agent-live-schema-authority.md)).
-- `search_sql_usage` queries `sql-index` in-process for exact table→block facts; `sql-index.query()` sorts by `runDate` descending before truncating.
+- `search_sql_usage` queries `sql-index` in-process for exact table→block facts. Its `table` input unions read and write uses; `readTable` / `writeTable` are directional filters. `INSERT ... SELECT` indexes both its target write and source reads. `sql-index.query()` sorts by `runDate` descending before truncating.
 - Agent `run_sql` records to `result-store` and `history-journal` under `blockId` `agent:<runId>`, so agent executions are auditable and feed the same usage statistics as user runs.
 - Retrieval quality is measured by `npm run eval:retrieval` against mechanically labelled slices; labels never share a signal with the ranker. That eval calls the ranking functions directly, so it says nothing about whether the model picks the right tool or writes a usable query.
 - Ask discipline (`ask_user`) is measured by `npm run eval:agent-ask`, which drives the real `AgentHarness` with the real system prompt and tools. Tasks are generated in pairs from same-family table names in the vault: one version names the table, one leaves ≥3 used candidates open. Asking on the open version and not asking on the named one are both counted, so an agent that always asks cannot score well. Only `connector.execute`, `recordRun`, and `sqlIndex.query` are stubbed — answer correctness needs a live connection and is out of scope. `--self-check` verifies the whole rig without a model call.
