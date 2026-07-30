@@ -1,13 +1,16 @@
-import { useCallback, useEffect, useRef, useState, type WheelEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
 import {
   Bot,
   Brain,
   CheckCircle2,
   ChevronDown,
+  Circle,
+  Database,
   FileText,
   HelpCircle,
   Loader2,
   MessageSquareQuote,
+  MinusCircle,
   Plus,
   Send,
   ShieldAlert,
@@ -187,7 +190,6 @@ export function AgentPanel() {
   const connectionName = activeTab.connectionName;
   const contextUsage = activeTab.contextUsage;
   const compacting = activeTab.compacting;
-  const plan = activeTab.plan;
   const vaultPath = useWorkspace((s) => s.vaultPath);
   const focusToken = useLayout((s) => s.agentFocusToken);
   const aiSettings = useSettings((s) => s.settings.ai);
@@ -205,10 +207,13 @@ export function AgentPanel() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const promptInputRef = useRef<AiPromptInputHandle>(null);
   const busy = status === "running";
-  const toolEntries = timeline.filter(
-    (entry): entry is Extract<AgentTimelineEntry, { kind: "tool" }> => entry.kind === "tool",
+  // 连续的 tool entries 就地合成一条 ToolActivity：执行记录跟随产生它的那一轮，
+  // 不再跨轮次汇总到最底部。pending 的 question 从 timeline 摘出，固定到输入框上方。
+  const timelineItems = useMemo(() => groupTimeline(timeline), [timeline]);
+  const pendingQuestion = timeline.find(
+    (entry): entry is Extract<AgentTimelineEntry, { kind: "proposal" }> =>
+      entry.kind === "proposal" && entry.proposalKind === "question" && entry.resolution === "pending",
   );
-  const visibleTimeline = timeline.filter((entry) => entry.kind !== "tool");
 
   const connectionEntries = useConnections((s) => s.entries);
   const connectionsLoaded = useConnections((s) => s.loaded);
@@ -401,13 +406,13 @@ export function AgentPanel() {
         {timeline.length === 0 ? (
           <div className="text-[12px] text-muted-foreground">{t("agent.panel.empty")}</div>
         ) : (
-          <>
-            {plan ? <ExecutionPlanCard plan={plan} /> : null}
-            {visibleTimeline.map((entry) => (
-            <TimelineItem key={entry.id} entry={entry} onRespond={respondProposal} />
-            ))}
-            {toolEntries.length > 0 ? <ToolActivity key={activeTabId} entries={toolEntries} /> : null}
-          </>
+          timelineItems.map((item) =>
+            item.kind === "tools" ? (
+              <ToolActivity key={item.id} entries={item.entries} />
+            ) : (
+              <TimelineItem key={item.entry.id} entry={item.entry} onRespond={respondProposal} />
+            ),
+          )
         )}
         {busy ? (
           <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
@@ -416,7 +421,13 @@ export function AgentPanel() {
           </div>
         ) : null}
       </div>
-          
+
+      {pendingQuestion ? (
+        <div className="border-t border-border bg-muted/20 px-2.5 pt-2">
+          <QuestionCard entry={pendingQuestion} onRespond={respondProposal} />
+        </div>
+      ) : null}
+
       <div className="border-t border-border bg-muted/20 px-2.5 py-2">
       <AttachmentChips attachments={draft.attachments} onRemove={removeAttachment} />
         <AiPromptInput
@@ -485,6 +496,35 @@ export function AgentPanel() {
   );
 }
 
+type ToolEntry = Extract<AgentTimelineEntry, { kind: "tool" }>;
+type TimelineRenderItem =
+  | { kind: "entry"; entry: AgentTimelineEntry }
+  | { kind: "tools"; id: string; entries: ToolEntry[] };
+
+/**
+ * 把连续的 tool entries 合成一个 ToolActivity 组，位置保持在它们产生的轮次里。
+ * pending 的 question 摘出 timeline（固定在输入框上方），回答/跳过后自然落回成气泡。
+ */
+function groupTimeline(timeline: AgentTimelineEntry[]): TimelineRenderItem[] {
+  const items: TimelineRenderItem[] = [];
+  for (const entry of timeline) {
+    if (entry.kind === "proposal" && entry.proposalKind === "question" && entry.resolution === "pending") {
+      continue;
+    }
+    if (entry.kind === "tool") {
+      const last = items[items.length - 1];
+      if (last?.kind === "tools") {
+        last.entries.push(entry);
+      } else {
+        items.push({ kind: "tools", id: entry.id, entries: [entry] });
+      }
+      continue;
+    }
+    items.push({ kind: "entry", entry });
+  }
+  return items;
+}
+
 function AttachmentChips({
   attachments,
   onRemove,
@@ -535,6 +575,29 @@ function TimelineItem({
       return (
         <div className="flex justify-end">
           <div className="max-w-[80%] rounded-lg bg-muted px-3 py-2 text-sm text-foreground">
+            {entry.mentionedTables?.length || entry.referencedNotes?.length ? (
+              <div className="mb-1.5 flex flex-wrap gap-1">
+                {entry.mentionedTables?.map((table) => (
+                  <span
+                    key={`t-${table}`}
+                    className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                  >
+                    <Database className="h-3 w-3 flex-none text-primary" />
+                    <span className="truncate">{table}</span>
+                  </span>
+                ))}
+                {entry.referencedNotes?.map((path) => (
+                  <span
+                    key={`n-${path}`}
+                    title={path}
+                    className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                  >
+                    <FileText className="h-3 w-3 flex-none text-primary" />
+                    <span className="truncate">{path.split("/").pop() || path}</span>
+                  </span>
+                ))}
+              </div>
+            ) : null}
             {entry.content}
           </div>
         </div>
@@ -554,6 +617,8 @@ function TimelineItem({
       );
     case "cancelled":
       return <div className="text-xs italic text-muted-foreground">{t("agent.panel.cancelled")}</div>;
+    case "plan":
+      return <ExecutionPlanCard plan={entry.plan} />;
     case "tool":
       return <ToolChip entry={entry} />;
     case "proposal":
@@ -628,16 +693,63 @@ function AssistantMessage({ content }: { content: string }) {
   return <div className="stela-ai-markdown text-sm leading-6">{renderMarkdown(content)}</div>;
 }
 
+function PlanStepIcon({ status }: { status: AgentPlanSnapshot["steps"][number]["status"] }) {
+  switch (status) {
+    case "completed":
+      return <CheckCircle2 className="h-3.5 w-3.5 flex-none text-primary" />;
+    case "running":
+      return <Loader2 className="h-3.5 w-3.5 flex-none animate-spin text-primary" />;
+    case "blocked":
+      return <XCircle className="h-3.5 w-3.5 flex-none text-destructive" />;
+    case "skipped":
+      return <MinusCircle className="h-3.5 w-3.5 flex-none text-muted-foreground" />;
+    default:
+      return <Circle className="h-3.5 w-3.5 flex-none text-muted-foreground/50" />;
+  }
+}
+
 function ExecutionPlanCard({ plan }: { plan: AgentPlanSnapshot }) {
   const t = useT();
+  const [expanded, setExpanded] = useState(true);
   const completed = plan.steps.filter((step) => ["completed", "skipped"].includes(step.status)).length;
   const current = plan.steps.find((step) => step.status === "running" || step.status === "blocked");
   return (
-    <div className="rounded-lg border border-primary/20 bg-primary/5 p-2.5 text-xs">
-      <div className="flex items-center justify-between gap-2 font-medium">
+    <div className="rounded-lg border border-primary/20 bg-primary/5 text-xs">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center justify-between gap-2 px-2.5 py-2 text-left font-medium"
+      >
         <span>{t("agent.panel.planProgress", { completed, total: plan.steps.length })}</span>
-        <span className="text-muted-foreground">{current?.status === "blocked" ? t("agent.panel.blocked") : current?.title}</span>
-      </div>
+        <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+          <span className="truncate">
+            {current?.status === "blocked" ? t("agent.panel.blocked") : current?.title}
+          </span>
+          <ChevronDown className={cn("h-3 w-3 flex-none transition-transform", expanded && "rotate-180")} />
+        </span>
+      </button>
+      {expanded ? (
+        <ol className="space-y-1.5 border-t border-primary/10 px-2.5 py-2">
+          {plan.steps.map((step) => (
+            <li key={step.id} className="flex items-start gap-2">
+              <span className="mt-px"><PlanStepIcon status={step.status} /></span>
+              <span
+                className={cn(
+                  "min-w-0",
+                  step.status === "pending" && "text-muted-foreground",
+                  step.status === "skipped" && "text-muted-foreground line-through",
+                  step.status === "blocked" && "text-destructive",
+                )}
+              >
+                {step.title}
+                {step.evidence ? (
+                  <span className="block text-[11px] text-muted-foreground">{step.evidence}</span>
+                ) : null}
+              </span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
     </div>
   );
 }

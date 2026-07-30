@@ -88,6 +88,12 @@ export class ModulePluginConnector implements Connector {
   listTables(cfg: unknown, db?: string | null) {
     return this.inner.listTables(cfg, db);
   }
+  describeTables(
+    cfg: unknown,
+    tables: Array<{ database: string | null; table: string }>,
+  ) {
+    return this.inner.describeTables?.(cfg, tables);
+  }
   async dispose(): Promise<void> {
     try {
       await this.inner.dispose?.();

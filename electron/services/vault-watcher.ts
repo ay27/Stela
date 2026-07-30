@@ -2,21 +2,21 @@
  * Vault 文件 watcher（v0.2 #7）。
  *
  * 职责：
- *   1. 在 vault 切换时启动 / 停止 chokidar 递归 watcher
+ *   1. 在 vault 切换时启动 / 停止原生递归 watcher
  *   2. 过滤掉应用自身写入的事件（app-owned suppress）
  *   3. 过滤 `.stela.sqlite*` / `.stela/` / `.git/` / 隐藏文件等噪音
  *   4. 把短时间内的多条事件合并成 batch 通过事件 channel 广播给 renderer
  *
  * 不做的事：
  *   - 不做 rename 推断（remove + add 自然能在 renderer 侧实现"先删再建"逻辑）
- *   - 不做 polling 兜底（chokidar 默认 native fs events，跨平台够用；后续如有
- *     网络盘 / Docker 卷反馈再开 usePolling）
+ *   - 不做 polling 兜底；网络盘 / Docker 卷出现反馈时再单独处理
  *
- * 注意：chokidar 是 Node 模块；在 main 进程使用，**不能**直接被 renderer 引用。
+ * 注意：@parcel/watcher 是 Node 原生模块；在 main 进程使用，**不能**直接被 renderer 引用。
  */
 
+import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
-import chokidar, { type FSWatcher } from "chokidar";
+import parcelWatcher from "@parcel/watcher";
 
 import type {
   VaultExternalChangePayload,
@@ -31,23 +31,26 @@ const log = getLogger("vault-watcher");
 /** 事件合并窗口（ms）。窗口越大越省 IPC，但用户感知刷新会更迟。 */
 const BATCH_DELAY_MS = 200;
 
-/** app-owned 写入抑制时长（ms）。从 vault-fs.notifySelfWrite 落到 chokidar
+/** app-owned 写入抑制时长（ms）。从 vault-fs.notifySelfWrite 落到原生
  *  事件回调之间的最长抖动；实测 macOS fsevents 通常 < 80ms，留 1.5s 余量
  *  覆盖 GC / WAL 等场景。 */
 const SUPPRESS_TTL_MS = 1500;
+const WRITE_STABILITY_MS = 150;
 
 /**
- * 应用自身写入的路径 → 过期时间戳。chokidar 事件命中时若仍在 TTL 内则吞掉。
+ * 应用自身写入的路径 → 过期时间戳。原生 watcher 事件命中时若仍在 TTL 内则吞掉。
  * Map 而非 Set 是为了支持过期判断；过期 key 在每次 sweep / 命中时主动清理。
  */
 const suppressed = new Map<string, number>();
 
 interface WatcherRuntime {
   vaultPath: string;
-  watcher: FSWatcher;
+  subscription: { unsubscribe(): Promise<void> };
+  directories: Set<string>;
   /** 待 flush 的事件队列，flushTimer 触发时一次性广播 */
   queue: VaultFsEvent[];
   flushTimer: ReturnType<typeof setTimeout> | null;
+  pendingUpdates: Map<string, ReturnType<typeof setTimeout>>;
   /** main → renderer 广播的回调（webContents.send 的薄封装）；setBroadcaster 注入 */
   broadcast: (payload: VaultExternalChangePayload) => void;
 }
@@ -195,36 +198,115 @@ function enqueue(rt: WatcherRuntime, event: VaultFsEvent): void {
   }, BATCH_DELAY_MS);
 }
 
-function attachHandlers(rt: WatcherRuntime): void {
-  const handle = (
-    type: VaultFsEventType,
-    isDir: boolean,
-    absPath: string,
-  ) => {
-    if (shouldIgnore(absPath, rt.vaultPath)) return;
-    // self-write suppress 只对 `changed` 事件生效。
-    //
-    // 背景：suppress 的唯一目的是防止 EditorView 把自己 onPersist 写回的 .md
-    // 识别为外部修改而弹 conflict banner / reload。`applyExternalEvents`
-    // 也只会因 changed/removed 改 tab 状态。
-    //
-    // 反过来：`added` 事件不会触发任何 tab 状态变化（新文件不会命中已打开
-    // 的 tab 路径），却是 FileTree / vault-index 等订阅者唯一的"新增文件"
-    // 信号。如果一并 suppress，粘贴附件 / createFile 等场景下文件树永远
-    // 不刷新。`removed` 类似——renderer 主动删除的入口已经各自调过
-    // closeTabsForPath，watcher 这条路只是给 FileTree 等订阅者兜底刷新。
-    if (!isDir && type === "changed" && isSuppressed(absPath)) return;
-    enqueue(rt, { type, path: absPath, isDir });
-  };
+async function collectDirectories(vaultPath: string): Promise<Set<string>> {
+  const directories = new Set<string>([normalizeKey(vaultPath)]);
+  const pending = [vaultPath];
+  while (pending.length > 0) {
+    const dir = pending.pop()!;
+    let entries: Awaited<ReturnType<typeof readdir>>;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        log.warn("scan watcher directories failed", {
+          dir,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const child = path.join(dir, entry.name);
+      if (shouldIgnore(child, vaultPath)) continue;
+      directories.add(normalizeKey(child));
+      pending.push(child);
+    }
+  }
+  return directories;
+}
 
-  rt.watcher.on("add", (p) => handle("added", false, p));
-  rt.watcher.on("addDir", (p) => handle("added", true, p));
-  rt.watcher.on("change", (p) => handle("changed", false, p));
-  rt.watcher.on("unlink", (p) => handle("removed", false, p));
-  rt.watcher.on("unlinkDir", (p) => handle("removed", true, p));
-  rt.watcher.on("error", (err) => {
-    log.error("watcher error", { err: (err as Error).message });
-  });
+function removeDirectoryAndChildren(rt: WatcherRuntime, absPath: string): boolean {
+  const key = normalizeKey(absPath);
+  const isDir = rt.directories.has(key);
+  for (const directory of rt.directories) {
+    if (directory === key || directory.startsWith(`${key}${path.sep}`)) {
+      rt.directories.delete(directory);
+    }
+  }
+  return isDir;
+}
+
+async function classifyPresentPath(
+  rt: WatcherRuntime,
+  absPath: string,
+): Promise<{ isDir: boolean } | null> {
+  try {
+    const stats = await lstat(absPath);
+    const isDir = stats.isDirectory();
+    if (isDir) rt.directories.add(normalizeKey(absPath));
+    return { isDir };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      log.warn("stat watcher event failed", {
+        path: absPath,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return null;
+  }
+}
+
+function publishEvent(
+  rt: WatcherRuntime,
+  type: VaultFsEventType,
+  absPath: string,
+  isDir: boolean,
+): void {
+  if (shouldIgnore(absPath, rt.vaultPath)) return;
+  // self-write suppress 只对 `changed` 事件生效；added / removed 仍必须让
+  // FileTree 与索引刷新，即使它们是应用自己发起的写入。
+  if (!isDir && type === "changed" && isSuppressed(absPath)) return;
+  enqueue(rt, { type, path: absPath, isDir });
+}
+
+function scheduleUpdate(rt: WatcherRuntime, absPath: string): void {
+  const key = normalizeKey(absPath);
+  const pending = rt.pendingUpdates.get(key);
+  if (pending) clearTimeout(pending);
+  rt.pendingUpdates.set(
+    key,
+    setTimeout(() => {
+      rt.pendingUpdates.delete(key);
+      void classifyPresentPath(rt, absPath).then((entry) => {
+        if (entry && !entry.isDir) publishEvent(rt, "changed", absPath, false);
+      });
+    }, WRITE_STABILITY_MS),
+  );
+}
+
+function handleParcelEvents(
+  rt: WatcherRuntime,
+  events: Array<{ path: string; type: "create" | "update" | "delete" }>,
+): void {
+  for (const event of events) {
+    const absPath = path.resolve(event.path);
+    if (shouldIgnore(absPath, rt.vaultPath)) continue;
+    if (event.type === "delete") {
+      const pending = rt.pendingUpdates.get(normalizeKey(absPath));
+      if (pending) clearTimeout(pending);
+      rt.pendingUpdates.delete(normalizeKey(absPath));
+      publishEvent(rt, "removed", absPath, removeDirectoryAndChildren(rt, absPath));
+      continue;
+    }
+    if (event.type === "create") {
+      void classifyPresentPath(rt, absPath).then((entry) => {
+        if (entry) publishEvent(rt, "added", absPath, entry.isDir);
+      });
+      continue;
+    }
+    scheduleUpdate(rt, absPath);
+  }
 }
 
 /**
@@ -243,53 +325,67 @@ export async function start(vaultPath: string | null): Promise<void> {
     );
     return;
   }
-  let watcher: FSWatcher;
+  let subscription: { unsubscribe(): Promise<void> };
   try {
-    watcher = chokidar.watch(vaultPath, {
-      ignoreInitial: true,
-      persistent: true,
-      // 避免大型 vault 启动期 IO 抖动：暂停发送直到文件 size 稳定（chokidar 默认行为，显式写一下）
-      awaitWriteFinish: {
-        stabilityThreshold: 150,
-        pollInterval: 50,
-      },
-      // 跳过 chokidar 内部对 .stela / .git 等目录的 stat：节省 fd 与 watcher slot
-      ignored: (p: string) => {
-        if (p === vaultPath) return false;
-        return shouldIgnore(p, vaultPath);
-      },
+    const directories = await collectDirectories(vaultPath);
+    subscription = await parcelWatcher.subscribe(vaultPath, (err, events) => {
+      if (err) {
+        log.error("native watcher error", { err: err.message });
+        return;
+      }
+      const rt = runtime;
+      if (!rt || rt.vaultPath !== vaultPath) return;
+      handleParcelEvents(rt, events);
     });
+    runtime = {
+      vaultPath,
+      subscription,
+      directories,
+      queue: [],
+      flushTimer: null,
+      pendingUpdates: new Map(),
+      broadcast: broadcaster,
+    };
   } catch (err) {
-    log.error("chokidar.watch failed", {
+    log.error("native watcher subscribe failed", {
       vaultPath,
       err: (err as Error).message,
     });
     return;
   }
-  runtime = {
-    vaultPath,
-    watcher,
-    queue: [],
-    flushTimer: null,
-    broadcast: broadcaster,
-  };
-  attachHandlers(runtime);
   log.info("vault watcher started", { vaultPath });
 }
 
 export async function stop(): Promise<void> {
-  if (!runtime) return;
+  const rt = detachRuntime();
+  if (!rt) return;
+  try {
+    await rt.subscription.unsubscribe();
+  } catch (err) {
+    log.warn("native watcher unsubscribe failed", { err: (err as Error).message });
+  }
+  log.info("vault watcher stopped", { vaultPath: rt.vaultPath });
+}
+
+/**
+ * Electron 已进入最终退出阶段时调用。此时不等待 native unsubscribe：
+ * vault 切换和手动关闭 vault 仍必须使用 stop() 释放订阅。
+ */
+export function releaseForAppQuit(): void {
+  const rt = detachRuntime();
+  if (rt) log.info("vault watcher released for app quit", { vaultPath: rt.vaultPath });
+}
+
+function detachRuntime(): WatcherRuntime | null {
+  if (!runtime) return null;
   const rt = runtime;
   runtime = null;
   if (rt.flushTimer) {
     clearTimeout(rt.flushTimer);
     rt.flushTimer = null;
   }
+  for (const timer of rt.pendingUpdates.values()) clearTimeout(timer);
+  rt.pendingUpdates.clear();
   rt.queue = [];
-  try {
-    await rt.watcher.close();
-  } catch (err) {
-    log.warn("watcher close failed", { err: (err as Error).message });
-  }
-  log.info("vault watcher stopped", { vaultPath: rt.vaultPath });
+  return rt;
 }

@@ -25,6 +25,7 @@ import type {
   PluginInfo,
   PluginInstallInput,
   QueryResult,
+  TableDescriptor,
   TestResult,
 } from "@shared/types";
 
@@ -104,6 +105,7 @@ async function writeManifestFile(
 /** shutdown subprocess（kill）+ dispose module（关池），并从 registry 摘除。 */
 async function disposeAllDynamic(): Promise<void> {
   for (const [kind, c] of [...registry.entries()]) {
+    log.info("dispose connector start", { kind });
     try {
       if (c instanceof SubprocessConnector) {
         c.shutdown();
@@ -116,6 +118,7 @@ async function disposeAllDynamic(): Promise<void> {
         err: (err as Error).message,
       });
     }
+    log.info("dispose connector done", { kind });
     registry.delete(kind);
   }
 }
@@ -255,6 +258,20 @@ export async function listTables(
   db?: string | null,
 ): Promise<string[]> {
   return getOrThrow(kind).listTables(config, db);
+}
+
+/**
+ * 批量拿表结构（带 COMMENT）。插件未实现时返回空数组，让 caller
+ * 回退到 DESCRIBE 拼装。
+ */
+export async function describeTables(
+  kind: string,
+  config: unknown,
+  tables: Array<{ database: string | null; table: string }>,
+): Promise<TableDescriptor[]> {
+  const c = getOrThrow(kind);
+  if (typeof c.describeTables !== "function") return [];
+  return c.describeTables(config, tables);
 }
 
 // ---------- Plugin management ----------
@@ -514,8 +531,15 @@ export async function restartPlugin(kind: string): Promise<PluginInfo> {
   return toSubprocessInfo(kind, c);
 }
 
-/** App quit 时调用：dispose 所有插件。 */
+/**
+ * App 最终退出时调用：同步终止子进程并释放注册表。
+ * 不 await module connector 的 dispose()，因为进程会立即退出并由 OS 回收 socket；
+ * 等待连接池的优雅关闭会重新引入不可控的退出延迟。
+ */
 export function shutdown(): void {
-  void disposeAllDynamic();
+  for (const c of registry.values()) {
+    if (c instanceof SubprocessConnector) c.shutdown();
+  }
+  registry.clear();
   currentVaultPath = null;
 }

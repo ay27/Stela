@@ -22,6 +22,7 @@ import { AppError } from "@shared/errors";
 import type {
   ConnectorKindMeta,
   QueryResult,
+  TableDescriptor,
   TestResult,
 } from "@shared/types";
 
@@ -271,6 +272,15 @@ export class SubprocessConnector implements Connector {
       config: cfg,
       db: db ?? null,
     })) as string[];
+  }
+  async describeTables(
+    cfg: unknown,
+    tables: Array<{ database: string | null; table: string }>,
+  ): Promise<TableDescriptor[]> {
+    return (await this.call("describe_tables", {
+      config: cfg,
+      tables,
+    })) as TableDescriptor[];
   }
 
   shutdown(): void {

@@ -28,6 +28,11 @@ export function formatExecutionPlan(snapshot: AgentPlanSnapshot | null): string 
     .join("\n");
 }
 
+/** Session projector reads the mutable plan without appending a message mid-tool-call. */
+export function formatExecutionPlanEntry(data: { plan?: ExecutionPlanStore }): string {
+  return formatExecutionPlan(data.plan?.get() ?? null);
+}
+
 function text(value: string, field: string, maxLength = MAX_TEXT_LENGTH): string {
   const trimmed = value.trim();
   if (!trimmed) throw new Error(`${field} must be a non-empty string.`);

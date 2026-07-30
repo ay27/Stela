@@ -37,7 +37,14 @@ export interface AgentDraft {
 }
 
 export type AgentTimelineEntry =
-  | { kind: "user"; id: string; content: string }
+  | {
+      kind: "user";
+      id: string;
+      content: string;
+      /** 发送时输入框里的 @表 与 [[笔记]] 引用，用于在气泡里回显 pill。 */
+      mentionedTables?: string[];
+      referencedNotes?: string[];
+    }
   | {
       kind: "tool";
       id: string;
@@ -68,7 +75,8 @@ export type AgentTimelineEntry =
       };
     }
   | { kind: "error"; id: string; message: string }
-  | { kind: "cancelled"; id: string };
+  | { kind: "cancelled"; id: string }
+  | { kind: "plan"; id: string; runId: string; plan: AgentPlanSnapshot };
 
 export interface AgentTab {
   id: string;
@@ -87,7 +95,6 @@ export interface AgentTab {
     estimated: boolean;
   } | null;
   compacting: boolean;
-  plan: AgentPlanSnapshot | null;
 }
 
 interface AgentPanelState {
@@ -150,7 +157,6 @@ function newTab(): AgentTab {
     resetToken: 0,
     contextUsage: null,
     compacting: false,
-    plan: null,
   };
 }
 
@@ -163,10 +169,21 @@ function toolCallEntry(call: AgentToolCallInfo): AgentTimelineEntry {
 function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTimelineEntry[] {
   switch (event.type) {
     case "started":
-    case "plan_updated":
     case "context_usage":
     case "compaction":
       return timeline;
+    case "plan_updated": {
+      // 同一 run 的计划快照只保留一条 entry：原地更新，位置固定在首次创建处。
+      const index = timeline.findIndex(
+        (entry) => entry.kind === "plan" && entry.runId === event.plan.runId,
+      );
+      if (index === -1) {
+        return [...timeline, { kind: "plan", id: nextId(), runId: event.plan.runId, plan: event.plan }];
+      }
+      return timeline.map((entry, i) =>
+        i === index && entry.kind === "plan" ? { ...entry, plan: event.plan } : entry,
+      );
+    }
     case "skill_maintenance_started":
       return timeline.map((entry, index) =>
         index === timeline.length - 1 && entry.kind === "final"
@@ -330,9 +347,17 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
         runId,
         status: "running",
         title: current.timeline.length === 0 ? titleFromPrompt(prompt) : current.title,
-        timeline: [...current.timeline, { kind: "user", id: nextId(), content: prompt }],
+        timeline: [
+          ...current.timeline,
+          {
+            kind: "user",
+            id: nextId(),
+            content: prompt,
+            ...(mentionedTables?.length ? { mentionedTables } : {}),
+            ...(referencedNotes?.length ? { referencedNotes } : {}),
+          },
+        ],
         draft: emptyDraft(),
-        plan: null,
         resetToken: current.resetToken + 1,
       })),
     );
@@ -435,9 +460,6 @@ onAgentEvent((event) => {
           contextWindow: event.contextWindow,
           estimated: event.estimated,
         };
-      }
-      if (event.type === "plan_updated") {
-        next.plan = event.plan;
       }
       if (event.type === "compaction") {
         next.compacting = event.phase === "started";

@@ -128,6 +128,22 @@ export interface TestResult {
   latencyMs?: number;
 }
 
+/**
+ * Connector 直出的表结构。`describeTables` 是 schema 工具的专用 API，
+ * 一次返回表名 + 列（含 COMMENT），比 listTables + 三条 SQL 探测更稳。
+ *
+ * 详见 ADR-0042：把列注释/类型放进结构化字段，避免 AI 再去拼
+ * `SHOW CREATE` / `DESCRIBE` / `LIMIT 0` 的探测。
+ */
+export interface TableDescriptor {
+  /** schema / database 名；connector 不强支持时为 null */
+  database: string | null;
+  table: string;
+  columns: ColumnDef[];
+  /** 未取到 DDL 文本时为 null；ai prompt 不再依赖 `ddlSnippet`，仅 retention 用 */
+  ddlSnippet: string | null;
+}
+
 /** main → renderer 错误归一化：保留原始 code，不暴露内部堆栈 */
 export interface IpcErrorPayload {
   code: string;

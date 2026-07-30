@@ -175,13 +175,36 @@ if (!gotLock) {
 
   // First before-quit: flush AutoGit checkpoint, then re-enter quit.
   // Second pass (isQuitting): tear down IPC / vault / connectors.
+  // 每步都打计时日志：退出路径一旦卡住（git 挂起 / 子进程不退），
+  // 终端里最后一条 quit 日志就是卡住的阶段。
   let isQuitting = false;
   app.on("before-quit", (event) => {
+    const quitStart = Date.now();
+    const elapsed = () => `${Date.now() - quitStart}ms`;
     if (isQuitting) {
+      log.info("quit: teardown start", { elapsed: elapsed() });
       try {
         shutdownVaultContext();
+        log.info("quit: vault context down", { elapsed: elapsed() });
         connectorRegistry.shutdown();
+        log.info("quit: connectors down", { elapsed: elapsed() });
         resultStore.close();
+        log.info("quit: result store closed", { elapsed: elapsed() });
+        // before-quit 返回后 Electron 会先进入 BrowserWindow/Chromium 关闭路径；
+        // 不能用 setImmediate 延迟退出，否则 native handle 仍可让用户等待数十秒。
+        log.info("quit: forcing process exit", { elapsed: elapsed() });
+        // ponytail: Electron 41 将 process.exit/app.exit 改写为异步应用退出；在
+        // before-quit 重入时它会返回且继续等待 native handle。所有持久化与子进程
+        // 清理都已完成，故使用 Node 的底层出口；若未来 Electron 恢复同步 exit，
+        // 可删掉这个 fallback。
+        const reallyExit = (process as typeof process & {
+          reallyExit?: (code: number) => void;
+        }).reallyExit;
+        if (reallyExit) {
+          reallyExit(0);
+        } else {
+          app.exit(0);
+        }
       } catch (err) {
         log.error("shutdown error", err);
       }
@@ -192,9 +215,11 @@ if (!gotLock) {
     void (async () => {
       try {
         const vaultPath = getCurrentVault();
+        log.info("quit: auto-commit flush start", { vaultPath, elapsed: elapsed() });
         if (vaultPath) {
           await syncOrchestrator.flushAutoCommitOnQuit(vaultPath);
         }
+        log.info("quit: auto-commit flush done", { elapsed: elapsed() });
       } catch (err) {
         log.error("quit auto-commit failed", err);
       } finally {

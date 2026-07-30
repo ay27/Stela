@@ -5,7 +5,14 @@ import { tmpdir } from "node:os";
 
 import type { ConnectionEntry } from "@shared/types";
 
-import { mergeSchemaTargets, parseColumnsFromDdl, resolveMentionedSchemaContext, resolveSchemaContext } from "./schema-context";
+import {
+  mergeSchemaTargets,
+  parseColumnsFromDdl,
+  resolveMentionedSchemaContext,
+  resolveNamedTableSchemas,
+  resolveSchemaContext,
+  searchTables,
+} from "./schema-context";
 import { extractSqlSymbols } from "./sql-symbols";
 
 const root = await mkdtemp(join(tmpdir(), "stela-ai-schema-"));
@@ -212,6 +219,143 @@ try {
   });
   assert.equal(fallback[0]?.table, "orders");
   assert.ok(fallback[0]?.columns?.some((column) => column.name === "amount"));
+
+  const liveAgentSchema = await resolveNamedTableSchemas({
+    tableNames: ["dw.users"],
+    connectionName: "prod",
+    connection,
+    request: {
+      action: "explain-table",
+      context: {
+        source: "schema",
+        connectionName: "prod",
+        connector: { kind: "mysql", displayName: "MySQL", dialect: "MySQL" },
+      },
+    },
+    matchReason: "agent get_table_schema",
+    preferLocalSchemaDir: false,
+    deps: {
+      listDatabases: async () => ["dw"],
+      listTables: async () => ["users"],
+      execute: async () => ({
+        kind: "query",
+        columns: [{ name: "Create Table", typeName: "varchar" }],
+        rows: [[
+          "CREATE TABLE `dw`.`users` (\n  `live_id` bigint,\n  `live_email` varchar(255)\n)",
+        ]],
+      }),
+    },
+  });
+  assert.equal(liveAgentSchema[0]?.source, "connector");
+  assert.ok(liveAgentSchema[0]?.columns?.some((column) => column.name === "live_id"));
+
+  const describeFallbackSchema = await resolveNamedTableSchemas({
+    tableNames: ["dw.users"],
+    connectionName: "prod",
+    connection,
+    request: {
+      action: "explain-table",
+      context: {
+        source: "schema",
+        connectionName: "prod",
+        connector: { kind: "http", displayName: "HTTP", dialect: "StarRocks" },
+      },
+    },
+    matchReason: "agent get_table_schema",
+    preferLocalSchemaDir: false,
+    deps: {
+      listDatabases: async () => ["dw"],
+      listTables: async () => ["users"],
+      execute: async (_kind, _config, sql) => {
+        if (sql.startsWith("SHOW CREATE")) throw new Error("gateway does not support SHOW CREATE");
+        if (sql.startsWith("DESCRIBE")) {
+          return {
+            kind: "query",
+            columns: [
+              { name: "Field", typeName: "VARCHAR" },
+              { name: "Type", typeName: "VARCHAR" },
+            ],
+            rows: [["live_id", "BIGINT"]],
+          };
+        }
+        return { kind: "query", columns: [], rows: [] };
+      },
+    },
+  });
+  assert.deepEqual(describeFallbackSchema[0]?.columns, [{ name: "live_id", typeName: "BIGINT" }]);
+
+  const liveAgentSearch = await searchTables({
+    connectionName: "prod",
+    connection,
+    keywords: ["newly_added"],
+    preferLocalSchemaDir: false,
+    deps: {
+      listDatabases: async () => ["dw"],
+      listTables: async () => ["newly_added"],
+    },
+  });
+  assert.equal(liveAgentSearch[0]?.table, "newly_added");
+  assert.equal(liveAgentSearch[0]?.source, "connector");
+
+  // describeTables 提供 COMMENT 时，searchTables 与 resolveNamedTableSchemas
+  // 都能拿到结构化列（不再走 SHOW CREATE/DESCRIBE 探测链）。
+  const liveConnectorOnly: ConnectionEntry = {
+    kind: "fake-kind",
+    config: {},
+  };
+  const describedSearch = await searchTables({
+    connectionName: "prod",
+    connection: liveConnectorOnly,
+    keywords: ["orders"],
+    preferLocalSchemaDir: false,
+    deps: {
+      listDatabases: async () => ["dw"],
+      listTables: async (_kind, _cfg, db) => (db === "dw" ? ["orders"] : []),
+      describeTables: async (_kind, _cfg, tables) =>
+        tables.map((t) => ({
+          database: t.database,
+          table: t.table,
+          columns: [
+            { name: "order_id", typeName: "BIGINT", comment: "订单 id" },
+            { name: "amount", typeName: "DECIMAL", comment: "金额" },
+          ],
+        })),
+    },
+  });
+  assert.equal(describedSearch[0]?.table, "orders");
+  assert.match(describedSearch[0]?.columns?.[0]?.comment ?? "", /订单/);
+
+  const describedSchema = await resolveNamedTableSchemas({
+    tableNames: ["dw.orders"],
+    connectionName: "prod",
+    connection: liveConnectorOnly,
+    request: {
+      action: "explain-table",
+      context: {
+        source: "schema",
+        connectionName: "prod",
+        connector: { kind: "fake-kind", displayName: "Fake", dialect: "MySQL" },
+      },
+    },
+    matchReason: "agent get_table_schema",
+    preferLocalSchemaDir: false,
+    deps: {
+      listDatabases: async () => ["dw"],
+      listTables: async (_kind, _cfg, db) => (db === "dw" ? ["orders"] : []),
+      describeTables: async (_kind, _cfg, tables) =>
+        tables.map((t) => ({
+          database: t.database,
+          table: t.table,
+          columns: [
+            { name: "order_id", typeName: "BIGINT", comment: "订单 id" },
+            { name: "amount", typeName: "DECIMAL", comment: "金额" },
+          ],
+          ddlSnippet: "CREATE TABLE dw.orders (order_id BIGINT, amount DECIMAL)",
+        })),
+    },
+  });
+  assert.equal(describedSchema[0]?.columns.length, 2);
+  assert.match(describedSchema[0]?.ddlSnippet ?? "", /CREATE TABLE/);
 
   const mentioned = await resolveMentionedSchemaContext({
     mentionedTables: ["dw.orders"],

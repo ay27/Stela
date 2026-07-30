@@ -441,6 +441,16 @@ Hits always come from deterministic `sql-index` intersection — the model must 
 
 ### Agent harness
 
+Agent schema tools have one authority: the current live connector. `search_tables`
+enumerates its catalog and `get_table_schema` fetches current DDL or columns;
+they do not read the optional connection `schemaDir` dump ([ADR-0041](./adr/0041-agent-live-schema-authority.md)).
+
+When the connector implements `describeTables(kind, config, tables)` the schema
+resolver calls it once per lookup and uses the returned `TableDescriptor`
+columns (with `comment`) directly. Otherwise it falls back to `SHOW CREATE TABLE`
+→ `DESCRIBE` → `SELECT ... LIMIT 0` ladder; old plugins keep working
+([ADR-0042](./adr/0042-connector-describe-tables-api.md)).
+
 ```typescript
 type AgentToolName =
   | "list_databases" | "list_tables" | "search_tables" | "get_table_schema"
@@ -527,7 +537,7 @@ Safety ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md)):
 - Note references are paths only; the agent should call `read_note` before relying on note contents
 - Selection / RunSQL attachments are bounded and included only on the user turn that added them
 - `ask_user` blocks on the same handshake with `kind: "question"`, resolving to the answer string; ≤3 questions per run, enforced in the tool ([ADR-0027](./adr/0027-agent-ask-user-clarification.md))
-- Final answers follow a fixed contract: conclusion, evidence (table · column · SQL), key numbers, assumptions made, remaining uncertainty
+- Final answers are concise: direct answer + key numbers in 1–3 sentences, one compact evidence line (table · column · SQL logic); assumptions / uncertainty sections only when an ambiguity was actually resolved or remains open ([ADR-0039](./adr/0039-concise-agent-final-answers.md))
 
 ### Agent Skills
 
@@ -637,7 +647,7 @@ Global dialog pattern: modals mount at `AppShell` root, triggered via `dialogs.t
 ## Event Flow (External Changes)
 
 ```
-vault-watcher (chokidar, main)
+vault-watcher (@parcel/watcher, main)
     │ vault:external-change { paths, kind }
     ▼
 renderer subscriber (vault-watcher-subscriber.ts)

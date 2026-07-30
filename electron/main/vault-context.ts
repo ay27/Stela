@@ -116,10 +116,9 @@ export async function setCurrentVault(
   log.info("setCurrentVault done", { vaultPath });
 }
 
-/** 主进程退出前调用：让 registry shutdown 所有 subprocess plugin。 */
+/** 主进程最终退出前调用。Connector 由 main 的独立 shutdown 步骤处理。 */
 export function shutdownVaultContext(): void {
-  void registrySetVault(null).catch(() => {});
-  void vaultWatcher.stop().catch(() => {});
+  vaultWatcher.releaseForAppQuit();
   void vaultIndex.stop().catch(() => {});
   void sqlIndex.stop().catch(() => {});
   currentVaultPath = null;

@@ -19,7 +19,6 @@ import { isContextOverflow } from "@earendil-works/pi-ai";
 
 import type {
   AgentEvent,
-  AgentPlanSnapshot,
   AgentProposalResponse,
   AgentRunRequest,
   ConnectionEntry,
@@ -40,7 +39,7 @@ import {
   rankAgentSkills,
   type AgentSkillMaintenanceRecord,
 } from "./agent-skills";
-import { ExecutionPlanStore, formatExecutionPlan } from "./execution-plan";
+import { ExecutionPlanStore, formatExecutionPlanEntry } from "./execution-plan";
 import {
   createAgentTools,
   type AgentRunRecorder,
@@ -87,7 +86,6 @@ const activeProposals = new Map<string, Map<string, ProposalResolver>>();
  * 升级路径=加个数上限的 LRU，或在前端"新建对话"时清掉旧的 sessionId。
  */
 const sessions = new Map<string, Session>();
-const planEntryWrites = new WeakMap<Session, Promise<void>>();
 
 /** IPC 入口：用户在前端 approve/reject 一个 proposal 时调用。找不到（已超时/run 已结束）返回 false。 */
 export function respondToProposal(response: AgentProposalResponse): boolean {
@@ -205,10 +203,10 @@ function createSession(): Session {
     ],
     entryProjectors: {
       [EXECUTION_PLAN_ENTRY]: (entry) => {
-        const data = entry.data as { plan?: AgentPlanSnapshot | null } | undefined;
+        const data = entry.data as { plan?: ExecutionPlanStore } | undefined;
         return [{
           role: "user",
-          content: `Current execution plan:\n${formatExecutionPlan(data?.plan ?? null)}`,
+          content: `Current execution plan:\n${formatExecutionPlanEntry(data ?? {})}`,
           timestamp: Date.now(),
         }];
       },
@@ -216,11 +214,8 @@ function createSession(): Session {
   });
 }
 
-function appendPlanEntry(session: Session, runId: string, plan: AgentPlanSnapshot | null): Promise<void> {
-  const pending = planEntryWrites.get(session) ?? Promise.resolve();
-  const next = pending.then(() => session.appendCustomEntry(EXECUTION_PLAN_ENTRY, { runId, plan }));
-  planEntryWrites.set(session, next.catch(() => {}));
-  return next;
+function appendPlanEntry(session: Session, runId: string, plan: ExecutionPlanStore): Promise<string> {
+  return session.appendCustomEntry(EXECUTION_PLAN_ENTRY, { runId, plan });
 }
 
 function getOrCreateSession(sessionId: string | undefined): Session {
@@ -270,6 +265,7 @@ async function runSkillMaintenance(options: {
           listDatabases: connectorRegistry.listDatabases,
           listTables: connectorRegistry.listTables,
           execute: connectorRegistry.execute,
+          describeTables: connectorRegistry.describeTables,
         },
         sqlIndex: { query: sqlIndex.query },
         skills: skills.loaded,
@@ -347,9 +343,8 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
     const session = getOrCreateSession(request.sessionId ?? undefined);
     const plan = new ExecutionPlanStore(runId, (snapshot) => {
       onEvent({ type: "plan_updated", runId, plan: snapshot });
-      void appendPlanEntry(session, runId, snapshot);
     });
-    await appendPlanEntry(session, runId, null);
+    await appendPlanEntry(session, runId, plan);
 
     const emitUsage = async (estimated: boolean) => {
       const context = await session.buildContext();
@@ -395,6 +390,7 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
             listDatabases: connectorRegistry.listDatabases,
             listTables: connectorRegistry.listTables,
             execute: connectorRegistry.execute,
+            describeTables: connectorRegistry.describeTables,
           },
           sqlIndex: { query: sqlIndex.query },
           skills: skills.loaded,

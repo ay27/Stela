@@ -45,6 +45,18 @@ export interface TestResult {
 }
 
 /**
+ * Connector 直出的表结构。`describeTables` 是 schema 工具的专用 API：
+ * 一次返回带 COMMENT 的列，避免 `SHOW CREATE` / `DESCRIBE` / `LIMIT 0`
+ * 这种拼凑的探测链。`comment` 可选，老插件不实现时为 undefined。
+ */
+export interface TableDescriptor {
+  database: string | null;
+  table: string;
+  columns: (ColumnDef & { comment?: string | null })[];
+  ddlSnippet: string | null;
+}
+
+/**
  * connector kind 的元信息。`configSchema` 是 JSON Schema 风格对象，Stela 前端
  * 据此渲染连接配置表单；想做「专有 / 零配置」插件，只暴露需要用户填的字段即可
  * （把固定值硬编码在插件内部，不写进 schema）。
@@ -77,6 +89,14 @@ export interface Connector {
   execute(config: unknown, sql: string): Promise<QueryResult>;
   listDatabases(config: unknown): Promise<string[]>;
   listTables(config: unknown, db?: string | null): Promise<string[]>;
+  /**
+   * 可选：批量拿表结构（含 COMMENT）。host 端默认回退到 listTables + DESCRIBE
+   * 拼装。实现后能保留原生 COMMENT，是 AI 列注释打分的干净路径。
+   */
+  describeTables?(
+    config: unknown,
+    tables: Array<{ database: string | null; table: string }>,
+  ): Promise<TableDescriptor[]>;
   /** 可选：释放底层资源（连接池 / socket）。host 在卸载或切 vault 时调用。 */
   dispose?(): void | Promise<void>;
 }

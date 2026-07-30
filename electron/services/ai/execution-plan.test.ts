@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { ExecutionPlanStore } from "./execution-plan";
+import { ExecutionPlanStore, formatExecutionPlanEntry } from "./execution-plan";
 
 const store = new ExecutionPlanStore("agent_test");
 
@@ -51,5 +51,19 @@ const completed = store.update({
 });
 assert.equal(completed.steps[1]?.status, "completed");
 assert.equal(completed.steps[1]?.runId, "run_daily_trend");
+
+// Session 条目持有同一份可变计划；工具调用后重建上下文会读到最新快照。
+{
+  const plan = new ExecutionPlanStore("agent_session");
+  plan.create([
+    {
+      id: "scope",
+      title: "Confirm scope",
+      intent: "Identify the requested metric.",
+      acceptance: "The metric is defined.",
+    },
+  ]);
+  assert.match(formatExecutionPlanEntry({ plan }), /\[running\] Confirm scope/);
+}
 
 console.log("execution plan tests passed.");

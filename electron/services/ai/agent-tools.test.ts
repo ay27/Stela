@@ -179,6 +179,43 @@ try {
     assert.equal(new Set(runIds).size, 2);
   }
 
+  // get_table_schema 必须把 connector.execute 传给 schema-context，否则 DESCRIBE 永远跑不到。
+  {
+    const executed: string[] = [];
+    const ctx = {
+      ...withConnection,
+      connector: {
+        listKinds: () => [],
+        listDatabases: async () => ["threed"],
+        listTables: async () => ["global_3d_normal_clustering_final_summary"],
+        execute: async (_kind: string, _config: unknown, sql: string) => {
+          executed.push(sql);
+          if (sql.startsWith("SHOW CREATE")) throw new Error("unsupported");
+          if (sql.startsWith("DESCRIBE")) {
+            return {
+              kind: "query" as const,
+              columns: [
+                { name: "Field", typeName: "VARCHAR" },
+                { name: "Type", typeName: "VARCHAR" },
+              ],
+              rows: [["id", "BIGINT"]],
+              elapsedMs: 1,
+            };
+          }
+          return { kind: "query" as const, columns: [], rows: [], elapsedMs: 1 };
+        },
+      },
+    };
+    const r = await dispatchTool(
+      "get_table_schema",
+      JSON.stringify({ tables: ["threed.global_3d_normal_clustering_final_summary"] }),
+      ctx,
+    );
+    assert.equal(r.ok, true);
+    assert.match(r.text, /"name": "id"/);
+    assert.ok(executed.some((sql) => sql.startsWith("DESCRIBE")));
+  }
+
   // propose_edit：reject 不写盘，approve 才写盘
   {
     const r = await dispatchTool(

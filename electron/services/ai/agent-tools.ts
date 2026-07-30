@@ -56,6 +56,22 @@ export interface AgentConnectorOps {
   listDatabases(kind: string, config: unknown): Promise<string[]>;
   listTables(kind: string, config: unknown, db?: string | null): Promise<string[]>;
   execute(kind: string, config: unknown, sql: string): Promise<QueryResult>;
+  /**
+   * 可选：批量拿带 COMMENT 的列。caller 需要 ignore 它不存在的情形（runtime
+   * 注入来自 registry.describeTables）。
+   */
+  describeTables?(
+    kind: string,
+    config: unknown,
+    tables: Array<{ database: string | null; table: string }>,
+  ): Promise<
+    Array<{
+      database: string | null;
+      table: string;
+      columns: Array<{ name: string; typeName: string; comment?: string | null }>;
+      ddlSnippet: string | null;
+    }>
+  >;
 }
 
 /**
@@ -493,6 +509,13 @@ async function runSearchTables(args: { keywords?: unknown; limit?: unknown }, ct
     connection,
     keywords,
     limit,
+    preferLocalSchemaDir: false,
+    deps: {
+      listDatabases: ctx.connector.listDatabases,
+      listTables: ctx.connector.listTables,
+      execute: ctx.connector.execute,
+      describeTables: ctx.connector.describeTables,
+    },
   });
   if (targets.length === 0) {
     return fail("No matching tables found. Try list_databases/list_tables, or broaden the keywords.");
@@ -548,6 +571,7 @@ async function runGetTableSchema(args: { tables?: unknown }, ctx: AgentToolConte
     connectionName: ctx.connectionName!,
     connection,
     matchReason: "agent get_table_schema",
+    preferLocalSchemaDir: false,
     request: {
       action: "explain-table",
       context: {
@@ -555,6 +579,12 @@ async function runGetTableSchema(args: { tables?: unknown }, ctx: AgentToolConte
         connectionName: ctx.connectionName,
         connector: { kind: connection.kind, displayName: connection.kind, dialect: resolveDialect(connection.kind, ctx) },
       },
+    },
+    deps: {
+      listDatabases: ctx.connector.listDatabases,
+      listTables: ctx.connector.listTables,
+      execute: ctx.connector.execute,
+      describeTables: ctx.connector.describeTables,
     },
   });
   if (targets.length === 0) return fail(`No schema found for: ${tables.join(", ")}`);

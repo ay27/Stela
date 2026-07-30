@@ -66,8 +66,13 @@ async function autoMessage(vaultPath: string): Promise<string> {
  */
 export async function flushAutoCommitOnQuit(vaultPath: string): Promise<void> {
   const settings = await settingsStore.loadAppSettings(vaultPath);
-  if (!settings.git.enabled || !settings.git.autoCommit) return;
+  if (!settings.git.enabled || !settings.git.autoCommit) {
+    log.info("quit flush skipped", { enabled: settings.git.enabled, autoCommit: settings.git.autoCommit });
+    return;
+  }
+  log.info("quit flush commit start");
   await syncPush(vaultPath, undefined, { push: false });
+  log.info("quit flush commit done");
 }
 
 /**

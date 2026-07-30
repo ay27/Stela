@@ -91,3 +91,7 @@ proposed → active → superseded
 | [0036](0036-user-deletion-of-experience-knowledge.md) | User deletion of Experience Knowledge | active |
 | [0037](0037-concise-verified-skill-maintenance.md) | Concise verified Skill maintenance | active |
 | [0038](0038-runtime-agent-execution-plans.md) | Runtime linear agent execution plans | active |
+| [0039](0039-concise-agent-final-answers.md) | Concise agent final answers | active |
+| [0040](0040-native-vault-watcher-backend.md) | Native vault watcher backend | active |
+| [0041](0041-agent-live-schema-authority.md) | Agent live schema authority | active |
+| [0042](0042-connector-describe-tables-api.md) | Connector describeTables API for live column COMMENT | active |

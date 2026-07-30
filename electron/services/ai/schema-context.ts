@@ -9,8 +9,10 @@ import type {
   QueryResult,
 } from "@shared/types";
 
+import { getLogger } from "../logger";
 import type { SqlSymbols } from "./sql-symbols";
 
+const log = getLogger("ai.schema-context");
 const MAX_SCHEMA_TARGETS = 5;
 const MAX_DDL_CHARS = 4_000;
 /**
@@ -68,6 +70,22 @@ export interface SchemaResolverDeps {
   listDatabases?: (kind: string, config: unknown) => Promise<string[]>;
   listTables?: (kind: string, config: unknown, db?: string | null) => Promise<string[]>;
   execute?: (kind: string, config: unknown, sql: string) => Promise<QueryResult>;
+  /**
+   * 可选：批量拿带 COMMENT 的列。若提供并返回结果，会跳过 SHOW CREATE /
+   * DESCRIBE / LIMIT 0 三段拼装。返回的列可不带 COMMENT。
+   */
+  describeTables?: (
+    kind: string,
+    config: unknown,
+    tables: Array<{ database: string | null; table: string }>,
+  ) => Promise<
+    Array<{
+      database: string | null;
+      table: string;
+      columns: Array<{ name: string; typeName: string; comment?: string | null }>;
+      ddlSnippet?: string | null;
+    }>
+  >;
 }
 
 export interface ResolveSchemaContextOptions {
@@ -458,12 +476,14 @@ export interface SearchTablesOptions {
   /** 自然语言关键词（表名/业务词），来自 agent 对用户问题的推测。 */
   keywords: string[];
   limit?: number;
+  /** false 时跳过可过期的本地 dump，只枚举当前 connector。 */
+  preferLocalSchemaDir?: boolean;
   deps?: SchemaResolverDeps;
 }
 
 /**
  * 需求 5 的核心：agent 拿一组模糊关键词（表名片段 / 业务词），在 schema-dir
- * 文档 或 connector 的 database/table 目录里模糊打分找候选表。复用
+ * 文档或 connector 的 database/table 目录里模糊打分找候选表。复用
  * [rankCatalog](#rankCatalog) 同款打分逻辑（表名/列名/DDL 命中），只是输入
  * 从 `AiCompleteRequest` 换成一组裸关键词，方便 agent 工具直接调用。
  */
@@ -475,15 +495,44 @@ export async function searchTables(
     readFile: fs.readFile,
     ...options.deps,
   };
-  const fromSchemaDir = await loadSchemaDirCatalog(
-    options.connectionName,
-    options.connection.schemaDir,
-    deps,
-  );
-  const catalog =
+  const fromSchemaDir =
+    options.preferLocalSchemaDir === false
+      ? []
+      : await loadSchemaDirCatalog(
+          options.connectionName,
+          options.connection.schemaDir,
+          deps,
+        );
+  let catalog =
     fromSchemaDir.length > 0
       ? fromSchemaDir
       : await loadConnectorCatalog(options.connectionName, options.connection, deps);
+  // 让 live connector 上的 COMMENT 进入打分：先按表名筛，再批量拉结构。
+  // ponytail: 整页表不会被全量拉，只命中当前关键词后的候选表前 N 个。
+  if (deps.describeTables && catalog.every((entry) => entry.source === "connector")) {
+    const probed = await callDescribeTables(
+      options.connection,
+      catalog.slice(0, 200).map((entry) => ({ database: entry.database, table: entry.table })),
+      deps,
+    );
+    if (probed.length > 0) {
+      const byQName = new Map(
+        probed.map((entry) => [
+          normalizeName(qualifiedName(entry.database, entry.table)),
+          entry,
+        ]),
+      );
+      catalog = catalog.map((entry) => {
+        const hit = byQName.get(normalizeName(entry.qualifiedName));
+        if (!hit) return entry;
+        return {
+          ...entry,
+          columns: hit.columns.length > 0 ? hit.columns : entry.columns,
+          ddlSnippet: hit.ddlSnippet ?? entry.ddlSnippet,
+        };
+      });
+    }
+  }
   const ranked = rankCatalogByKeywords(catalog, options.keywords);
   const limit = options.limit ?? MAX_SCHEMA_TARGETS;
   return ranked.slice(0, limit).map((entry) => ({
@@ -501,6 +550,64 @@ export async function searchTables(
 function quoteIdent(value: string, dialect: string | undefined): string {
   const quote = dialect?.toLowerCase().includes("postgres") ? `"` : "`";
   return `${quote}${value.replaceAll(quote, `${quote}${quote}`)}${quote}`;
+}
+
+/**
+ * 把 connector 直出的列转成 AiSchemaColumnContext。
+ * 缺失 `comment` 字段的老插件保留原 shape（可选字段省略）。
+ */
+function descriptorColumns(
+  columns: Array<{ name: string; typeName: string; comment?: string | null }>,
+): AiSchemaColumnContext[] {
+  return columns.map((column) => ({
+    name: column.name,
+    typeName: column.typeName,
+    ...(column.comment ? { comment: column.comment } : {}),
+  }));
+}
+
+async function callDescribeTables(
+  connection: ConnectionEntry,
+  targets: Array<{ database: string | null; table: string }>,
+  deps: SchemaResolverDeps,
+): Promise<
+  Array<{
+    database: string | null;
+    table: string;
+    columns: AiSchemaColumnContext[];
+    ddlSnippet: string | null;
+  }>
+> {
+  if (!deps.describeTables) return [];
+  const raw = await deps
+    .describeTables(connection.kind, connection.config, targets)
+    .catch((err) => {
+      log.warn("describeTables failed, falling back to SQL probes", {
+        connectionKind: connection.kind,
+        err: (err as Error).message,
+      });
+      return [];
+    });
+  const descriptors = Array.isArray(raw) ? raw : [];
+  return descriptors.map((entry) => ({
+    database: entry.database,
+    table: entry.table,
+    columns: descriptorColumns(entry.columns),
+    ddlSnippet: entry.ddlSnippet ?? null,
+  }));
+}
+
+function columnsFromDescribe(result: QueryResult): AiSchemaColumnContext[] {
+  if (result.kind !== "query") return [];
+  const fieldIndex = result.columns.findIndex((column) => /^(field|column|column_name|name)$/i.test(column.name));
+  if (fieldIndex < 0) return [];
+  const typeIndex = result.columns.findIndex((column) => /^(type|data_type)$/i.test(column.name));
+  return result.rows.flatMap((row) => {
+    const name = row[fieldIndex];
+    if (typeof name !== "string" || !name.trim()) return [];
+    const type = typeIndex >= 0 ? row[typeIndex] : null;
+    return [{ name, typeName: typeof type === "string" ? type : undefined }];
+  });
 }
 
 async function probeColumns(
@@ -541,7 +648,13 @@ async function fetchTableSchemaFromConnector(
   dialect: string | undefined,
   deps: SchemaResolverDeps,
 ): Promise<{ columns: AiSchemaColumnContext[]; ddlSnippet: string | null }> {
-  if (!deps.execute) return { columns: [], ddlSnippet: null };
+  if (!deps.execute) {
+    log.warn("schema probe skipped: connector execute dep missing", {
+      connectionKind: connection.kind,
+      table: qualifiedName(database, table),
+    });
+    return { columns: [], ddlSnippet: null };
+  }
   const tableRef = database
     ? `${quoteIdent(database, dialect)}.${quoteIdent(table, dialect)}`
     : quoteIdent(table, dialect);
@@ -564,6 +677,18 @@ async function fetchTableSchemaFromConnector(
         };
       }
     }
+  } catch {
+    // Fall through to DESCRIBE / LIMIT 0 probes.
+  }
+
+  try {
+    const result = await deps.execute(
+      connection.kind,
+      connection.config,
+      `DESCRIBE ${tableRef}`,
+    );
+    const columns = columnsFromDescribe(result);
+    if (columns.length > 0) return { columns, ddlSnippet: null };
   } catch {
     // fall through to LIMIT 0 probe
   }
@@ -643,6 +768,8 @@ export interface ResolveNamedTableSchemasOptions {
   request: AiCompleteRequest;
   matchReason: string;
   score?: number;
+  /** false 时即使存在 schemaDir，也向当前 connector 拉取结构。 */
+  preferLocalSchemaDir?: boolean;
   deps?: SchemaResolverDeps;
 }
 
@@ -660,15 +787,37 @@ export async function resolveNamedTableSchemas(
     ...options.deps,
   };
   const dialect = options.request.context.connector?.dialect;
-  const schemaDirCatalog = await loadSchemaDirCatalog(
-    options.connectionName,
-    options.connection.schemaDir,
-    deps,
-  );
+  const schemaDirCatalog =
+    options.preferLocalSchemaDir === false
+      ? []
+      : await loadSchemaDirCatalog(
+          options.connectionName,
+          options.connection.schemaDir,
+          deps,
+        );
   const connectorCatalog =
     schemaDirCatalog.length > 0
       ? schemaDirCatalog
       : await loadConnectorCatalog(options.connectionName, options.connection, deps);
+
+  // 先尝试 connector 直出的 describeTables：单次往返、可拿到 COMMENT 全文。
+  // 没接口或失败时回退到原本的 SHOW CREATE / DESCRIBE / LIMIT 0 拼装。
+  const parsedTargets: Array<{ database: string | null; table: string }> = [];
+  for (const name of uniqueNames) {
+    const parsed = splitQualifiedName(name);
+    const connectorEntry = findCatalogEntry(connectorCatalog, name);
+    parsedTargets.push({
+      database: connectorEntry?.database ?? parsed.database,
+      table: connectorEntry?.table ?? parsed.table,
+    });
+  }
+  const described = await callDescribeTables(options.connection, parsedTargets, deps);
+  const describedByQName = new Map(
+    described.map((entry) => [
+      normalizeName(qualifiedName(entry.database, entry.table)),
+      entry,
+    ]),
+  );
 
   const out: AiSchemaTargetContext[] = [];
   for (const name of uniqueNames) {
@@ -686,13 +835,23 @@ export async function resolveNamedTableSchemas(
         database = connectorEntry.database ?? parsed.database;
         table = connectorEntry.table;
       }
-      const fetched = await fetchTableSchemaFromConnector(
-        options.connection,
-        database,
-        table,
-        dialect,
-        deps,
-      );
+      const describedHit =
+        describedByQName.get(normalizeName(qualifiedName(database, table))) ?? null;
+      let fetched: { columns: AiSchemaColumnContext[]; ddlSnippet: string | null };
+      if (describedHit && describedHit.columns.length > 0) {
+        fetched = {
+          columns: describedHit.columns,
+          ddlSnippet: describedHit.ddlSnippet,
+        };
+      } else {
+        fetched = await fetchTableSchemaFromConnector(
+          options.connection,
+          database,
+          table,
+          dialect,
+          deps,
+        );
+      }
       columns = fetched.columns.length > 0 ? fetched.columns : columns;
       ddlSnippet = fetched.ddlSnippet ?? ddlSnippet;
       source = "connector";

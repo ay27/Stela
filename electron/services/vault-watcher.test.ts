@@ -35,6 +35,11 @@ try {
   assert.deepEqual(events[0]!.events, [
     { type: "changed", path: notePath, isDir: false },
   ]);
+
+  events.length = 0;
+  notifyFileChanged(path.join(root, ".git", "config"));
+  await wait(260);
+  assert.equal(events.length, 0, "ignored paths should not publish synthetic events");
 } finally {
   await stop();
   await rm(root, { recursive: true, force: true });
