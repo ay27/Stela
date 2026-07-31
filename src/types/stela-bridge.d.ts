@@ -8,9 +8,13 @@
 
 import type {
   AgentEvent,
+  AgentHistoryRef,
+  AgentHistorySession,
+  AgentHistorySummary,
   AgentSkillListItem,
   AgentProposalResponse,
   AgentRunRequest,
+  AgentRunResponse,
   AiCompleteRequest,
   AiCompleteResponse,
   AiInlineCompletionEvent,
@@ -223,7 +227,9 @@ interface StelaBridge {
     ) => () => void;
   };
   agent: {
-    run: (request: AgentRunRequest) => Promise<{ runId: string }>;
+    run: (request: AgentRunRequest) => Promise<AgentRunResponse>;
+    listHistory: () => Promise<AgentHistorySummary[]>;
+    loadHistory: (ref: AgentHistoryRef) => Promise<AgentHistorySession>;
     listSkills: () => Promise<AgentSkillListItem[]>;
     removeSkill: (relativePath: string) => Promise<void>;
     cancel: (runId: string) => Promise<{ cancelled: boolean }>;

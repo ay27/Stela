@@ -18,6 +18,7 @@ import type {
   GitVaultStatus,
 } from "@shared/types";
 
+import { useAgentPanel } from "@/state/agent-panel";
 import { useWorkspace } from "@/state/workspace";
 
 const EMPTY_STATUS: GitVaultStatus = {
@@ -112,6 +113,7 @@ export const useGitStore = create<GitState>((set, get) => ({
       // 比纯等 vault-watcher 事件更跟手、抖动更少；watcher 仍会兜底刷新文件树等。
       if (r.updated && !r.conflicted) {
         useWorkspace.getState().reloadCleanFileTabsAfterSync();
+        void useAgentPanel.getState().refreshHistory();
       }
       await get().refresh();
       return r;

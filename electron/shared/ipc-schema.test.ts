@@ -22,4 +22,13 @@ const parsed = parseInput<{
 assert.equal(parsed.patch.ai?.sendResultSamples, true);
 assert.equal(parsed.patch.ai?.maxSampleRows, 20);
 
+assert.deepEqual(parseInput(IPC.AI_AGENT_HISTORY_LIST, {}), {});
+assert.deepEqual(
+  parseInput(IPC.AI_AGENT_HISTORY_LOAD, { sessionId: "sess_abc", deviceSlug: "laptop" }),
+  { sessionId: "sess_abc", deviceSlug: "laptop" },
+);
+assert.throws(
+  () => parseInput(IPC.AI_AGENT_HISTORY_LOAD, { sessionId: "../escape", deviceSlug: "laptop" }),
+);
+
 console.log("ipc-schema tests passed.");

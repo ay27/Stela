@@ -44,3 +44,4 @@ worktrees/
 # OS / editor
 .DS_Store
 *.log
+.cursor/

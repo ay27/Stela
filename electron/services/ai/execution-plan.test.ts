@@ -66,4 +66,10 @@ assert.equal(completed.steps[1]?.runId, "run_daily_trend");
   assert.match(formatExecutionPlanEntry({ plan }), /\[running\] Confirm scope/);
 }
 
+// 持久化 JSONL 恢复后的 plain snapshot 也必须能投影进 Agent context。
+assert.match(
+  formatExecutionPlanEntry({ plan: JSON.parse(JSON.stringify(completed)) }),
+  /\[completed\] Query the daily trend/,
+);
+
 console.log("execution plan tests passed.");

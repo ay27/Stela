@@ -10,12 +10,22 @@ import { create } from "zustand";
 import type {
   AgentAttachment,
   AgentEvent,
+  AgentHistoryRef,
+  AgentHistorySession,
+  AgentHistorySummary,
   AgentPlanSnapshot,
   AgentProposalKind,
   AgentProposalPayload,
   AgentToolCallInfo,
 } from "@shared/types";
-import { cancelAgent, onAgentEvent, respondAgentProposal, runAgent } from "@/services/agent";
+import {
+  cancelAgent,
+  listAgentHistory,
+  loadAgentHistory,
+  onAgentEvent,
+  respondAgentProposal,
+  runAgent,
+} from "@/services/agent";
 import { useLayout } from "@/state/layout";
 
 export type AgentRunStatus = "idle" | "running" | "done" | "error" | "cancelled";
@@ -60,7 +70,7 @@ export type AgentTimelineEntry =
       callId: string;
       proposalKind: AgentProposalKind;
       payload: AgentProposalPayload;
-      resolution: "pending" | "approved" | "rejected";
+      resolution: "pending" | "approved" | "rejected" | "expired";
       /** `question` kind：用户实际给出的答案，供 timeline 回看。 */
       answer?: string;
     }
@@ -76,12 +86,14 @@ export type AgentTimelineEntry =
     }
   | { kind: "error"; id: string; message: string }
   | { kind: "cancelled"; id: string }
+  | { kind: "interrupted"; id: string }
   | { kind: "plan"; id: string; runId: string; plan: AgentPlanSnapshot };
 
 export interface AgentTab {
   id: string;
   title: string;
   runId: string | null;
+  historyRef: AgentHistoryRef | null;
   /** 同一 tab 下的多次 start() 在 main 进程里共享对话历史，实现多轮对话。 */
   sessionId: string;
   status: AgentRunStatus;
@@ -100,6 +112,12 @@ export interface AgentTab {
 interface AgentPanelState {
   tabs: AgentTab[];
   activeTabId: string;
+  history: AgentHistorySummary[];
+  historyLoaded: boolean;
+  vaultPath: string | null;
+  bindVault: (vaultPath: string | null) => Promise<void>;
+  refreshHistory: () => Promise<void>;
+  openHistory: (ref: AgentHistoryRef) => Promise<void>;
   switchTab: (tabId: string) => void;
   newConversation: () => void;
   closeTab: (tabId: string) => void;
@@ -149,6 +167,7 @@ function newTab(): AgentTab {
     id: `tab_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     title: "New",
     runId: null,
+    historyRef: null,
     sessionId: newSessionId(),
     status: "idle",
     timeline: [],
@@ -171,6 +190,7 @@ function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTim
     case "started":
     case "context_usage":
     case "compaction":
+    case "history_updated":
       return timeline;
     case "plan_updated": {
       // 同一 run 的计划快照只保留一条 entry：原地更新，位置固定在首次创建处。
@@ -256,6 +276,79 @@ function titleFromPrompt(prompt: string): string {
   return prompt.trim().replace(/\s+/g, " ").slice(0, 28) || "New";
 }
 
+function applyProposalResponse(
+  timeline: AgentTimelineEntry[],
+  response: { runId: string; callId: string; approve: boolean; answer?: string },
+): AgentTimelineEntry[] {
+  return timeline.map((entry) =>
+    entry.kind === "proposal" && entry.runId === response.runId && entry.callId === response.callId
+      ? {
+          ...entry,
+          resolution: response.approve ? "approved" : "rejected",
+          ...(response.answer !== undefined ? { answer: response.answer } : {}),
+        }
+      : entry,
+  );
+}
+
+export function replayAgentHistory(history: AgentHistorySession): AgentTimelineEntry[] {
+  let timeline: AgentTimelineEntry[] = [];
+  for (const run of history.runs) {
+    timeline = [
+      ...timeline,
+      {
+        kind: "user",
+        id: `history_${run.request.runId}_user`,
+        content: run.request.prompt,
+        ...(run.request.mentionedTables?.length ? { mentionedTables: run.request.mentionedTables } : {}),
+        ...(run.request.referencedNotes?.length ? { referencedNotes: run.request.referencedNotes } : {}),
+      },
+    ];
+    for (const event of run.events) timeline = applyEvent(timeline, event);
+    for (const response of run.proposalResponses) timeline = applyProposalResponse(timeline, response);
+    if (run.finishedAt === null) {
+      timeline = timeline.map((entry) =>
+        entry.kind === "proposal" && entry.runId === run.request.runId && entry.resolution === "pending"
+          ? { ...entry, resolution: "expired" }
+          : entry,
+      );
+      timeline = [...timeline, { kind: "interrupted", id: `history_${run.request.runId}_interrupted` }];
+    }
+  }
+  return timeline;
+}
+
+function tabFromHistory(history: AgentHistorySession): AgentTab {
+  const timeline = replayAgentHistory(history);
+  const lastEvent = history.runs.at(-1)?.events.at(-1);
+  return {
+    ...newTab(),
+    title: history.summary.title,
+    sessionId: history.summary.sessionId,
+    historyRef: {
+      sessionId: history.summary.sessionId,
+      deviceSlug: history.summary.deviceSlug,
+    },
+    status: history.runs.at(-1)?.finishedAt === null
+      ? "cancelled"
+      : lastEvent
+        ? statusAfter(lastEvent, "idle")
+        : "idle",
+    timeline,
+  };
+}
+
+export function isCurrentHistoryTab(
+  tab: Pick<AgentTab, "sessionId" | "historyRef">,
+  ref: AgentHistoryRef,
+  isLocal: boolean,
+): boolean {
+  return (
+    (tab.historyRef?.sessionId === ref.sessionId && tab.historyRef.deviceSlug === ref.deviceSlug) ||
+    (isLocal && tab.sessionId === ref.sessionId)
+  );
+}
+
 function draftWithAttachment(draft: AgentDraft, attachment: AgentDraftAttachmentInput): AgentDraft {
   if (attachment.kind === "note") {
     if (draft.attachments.some((item) => item.kind === "note" && item.path === attachment.path)) {
@@ -276,6 +369,73 @@ function draftWithAttachment(draft: AgentDraft, attachment: AgentDraftAttachment
 export const useAgentPanel = create<AgentPanelState>((set, get) => ({
   tabs: [initialTab],
   activeTabId: initialTab.id,
+  history: [],
+  historyLoaded: false,
+  vaultPath: null,
+  async bindVault(vaultPath) {
+    if (!vaultPath) {
+      const tab = newTab();
+      set({ vaultPath: null, history: [], historyLoaded: false, tabs: [tab], activeTabId: tab.id });
+      return;
+    }
+    if (get().vaultPath === vaultPath && get().historyLoaded) return;
+    const changedVault = get().vaultPath !== vaultPath;
+    const tab = newTab();
+    set({
+      vaultPath,
+      historyLoaded: false,
+      ...(changedVault ? { tabs: [tab], activeTabId: tab.id } : {}),
+    });
+    try {
+      const history = await listAgentHistory();
+      if (get().vaultPath !== vaultPath) return;
+      set({ history, historyLoaded: true });
+      const latestLocal = history.find((item) => item.isLocal);
+      const active = get().tabs.find((tab) => tab.id === get().activeTabId);
+      if (latestLocal && active?.timeline.length === 0) {
+        await get().openHistory(latestLocal);
+      }
+    } catch {
+      if (get().vaultPath === vaultPath) set({ history: [], historyLoaded: true });
+    }
+  },
+  async refreshHistory() {
+    const vaultPath = get().vaultPath;
+    if (!vaultPath) return;
+    try {
+      const history = await listAgentHistory();
+      if (get().vaultPath === vaultPath) set({ history, historyLoaded: true });
+    } catch {
+      // 历史目录暂时不可读时保留已加载列表，避免把可用历史闪成空白。
+    }
+  },
+  async openHistory(ref) {
+    const summary = get().history.find(
+      (item) => item.sessionId === ref.sessionId && item.deviceSlug === ref.deviceSlug,
+    );
+    const existing = get().tabs.find(
+      (tab) => isCurrentHistoryTab(tab, ref, summary?.isLocal === true),
+    );
+    if (existing) {
+      set((state) => ({
+        activeTabId: existing.id,
+        tabs: state.tabs.map((tab) =>
+          tab.id === existing.id ? { ...tab, historyRef: ref } : tab,
+        ),
+      }));
+      return;
+    }
+    const history = await loadAgentHistory(ref);
+    const tab = tabFromHistory(history);
+    set((state) => {
+      const active = state.tabs.find((item) => item.id === state.activeTabId);
+      const replaceEmpty = state.tabs.length === 1 && active?.timeline.length === 0;
+      return {
+        tabs: replaceEmpty ? [tab] : [...state.tabs, tab],
+        activeTabId: tab.id,
+      };
+    });
+  },
   switchTab(tabId) {
     if (!get().tabs.some((tab) => tab.id === tabId)) return;
     set({ activeTabId: tabId });
@@ -362,7 +522,7 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
       })),
     );
     try {
-      await runAgent({
+      const response = await runAgent({
         runId,
         sessionId: tab.sessionId,
         prompt,
@@ -373,6 +533,15 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
         notePath,
         locale,
       });
+      if (response.sessionId !== tab.sessionId) {
+        set((s) => ({
+          tabs: s.tabs.map((current) =>
+            current.runId === runId
+              ? { ...current, sessionId: response.sessionId, historyRef: null }
+              : current,
+          ),
+        }));
+      }
     } catch (err) {
       set((s) => ({
         tabs: s.tabs.map((current) =>
@@ -445,29 +614,34 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
 }));
 
 // 全局只订阅一次事件流；按 event.runId 路由到所属 tab，避免多个 tab 同时运行时串线。
-onAgentEvent((event) => {
-  useAgentPanel.setState((s) => ({
-    tabs: s.tabs.map((tab) => {
-      if (event.runId !== tab.runId) return tab;
-      const next: AgentTab = {
-        ...tab,
-        timeline: applyEvent(tab.timeline, event),
-        status: statusAfter(event, tab.status),
-      };
-      if (event.type === "context_usage") {
-        next.contextUsage = {
-          usedTokens: event.usedTokens,
-          contextWindow: event.contextWindow,
-          estimated: event.estimated,
+if (typeof window !== "undefined") {
+  onAgentEvent((event) => {
+    useAgentPanel.setState((s) => ({
+      tabs: s.tabs.map((tab) => {
+        if (event.runId !== tab.runId) return tab;
+        const next: AgentTab = {
+          ...tab,
+          timeline: applyEvent(tab.timeline, event),
+          status: statusAfter(event, tab.status),
         };
-      }
-      if (event.type === "compaction") {
-        next.compacting = event.phase === "started";
-      }
-      if (event.type === "final" || event.type === "error" || event.type === "cancelled") {
-        next.compacting = false;
-      }
-      return next;
-    }),
-  }));
-});
+        if (event.type === "context_usage") {
+          next.contextUsage = {
+            usedTokens: event.usedTokens,
+            contextWindow: event.contextWindow,
+            estimated: event.estimated,
+          };
+        }
+        if (event.type === "compaction") {
+          next.compacting = event.phase === "started";
+        }
+        if (event.type === "final" || event.type === "error" || event.type === "cancelled") {
+          next.compacting = false;
+        }
+        return next;
+      }),
+    }));
+    if (event.type === "history_updated") {
+      void useAgentPanel.getState().refreshHistory();
+    }
+  });
+}

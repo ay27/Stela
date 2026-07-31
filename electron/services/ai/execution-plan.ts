@@ -28,9 +28,14 @@ export function formatExecutionPlan(snapshot: AgentPlanSnapshot | null): string 
     .join("\n");
 }
 
-/** Session projector reads the mutable plan without appending a message mid-tool-call. */
-export function formatExecutionPlanEntry(data: { plan?: ExecutionPlanStore }): string {
-  return formatExecutionPlan(data.plan?.get() ?? null);
+/** Session projector accepts a live plan during a run or its JSONL-restored snapshot. */
+export function formatExecutionPlanEntry(data: { plan?: ExecutionPlanStore | AgentPlanSnapshot }): string {
+  const plan = data.plan instanceof ExecutionPlanStore
+    ? data.plan.get()
+    : data.plan && Array.isArray(data.plan.steps)
+      ? data.plan
+      : null;
+  return formatExecutionPlan(plan);
 }
 
 function text(value: string, field: string, maxLength = MAX_TEXT_LENGTH): string {

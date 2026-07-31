@@ -1,0 +1,143 @@
+import assert from "node:assert/strict";
+import { appendFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import type { AgentRunRequest } from "@shared/types";
+
+import {
+  appendAgentHistoryEvent,
+  appendAgentHistoryFinished,
+  appendAgentHistoryStarted,
+  forkAgentHistorySession,
+  listAgentHistory,
+  loadAgentHistory,
+  openLocalAgentSessionStorage,
+  pruneLocalAgentHistory,
+} from "./agent-history";
+
+const vaultPath = await mkdtemp(path.join(os.tmpdir(), "stela-agent-history-"));
+const request: AgentRunRequest = {
+  runId: "run_1",
+  sessionId: "session_1",
+  prompt: "Show daily revenue",
+};
+
+try {
+  const storage = await openLocalAgentSessionStorage(vaultPath, "laptop", "session_1");
+  await appendAgentHistoryStarted(storage, request);
+  await appendAgentHistoryEvent(storage, { type: "final", runId: "run_1", content: "Revenue is 42." });
+  await appendAgentHistoryFinished(storage, "run_1");
+  const lastEntry = (await storage.getEntries()).at(-1);
+  await appendFile(
+    path.join(vaultPath, ".stela", "agent-history", "laptop", "session_1.jsonl"),
+    [
+      { type: "plan_updated", runId: "run_1" },
+      {
+        type: "plan_updated",
+        runId: "run_1",
+        plan: { runId: "run_1", version: 1, steps: [null] },
+      },
+      {
+        type: "skill_maintenance",
+        runId: "run_1",
+        actions: [{ action: "saved", name: 1, path: "bad", reason: "bad" }],
+        summary: "bad",
+      },
+    ]
+      .map((event, index) =>
+        JSON.stringify({
+          type: "custom",
+          id: `invalid_event_${index}`,
+          parentId: lastEntry?.id ?? null,
+          timestamp: new Date().toISOString(),
+          customType: "stela_agent_run_event",
+          data: { runId: "run_1", event },
+        }),
+      )
+      .join("\n") + "\n",
+  );
+
+  const history = await loadAgentHistory(vaultPath, { sessionId: "session_1", deviceSlug: "laptop" });
+  assert.equal(history.summary.title, "Show daily revenue");
+  assert.equal(history.runs.length, 1);
+  assert.equal(history.runs[0]?.finishedAt !== null, true);
+  assert.deepEqual(history.runs[0]?.events, [
+    { type: "final", runId: "run_1", content: "Revenue is 42." },
+  ]);
+
+  const outside = await mkdtemp(path.join(os.tmpdir(), "stela-agent-history-outside-"));
+  try {
+    await symlink(
+      outside,
+      path.join(vaultPath, ".stela", "agent-history", "escaped"),
+      "dir",
+    );
+    await assert.rejects(
+      () => loadAgentHistory(vaultPath, { sessionId: "session_1", deviceSlug: "escaped" }),
+      /escapes vault/,
+    );
+  } finally {
+    await rm(outside, { force: true, recursive: true });
+  }
+
+  const remoteStorage = await openLocalAgentSessionStorage(vaultPath, "desktop", "remote_1");
+  await appendAgentHistoryStarted(remoteStorage, {
+    ...request,
+    runId: "run_remote",
+    sessionId: "remote_1",
+    prompt: "Inspect orders",
+  });
+  await mkdir(path.join(vaultPath, ".stela", "agent-history", "broken"), { recursive: true });
+  await writeFile(
+    path.join(vaultPath, ".stela", "agent-history", "broken", "invalid.jsonl"),
+    "not-json\n",
+  );
+  const summaries = await listAgentHistory(vaultPath, "laptop");
+  assert.deepEqual(
+    summaries.map((summary) => [summary.sessionId, summary.deviceSlug, summary.isLocal]),
+    [
+      ["remote_1", "desktop", false],
+      ["session_1", "laptop", true],
+    ],
+  );
+
+  const forked = await forkAgentHistorySession(vaultPath, "laptop", {
+    sessionId: "remote_1",
+    deviceSlug: "desktop",
+  });
+  assert.notEqual(forked.sessionId, "remote_1");
+  assert.equal(forked.deviceSlug, "laptop");
+  const forkedHistory = await loadAgentHistory(vaultPath, forked);
+  assert.equal(forkedHistory.runs[0]?.request.prompt, "Inspect orders");
+
+  const remoteHistory = await loadAgentHistory(vaultPath, { sessionId: "remote_1", deviceSlug: "desktop" });
+  assert.equal(remoteHistory.runs[0]?.finishedAt, null);
+
+  for (let index = 0; index <= 20; index++) {
+    const sessionId = `limit_${String(index).padStart(2, "0")}`;
+    const limitStorage = await openLocalAgentSessionStorage(vaultPath, "retention", sessionId);
+    await appendAgentHistoryStarted(limitStorage, { runId: `run_${sessionId}`, sessionId, prompt: sessionId });
+    await appendAgentHistoryFinished(limitStorage, `run_${sessionId}`);
+  }
+  assert.deepEqual(
+    await pruneLocalAgentHistory(vaultPath, "retention", () => new Set(["limit_00"])),
+    [],
+  );
+  assert.equal(
+    (await listAgentHistory(vaultPath, "retention")).filter((summary) => summary.deviceSlug === "retention").length,
+    21,
+  );
+  assert.deepEqual(
+    await pruneLocalAgentHistory(vaultPath, "retention"),
+    [{ deviceSlug: "retention", sessionId: "limit_00" }],
+  );
+  assert.equal(
+    (await listAgentHistory(vaultPath, "retention")).filter((summary) => summary.deviceSlug === "retention").length,
+    20,
+  );
+} finally {
+  await rm(vaultPath, { force: true, recursive: true });
+}
+
+console.log("agent history tests passed.");

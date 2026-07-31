@@ -714,6 +714,7 @@ export type AgentEvent =
       }>;
       summary: string;
     }
+  | { type: "history_updated"; runId: string }
   | { type: "final"; runId: string; content: string }
   | { type: "error"; runId: string; message: string }
   | { type: "cancelled"; runId: string };
@@ -731,6 +732,36 @@ export interface AgentProposalResponse {
   approve: boolean;
   /** `question` kind 的答案文本。approve=false 表示用户拒绝回答。 */
   answer?: string;
+}
+
+export interface AgentHistoryRef {
+  sessionId: string;
+  deviceSlug: string;
+}
+
+export interface AgentHistorySummary extends AgentHistoryRef {
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  isLocal: boolean;
+}
+
+export interface AgentHistoryRun {
+  request: AgentRunRequest;
+  startedAt: number;
+  finishedAt: number | null;
+  events: AgentEvent[];
+  proposalResponses: AgentProposalResponse[];
+}
+
+export interface AgentHistorySession {
+  summary: AgentHistorySummary;
+  runs: AgentHistoryRun[];
+}
+
+export interface AgentRunResponse {
+  runId: string;
+  sessionId: string;
 }
 
 // ---------- Wiki / Vault index（v0.3 双链 M2/M3） ----------

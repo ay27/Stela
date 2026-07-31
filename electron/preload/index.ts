@@ -20,9 +20,13 @@ import {
 } from "@shared/ipc-events";
 import type {
   AgentEvent,
+  AgentHistoryRef,
+  AgentHistorySession,
+  AgentHistorySummary,
   AgentSkillListItem,
   AgentProposalResponse,
   AgentRunRequest,
+  AgentRunResponse,
   AiCompleteRequest,
   AiCompleteResponse,
   AiInlineCompletionEvent,
@@ -320,7 +324,9 @@ const stela = {
   },
 
   agent: {
-    run: (request: AgentRunRequest) => call<{ runId: string }>(IPC.AI_AGENT_RUN, { request }),
+    run: (request: AgentRunRequest) => call<AgentRunResponse>(IPC.AI_AGENT_RUN, { request }),
+    listHistory: () => call<AgentHistorySummary[]>(IPC.AI_AGENT_HISTORY_LIST, {}),
+    loadHistory: (ref: AgentHistoryRef) => call<AgentHistorySession>(IPC.AI_AGENT_HISTORY_LOAD, ref),
     listSkills: () => call<AgentSkillListItem[]>(IPC.AI_SKILLS_LIST, {}),
     removeSkill: (relativePath: string) => call<void>(IPC.AI_SKILLS_REMOVE, { relativePath }),
     cancel: (runId: string) =>

@@ -8,6 +8,7 @@ import {
   Database,
   FileText,
   HelpCircle,
+  History,
   Loader2,
   MessageSquareQuote,
   MinusCircle,
@@ -190,6 +191,8 @@ export function AgentPanel() {
   const connectionName = activeTab.connectionName;
   const contextUsage = activeTab.contextUsage;
   const compacting = activeTab.compacting;
+  const history = useAgentPanel((s) => s.history);
+  const historyLoaded = useAgentPanel((s) => s.historyLoaded);
   const vaultPath = useWorkspace((s) => s.vaultPath);
   const focusToken = useLayout((s) => s.agentFocusToken);
   const aiSettings = useSettings((s) => s.settings.ai);
@@ -199,12 +202,16 @@ export function AgentPanel() {
   const cancel = useAgentPanel((s) => s.cancel);
   const respondProposal = useAgentPanel((s) => s.respondProposal);
   const newConversation = useAgentPanel((s) => s.newConversation);
+  const bindVault = useAgentPanel((s) => s.bindVault);
+  const refreshHistory = useAgentPanel((s) => s.refreshHistory);
+  const openHistory = useAgentPanel((s) => s.openHistory);
   const closeTab = useAgentPanel((s) => s.closeTab);
   const setConnectionName = useAgentPanel((s) => s.setConnectionName);
   const updateDraft = useAgentPanel((s) => s.updateDraft);
   const removeAttachment = useAgentPanel((s) => s.removeAttachment);
   const ensureDefaultNote = useAgentPanel((s) => s.ensureDefaultNote);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const historyMenuRef = useRef<HTMLDetailsElement>(null);
   const promptInputRef = useRef<AiPromptInputHandle>(null);
   const busy = status === "running";
   // 连续的 tool entries 就地合成一条 ToolActivity：执行记录跟随产生它的那一轮，
@@ -223,6 +230,10 @@ export function AgentPanel() {
     if (!connectionsLoaded) void reloadConnections();
   }, [connectionsLoaded, reloadConnections]);
 
+  useEffect(() => {
+    void bindVault(vaultPath);
+  }, [vaultPath, bindVault]);
+
   // 当前文档的连接 > 默认连接（isDefault 标记 / 名称首个）> 空。与
   // EditorView 的 frontmatter 兜底规则保持一致，避免多连接时每次都要手选。
   useEffect(() => {
@@ -240,6 +251,21 @@ export function AgentPanel() {
   useEffect(() => {
     if (focusToken > 0) promptInputRef.current?.focus();
   }, [focusToken]);
+
+  useEffect(() => {
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!historyMenuRef.current?.contains(event.target as Node)) historyMenuRef.current?.removeAttribute("open");
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") historyMenuRef.current?.removeAttribute("open");
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, []);
 
   useEffect(() => {
     ensureDefaultNote(relativeToVault(getRunContext()?.path, vaultPath));
@@ -371,6 +397,48 @@ export function AgentPanel() {
           })}
           <div className="flex-1 border-b border-border/0" />
         </div>
+        <details
+          ref={historyMenuRef}
+          className="group relative border-l border-border"
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget)) {
+              historyMenuRef.current?.removeAttribute("open");
+            }
+          }}
+          onToggle={(event) => {
+            if (event.currentTarget.open) void refreshHistory();
+          }}
+        >
+          <summary
+            className="flex h-full cursor-pointer list-none items-center gap-1 px-2 text-[11px] text-muted-foreground hover:bg-background/50 hover:text-foreground [&::-webkit-details-marker]:hidden"
+            title={t("agent.panel.history")}
+          >
+            <History className="h-3.5 w-3.5" />
+            {t("agent.panel.history")}
+          </summary>
+          <div className="absolute right-0 top-9 z-20 max-h-64 w-64 overflow-auto rounded-md border border-border bg-popover p-1 shadow-md">
+            {!historyLoaded ? (
+              <div className="px-2 py-1.5 text-[11px] text-muted-foreground">{t("agent.panel.historyLoading")}</div>
+            ) : history.length === 0 ? (
+              <div className="px-2 py-1.5 text-[11px] text-muted-foreground">{t("agent.panel.historyEmpty")}</div>
+            ) : (
+              history.map((item) => (
+                <button
+                  key={`${item.deviceSlug}:${item.sessionId}`}
+                  type="button"
+                  onClick={() => {
+                    historyMenuRef.current?.removeAttribute("open");
+                    void openHistory(item);
+                  }}
+                  className="flex w-full flex-col rounded px-2 py-1.5 text-left text-[11px] hover:bg-accent"
+                >
+                  <span className="truncate text-foreground">{item.title}</span>
+                  <span className="text-muted-foreground">{item.deviceSlug}</span>
+                </button>
+              ))
+            )}
+          </div>
+        </details>
         <button
           type="button"
           onClick={newConversation}
@@ -617,6 +685,13 @@ function TimelineItem({
       );
     case "cancelled":
       return <div className="text-xs italic text-muted-foreground">{t("agent.panel.cancelled")}</div>;
+    case "interrupted":
+      return (
+        <div className="flex items-center gap-1.5 text-xs italic text-muted-foreground">
+          <History className="h-3 w-3" />
+          {t("agent.panel.interrupted")}
+        </div>
+      );
     case "plan":
       return <ExecutionPlanCard plan={entry.plan} />;
     case "tool":
@@ -850,7 +925,9 @@ function QuestionCard({
       ) : null}
       {resolved ? (
         <div className="text-xs text-muted-foreground">
-          {entry.answer
+          {entry.resolution === "expired"
+            ? t("agent.panel.proposal.expired")
+            : entry.answer
             ? t("agent.panel.proposal.answered", { answer: entry.answer })
             : t("agent.panel.proposal.rejected")}
         </div>
@@ -952,7 +1029,9 @@ function ProposalCard({
       ) : null}
       {resolved ? (
         <div className="text-xs text-muted-foreground">
-          {entry.resolution === "approved"
+          {entry.resolution === "expired"
+            ? t("agent.panel.proposal.expired")
+            : entry.resolution === "approved"
             ? t("agent.panel.proposal.approved")
             : t("agent.panel.proposal.rejected")}
         </div>

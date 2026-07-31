@@ -13,6 +13,7 @@ import { IPC, type IpcChannel } from "./ipc-channels";
 
 const stringPath = z.string().min(1).max(8192);
 const stringMin1 = z.string().min(1);
+const agentHistorySegment = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 
 const fileNodeSchema = z.object({
   name: z.string(),
@@ -509,7 +510,7 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
       request: z
         .object({
           runId: stringMin1.max(128),
-          sessionId: stringMin1.max(128).optional(),
+          sessionId: agentHistorySegment.optional(),
           prompt: z.string().min(1).max(20_000),
           connectionName: z.string().max(256).nullable().optional(),
           mentionedTables: z.array(z.string().max(512)).max(8).optional(),
@@ -545,6 +546,10 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
     })
     .strict(),
   [IPC.AI_AGENT_CANCEL]: z.object({ runId: stringMin1.max(128) }),
+  [IPC.AI_AGENT_HISTORY_LIST]: z.object({}).strict(),
+  [IPC.AI_AGENT_HISTORY_LOAD]: z
+    .object({ sessionId: agentHistorySegment, deviceSlug: agentHistorySegment })
+    .strict(),
   [IPC.AI_SKILLS_LIST]: z.object({}).strict(),
   [IPC.AI_SKILLS_REMOVE]: z
     .object({ relativePath: z.string().min(1).max(512) })

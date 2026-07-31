@@ -98,3 +98,5 @@ proposed → active → superseded
 | [0043](0043-evidence-gated-skill-maintenance.md) | Evidence-gated Skill maintenance | superseded → [0044](0044-associative-skill-distillation.md) |
 | [0044](0044-associative-skill-distillation.md) | Associative Skill distillation | superseded → [0045](0045-recency-ordered-skill-distillation.md) |
 | [0045](0045-recency-ordered-skill-distillation.md) | Recency-ordered Skill distillation | active |
+| [0046](0046-device-sharded-agent-session-history.md) | Device-sharded Agent session history | active |
+| [0047](0047-bounded-device-agent-history-retention.md) | Bounded device Agent history retention | active |

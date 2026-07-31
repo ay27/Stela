@@ -482,7 +482,7 @@ interface AgentProposalResponse {
 
 interface AgentRunRequest {
   runId: string;
-  sessionId?: string;          // in-memory multi-turn history
+  sessionId?: string;          // persisted multi-turn history
   prompt: string;
   connectionName?: string | null;
   mentionedTables?: string[];
@@ -521,10 +521,20 @@ type AgentEvent =
   | { type: "proposal"; runId: string; callId: string; kind: AgentProposalKind; payload: AgentProposalPayload }
   | { type: "context_usage"; runId: string; usedTokens: number; contextWindow: number; estimated: boolean }
   | { type: "compaction"; runId: string; phase: "started" | "completed" }
+  | { type: "history_updated"; runId: string }
   | { type: "final"; runId: string; content: string }
   | { type: "error"; runId: string; message: string }
   | { type: "cancelled"; runId: string };
 ```
+
+Agent session files are native pi JSONL under
+`{vault}/.stela/agent-history/<deviceSlug>/<sessionId>.jsonl`. Besides pi
+session entries, Stela appends custom run entries that reconstruct the Agent
+Panel timeline. A history summary identifies its owner device and whether it is
+local; a remote session is read-only and a new prompt forks it to a local
+`sessionId`.
+Each device retains only its 20 most recently updated session files; cleanup
+never deletes another device's directory ([ADR-0047](./adr/0047-bounded-device-agent-history-retention.md)).
 
 `search_sql_usage({ table })` finds a table in either read or write position.
 `readTable` and `writeTable` remain available when the caller needs only one
@@ -537,7 +547,7 @@ Safety ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md)):
 - Runs continue until model completion, error, or explicit user cancellation ([ADR-0017](./adr/0017-user-cancelled-agent-runs.md))
 - Tools use `executionMode: "parallel"` except `propose_edit` (`"sequential"`) ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md)). NodeExecutionEnv is harness cwd only (not exposed as model tools)
 - Compaction uses `ai.contextWindow` + one overflow recovery ([ADR-0018](./adr/0018-pi-ai-agent-harness.md))
-- Execution plans are bounded, linear, main-process runtime state; the latest snapshot is a pi Session custom entry projected into every model context and is never persisted to the Vault ([ADR-0038](./adr/0038-runtime-agent-execution-plans.md))
+- Execution plans are bounded and linear. Their active store is main-process runtime state, while the latest `AgentPlanSnapshot` is appended to the persisted pi session so its context projector can recover after restart ([ADR-0038](./adr/0038-runtime-agent-execution-plans.md), [ADR-0046](./adr/0046-device-sharded-agent-session-history.md))
 - Note references are paths only; the agent should call `read_note` before relying on note contents
 - Selection / RunSQL attachments are bounded and included only on the user turn that added them
 - `ask_user` blocks on the same handshake with `kind: "question"`, resolving to the answer string; ≤3 questions per run, enforced in the tool ([ADR-0027](./adr/0027-agent-ask-user-clarification.md))

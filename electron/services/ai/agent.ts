@@ -9,6 +9,7 @@ import {
   AgentHarness,
   DEFAULT_COMPACTION_SETTINGS,
   InMemorySessionStorage,
+  JsonlSessionStorage,
   Session,
   estimateContextTokens,
   shouldCompact,
@@ -19,6 +20,7 @@ import { isContextOverflow } from "@earendil-works/pi-ai";
 
 import type {
   AgentEvent,
+  AgentPlanSnapshot,
   AgentProposalResponse,
   AgentRunRequest,
   ConnectionEntry,
@@ -52,6 +54,15 @@ import {
   hasSkillMaintenanceEvidence,
   type SkillMaintenanceEvidence,
 } from "./skill-maintenance";
+import {
+  appendAgentHistoryEvent,
+  appendAgentHistoryFinished,
+  appendAgentHistoryProposalResponse,
+  appendAgentHistoryStarted,
+  openLocalAgentSessionStorage,
+  prepareLocalAgentHistorySession,
+  pruneLocalAgentHistory,
+} from "./agent-history";
 
 const log = getLogger("ai.agent");
 const TOOL_RESULT_SUMMARY_CHARS = 480;
@@ -84,23 +95,38 @@ type ProposalResolver = (outcome: boolean | string) => void;
 /** runId -> callId -> resolver，供 IPC 层的 respondToProposal 查找。 */
 const activeProposals = new Map<string, Map<string, ProposalResolver>>();
 
-/**
- * sessionId -> pi Session (InMemorySessionStorage).
- *
- * ponytail: 存在内存里，随 app 生命周期增长，没有上限/持久化；单机桌面
- * 应用会话数量小，重启即清空。上限=长时间不重启会积累多个旧会话占内存；
- * 升级路径=加个数上限的 LRU，或在前端"新建对话"时清掉旧的 sessionId。
- */
-const sessions = new Map<string, Session>();
+/** `vaultPath + sessionId` -> 已打开的本地 JSONL session，避免每轮重复解析文件。 */
+const sessions = new Map<string, { session: Session; storage: JsonlSessionStorage }>();
+const historyResponses = new Map<string, AgentProposalResponse[]>();
 
 /** IPC 入口：用户在前端 approve/reject 一个 proposal 时调用。找不到（已超时/run 已结束）返回 false。 */
 export function respondToProposal(response: AgentProposalResponse): boolean {
   const pending = activeProposals.get(response.runId);
   const resolver = pending?.get(response.callId);
   if (!resolver) return false;
+  historyResponses.get(response.runId)?.push(response);
   pending!.delete(response.callId);
   resolver(response.approve && response.answer !== undefined ? response.answer : response.approve);
   return true;
+}
+
+export function preparePersistentAgentSession(
+  vaultPath: string,
+  deviceSlug: string,
+  sessionId: string | undefined,
+) {
+  return prepareLocalAgentHistorySession(vaultPath, deviceSlug, sessionId);
+}
+
+export async function prunePersistentAgentHistory(
+  vaultPath: string,
+  deviceSlug: string,
+  getProtectedSessionIds: () => ReadonlySet<string>,
+): Promise<void> {
+  const pruned = await pruneLocalAgentHistory(vaultPath, deviceSlug, getProtectedSessionIds);
+  for (const removed of pruned) {
+    sessions.delete(`${vaultPath}\0${removed.sessionId}`);
+  }
 }
 
 async function resolveConnection(
@@ -197,8 +223,8 @@ function buildSkillMaintenanceInput(
   ].join("\n\n");
 }
 
-function createSession(): Session {
-  return new Session(new InMemorySessionStorage(), {
+function createSession(storage: InMemorySessionStorage | JsonlSessionStorage = new InMemorySessionStorage()): Session {
+  return new Session(storage, {
     entryTransforms: [
       (entries) => {
         let latestPlan = -1;
@@ -213,7 +239,7 @@ function createSession(): Session {
     ],
     entryProjectors: {
       [EXECUTION_PLAN_ENTRY]: (entry) => {
-        const data = entry.data as { plan?: ExecutionPlanStore } | undefined;
+        const data = entry.data as { plan?: ExecutionPlanStore | AgentPlanSnapshot } | undefined;
         return [{
           role: "user",
           content: `Current execution plan:\n${formatExecutionPlanEntry(data ?? {})}`,
@@ -228,15 +254,26 @@ function appendPlanEntry(session: Session, runId: string, plan: ExecutionPlanSto
   return session.appendCustomEntry(EXECUTION_PLAN_ENTRY, { runId, plan });
 }
 
-function getOrCreateSession(sessionId: string | undefined): Session {
-  if (sessionId) {
-    const existing = sessions.get(sessionId);
-    if (existing) return existing;
-    const created = createSession();
-    sessions.set(sessionId, created);
-    return created;
-  }
-  return createSession();
+function appendPersistedPlanEntry(
+  session: Session,
+  runId: string,
+  snapshot: AgentPlanSnapshot | null,
+): Promise<string> {
+  return session.appendCustomEntry(EXECUTION_PLAN_ENTRY, { runId, plan: snapshot });
+}
+
+async function getOrCreateSession(
+  vaultPath: string,
+  deviceSlug: string,
+  sessionId: string,
+): Promise<{ session: Session; storage: JsonlSessionStorage }> {
+  const key = `${vaultPath}\0${sessionId}`;
+  const existing = sessions.get(key);
+  if (existing) return existing;
+  const storage = await openLocalAgentSessionStorage(vaultPath, deviceSlug, sessionId);
+  const created = { session: createSession(storage), storage };
+  sessions.set(key, created);
+  return created;
 }
 
 async function runSkillMaintenance(options: {
@@ -331,13 +368,26 @@ export interface RunAgentOptions {
 }
 
 export async function runAgent(options: RunAgentOptions): Promise<void> {
-  const { vaultPath, slug, request, onEvent, signal } = options;
+  const { vaultPath, slug, onEvent, signal } = options;
+  let request = options.request;
+  if (!request.sessionId) {
+    const session = await preparePersistentAgentSession(vaultPath, slug, undefined);
+    request = { ...request, sessionId: session.sessionId };
+  }
   const runId = request.runId;
   const pending = new Map<string, ProposalResolver>();
+  const historyEvents: AgentEvent[] = [];
+  const emit = (event: AgentEvent) => {
+    historyEvents.push(event);
+    onEvent(event);
+  };
   activeProposals.set(runId, pending);
-  onEvent({ type: "started", runId });
+  historyResponses.set(runId, []);
 
   let harness: AgentHarness | null = null;
+  let session: Session | null = null;
+  let historyStorage: JsonlSessionStorage | null = null;
+  let plan: ExecutionPlanStore | null = null;
   const normalSkillActions: AgentSkillMaintenanceRecord[] = [];
   const maintenanceEvidence: SkillMaintenanceEvidence[] = [];
   const onAbort = () => {
@@ -346,9 +396,14 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
   signal.addEventListener("abort", onAbort);
 
   try {
+    const opened = await getOrCreateSession(vaultPath, slug, request.sessionId);
+    session = opened.session;
+    historyStorage = opened.storage;
+    await appendAgentHistoryStarted(historyStorage, request);
+    emit({ type: "started", runId });
     const settings = await settingsStore.loadAppSettings(vaultPath);
     if (settings.ai.providerMode === "disabled") {
-      onEvent({ type: "error", runId, message: "AI provider is disabled. Enable it in Settings → AI." });
+      emit({ type: "error", runId, message: "AI provider is disabled. Enable it in Settings → AI." });
       return;
     }
     const profile = getActiveProfile(settings.ai, request.profileId);
@@ -358,16 +413,15 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
     const promptSkills = rankAgentSkills(skills.loaded, request.prompt, SKILL_PROMPT_LIMIT);
     const { models, model } = createTransportForProfile(settings.ai, apiKey, profile.id);
     const contextWindow = model.contextWindow;
-    const session = getOrCreateSession(request.sessionId ?? undefined);
-    const plan = new ExecutionPlanStore(runId, (snapshot) => {
-      onEvent({ type: "plan_updated", runId, plan: snapshot });
+    plan = new ExecutionPlanStore(runId, (snapshot) => {
+      emit({ type: "plan_updated", runId, plan: snapshot });
     });
     await appendPlanEntry(session, runId, plan);
 
     const emitUsage = async (estimated: boolean) => {
       const context = await session.buildContext();
       const estimate = estimateContextTokens(context.messages);
-      onEvent({
+      emit({
         type: "context_usage",
         runId,
         usedTokens: estimate.tokens,
@@ -378,11 +432,11 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
 
     const compactOnce = async () => {
       if (!harness) return;
-      onEvent({ type: "compaction", runId, phase: "started" });
+      emit({ type: "compaction", runId, phase: "started" });
       await harness.compact(
         "Preserve the current execution plan, completed evidence, the active step, and every blocked acceptance condition.",
       );
-      onEvent({ type: "compaction", runId, phase: "completed" });
+      emit({ type: "compaction", runId, phase: "completed" });
       await emitUsage(true);
     };
 
@@ -419,7 +473,7 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
           onSkillMaintenance: (record) => normalSkillActions.push(record),
         },
         requestProposal: (toolCallId, proposal) =>
-          makeRequestProposal(runId, toolCallId, onEvent, pending, signal)(proposal),
+          makeRequestProposal(runId, toolCallId, emit, pending, signal)(proposal),
       }),
     });
 
@@ -427,7 +481,7 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
     const unsubscribe = harness.subscribe((event) => {
       if (event.type === "tool_execution_start") {
         toolCalls.set(event.toolCallId, { name: event.toolName, args: event.args ?? {} });
-        onEvent({
+        emit({
           type: "tool_call",
           runId,
           call: {
@@ -449,7 +503,7 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
           ));
           toolCalls.delete(event.toolCallId);
         }
-        onEvent({
+        emit({
           type: "tool_result",
           runId,
           callId: event.toolCallId,
@@ -472,7 +526,7 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
       await emitUsage(false);
 
       if (signal.aborted || result.stopReason === "aborted") {
-        onEvent({ type: "cancelled", runId });
+        emit({ type: "cancelled", runId });
         return;
       }
 
@@ -483,10 +537,10 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
           await emitUsage(false);
         } catch (err) {
           if (signal.aborted) {
-            onEvent({ type: "cancelled", runId });
+            emit({ type: "cancelled", runId });
             return;
           }
-          onEvent({
+          emit({
             type: "error",
             runId,
             message: err instanceof Error ? err.message : String(err),
@@ -495,11 +549,11 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
         }
 
         if (signal.aborted || result.stopReason === "aborted") {
-          onEvent({ type: "cancelled", runId });
+          emit({ type: "cancelled", runId });
           return;
         }
         if (isContextOverflow(result, contextWindow)) {
-          onEvent({
+          emit({
             type: "error",
             runId,
             message: "Context still overflows after compaction.",
@@ -509,7 +563,7 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
       }
 
       if (result.stopReason === "error") {
-        onEvent({
+        emit({
           type: "error",
           runId,
           message: result.errorMessage ?? "Agent run failed.",
@@ -523,9 +577,9 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
           "",
         )
         .trim();
-      onEvent({ type: "final", runId, content: finalAnswer });
+      emit({ type: "final", runId, content: finalAnswer });
       if (normalSkillActions.length > 0) {
-        onEvent({
+        emit({
           type: "skill_maintenance",
           runId,
           actions: normalSkillActions,
@@ -546,7 +600,7 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
           onAbortHarness: (nextHarness) => {
             harness = nextHarness;
           },
-          onEvent,
+          onEvent: emit,
           signal,
         });
       }
@@ -556,13 +610,34 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
   } catch (err) {
     const isAbort = signal.aborted || (err instanceof Error && err.name === "AbortError");
     if (isAbort) {
-      onEvent({ type: "cancelled", runId });
+      emit({ type: "cancelled", runId });
     } else {
       log.error("agent run failed", { runId, err: err instanceof Error ? err.message : String(err) });
-      onEvent({ type: "error", runId, message: err instanceof Error ? err.message : String(err) });
+      emit({ type: "error", runId, message: err instanceof Error ? err.message : String(err) });
     }
   } finally {
+    if (historyStorage) {
+      try {
+        for (const event of historyEvents) {
+          await appendAgentHistoryEvent(historyStorage, event);
+        }
+        for (const response of historyResponses.get(runId) ?? []) {
+          await appendAgentHistoryProposalResponse(historyStorage, response);
+        }
+        if (session && plan) {
+          await appendPersistedPlanEntry(session, runId, plan.get());
+        }
+        await appendAgentHistoryFinished(historyStorage, runId);
+        emit({ type: "history_updated", runId });
+      } catch (err) {
+        log.warn("agent history write failed", {
+          runId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
     signal.removeEventListener("abort", onAbort);
     activeProposals.delete(runId);
+    historyResponses.delete(runId);
   }
 }

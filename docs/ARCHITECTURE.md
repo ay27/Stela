@@ -8,9 +8,9 @@ Stela is a local-first desktop app for SQL data notes. Users write Markdown, run
 
 Stela notes are plain `.md` files with YAML frontmatter, `runsql` fenced code blocks, and `<detail>` HTML summaries. The app never owns the prose — it only reads and writes files. Any tool that understands Markdown (VS Code, GitHub, Obsidian) can open a Stela vault without Stela installed. `runsql` blocks degrade to ordinary code blocks in those viewers.
 
-### Two authorities, three disposable layers
+### Three authorities, three disposable layers
 
-SQL result sets are too large to live in Markdown. Stela therefore has **two authoritative stores** and **three disposable caches**:
+SQL result sets and Agent sessions are too large to live in Markdown. Stela therefore has **three authoritative stores** and **three disposable caches**:
 
 | Layer | Location | Authority | Role |
 |-------|----------|-----------|------|
@@ -18,9 +18,10 @@ SQL result sets are too large to live in Markdown. Stela therefore has **two aut
 | Execution history | `{vault}/.stela/history/history_{deviceSlug}.jsonl` | **Authoritative** | Append-only run packages; Git-synced, per-device write isolation |
 | Result cache | `{vault}/.stela.sqlite` | Disposable | Query cache (`runs` / `result_schemas` / `result_rows`); rebuildable from JSONL |
 | Vault config | `{vault}/.stela/*.json` | Authoritative | Settings, connections, plugin manifests |
+| Agent session history | `{vault}/.stela/agent-history/<deviceSlug>/*.jsonl` | **Authoritative** | pi AgentHarness context and Agent Panel timeline; newest 20 per device |
 | Session state | Zustand + localStorage + `{userData}/` | Disposable | Panel widths, open tabs, recent vaults |
 
-When in doubt: **Markdown + JSONL win**. SQLite, in-memory indexes, and React state must be reconstructible by deleting them.
+When in doubt: **Markdown + JSONL win**. SQLite, in-memory indexes, and transient React state must be reconstructible by deleting them.
 
 ```mermaid
 flowchart LR
@@ -63,7 +64,8 @@ When deciding where to persist data, ask: **"Should this follow the vault across
 | `.stela/settings.json` (appearance, execution, git, AI prefs) | `{userData}/stela-cache.json` (last vault, recent vaults, locale) |
 | `.stela/connections.json` (connection definitions) | `{userData}/device-profile.json` (deviceId + slug for JSONL filename) |
 | `.stela/secrets/secrets_{slug}.json` (safeStorage-wrapped DB passwords) | Panel widths, open tabs, transient UI state |
-| `.stela/secrets/ai_{slug}.json` (safeStorage-wrapped AI API key) | Agent in-memory `sessionId` chat history |
+| `.stela/secrets/ai_{slug}.json` (safeStorage-wrapped AI API key) | Panel widths, open tabs, transient UI state |
+| `.stela/agent-history/<deviceSlug>/*.jsonl` | — |
 | `.stela/connector_plugins.json` + `.stela/plugins/` | Command palette transient input |
 | Markdown frontmatter `connection_name` | Dev-mode isolated userData (`Stela-dev`) |
 
@@ -310,7 +312,7 @@ flowchart TB
 
 1. **Action complete** — one-shot `AiActionKind` (rewrite-sql, ask-sql, explain-result, explain-table, …). Prompt assembled in main; returns text + optional extracted SQL. UI: RunSQL inline panel, AI modal, schema browser actions. ([ADR-0014](./adr/0014-ai-context-redaction-and-schema-enrichment.md))
 2. **SQL inline completion** — `AI_INLINE_COMPLETION_START` / `AI_INLINE_COMPLETION_CANCEL` invoke channels and the `ai:inline-completion-event` push channel stream insertion text correlated by `requestId`; preload exposes `window.stela.ai.startInlineCompletion`, `cancelInlineCompletion`, and `onInlineCompletionEvent`. The selected completion profile's model receives bounded prefix/suffix sections, up to 8K characters of nearest-first sibling RunSQL blocks, the nearest heading plus a 500-character prose excerpt, and table schemas from two sources: columns the renderer already has in `column-cache` (sent in the request, preferred per table) and DDL for referenced tables found in the connection's local `schemaDir`. Requests never trigger a column probe; the probe is warmed on block focus instead. This path uses pi-ai `streamSimple`, not AgentHarness, and never falls back to connector list/execute calls. RunSQL triggers only after an edit, waits 120 ms at a line tail, and shows at most one ghost-text line; focus, click, or selection movement never starts a model request. A native completion popup takes priority, then a pending edited context is re-scheduled after it closes. Stale requests are cancelled, Tab accepts, Escape dismisses, and IME composition, blur, or editor destruction suppress or cancel completion. ([ADR-0028](./adr/0028-inline-completion-schema-and-note-context.md))
-3. **Harness agent** — `AgentHarness` tool loop with streaming `ai:agent-event`. Tools browse live connector schema, run SQL, search/read notes, search SQL usage, ask the user a question, propose edits, and manage a bounded linear execution plan. The plan lives in main-process memory for a run, emits typed progress snapshots, and is injected as the latest pi Session custom entry on every context build so compaction cannot discard its active step or evidence. Same-turn tools may run in parallel except plan tools and `propose_edit` (sequential). Mutations and note writes wait for user approve. Agent chat accepts `@table` mentions, `[[note]]` references, a default current-note reference, and Add to Chat content attachments. Runs continue until the model finishes, errors, or the user cancels. Compacts when near `ai.contextWindow` budget and once on provider context overflow; Panel shows approximate usage, compacting status, plan progress, and a collapsed ordinary-tool activity log. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md), [ADR-0016](./adr/0016-agent-chat-references-and-add-to-chat.md), [ADR-0017](./adr/0017-user-cancelled-agent-runs.md), [ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0026](./adr/0026-ranked-lexical-retrieval-for-agent.md), [ADR-0027](./adr/0027-agent-ask-user-clarification.md), [ADR-0038](./adr/0038-runtime-agent-execution-plans.md), [ADR-0041](./adr/0041-agent-live-schema-authority.md))
+3. **Harness agent** — `AgentHarness` tool loop with streaming `ai:agent-event`. Tools browse live connector schema, run SQL, search/read notes, search SQL usage, ask the user a question, propose edits, and manage a bounded linear execution plan. The plan lives in main-process memory for a run, emits typed progress snapshots, and is injected as the latest pi Session custom entry on every context build so compaction cannot discard its active step or evidence. Same-turn tools may run in parallel except plan tools and `propose_edit` (sequential). Mutations and note writes wait for user approve. Agent chat accepts `@table` mentions, `[[note]]` references, a default current-note reference, and Add to Chat content attachments. Sessions and Panel timelines persist as native pi JSONL below `.stela/agent-history/<deviceSlug>/`; every device writes only its own shard, reads all shards, and forks a remote session before continuing it. Runs continue until the model finishes, errors, or the user cancels. Compacts when near `ai.contextWindow` budget and once on provider context overflow; Panel shows approximate usage, compacting status, plan progress, and a collapsed ordinary-tool activity log. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md), [ADR-0016](./adr/0016-agent-chat-references-and-add-to-chat.md), [ADR-0017](./adr/0017-user-cancelled-agent-runs.md), [ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0026](./adr/0026-ranked-lexical-retrieval-for-agent.md), [ADR-0027](./adr/0027-agent-ask-user-clarification.md), [ADR-0038](./adr/0038-runtime-agent-execution-plans.md), [ADR-0041](./adr/0041-agent-live-schema-authority.md), [ADR-0046](./adr/0046-device-sharded-agent-session-history.md))
 4. **SQL query parse** — model only emits a `SqlIndexFilter`; hits always come from deterministic `sql-index`.
 
 ### Agent Skills
@@ -383,7 +385,7 @@ Before any action prompt leaves the machine ([ADR-0014](./adr/0014-ai-context-re
 - `ask_user` reuses the same blocking proposal handshake as a third kind (`question`), resolving to the answer string; at most 3 questions per run, and skipping never counts as approval ([ADR-0027](./adr/0027-agent-ask-user-clarification.md))
 - Same-turn tool batches may run in parallel; only `propose_edit` is sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md))
 - Agent runs are stopped by model completion, errors, or explicit user cancellation; legacy iteration/time settings are ignored
-- Session history is in-memory `Session` / `InMemorySessionStorage` by `sessionId` (not persisted)
+- Sessions use native pi `JsonlSessionStorage` by `sessionId` at `.stela/agent-history/<deviceSlug>/`. Main caches open local sessions; other-device sessions are read-only and fork to a new local session before a new prompt.
 - Compaction: proactive `shouldCompact` against `ai.contextWindow`, plus one overflow recovery compact + continue; the current plan is re-injected from the Session custom-entry projector, and `plan_updated` joins `context_usage` / `compaction` on `ai:agent-event`
 - Agent chat references are structured: note paths are listed for tool-driven `read_note`, while selected prose and RunSQL snippets are added to the current user turn with a bounded character budget
 

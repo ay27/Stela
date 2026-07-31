@@ -18,9 +18,13 @@ import { IPC } from "@shared/ipc-channels";
 import { IPC_EVENTS } from "@shared/ipc-events";
 import type {
   AgentEvent,
+  AgentHistoryRef,
+  AgentHistorySession,
+  AgentHistorySummary,
   AgentSkillListItem,
   AgentProposalResponse,
   AgentRunRequest,
+  AgentRunResponse,
   AiCompleteRequest,
   AiCompleteResponse,
   AiInlineCompletionEvent,
@@ -99,6 +103,7 @@ import * as sqlIndex from "../services/sql-index";
 import * as autoUpdate from "../services/auto-updater";
 import * as ai from "../services/ai";
 import * as agent from "../services/ai/agent";
+import * as agentHistory from "../services/ai/agent-history";
 import * as agentSkills from "../services/ai/agent-skills";
 import { runInlineCompletion } from "../services/ai/inline-completion";
 
@@ -116,8 +121,28 @@ function requireVault(): string {
 
 /** runId -> 该次 agent run 的 AbortController，供 AI_AGENT_CANCEL 查找。 */
 const agentRunControllers = new Map<string, AbortController>();
+const activeAgentSessions = new Map<string, string>();
 const inlineCompletionControllers = new Map<string, AbortController>();
 const savedExportPaths = new Map<string, string>();
+let agentHistoryLock: Promise<void> = Promise.resolve();
+
+function withAgentHistoryLock<T>(operation: () => Promise<T>): Promise<T> {
+  const result = agentHistoryLock.catch(() => {}).then(operation);
+  agentHistoryLock = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+function activeAgentSessionIds(vaultPath: string): Set<string> {
+  const prefix = `${vaultPath}\0`;
+  return new Set(
+    [...activeAgentSessions.keys()]
+      .filter((key) => key.startsWith(prefix))
+      .map((key) => key.slice(prefix.length)),
+  );
+}
 
 function rememberSavedExport(filePath: string): string {
   const revealToken = randomUUID();
@@ -559,13 +584,23 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
   );
 
   // ---------- Harness agent ----------
-  registerHandler<{ request: AgentRunRequest }, { runId: string }>(
+  registerHandler<{ request: AgentRunRequest }, AgentRunResponse>(
     IPC.AI_AGENT_RUN,
     async ({ request }, handlerCtx) => {
       const vaultPath = requireVault();
       const slug = (await deviceProfile.loadDeviceProfile()).slug;
-      const controller = new AbortController();
-      agentRunControllers.set(request.runId, controller);
+      const { controller, effectiveRequest, sessionKey, sessionId } = await withAgentHistoryLock(async () => {
+        const session = await agent.preparePersistentAgentSession(vaultPath, slug, request.sessionId);
+        const effectiveRequest = { ...request, sessionId: session.sessionId };
+        const sessionKey = `${vaultPath}\0${session.sessionId}`;
+        if (activeAgentSessions.has(sessionKey)) {
+          throw new AppError("agent_session_busy", "This Agent session already has a running request.");
+        }
+        const controller = new AbortController();
+        agentRunControllers.set(request.runId, controller);
+        activeAgentSessions.set(sessionKey, request.runId);
+        return { controller, effectiveRequest, sessionKey, sessionId: session.sessionId };
+      });
       const sender = handlerCtx.event.sender;
       const onEvent = (event: AgentEvent) => {
         if (sender.isDestroyed()) return;
@@ -579,7 +614,7 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
       };
       // Fire-and-forget：invoke 立刻返回 runId，进度全部走流式事件推送。
       void agent
-        .runAgent({ vaultPath, slug, request, onEvent, signal: controller.signal })
+        .runAgent({ vaultPath, slug, request: effectiveRequest, onEvent, signal: controller.signal })
         .catch((err) => {
           getLogger("ai.agent").error("agent run crashed", {
             runId: request.runId,
@@ -587,9 +622,28 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
           });
         })
         .finally(() => {
-          agentRunControllers.delete(request.runId);
+          void withAgentHistoryLock(async () => {
+            agentRunControllers.delete(request.runId);
+            if (activeAgentSessions.get(sessionKey) === request.runId) {
+              activeAgentSessions.delete(sessionKey);
+            }
+            if (activeAgentSessionIds(vaultPath).size > 0) return;
+            try {
+              await agent.prunePersistentAgentHistory(
+                vaultPath,
+                slug,
+                () => activeAgentSessionIds(vaultPath),
+              );
+              onEvent({ type: "history_updated", runId: request.runId });
+            } catch (err) {
+              getLogger("ai.agent").warn("agent history cleanup failed", {
+                runId: request.runId,
+                err: err instanceof Error ? err.message : String(err),
+              });
+            }
+          });
         });
-      return { runId: request.runId };
+      return { runId: request.runId, sessionId };
     },
   );
   registerHandler<{ runId: string }, { cancelled: boolean }>(
@@ -604,6 +658,22 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
   registerHandler<AgentProposalResponse, { ok: boolean }>(
     IPC.AI_AGENT_RESPOND_PROPOSAL,
     (response) => ({ ok: agent.respondToProposal(response) }),
+  );
+  registerHandler<Record<string, never>, AgentHistorySummary[]>(
+    IPC.AI_AGENT_HISTORY_LIST,
+    async () => {
+      const vaultPath = requireVault();
+      const slug = (await deviceProfile.loadDeviceProfile()).slug;
+      return agentHistory.listAgentHistory(vaultPath, slug);
+    },
+  );
+  registerHandler<AgentHistoryRef, AgentHistorySession>(
+    IPC.AI_AGENT_HISTORY_LOAD,
+    async (ref) => {
+      const vaultPath = requireVault();
+      const slug = (await deviceProfile.loadDeviceProfile()).slug;
+      return agentHistory.loadAgentHistory(vaultPath, ref, slug);
+    },
   );
   registerHandler<Record<string, never>, AgentSkillListItem[]>(
     IPC.AI_SKILLS_LIST,

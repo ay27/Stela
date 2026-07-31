@@ -98,6 +98,8 @@ export const IPC = {
   AI_AGENT_RUN: "ai:agent-run",
   AI_AGENT_CANCEL: "ai:agent-cancel",
   AI_AGENT_RESPOND_PROPOSAL: "ai:agent-respond-proposal",
+  AI_AGENT_HISTORY_LIST: "ai:agent-history-list",
+  AI_AGENT_HISTORY_LOAD: "ai:agent-history-load",
   AI_SKILLS_LIST: "ai:skills-list",
   AI_SKILLS_REMOVE: "ai:skills-remove",
 
