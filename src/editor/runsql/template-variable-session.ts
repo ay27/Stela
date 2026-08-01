@@ -1,4 +1,4 @@
-import type { ChangeDesc } from "@codemirror/state";
+import { EditorState, type ChangeDesc } from "@codemirror/state";
 
 import type { TemplateVariableField } from "./sql-template-snippet";
 
@@ -6,6 +6,10 @@ export interface TemplateVariableSession {
   fields: TemplateVariableField[];
   activeIndex: number;
 }
+
+/** Required for linked placeholders to remain simultaneous CM selections. */
+export const templateMultiSelectionExtension =
+  EditorState.allowMultipleSelections.of(true);
 
 export function advanceTemplateVariableSession(
   session: TemplateVariableSession,

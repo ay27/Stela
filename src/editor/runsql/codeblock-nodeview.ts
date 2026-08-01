@@ -84,6 +84,7 @@ import { openSqlTemplatePicker } from "@/state/sql-template-picker";
 import {
   advanceTemplateVariableSession,
   mapTemplateVariableSession,
+  templateMultiSelectionExtension,
   type TemplateVariableSession,
 } from "./template-variable-session";
 import {
@@ -514,6 +515,7 @@ export class CodeBlockNodeView implements NodeView {
       lineNumbers(),
       highlightActiveLine(),
       drawSelection(),
+      templateMultiSelectionExtension,
       history(),
       indentOnInput(),
       bracketMatching(),

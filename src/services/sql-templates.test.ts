@@ -18,6 +18,7 @@ import {
 } from "@/editor/runsql/sql-template-snippet";
 import { matchesModAltPhysicalKey } from "@/editor/runsql/cm-hotkeys";
 import { matchesTemplateCommandTarget } from "@/editor/runsql/template-command-target";
+import { templateMultiSelectionExtension } from "@/editor/runsql/template-variable-session";
 import { EditorSelection, EditorState } from "@codemirror/state";
 
 interface Check {
@@ -164,7 +165,7 @@ WHERE dt = {{date}} OR snapshot_dt = {{date}}
   const date = session.fields[0]!;
   let state = EditorState.create({
     doc: session.text,
-    extensions: [EditorState.allowMultipleSelections.of(true)],
+    extensions: [templateMultiSelectionExtension],
     selection: EditorSelection.create(
       date.ranges.map((range) => EditorSelection.range(range.from, range.to)),
     ),
