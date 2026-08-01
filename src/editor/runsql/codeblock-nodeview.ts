@@ -24,6 +24,7 @@ import {
 import {
   EditorState as CMState,
   Compartment,
+  EditorSelection,
   Prec,
   type EditorState,
   type Extension,
@@ -78,6 +79,17 @@ import { i18n } from "@/i18n";
 import { isRunsqlBlockPending } from "./pending-runs";
 import { extractScope } from "./sql-scope";
 import { sqlInlineCompletionExtension } from "./sql-inline-completion";
+import { matchesModAltPhysicalKey } from "./cm-hotkeys";
+import { openSqlTemplatePicker } from "@/state/sql-template-picker";
+import {
+  advanceTemplateVariableSession,
+  mapTemplateVariableSession,
+  type TemplateVariableSession,
+} from "./template-variable-session";
+import {
+  applyTemplateCommand,
+  type TemplateCommandSnapshot,
+} from "./template-command-session";
 
 export const RUNSQL_LANGUAGE = "runsql";
 export const MERMAID_LANGUAGE = "mermaid";
@@ -120,6 +132,16 @@ export function flushAllRunsqlEditors(): void {
   }
 }
 
+export function openTemplatePickerInFocusedRunsql(): boolean {
+  const active = document.activeElement;
+  const focused = [...activeRunsqlViews].find(
+    (nodeView) => active !== null && nodeView.dom.contains(active),
+  );
+  if (!focused) return false;
+  focused.openTemplatePicker();
+  return true;
+}
+
 export class CodeBlockNodeView implements NodeView {
   dom: HTMLElement;
   private node: ProseNode;
@@ -149,6 +171,7 @@ export class CodeBlockNodeView implements NodeView {
   private resultViewState: BlockResultViewState = DEFAULT_VIEW_STATE;
   /** 上次 render 见到的最新 runId；变化即说明有新执行，重置 view state */
   private lastSeenRunId: string | null = null;
+  private templateVariableSession: TemplateVariableSession | null = null;
 
   // ----- mermaid 相关 ------------------------------------------------------
   /** 仅 mermaid block：预览 SVG 挂载点 */
@@ -510,9 +533,30 @@ export class CodeBlockNodeView implements NodeView {
       ]),
       this.languageCompartment.of(this.languageExtension(language)),
       this.aiDiffCompartment.of([]),
+      CMView.domEventHandlers({
+        keydown: (event, cm) => {
+          if (this.node.attrs.language !== RUNSQL_LANGUAGE) return false;
+          if (matchesModAltPhysicalKey(event, "KeyT")) {
+            this.openTemplatePicker();
+            return true;
+          }
+          if (matchesModAltPhysicalKey(event, "KeyL")) {
+            return formatSqlCommand(cm);
+          }
+          return false;
+        },
+      }),
       CMView.updateListener.of((update) => {
         if (this.updating) return;
-        if (update.docChanged) this.forwardUpdate(update);
+        if (update.docChanged) {
+          if (this.templateVariableSession) {
+            mapTemplateVariableSession(
+              this.templateVariableSession,
+              update.changes,
+            );
+          }
+          this.forwardUpdate(update);
+        }
       }),
       // 搜索高亮：监听 setCmSearchHighlight / clearCmSearchHighlight effect，
       // 由 [src/editor/MilkdownEditor.tsx](../MilkdownEditor.tsx) reveal effect
@@ -741,7 +785,74 @@ export class CodeBlockNodeView implements NodeView {
           return formatSqlCommand(cm);
         },
       },
+      {
+        key: "Mod-Alt-t",
+        run: () => {
+          if (this.node.attrs.language !== RUNSQL_LANGUAGE) return false;
+          this.openTemplatePicker();
+          return true;
+        },
+      },
+      {
+        key: "Tab",
+        run: () => this.advanceTemplateVariable(1),
+      },
+      {
+        key: "Shift-Tab",
+        run: () => this.advanceTemplateVariable(-1),
+      },
+      {
+        key: "Escape",
+        run: () => {
+          if (!this.templateVariableSession) return false;
+          this.templateVariableSession = null;
+          return true;
+        },
+      },
     ];
+  }
+
+  openTemplatePicker(): void {
+    if (this.destroyed || this.node.attrs.language !== RUNSQL_LANGUAGE) return;
+    const selection = this.cm.state.selection.main;
+    const snapshot: TemplateCommandSnapshot = {
+      from: selection.from,
+      to: selection.to,
+      text: this.cm.state.doc.toString(),
+    };
+    openSqlTemplatePicker((sql) => {
+      if (this.destroyed) return;
+      const result = applyTemplateCommand({
+        pm: this.view,
+        cm: this.cm,
+        getPos: this.getPos,
+        sql,
+        snapshot,
+      });
+      if (!result.applied) return;
+      this.templateVariableSession = result.session;
+      requestAnimationFrame(() => {
+        if (!this.destroyed) this.cm.focus();
+      });
+    });
+  }
+
+  private advanceTemplateVariable(direction: 1 | -1): boolean {
+    const session = this.templateVariableSession;
+    if (!session) return false;
+    const next = advanceTemplateVariableSession(session, direction);
+    if (!next) {
+      this.templateVariableSession = null;
+      return true;
+    }
+    this.cm.dispatch({
+      selection: EditorSelection.create(
+        next.ranges.map((range) =>
+          EditorSelection.range(range.from, range.to),
+        ),
+      ),
+    });
+    return true;
   }
 
   /**
@@ -1052,6 +1163,7 @@ export class CodeBlockNodeView implements NodeView {
         ${attrs.blockId ? `<span class="stela-cb__id">${escapeHtml(attrs.blockId)}</span>` : ""}
         <button type="button" class="stela-cb__ai stela-cb__ai-rewrite" title="${escapeHtml(i18n.t("ai.runsql.rewriteSql"))}">${AI_ICON_HTML}${escapeHtml(i18n.t("ai.runsql.rewriteShort"))}</button>
         <button type="button" class="stela-cb__ai stela-cb__ai-ask" title="${escapeHtml(i18n.t("ai.runsql.askSql"))}">${AI_ICON_HTML}${escapeHtml(i18n.t("ai.runsql.askShort"))}</button>
+        <button type="button" class="stela-cb__template" title="${escapeHtml(i18n.t("templates.picker.title"))} (${escapeHtml(formatHotkey("Mod+Alt+T"))})">${escapeHtml(i18n.t("templates.library.title"))}</button>
         <button type="button" class="stela-cb__format" title="格式化 SQL (${escapeHtml(formatHint)})" aria-label="格式化 SQL">${FORMAT_ICON_HTML}<span class="stela-cb__format-kbd" aria-hidden="true">${escapeHtml(formatHint)}</span></button>
         <button type="button" class="stela-cb__run" data-state="${runState}" ${running ? "disabled" : ""} title="执行 SQL (${formatHotkey("Mod+Enter")})">${PLAY_ICON_HTML}${escapeHtml(label)}<span class="stela-cb__run-kbd" aria-hidden="true">${escapeHtml(formatHotkey("Mod+Enter"))}</span></button>
       `;
@@ -1072,6 +1184,17 @@ export class CodeBlockNodeView implements NodeView {
         });
         aiBtn.addEventListener("click", (ev) => this.onAiButtonClick(ev, mode));
       }
+      const templateButton =
+        this.headerEl.querySelector<HTMLButtonElement>(
+          "button.stela-cb__template",
+        );
+      templateButton?.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      templateButton?.addEventListener("click", () =>
+        this.openTemplatePicker(),
+      );
       const btn = this.headerEl.querySelector<HTMLButtonElement>(
         "button.stela-cb__run",
       );

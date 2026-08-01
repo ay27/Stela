@@ -100,3 +100,4 @@ proposed → active → superseded
 | [0045](0045-recency-ordered-skill-distillation.md) | Recency-ordered Skill distillation | active |
 | [0046](0046-device-sharded-agent-session-history.md) | Device-sharded Agent session history | active |
 | [0047](0047-bounded-device-agent-history-retention.md) | Bounded device Agent history retention | active |
+| [0048](0048-vault-markdown-sql-template-library.md) | Vault Markdown SQL template library | active |

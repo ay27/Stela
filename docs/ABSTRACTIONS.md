@@ -23,6 +23,15 @@ A Stela data note is a standard Markdown file (`.md`) with optional YAML frontma
 
 Frontmatter parsing is intentionally minimal (`electron/shared/frontmatter.ts`) — key-value lines only, no full YAML parser dependency.
 
+### SQL Template file
+
+A SQL template is a hidden Vault Markdown file at
+`.stela/sql-templates/<stable-slug>.md`. It uses `type: stela-sql-template`,
+`name`, `description`, and `connection_name` frontmatter. The first `runsql`
+fence is the insertion payload. `{{variable}}` placeholders remain visible,
+repeated names edit together, `Tab` / `Shift+Tab` move between variables, and
+`Escape` ends variable editing.
+
 ### RunSQL block shape
 
 Each executable SQL block in a note follows this on-disk pattern:

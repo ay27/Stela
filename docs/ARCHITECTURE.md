@@ -67,6 +67,7 @@ When deciding where to persist data, ask: **"Should this follow the vault across
 | `.stela/secrets/ai_{slug}.json` (safeStorage-wrapped AI API key) | Panel widths, open tabs, transient UI state |
 | `.stela/agent-history/<deviceSlug>/*.jsonl` | — |
 | `.stela/connector_plugins.json` + `.stela/plugins/` | Command palette transient input |
+| `.stela/sql-templates/*.md` (reusable SQL templates) | — |
 | Markdown frontmatter `connection_name` | Dev-mode isolated userData (`Stela-dev`) |
 
 Passwords are stored per-device in `secrets_{slug}.json` (Git-synced ciphertext, decryptable only on the originating machine via `safeStorage`).

@@ -17,6 +17,10 @@ import { useConnections } from "@/state/connections";
 import { firstConnectionName } from "@/services/connections";
 import { useT } from "@/i18n/use-t";
 import {
+  isSqlTemplatePath,
+  SQL_TEMPLATE_TYPE,
+} from "@/services/sql-templates";
+import {
   parseFrontmatterField,
   splitFrontmatter,
   updateFrontmatterField,
@@ -24,6 +28,7 @@ import {
 import { cn } from "@/lib/utils";
 
 export function EditorView({ tabId, path }: { tabId: string; path: string }) {
+  const vaultPath = useWorkspace((state) => state.vaultPath);
   const t = useT();
   const setDirty = useWorkspace((s) => s.setDirty);
   const openSettings = useDialogs((s) => s.setSettings);
@@ -180,6 +185,18 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
     [path, setDirty, tabId],
   );
 
+  const onUpdateTemplateMetadata = useCallback(
+    (key: "name" | "description", value: string) => {
+      if (raw === null) return;
+      const next = updateFrontmatterField(raw, key, value);
+      if (next === raw) return;
+      setRaw(next);
+      setTabBuffer(tabId, next);
+      scheduleTabPersist(tabId, path, next, () => setDirty(tabId, false));
+    },
+    [path, raw, setDirty, tabId],
+  );
+
   const onCopyPath = useCallback(() => {
     window.stela.shell.writeClipboardText(path);
     setPathCopied(true);
@@ -229,6 +246,14 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
       </div>
     );
   }
+
+  const { frontmatter } = splitFrontmatter(raw);
+  const isSqlTemplate =
+    isSqlTemplatePath(path, vaultPath ?? undefined) &&
+    parseFrontmatterField(frontmatter, "type") === SQL_TEMPLATE_TYPE;
+  const templateName = parseFrontmatterField(frontmatter, "name") ?? "";
+  const templateDescription =
+    parseFrontmatterField(frontmatter, "description") ?? "";
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -281,6 +306,30 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
           />
         </div>
       </div>
+      {isSqlTemplate ? (
+        <div className="grid flex-none gap-2 border-b border-border bg-muted/20 px-3 py-2 sm:grid-cols-[minmax(12rem,1fr)_minmax(18rem,2fr)]">
+          <label className="grid gap-1 text-[11px] font-medium text-muted-foreground">
+            {t("templates.library.name")}
+            <input
+              value={templateName}
+              onChange={(event) =>
+                onUpdateTemplateMetadata("name", event.target.value)
+              }
+              className="h-7 rounded border border-input bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </label>
+          <label className="grid gap-1 text-[11px] font-medium text-muted-foreground">
+            {t("templates.library.descriptionLabel")}
+            <input
+              value={templateDescription}
+              onChange={(event) =>
+                onUpdateTemplateMetadata("description", event.target.value)
+              }
+              className="h-7 rounded border border-input bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </label>
+        </div>
+      ) : null}
       {externalChange ? (
         <ExternalChangeBanner
           kind={externalChange}

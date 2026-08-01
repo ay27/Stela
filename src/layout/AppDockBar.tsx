@@ -9,7 +9,14 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, FolderSync, Link2, Settings as SettingsIcon, Tag } from "lucide-react";
+import {
+  BookOpen,
+  FileCode2,
+  FolderSync,
+  Link2,
+  Settings as SettingsIcon,
+  Tag,
+} from "lucide-react";
 
 import type { UpdaterStatus } from "@shared/types";
 
@@ -90,6 +97,8 @@ export function AppDockBar() {
             <GitBadge showBranch className={`${dockItem} max-w-[120px]`} />
             <DockSep />
             <SkillLibraryButton />
+            <DockSep />
+            <SqlTemplateLibraryButton />
           </>
         ) : null}
       </div>
@@ -123,6 +132,24 @@ function SkillLibraryButton() {
       onClick={() => setExperienceKnowledge(true)}
     >
       <BookOpen className="h-3.5 w-3.5 flex-none" />
+      <span className="whitespace-nowrap">{title}</span>
+    </button>
+  );
+}
+
+function SqlTemplateLibraryButton() {
+  const t = useT();
+  const setSqlTemplate = useDialogs((state) => state.setSqlTemplate);
+  const title = t("templates.library.title");
+  return (
+    <button
+      type="button"
+      className={dockItem}
+      title={title}
+      aria-label={title}
+      onClick={() => setSqlTemplate(true)}
+    >
+      <FileCode2 className="h-3.5 w-3.5 flex-none" />
       <span className="whitespace-nowrap">{title}</span>
     </button>
   );

@@ -14,6 +14,8 @@ import { useLayout } from "@/state/layout";
 import { useTabSwitcher } from "@/state/tab-switcher";
 import { ConnectionsDialog } from "@/components/connections-dialog";
 import { ExperienceKnowledgeDialog } from "@/components/experience-knowledge-dialog";
+import { SqlTemplateDialog } from "@/components/sql-template-dialog";
+import { SqlTemplatePicker } from "@/components/sql-template-picker";
 import { ExportNoteDialog } from "@/components/export-note-dialog";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { AiModal } from "@/components/ai/ai-modal";
@@ -55,6 +57,8 @@ export function AppShell() {
   const setSettingsOpen = useDialogs((s) => s.setSettings);
   const experienceKnowledgeOpen = useDialogs((s) => s.experienceKnowledgeOpen);
   const setExperienceKnowledgeOpen = useDialogs((s) => s.setExperienceKnowledge);
+  const sqlTemplateOpen = useDialogs((s) => s.sqlTemplateOpen);
+  const setSqlTemplateOpen = useDialogs((s) => s.setSqlTemplate);
   const paletteOpen = useDialogs((s) => s.paletteOpen);
   const setPaletteOpen = useDialogs((s) => s.setPalette);
   const togglePalette = useDialogs((s) => s.togglePalette);
@@ -341,6 +345,11 @@ export function AppShell() {
         open={experienceKnowledgeOpen}
         onOpenChange={setExperienceKnowledgeOpen}
       />
+      <SqlTemplateDialog
+        open={sqlTemplateOpen}
+        onOpenChange={setSqlTemplateOpen}
+      />
+      <SqlTemplatePicker />
       <CommandPalette
         open={paletteOpen}
         onOpenChange={setPaletteOpen}

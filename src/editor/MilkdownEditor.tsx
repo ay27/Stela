@@ -37,6 +37,7 @@ import {
 } from "./active-editor";
 import {
   MERMAID_LANGUAGE,
+  openTemplatePickerInFocusedRunsql,
   RUNSQL_LANGUAGE,
 } from "./runsql/codeblock-nodeview";
 import { showContextMenu } from "./runsql/context-menu";
@@ -756,6 +757,17 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       const mod = e.metaKey || e.ctrlKey;
       const isF = e.code === "KeyF";
+      if (
+        mod &&
+        e.altKey &&
+        !e.shiftKey &&
+        e.code === "KeyT" &&
+        openTemplatePickerInFocusedRunsql()
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (mod && isF && !e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
@@ -1272,4 +1284,3 @@ function DocumentTocRail({
     </div>
   );
 }
-
