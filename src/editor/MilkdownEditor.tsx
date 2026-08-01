@@ -40,6 +40,7 @@ import {
   openTemplatePickerInFocusedRunsql,
   RUNSQL_LANGUAGE,
 } from "./runsql/codeblock-nodeview";
+import { STELA_USER_EDIT_EVENT } from "./user-edit-event";
 import { showContextMenu } from "./runsql/context-menu";
 import {
   clearRunContext,
@@ -546,6 +547,7 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       "cut",
       "drop",
       "compositionstart",
+      STELA_USER_EDIT_EVENT,
     ] as const;
     for (const ev of events) {
       host.addEventListener(ev, onUserInput, { capture: true });

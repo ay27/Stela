@@ -17,6 +17,7 @@ import {
   createTemplateVariableSession,
 } from "@/editor/runsql/sql-template-snippet";
 import { matchesModAltPhysicalKey } from "@/editor/runsql/cm-hotkeys";
+import { matchesTemplateCommandTarget } from "@/editor/runsql/template-command-target";
 import { EditorSelection, EditorState } from "@codemirror/state";
 
 interface Check {
@@ -214,6 +215,27 @@ WHERE dt = {{date}} OR snapshot_dt = {{date}}
   check(
     "SQL without variables remains unchanged",
     createTemplateVariableSession("SELECT 1").text === "SELECT 1",
+  );
+}
+
+{
+  const target = {
+    tabId: "tab-1",
+    blockId: null,
+    blockIndex: 2,
+    text: "",
+  };
+  check(
+    "remounted empty RunSQL block remains a valid template target",
+    matchesTemplateCommandTarget(target, { ...target, connected: true }),
+  );
+  check(
+    "template target rejects a matching block in another tab",
+    !matchesTemplateCommandTarget(target, {
+      ...target,
+      tabId: "tab-2",
+      connected: true,
+    }),
   );
 }
 

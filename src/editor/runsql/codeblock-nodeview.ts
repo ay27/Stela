@@ -87,6 +87,11 @@ import {
   type TemplateVariableSession,
 } from "./template-variable-session";
 import {
+  matchesTemplateCommandTarget,
+  type TemplateCommandTargetIdentity,
+} from "./template-command-target";
+import { markStelaUserEdit } from "../user-edit-event";
+import {
   applyTemplateCommand,
   type TemplateCommandSnapshot,
 } from "./template-command-session";
@@ -820,21 +825,55 @@ export class CodeBlockNodeView implements NodeView {
       to: selection.to,
       text: this.cm.state.doc.toString(),
     };
+    const target: TemplateCommandTargetIdentity = {
+      tabId: useWorkspace.getState().activeTabId,
+      blockId: (this.node.attrs.blockId as string | undefined) ?? null,
+      blockIndex: this.currentRunsqlBlockIndex(),
+      text: snapshot.text,
+    };
     openSqlTemplatePicker((sql) => {
-      if (this.destroyed) return;
+      const nodeView = this.destroyed
+        ? [...activeRunsqlViews].find((candidate) =>
+            candidate.matchesTemplateTarget(target),
+          )
+        : this;
+      if (!nodeView) {
+        console.warn(
+          "[stela][sql-template] insertion target is no longer available",
+        );
+        return;
+      }
+      markStelaUserEdit(nodeView.dom);
       const result = applyTemplateCommand({
-        pm: this.view,
-        cm: this.cm,
-        getPos: this.getPos,
+        pm: nodeView.view,
+        cm: nodeView.cm,
+        getPos: nodeView.getPos,
         sql,
         snapshot,
       });
-      if (!result.applied) return;
-      this.templateVariableSession = result.session;
+      if (!result.applied) {
+        console.warn("[stela][sql-template] insertion was not applied", result);
+        return;
+      }
+      nodeView.templateVariableSession = result.session;
       requestAnimationFrame(() => {
-        if (!this.destroyed) this.cm.focus();
+        if (!nodeView.destroyed) nodeView.cm.focus();
       });
     });
+  }
+
+  private matchesTemplateTarget(target: TemplateCommandTargetIdentity): boolean {
+    return (
+      !this.destroyed &&
+      this.node.attrs.language === RUNSQL_LANGUAGE &&
+      matchesTemplateCommandTarget(target, {
+        tabId: useWorkspace.getState().activeTabId,
+        blockId: (this.node.attrs.blockId as string | undefined) ?? null,
+        blockIndex: this.currentRunsqlBlockIndex(),
+        text: this.cm.state.doc.toString(),
+        connected: this.dom.isConnected,
+      })
+    );
   }
 
   private advanceTemplateVariable(direction: 1 | -1): boolean {
