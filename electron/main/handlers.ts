@@ -613,8 +613,12 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
         }
       };
       // Fire-and-forget：invoke 立刻返回 runId，进度全部走流式事件推送。
+      let maintenanceJob: agent.SkillMaintenanceJob | null | undefined;
       void agent
         .runAgent({ vaultPath, slug, request: effectiveRequest, onEvent, signal: controller.signal })
+        .then((job) => {
+          maintenanceJob = job;
+        })
         .catch((err) => {
           getLogger("ai.agent").error("agent run crashed", {
             runId: request.runId,
@@ -627,6 +631,7 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
             if (activeAgentSessions.get(sessionKey) === request.runId) {
               activeAgentSessions.delete(sessionKey);
             }
+            if (maintenanceJob) agent.startSkillMaintenanceJob(vaultPath, maintenanceJob);
             if (activeAgentSessionIds(vaultPath).size > 0) return;
             try {
               await agent.prunePersistentAgentHistory(

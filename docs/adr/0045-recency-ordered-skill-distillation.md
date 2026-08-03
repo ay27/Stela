@@ -2,7 +2,8 @@
 type: ADR
 id: "0045"
 title: "Recency-ordered Skill distillation"
-status: active
+status: superseded
+superseded_by: "0050"
 date: 2026-07-30
 ---
 

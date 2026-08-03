@@ -113,8 +113,8 @@ function truncate(text: string, maxChars = RESULT_CHAR_BUDGET): string {
     : `${text.slice(0, maxChars)}\n...[truncated ${text.length - maxChars} chars]`;
 }
 
-function ok(value: unknown, maxChars = RESULT_CHAR_BUDGET): ToolOutcome {
-  return { ok: true, text: truncate(typeof value === "string" ? value : JSON.stringify(value, null, 2), maxChars) };
+function ok(value: unknown, maxChars = RESULT_CHAR_BUDGET, terminate = false): ToolOutcome {
+  return { ok: true, text: truncate(typeof value === "string" ? value : JSON.stringify(value, null, 2), maxChars), terminate };
 }
 
 function fail(message: string): ToolOutcome {
@@ -124,6 +124,7 @@ function fail(message: string): ToolOutcome {
 export interface ToolOutcome {
   ok: boolean;
   text: string;
+  terminate?: boolean;
 }
 
 export interface ProposalRequest {
@@ -148,12 +149,15 @@ export interface AgentToolContext {
   connection: ConnectionEntry | null;
   maintenanceDialect?: string | null;
   maintenanceTables?: string[];
+  maintenanceSourcePaths?: string[];
+  maintenanceRefreshName?: string | null;
   maintenanceRelatedNotes?: { paths: Set<string>; reads: number };
   aiSettings: AiSettings;
   connector: AgentConnectorOps;
   sqlIndex: AgentSqlIndexOps;
   skills: LoadedAgentSkill[];
-  mode: "normal" | "maintenance";
+  mode: "normal" | "maintenance" | "refresh";
+  ensureSkillFresh?: (skill: LoadedAgentSkill) => Promise<LoadedAgentSkill | null>;
   onSkillMaintenance?: (record: AgentSkillMaintenanceRecord) => void;
   /**
    * 单次 run 的可变状态：`runId` / `notePath` 用于给执行历史生成
@@ -371,7 +375,7 @@ export function createAgentTools(options: {
       name: "save_skill",
       label: "Save Skill",
       description:
-        `Save a compact validated data-knowledge SKILL.md or archive an obsolete Skill. Save only reusable, verified rules with their scope and minimal check; never copy an analysis, result rows, or one-off SQL. ${AGENT_SKILL_LIMITS_PROMPT} For a save, call once with name, content, and reason; action defaults to save. content must include YAML frontmatter with description, category, and inline tags. For archive, set action to archive and omit content. Automatic maintenance may create only a new Skill; it cannot overwrite or archive existing knowledge. Never use it for user notes or arbitrary files.`,
+        `Save a compact validated data-knowledge SKILL.md or archive an obsolete Skill. Save only reusable, verified rules with their scope and minimal check; never copy an analysis, result rows, or one-off SQL. analysis-runbook is explicit-user-save only and must describe a repeatable flow with ordered steps, decision branches, and success criteria. ${AGENT_SKILL_LIMITS_PROMPT} For a save, call once with name, content, and reason; action defaults to save. content must include YAML frontmatter with description, category, and inline tags. For archive, set action to archive and omit content. Automatic maintenance may create only a new Skill; it cannot overwrite or archive existing knowledge. Never use it for user notes or arbitrary files.`,
       parameters: Type.Object({
         action: Type.Optional(Type.Union([Type.Literal("save"), Type.Literal("archive")])),
         name: Type.String({ description: "Required lowercase Skill directory name, e.g. postgresql-demo-tasks." }),
@@ -426,14 +430,8 @@ export function createAgentTools(options: {
       execute: (toolCallId, params) => runTool("ask_user", toolCallId, params, ctx, requestProposal),
     },
   ];
-  if (ctx.mode === "maintenance") {
-    return tools.filter((tool) =>
-      tool.name === "search_sql_usage" ||
-      tool.name === "read_note" ||
-      tool.name === "load_skill" ||
-      tool.name === "search_skills" ||
-      tool.name === "save_skill",
-    );
+  if (ctx.mode === "maintenance" || ctx.mode === "refresh") {
+    return tools.filter((tool) => tool.name === "save_skill");
   }
   return tools;
 }
@@ -455,6 +453,7 @@ async function runTool(
   return {
     content: [{ type: "text" as const, text: outcome.text }],
     details: { summary: outcome.text },
+    ...(outcome.terminate ? { terminate: true } : {}),
   };
 }
 
@@ -864,10 +863,16 @@ async function runReadNote(args: { path?: unknown; offset?: unknown; maxChars?: 
   }, fullRead ? Number.POSITIVE_INFINITY : maxChars + 2_000);
 }
 
-function runLoadSkill(args: { name?: unknown }, ctx: AgentToolContext): ToolOutcome {
+async function runLoadSkill(args: { name?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
   const name = typeof args.name === "string" ? args.name.trim() : "";
-  const skill = ctx.skills.find((item) => item.metadata.name === name);
+  let skill = ctx.skills.find((item) => item.metadata.name === name);
   if (!skill) return fail(`No installed Skill named '${name}'. Use only names in the available Skills list.`);
+  if (ctx.ensureSkillFresh) {
+    skill = await ctx.ensureSkillFresh(skill) ?? undefined;
+    if (!skill) {
+      return fail(`stale_skill_unavailable: '${name}' could not be refreshed from current Vault documents. Use live schema and note retrieval instead.`);
+    }
+  }
   const content = skill.skill.content;
   const truncated = content.length > MAX_AGENT_SKILL_CHARS;
   return ok({
@@ -899,12 +904,19 @@ async function runSaveSkill(
   const reason = typeof args.reason === "string" && args.reason.trim()
     ? args.reason
     : "Updated internal data knowledge.";
+  if (ctx.mode === "refresh" && ctx.maintenanceRefreshName !== name) {
+    return fail(`Refresh may update only '${ctx.maintenanceRefreshName ?? "the selected Skill"}'.`);
+  }
   const record =
     action === "save"
       ? typeof args.content === "string"
         ? await saveAgentSkill(ctx.vaultPath, name, args.content, reason, {
           overwrite: ctx.mode !== "maintenance",
-          dialect: ctx.mode === "maintenance" ? ctx.maintenanceDialect : null,
+          dialect: ctx.mode === "maintenance" || ctx.mode === "refresh" ? ctx.maintenanceDialect : null,
+          automatic: ctx.mode === "maintenance",
+          templateDriven: ctx.mode === "maintenance" || ctx.mode === "refresh",
+          sourcePaths: ctx.maintenanceSourcePaths,
+          sourceTables: ctx.maintenanceTables,
         })
         : null
       : action === "archive"
@@ -922,7 +934,7 @@ async function runSaveSkill(
   const refreshed = await loadAgentSkills(ctx.vaultPath);
   ctx.skills.splice(0, ctx.skills.length, ...refreshed.loaded);
   ctx.onSkillMaintenance?.(record);
-  return ok(record);
+  return ok(record, RESULT_CHAR_BUDGET, ctx.mode === "maintenance" || ctx.mode === "refresh");
 }
 
 async function runProposeEdit(
@@ -1086,7 +1098,7 @@ export async function dispatchTool(
       case "get_plan":
         return runGetPlan(ctx);
       case "load_skill":
-        return runLoadSkill(args, ctx);
+        return await runLoadSkill(args, ctx);
       case "search_skills":
         return runSearchSkills(args, ctx);
       case "save_skill":

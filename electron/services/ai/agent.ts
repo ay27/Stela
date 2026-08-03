@@ -40,6 +40,7 @@ import {
   loadAgentSkills,
   rankAgentSkills,
   type AgentSkillMaintenanceRecord,
+  type LoadedAgentSkill,
 } from "./agent-skills";
 import { ExecutionPlanStore, formatExecutionPlanEntry } from "./execution-plan";
 import {
@@ -63,6 +64,17 @@ import {
   prepareLocalAgentHistorySession,
   pruneLocalAgentHistory,
 } from "./agent-history";
+import {
+  collectSkillSourceNotes,
+  isSkillStale,
+  tablesFromSkill,
+  type SkillSourceNote,
+} from "./skill-source-context";
+import {
+  cancelSkillMaintenance,
+  enqueueSkillMaintenance,
+  SKILL_MAINTENANCE_MAX_TURNS,
+} from "./skill-maintenance-queue";
 
 const log = getLogger("ai.agent");
 const TOOL_RESULT_SUMMARY_CHARS = 480;
@@ -70,21 +82,37 @@ const EXECUTION_PLAN_ENTRY = "execution_plan";
 const OVERFLOW_CONTINUE_PROMPT =
   "The previous request exceeded the model context window. Continue from the compacted history and finish the user's last request.";
 const SKILL_PROMPT_LIMIT = 8;
-const SKILL_MAINTENANCE_ANSWER_CHARS = 2_400;
 const SKILL_MAINTENANCE_PROMPT = `You are Stela's internal experience-maintenance agent.
-Review the completed request and bounded tool evidence below. Save nothing by default. Preserve only durable, specific data-analysis knowledge that is verified, applies beyond this request, and does not duplicate an existing Skill: SQL dialect constraints, metric definitions, business glossary mappings, data lineage, or analysis runbooks.
+The application already retrieved, ordered, and validated the material below. You have one decision: call save_skill exactly once for one durable rule, or make no tool call and give a one-sentence reason. Conversation explains intent; only verified evidence and source documents prove facts. Never copy result rows, absolute counts, snapshots, private data, narration, or one-off SQL. Automatic creation supports only sql-dialect, metric-definition, business-glossary, and data-lineage; never create analysis-runbook.
 
-First search existing Skills when relevant. Use save_skill only when all three conditions hold: reusable scope, direct evidence in the completed work, and no existing equivalent. Do not copy the answer, SQL, result rows, absolute counts, date snapshots, or error logs into a Skill. A failed_attempt is not proof by itself: save a failure gotcha only if later successful tool evidence explains the cause and replacement. Never save transient_failure. Keep a saved Skill to its scope, rule, and minimal verification or exception. Automatic maintenance may create only a new compact validated SKILL.md; it cannot overwrite or archive an existing Skill. A saved file must use this frontmatter shape:
+Use this frontmatter:
 ---
 name: lowercase-hyphenated-name
 description: concise reusable purpose
-category: sql-dialect | metric-definition | business-glossary | data-lineage | analysis-runbook
+category: sql-dialect | metric-definition | business-glossary | data-lineage
 tags: [lowercase-tag, another-tag]
 ---
 
-${AGENT_SKILL_LIMITS_PROMPT}
+Fill exactly one category template:
+- sql-dialect: ## Scope; ## Rule; ## Valid Pattern; ## Verify
+- metric-definition: ## Scope; ## Definition; ## Grain & Filters; ## Verify
+- business-glossary: ## Scope; ## Term Mapping; ## Rule; ## Verify
+- data-lineage: ## Scope; ## Source → Transform → Target; ## Keys & Grain; ## Verify
 
-For each candidate table named in the evidence, call search_sql_usage with its table parameter before saving. Its matched notes are ordered by document update time; you may read at most the first three with read_note. Distill only rules shared across those records. If records conflict, the newest updated note takes precedence; do not retain a rule whose scope remains unclear. Tags may only use verified tables, business terms, and the active connection dialect; never guess another SQL dialect. Do not save one-off answers, speculative claims, user-private data, credentials, SQL result rows, analysis narration, or instructions requiring tools Stela does not have. If there is no safe durable knowledge, make no tool call and reply with a one-sentence reason.`;
+${AGENT_SKILL_LIMITS_PROMPT}`;
+
+const SKILL_REFRESH_PROMPT = `You refresh one existing Stela knowledge Skill from current source documents. Update only the named Skill and keep its category. Preserve supported rules, replace conflicts with the newest source, and omit anything not proved by the supplied documents. Call save_skill exactly once, or make no tool call if a safe complete refresh is impossible. Use the required category headings and never copy result rows, snapshots, private data, narration, or one-off SQL. Analysis-runbook refresh is allowed only for an already source-tracked runbook.`;
+
+function refreshTemplate(category: string | null): string {
+  switch (category) {
+    case "sql-dialect": return "## Scope; ## Rule; ## Valid Pattern; ## Verify";
+    case "metric-definition": return "## Scope; ## Definition; ## Grain & Filters; ## Verify";
+    case "business-glossary": return "## Scope; ## Term Mapping; ## Rule; ## Verify";
+    case "data-lineage": return "## Scope; ## Source → Transform → Target; ## Keys & Grain; ## Verify";
+    case "analysis-runbook": return "## Scope / Trigger; ## Preconditions; ## Ordered Checks; ## Decision → Action; ## Stop Conditions; ## Verify";
+    default: return "Use the existing Skill category's required headings.";
+  }
+}
 
 /**
  * `question` kind 需要把答案文本带回工具，所以 resolve 类型从 `boolean`
@@ -208,19 +236,43 @@ function toolResultSummary(result: unknown): string {
 }
 
 function buildSkillMaintenanceInput(
-  request: AgentRunRequest,
-  finalAnswer: string,
+  conversation: string,
   evidence: SkillMaintenanceEvidence[],
+  notes: SkillSourceNote[],
+  skills: LoadedAgentSkill[],
+  refreshSkill?: LoadedAgentSkill,
 ): string {
-  const answer = finalAnswer.trim().slice(0, SKILL_MAINTENANCE_ANSWER_CHARS);
   return [
-    `Completed user request:\n${request.prompt}`,
-    `Agent run ID: ${request.runId}`,
-    "Bounded tool evidence (extract only reusable verified facts; never copy this text verbatim):",
+    refreshSkill ? `Refresh only this Skill:\n${refreshSkill.content}` : "Create at most one new Skill.",
+    `Current-task conversation (context, not proof):\n${conversation}`,
+    "Verified tool evidence:",
     formatSkillMaintenanceEvidence(evidence) || "No tool evidence was available.",
-    "Final answer is task background only, not evidence:",
-    answer || "No final answer was available.",
+    `Source documents, newest first:\n${notes.map((note) =>
+      `--- SOURCE ${note.path} · ${note.updatedAt} ---\n${note.content}`
+    ).join("\n\n")}`,
+    `Existing related Skill metadata:\n${skills.map((skill) =>
+      `${skill.metadata.name} · ${skill.metadata.category} · ${skill.metadata.description}`
+    ).join("\n") || "none"}`,
   ].join("\n\n");
+}
+
+function conversationForMaintenance(messages: unknown[]): string {
+  return messages.flatMap((message) => {
+    if (!message || typeof message !== "object") return [];
+    const record = message as { role?: unknown; content?: unknown };
+    if (record.role !== "user" && record.role !== "assistant") return [];
+    const text = typeof record.content === "string"
+      ? record.content
+      : Array.isArray(record.content)
+        ? record.content.flatMap((block) =>
+          block && typeof block === "object" && (block as { type?: unknown }).type === "text" &&
+          typeof (block as { text?: unknown }).text === "string"
+            ? [(block as { text: string }).text]
+            : [],
+        ).join("\n")
+        : "";
+    return text.trim() ? [`${String(record.role).toUpperCase()}:\n${text.trim()}`] : [];
+  }).join("\n\n");
 }
 
 function createSession(storage: InMemorySessionStorage | JsonlSessionStorage = new InMemorySessionStorage()): Session {
@@ -279,7 +331,7 @@ async function getOrCreateSession(
 async function runSkillMaintenance(options: {
   vaultPath: string;
   request: AgentRunRequest;
-  finalAnswer: string;
+  conversation: string;
   evidence: SkillMaintenanceEvidence[];
   models: Awaited<ReturnType<typeof createTransportForProfile>>["models"];
   model: Awaited<ReturnType<typeof createTransportForProfile>>["model"];
@@ -287,24 +339,42 @@ async function runSkillMaintenance(options: {
   connection: ConnectionEntry | null;
   dialect: string | null;
   aiSettings: Awaited<ReturnType<typeof settingsStore.loadAppSettings>>["ai"];
-  onAbortHarness: (harness: AgentHarness) => void;
   onEvent: (event: AgentEvent) => void;
   signal: AbortSignal;
-}): Promise<void> {
-  const { vaultPath, request, finalAnswer, evidence, models, model, skills, connection, dialect, aiSettings, onAbortHarness, onEvent, signal } = options;
+  refreshSkill?: LoadedAgentSkill;
+  emitStatus?: boolean;
+}): Promise<boolean> {
+  const { vaultPath, request, conversation, evidence, models, model, skills, connection, dialect, aiSettings, onEvent, signal, refreshSkill } = options;
   const actions: AgentSkillMaintenanceRecord[] = [];
   const promptSkills = rankAgentSkills(skills.loaded, request.prompt, SKILL_PROMPT_LIMIT);
-  const maintenanceTables = Array.from(new Set(evidence.flatMap((item) => item.tables ?? [])));
-  const maintenanceRelatedNotes = { paths: new Set<string>(), reads: 0 };
-  onEvent({ type: "skill_maintenance_started", runId: request.runId });
+  const maintenanceTables = refreshSkill
+    ? tablesFromSkill(refreshSkill)
+    : Array.from(new Set(evidence.flatMap((item) => item.tables ?? []))).slice(0, 8);
+  if (refreshSkill?.metadata.category === "analysis-runbook" && refreshSkill.metadata.sources.length === 0) {
+    return false;
+  }
+  const sourceNotes = await collectSkillSourceNotes(vaultPath, maintenanceTables, sqlIndex.query);
+  if (sourceNotes.length === 0) return false;
+  const maxInputChars = Math.max(16_000, Math.floor(model.contextWindow * 2.5));
+  if (conversation.length > maxInputChars - 8_000) return false;
+  let remaining = Math.max(4_000, maxInputChars - conversation.length - 8_000);
+  const boundedNotes = sourceNotes.map((note) => {
+    const content = note.content.slice(0, remaining);
+    remaining = Math.max(0, remaining - content.length);
+    return { ...note, content };
+  }).filter((note) => note.content.length > 0);
+  if (boundedNotes.length === 0) return false;
+  if (options.emitStatus !== false) onEvent({ type: "skill_maintenance_started", runId: request.runId });
   const maintenanceHarness = new AgentHarness({
     env: new NodeExecutionEnv({ cwd: vaultPath }),
     session: createSession(),
     models,
     model,
     thinkingLevel: "off",
-    systemPrompt: `${SKILL_MAINTENANCE_PROMPT}\n${formatSkillsForSystemPrompt(promptSkills.map((item) => item.skill))}`,
-    resources: { skills: promptSkills.map((item) => item.skill) },
+    systemPrompt: refreshSkill
+      ? `${SKILL_REFRESH_PROMPT}\nRequired headings: ${refreshTemplate(refreshSkill.metadata.category)}`
+      : SKILL_MAINTENANCE_PROMPT,
+    resources: { skills: [] },
     tools: createAgentTools({
       ctx: {
         vaultPath,
@@ -312,7 +382,8 @@ async function runSkillMaintenance(options: {
         connection,
         maintenanceDialect: dialect,
         maintenanceTables,
-        maintenanceRelatedNotes,
+        maintenanceSourcePaths: boundedNotes.map((note) => note.path),
+        maintenanceRefreshName: refreshSkill?.metadata.name ?? null,
         aiSettings,
         connector: {
           listKinds: connectorRegistry.listKinds,
@@ -323,7 +394,7 @@ async function runSkillMaintenance(options: {
         },
         sqlIndex: { query: sqlIndex.query },
         skills: skills.loaded,
-        mode: "maintenance",
+        mode: refreshSkill ? "refresh" : "maintenance",
         run: { runId: request.runId, notePath: request.notePath ?? null, questionsAsked: 0 },
         recordRun: recordAgentRun(vaultPath),
         onSkillMaintenance: (record) => actions.push(record),
@@ -331,24 +402,42 @@ async function runSkillMaintenance(options: {
       requestProposal: async () => false,
     }),
   });
-  onAbortHarness(maintenanceHarness);
+  let turns = 0;
+  const unsubscribe = maintenanceHarness.subscribe((event) => {
+    if (event.type === "turn_end" && ++turns >= SKILL_MAINTENANCE_MAX_TURNS) {
+      void maintenanceHarness.abort();
+    }
+  });
+  const onAbort = () => void maintenanceHarness.abort();
+  signal.addEventListener("abort", onAbort, { once: true });
   try {
-    const result = await maintenanceHarness.prompt(buildSkillMaintenanceInput(request, finalAnswer, evidence));
-    if (signal.aborted || result.stopReason === "aborted") return;
-    onEvent({
-      type: "skill_maintenance",
-      runId: request.runId,
-      actions,
-      summary: actions.length > 0
-        ? `Updated ${actions.length} internal knowledge Skill${actions.length === 1 ? "" : "s"}.`
-        : assistantText(result).trim().slice(0, 120) || "No durable knowledge required a Skill update.",
-    });
+    const result = await maintenanceHarness.prompt(buildSkillMaintenanceInput(
+      conversation,
+      evidence,
+      boundedNotes,
+      promptSkills,
+      refreshSkill,
+    ));
+    const completed = !signal.aborted && result.stopReason !== "aborted";
+    if (options.emitStatus !== false) {
+      onEvent({
+        type: "skill_maintenance",
+        runId: request.runId,
+        actions,
+        summary: !completed
+          ? "Knowledge maintenance stopped at its time or turn limit."
+          : actions.length > 0
+            ? `Updated ${actions.length} internal knowledge Skill${actions.length === 1 ? "" : "s"}.`
+            : assistantText(result).trim().slice(0, 120) || "No durable knowledge required a Skill update.",
+      });
+    }
+    return completed && actions.length > 0;
   } catch (err) {
     log.warn("skill maintenance failed", {
       runId: request.runId,
       err: err instanceof Error ? err.message : String(err),
     });
-    if (!signal.aborted) {
+    if (options.emitStatus !== false) {
       onEvent({
         type: "skill_maintenance",
         runId: request.runId,
@@ -356,7 +445,20 @@ async function runSkillMaintenance(options: {
         summary: "Skill maintenance could not complete; the answer above is unaffected.",
       });
     }
+    return false;
+  } finally {
+    unsubscribe();
+    signal.removeEventListener("abort", onAbort);
   }
+}
+
+export interface SkillMaintenanceJob {
+  run(signal: AbortSignal): Promise<void>;
+  dropped(): void;
+}
+
+export function startSkillMaintenanceJob(vaultPath: string, job: SkillMaintenanceJob): void {
+  enqueueSkillMaintenance(vaultPath, job.run, job.dropped);
 }
 
 export interface RunAgentOptions {
@@ -367,7 +469,7 @@ export interface RunAgentOptions {
   signal: AbortSignal;
 }
 
-export async function runAgent(options: RunAgentOptions): Promise<void> {
+export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenanceJob | null | undefined> {
   const { vaultPath, slug, onEvent, signal } = options;
   let request = options.request;
   if (!request.sessionId) {
@@ -390,6 +492,7 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
   let plan: ExecutionPlanStore | null = null;
   const normalSkillActions: AgentSkillMaintenanceRecord[] = [];
   const maintenanceEvidence: SkillMaintenanceEvidence[] = [];
+  let maintenanceJob: SkillMaintenanceJob | null = null;
   const onAbort = () => {
     void harness?.abort();
   };
@@ -467,6 +570,33 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
           sqlIndex: { query: sqlIndex.query },
           skills: skills.loaded,
           mode: "normal",
+          ensureSkillFresh: async (skill) => {
+            if (!(await isSkillStale(vaultPath, skill, sqlIndex.query))) return skill;
+            if (skill.metadata.category === "analysis-runbook" && skill.metadata.sources.length === 0) {
+              return null;
+            }
+            cancelSkillMaintenance(vaultPath);
+            const refreshed = await runSkillMaintenance({
+              vaultPath,
+              request,
+              conversation: conversationForMaintenance((await session!.buildContext()).messages),
+              evidence: maintenanceEvidence.slice(-24),
+              models,
+              model,
+              skills,
+              connection,
+              dialect,
+              aiSettings: settings.ai,
+              onEvent: emit,
+              signal,
+              refreshSkill: skill,
+              emitStatus: false,
+            });
+            if (!refreshed) return null;
+            const reloaded = await loadAgentSkills(vaultPath);
+            skills.loaded.splice(0, skills.loaded.length, ...reloaded.loaded);
+            return skills.loaded.find((item) => item.metadata.name === skill.metadata.name) ?? null;
+          },
           run: { runId, notePath: request.notePath ?? null, questionsAsked: 0 },
           plan,
           recordRun: recordAgentRun(vaultPath),
@@ -586,10 +716,11 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
           summary: `Updated ${normalSkillActions.length} internal knowledge Skill${normalSkillActions.length === 1 ? "" : "s"}.`,
         });
       } else if (hasSkillMaintenanceEvidence(maintenanceEvidence)) {
-        await runSkillMaintenance({
+        const context = await session.buildContext();
+        const jobOptions = {
           vaultPath,
           request,
-          finalAnswer,
+          conversation: conversationForMaintenance(context.messages),
           evidence: maintenanceEvidence.slice(-24),
           models,
           model,
@@ -597,12 +728,19 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
           connection,
           dialect,
           aiSettings: settings.ai,
-          onAbortHarness: (nextHarness) => {
-            harness = nextHarness;
+          onEvent,
+        };
+        maintenanceJob = {
+          run: async (maintenanceSignal) => {
+            await runSkillMaintenance({ ...jobOptions, signal: maintenanceSignal });
           },
-          onEvent: emit,
-          signal,
-        });
+          dropped: () => onEvent({
+            type: "skill_maintenance",
+            runId,
+            actions: [],
+            summary: "A newer knowledge-maintenance task replaced this pending task.",
+          }),
+        };
       }
     } finally {
       unsubscribe();
@@ -640,4 +778,5 @@ export async function runAgent(options: RunAgentOptions): Promise<void> {
     activeProposals.delete(runId);
     historyResponses.delete(runId);
   }
+  return maintenanceJob;
 }

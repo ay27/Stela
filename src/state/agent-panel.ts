@@ -77,6 +77,7 @@ export type AgentTimelineEntry =
   | {
       kind: "final";
       id: string;
+      runId: string;
       content: string;
       maintenance?: {
         status: "working" | "updated" | "none";
@@ -205,14 +206,14 @@ function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTim
       );
     }
     case "skill_maintenance_started":
-      return timeline.map((entry, index) =>
-        index === timeline.length - 1 && entry.kind === "final"
+      return timeline.map((entry) =>
+        entry.kind === "final" && entry.runId === event.runId
           ? { ...entry, maintenance: { status: "working", actions: [] } }
           : entry,
       );
     case "skill_maintenance":
-      return timeline.map((entry, index) =>
-        index === timeline.length - 1 && entry.kind === "final"
+      return timeline.map((entry) =>
+        entry.kind === "final" && entry.runId === event.runId
           ? {
               ...entry,
               maintenance: {
@@ -245,7 +246,7 @@ function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTim
         },
       ];
     case "final":
-      return [...timeline, { kind: "final", id: nextId(), content: event.content }];
+      return [...timeline, { kind: "final", id: nextId(), runId: event.runId, content: event.content }];
     case "error":
       return [...timeline, { kind: "error", id: nextId(), message: event.message }];
     case "cancelled":
@@ -618,11 +619,15 @@ if (typeof window !== "undefined") {
   onAgentEvent((event) => {
     useAgentPanel.setState((s) => ({
       tabs: s.tabs.map((tab) => {
-        if (event.runId !== tab.runId) return tab;
+        const currentRun = event.runId === tab.runId;
+        const historicalMaintenance =
+          (event.type === "skill_maintenance_started" || event.type === "skill_maintenance") &&
+          tab.timeline.some((entry) => entry.kind === "final" && entry.runId === event.runId);
+        if (!currentRun && !historicalMaintenance) return tab;
         const next: AgentTab = {
           ...tab,
           timeline: applyEvent(tab.timeline, event),
-          status: statusAfter(event, tab.status),
+          status: currentRun ? statusAfter(event, tab.status) : tab.status,
         };
         if (event.type === "context_usage") {
           next.contextUsage = {

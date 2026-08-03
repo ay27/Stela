@@ -46,6 +46,42 @@ tags: [schema]
     (await listAgentSkills(root)).map((item) => item.name),
     ["valid-schema-gotcha"],
   );
+  assert.deepEqual(loaded[0]?.metadata.sources, []);
+  assert.deepEqual(loaded[0]?.metadata.sourceTables, []);
+  await writeFile(join(root, "source.md"), "# Source\n\nVerified table rule.\n");
+  await saveAgentSkill(
+    root,
+    "sourced-metric",
+    `---
+name: sourced-metric
+description: Verified reusable metric definition.
+category: metric-definition
+tags: [metric, verified]
+---
+
+## Scope
+Verified metric.
+
+## Definition
+Count verified records.
+
+## Grain & Filters
+One row per id.
+
+## Verify
+Compare the source total.`,
+    "Test provenance injection.",
+    {
+      automatic: true,
+      templateDriven: true,
+      sourcePaths: ["source.md"],
+      sourceTables: ["threed.metric_source"],
+    },
+  );
+  const sourced = (await loadAgentSkills(root)).loaded.find((item) => item.metadata.name === "sourced-metric");
+  assert.deepEqual(sourced?.metadata.sourceTables, ["threed.metric_source"]);
+  assert.equal(sourced?.metadata.sources[0]?.path, "source.md");
+  assert.match(sourced?.metadata.sources[0]?.sha256 ?? "", /^[a-f0-9]{64}$/);
   assert.deepEqual(rankAgentSkills(loaded, "unrelated words", 8), []);
   assert.deepEqual(
     rankAgentSkills(loaded, "schema", 8).map((item) => item.metadata.name),

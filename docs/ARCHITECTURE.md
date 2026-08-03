@@ -335,25 +335,31 @@ on-demand application dialog with active and archived Skill metadata through
 `window.stela.agent.listSkills()`. A confirmed `window.stela.agent.removeSkill()`
 operation can move only a listed Skill directory to the system trash; Skill bodies
 and arbitrary vault writes remain unavailable to the renderer.
-After a normal Agent completion with successful tool evidence, a restricted
-maintenance turn can use only `search_sql_usage`, `read_note`, Skill retrieval,
-and `save_skill` to create a validated new Skill. SQL usage is restricted to
-tables extracted from this run's SQL evidence; it may read at most three notes
-returned by that lookup, ordered by document update time newest first. Conflicting
-guidance follows the newest note. It cannot run SQL, search the Vault broadly, overwrite,
-or archive an existing Skill. A normal Agent turn may also use `save_skill` when
+After a normal Agent completion with successful tool evidence, the conversational
+run persists its history and releases its session lock before enqueueing an
+independent Vault-scoped maintenance job. Each Vault runs at most one job and
+keeps only the newest pending job; each job is bounded to 60 seconds and five
+model turns. Deterministic code extracts evidence tables, retrieves SQL usage,
+orders notes by document update time, reads at most three source notes, and finds
+related Skill metadata. The maintenance model receives that material plus the
+complete current-task conversation and can only call `save_skill` once or do
+nothing. It cannot run SQL, search the Vault, overwrite, or archive an existing
+Skill. A normal Agent turn may also use `save_skill` when
 the user explicitly asks it to retain verified reusable data knowledge. Neither path
 can call SQL, edit notes, or write elsewhere through this capability, and writes
 appear as a compact status indicator inside the final-answer bubble; hover/click
 reveals the maintenance summary and any changes. An explicit successful write is the
 final answer's update result and skips the redundant post-run maintenance call.
-Automatic maintenance receives bounded tool evidence and task background,
-including SQL AST table references. It saves only knowledge with reusable scope,
-direct cross-record support, and no equivalent existing Skill. Its known SQL
-dialect tags must match the active connection dialect. A failed attempt is retained
-only when later successful tool evidence explains its cause and replacement;
-transient failures are skipped. Live connector schema overrides any conflicting
-Skill. See [ADR-0045](./adr/0045-recency-ordered-skill-distillation.md),
+Automatically maintained Skills record up to three source-note paths and content
+hashes plus up to eight table retrieval anchors. `load_skill` checks those hashes
+and the current newest SQL-usage notes; a stale Skill is refreshed before use or
+skipped in favor of live retrieval. Source-less legacy Skills are recovered from
+qualified tables in their content when possible. Automatic creation uses strict
+templates for dialect, metric, glossary, or lineage knowledge; analysis runbooks
+require an explicit user request, while an already source-tracked runbook may be
+refreshed. Live connector schema overrides any conflicting Skill. See
+[ADR-0049](./adr/0049-independent-bounded-skill-maintenance.md),
+[ADR-0050](./adr/0050-source-tracked-template-driven-skills.md),
 [ADR-0036](./adr/0036-user-deletion-of-experience-knowledge.md).
 
 ### Agent retrieval

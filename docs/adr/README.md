@@ -97,7 +97,9 @@ proposed → active → superseded
 | [0042](0042-connector-describe-tables-api.md) | Connector describeTables API for live column COMMENT | active |
 | [0043](0043-evidence-gated-skill-maintenance.md) | Evidence-gated Skill maintenance | superseded → [0044](0044-associative-skill-distillation.md) |
 | [0044](0044-associative-skill-distillation.md) | Associative Skill distillation | superseded → [0045](0045-recency-ordered-skill-distillation.md) |
-| [0045](0045-recency-ordered-skill-distillation.md) | Recency-ordered Skill distillation | active |
+| [0045](0045-recency-ordered-skill-distillation.md) | Recency-ordered Skill distillation | superseded → [0050](0050-source-tracked-template-driven-skills.md) |
 | [0046](0046-device-sharded-agent-session-history.md) | Device-sharded Agent session history | active |
 | [0047](0047-bounded-device-agent-history-retention.md) | Bounded device Agent history retention | active |
 | [0048](0048-vault-markdown-sql-template-library.md) | Vault Markdown SQL template library | active |
+| [0049](0049-independent-bounded-skill-maintenance.md) | Independent bounded Skill maintenance | active |
+| [0050](0050-source-tracked-template-driven-skills.md) | Source-tracked template-driven Skills | active |

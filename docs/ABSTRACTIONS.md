@@ -572,25 +572,33 @@ non-empty `description`, a `category` from `sql-dialect`, `metric-definition`,
 same validation as writes and local lexical ranking selects at most eight
 positive-match metadata records for the main system prompt.
 
-Its body is a bounded reusable knowledge unit: scope, rule, and minimal
-verification or exception. A Skill is at most 6,000 characters; its description is
+Its body is a bounded reusable knowledge unit governed by a category template:
+dialect uses Scope/Rule/Valid Pattern/Verify, metrics use
+Scope/Definition/Grain & Filters/Verify, glossary uses
+Scope/Term Mapping/Rule/Verify, and lineage uses
+Scope/Source → Transform → Target/Keys & Grain/Verify. Analysis runbooks require
+an explicit user request plus trigger, ordered checks, a decision branch, stop
+conditions, and verification. A Skill is at most 6,000 characters; its description is
 at most 160 characters; its body has at most 80 lines and two code examples of at
 most 20 lines each. Analysis narration, result rows, and one-off SQL belong to run
 history or Vault notes instead.
 
 The model calls `search_skills(query)` for further metadata and
-`load_skill(name)` to add a matching Markdown body to the current tool loop. After
-a normal completion with successful tool evidence, a separate maintenance turn can
-use `save_skill` to create a validated new `SKILL.md`. SQL AST table references
-from that evidence scope its `search_sql_usage({ table })` calls, and only the
-first three notes returned by those calls may be read. Results are ordered by
-Markdown update time, newest first; the newest note takes precedence on conflicts.
-It cannot overwrite or
-archive existing Skills, call SQL, search the Vault broadly, or edit notes. It
-writes only when knowledge is reusable, supported across related records, and not
-equivalent to an existing Skill. Known SQL dialect tags must match the active
-connection dialect. Failed attempts require later successful evidence of their
-cause and replacement; transient failures are excluded. The normal Agent can also call
+`load_skill(name)` to add a matching Markdown body to the current tool loop.
+Automatically maintained files may add single-line flow-style `sources` metadata
+with at most three `{path, sha256}` records and `source_tables` with at most eight
+qualified table anchors. Paths are Vault-relative and server-injected only from
+notes actually retrieved for the maintenance job. Before loading, Stela compares
+source hashes and the current newest SQL-usage note set; stale knowledge must be
+refreshed successfully or is withheld from the Agent.
+
+After a normal completion with successful tool evidence, an independent bounded
+maintenance job receives the complete current-task conversation, structured
+evidence, at most three ordered source documents, and related Skill metadata. All
+retrieval is deterministic; the maintenance harness exposes only `save_skill` and
+may create one templated Skill or no-op. It cannot overwrite or archive existing
+Skills, call SQL, search the Vault broadly, or edit notes. Automatic creation
+rejects `analysis-runbook`; those require an explicit normal Agent request. The normal Agent can also call
 `save_skill` when the user explicitly asks to retain verified reusable data
 knowledge. A `skill_maintenance` event contains only concise action metadata for a
 small status indicator inside the final-answer bubble, never a Skill body. An

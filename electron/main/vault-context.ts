@@ -19,6 +19,7 @@ import * as sqlIndex from "../services/sql-index";
 import * as syncOrchestrator from "../services/sync-orchestrator";
 import * as vaultIndex from "../services/vault-index";
 import * as vaultWatcher from "../services/vault-watcher";
+import { cancelSkillMaintenance } from "../services/ai/skill-maintenance-queue";
 
 const log = getLogger("vault-context");
 
@@ -47,6 +48,7 @@ export async function setCurrentVault(
     from: currentVaultPath,
     to: vaultPath,
   });
+  if (currentVaultPath) cancelSkillMaintenance(currentVaultPath);
   if (vaultPath) {
     await maybeSeedFromLegacy(vaultPath).catch((err: unknown) => {
       // seed 失败不致命：日志记录后继续，让用户至少能用空 vault settings
@@ -118,6 +120,7 @@ export async function setCurrentVault(
 
 /** 主进程最终退出前调用。Connector 由 main 的独立 shutdown 步骤处理。 */
 export function shutdownVaultContext(): void {
+  cancelSkillMaintenance();
   vaultWatcher.releaseForAppQuit();
   void vaultIndex.stop().catch(() => {});
   void sqlIndex.stop().catch(() => {});

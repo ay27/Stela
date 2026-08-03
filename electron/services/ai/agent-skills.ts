@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { loadSkills, type Skill } from "@earendil-works/pi-agent-core";
@@ -37,7 +38,14 @@ export interface AgentSkillMetadata {
   description: string;
   category: AgentSkillCategory | null;
   tags: string[];
+  sources: AgentSkillSource[];
+  sourceTables: string[];
   relativePath: string;
+}
+
+export interface AgentSkillSource {
+  path: string;
+  sha256: string;
 }
 
 export interface LoadedAgentSkills {
@@ -48,6 +56,8 @@ export interface LoadedAgentSkills {
 export interface LoadedAgentSkill {
   skill: Skill;
   metadata: AgentSkillMetadata;
+  /** Validated full SKILL.md, including Stela frontmatter extensions. */
+  content: string;
 }
 
 export interface AgentSkillMaintenanceRecord {
@@ -121,6 +131,83 @@ function parseTags(value: string | null): string[] {
   );
 }
 
+function parseJsonArray(value: string | null): unknown[] {
+  if (!value) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseSources(value: string | null): AgentSkillSource[] {
+  return parseJsonArray(value).flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const record = item as Record<string, unknown>;
+    return typeof record.path === "string" &&
+      record.path.endsWith(".md") &&
+      !path.isAbsolute(record.path) &&
+      !record.path.split(/[\\/]/).some((part) => !part || part === ".." || part.startsWith(".")) &&
+      /^[a-f0-9]{64}$/.test(String(record.sha256))
+      ? [{ path: toPosixPath(record.path), sha256: String(record.sha256) }]
+      : [];
+  });
+}
+
+function parseSourceTables(value: string | null): string[] {
+  return parseJsonArray(value)
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => /^[a-z0-9_]+(?:\.[a-z0-9_]+)?$/.test(item));
+}
+
+export function skillSourceSha256(content: string): string {
+  return createHash("sha256").update(content.replace(/\r\n/g, "\n")).digest("hex");
+}
+
+function injectSourceFrontmatter(
+  content: string,
+  sources: AgentSkillSource[],
+  sourceTables: string[],
+): string {
+  const normalized = content.replace(/\r\n/g, "\n");
+  const marker = normalized.indexOf("\n---", 4);
+  if (marker < 0) return normalized;
+  const head = normalized.slice(0, marker)
+    .replace(/\n(?:sources|source_tables):[^\n]*/g, "");
+  const fields = [
+    sources.length > 0 ? `sources: ${JSON.stringify(sources)}` : "",
+    sourceTables.length > 0 ? `source_tables: ${JSON.stringify(sourceTables)}` : "",
+  ].filter(Boolean).join("\n");
+  return `${head}${fields ? `\n${fields}` : ""}${normalized.slice(marker)}`;
+}
+
+const TEMPLATE_HEADINGS: Record<AgentSkillCategory, string[]> = {
+  "sql-dialect": ["scope", "rule", "valid pattern", "verify"],
+  "metric-definition": ["scope", "definition", "grain & filters", "verify"],
+  "business-glossary": ["scope", "term mapping", "rule", "verify"],
+  "data-lineage": ["scope", "source → transform → target", "keys & grain", "verify"],
+  "analysis-runbook": ["scope / trigger", "preconditions", "ordered checks", "decision → action", "stop conditions", "verify"],
+};
+
+function assertTemplateShape(category: AgentSkillCategory, body: string): void {
+  const headings = new Set(
+    Array.from(body.matchAll(/^#{2,6}\s+(.+)$/gm), (match) => match[1]!.trim().toLowerCase()),
+  );
+  const missing = TEMPLATE_HEADINGS[category].filter((heading) => !headings.has(heading));
+  if (missing.length > 0) {
+    throw new AppError("invalid_skill", `Template for ${category} is missing headings: ${missing.join(", ")}.`);
+  }
+  if (category === "analysis-runbook") {
+    const ordered = body.match(/## Ordered Checks\s+([\s\S]*?)(?=\n## |$)/i)?.[1] ?? "";
+    const decisions = body.match(/## Decision → Action\s+([\s\S]*?)(?=\n## |$)/i)?.[1] ?? "";
+    if ((ordered.match(/^\s*(?:[-*]|\d+\.)\s+/gm) ?? []).length < 2 || !/(?:\b(?:if|when)\b|如果|若|当)/i.test(decisions)) {
+      throw new AppError("invalid_skill", "analysis-runbook requires at least two ordered checks and an evidence-based decision branch.");
+    }
+  }
+}
+
 async function metadataForSkill(skill: Skill, vaultPath: string): Promise<AgentSkillMetadata> {
   // pi-agent-core intentionally exposes the Markdown body as `skill.content`;
   // Stela's category/tags stay in the source file frontmatter.
@@ -173,6 +260,10 @@ function validateSkillContent(name: string, content: string): AgentSkillMetadata
   const frontmatterName = parseFrontmatterField(frontmatter, "name");
   const category = parseFrontmatterField(frontmatter, "category");
   const tags = parseTags(parseFrontmatterField(frontmatter, "tags"));
+  const rawSources = parseFrontmatterField(frontmatter, "sources");
+  const rawSourceTables = parseFrontmatterField(frontmatter, "source_tables");
+  const sources = parseSources(rawSources);
+  const sourceTables = parseSourceTables(rawSourceTables);
   if (!frontmatter || !description) throw new AppError("invalid_skill", "SKILL.md requires a non-empty description.");
   if (!body.trim()) throw new AppError("invalid_skill", "Skill body must contain reusable guidance.");
   if (description.length > AGENT_SKILL_LIMITS.maxDescriptionChars) {
@@ -198,11 +289,19 @@ function validateSkillContent(name: string, content: string): AgentSkillMetadata
     throw new AppError("invalid_skill", `category must be one of: ${AGENT_SKILL_CATEGORIES.join(", ")}.`);
   }
   if (tags.length === 0) throw new AppError("invalid_skill", "tags must be a non-empty inline YAML list.");
+  if (rawSources && (sources.length !== parseJsonArray(rawSources).length || sources.length > 3)) {
+    throw new AppError("invalid_skill", "sources must contain at most three valid Vault-relative Markdown paths and SHA-256 hashes.");
+  }
+  if (rawSourceTables && (sourceTables.length !== parseJsonArray(rawSourceTables).length || sourceTables.length > 8)) {
+    throw new AppError("invalid_skill", "source_tables must contain at most eight normalized table names.");
+  }
   return {
     name,
     description,
     category: category as AgentSkillCategory,
     tags,
+    sources,
+    sourceTables,
     relativePath: `${AGENT_SKILLS_DIR}/${name}/SKILL.md`,
   };
 }
@@ -218,7 +317,8 @@ export async function loadAgentSkills(vaultPath: string): Promise<LoadedAgentSki
   const checked = await Promise.all(
     result.skills.map(async (skill) => {
       try {
-        return { skill, metadata: await metadataForSkill(skill, vaultPath) };
+        const content = await fs.readFile(skill.filePath, "utf-8").catch(() => skill.content);
+        return { skill, metadata: await metadataForSkill(skill, vaultPath), content };
       } catch (err) {
         return {
           rejected: {
@@ -264,10 +364,42 @@ export async function saveAgentSkill(
   name: string,
   content: string,
   reason: string,
-  options: { overwrite?: boolean; dialect?: string | null } = {},
+  options: {
+    overwrite?: boolean;
+    dialect?: string | null;
+    automatic?: boolean;
+    templateDriven?: boolean;
+    sourcePaths?: string[];
+    sourceTables?: string[];
+  } = {},
 ): Promise<AgentSkillMaintenanceRecord> {
   const skillName = assertSkillName(name);
-  const metadata = validateSkillContent(skillName, content);
+  const initialMetadata = validateSkillContent(skillName, content);
+  if (options.automatic && initialMetadata.category === "analysis-runbook") {
+    throw new AppError("invalid_skill", "Automatic maintenance cannot create analysis-runbook Skills.");
+  }
+  if (options.templateDriven || initialMetadata.category === "analysis-runbook") {
+    assertTemplateShape(initialMetadata.category!, splitFrontmatter(content).body);
+  }
+  const sourceTables = Array.from(new Set((options.sourceTables ?? [])
+    .map((table) => table.trim().toLowerCase())
+    .filter((table) => /^[a-z0-9_]+(?:\.[a-z0-9_]+)?$/.test(table))))
+    .slice(0, 8);
+  const sources: AgentSkillSource[] = [];
+  for (const relativePath of Array.from(new Set(options.sourcePaths ?? [])).slice(0, 3)) {
+    const normalizedPath = toPosixPath(relativePath);
+    if (!normalizedPath.endsWith(".md") || normalizedPath.split("/").some((part) => part.startsWith("."))) {
+      throw new AppError("invalid_skill", `Invalid Skill source path '${relativePath}'.`);
+    }
+    const target = await vaultFs.ensureWithinVault(vaultPath, normalizedPath);
+    const raw = await fs.readFile(target, "utf-8");
+    sources.push({ path: normalizedPath, sha256: skillSourceSha256(raw) });
+  }
+  if (options.automatic && sources.length === 0) {
+    throw new AppError("invalid_skill", "Automatic maintenance requires at least one verified Vault source document.");
+  }
+  const finalContent = injectSourceFrontmatter(content, sources, sourceTables);
+  const metadata = validateSkillContent(skillName, finalContent);
   const activeDialect = options.dialect ? DIALECT_TAG_ALIASES[options.dialect.toLowerCase()] : null;
   const mismatchedDialectTag = activeDialect
     ? metadata.tags.find((tag) => DIALECT_TAG_ALIASES[tag] && DIALECT_TAG_ALIASES[tag] !== activeDialect)
@@ -284,8 +416,8 @@ export async function saveAgentSkill(
     throw new AppError("invalid_skill", `Automatic maintenance cannot overwrite existing Skill '${skillName}'.`);
   }
   await fs.mkdir(targetDir, { recursive: true });
-  await atomicWrite(target, content.replace(/\r\n/g, "\n"));
-  if ((await vaultFs.readFile(target)).replace(/\r\n/g, "\n") !== content.replace(/\r\n/g, "\n")) {
+  await atomicWrite(target, finalContent);
+  if ((await vaultFs.readFile(target)).replace(/\r\n/g, "\n") !== finalContent) {
     throw new AppError("write_failed", `Write verification failed for ${metadata.relativePath}.`);
   }
   notifyFileChanged(target);
@@ -331,4 +463,3 @@ export async function removeAgentSkill(vaultPath: string, relativePath: string):
   }
   await vaultFs.deletePath(vaultPath, path.dirname(target));
 }
-

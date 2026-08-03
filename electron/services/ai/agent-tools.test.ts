@@ -72,7 +72,7 @@ try {
     });
     assert.deepEqual(
       tools.map((tool) => tool.name),
-      ["search_sql_usage", "read_note", "load_skill", "search_skills", "save_skill"],
+      ["save_skill"],
     );
   }
   {
@@ -366,9 +366,24 @@ category: sql-dialect
 tags: [sql, gotcha]
 ---
 
-# Gotcha
-- Verify the live schema first.`;
-    const maintenanceCtx = { ...baseCtx, mode: "maintenance" as const, skills: [] };
+## Scope
+StarRocks SQL against the verified source table.
+
+## Rule
+Use the live schema type.
+
+## Valid Pattern
+Cast only after inspecting the live type.
+
+## Verify
+Inspect the live schema first.`;
+    const maintenanceCtx = {
+      ...baseCtx,
+      mode: "maintenance" as const,
+      skills: [],
+      maintenanceSourcePaths: ["note.md"],
+      maintenanceTables: ["threed.verified"],
+    };
     const created = await dispatchTool(
       "save_skill",
       JSON.stringify({ name: "verified-gotcha", content, reason: "Verified by live schema." }),
@@ -399,6 +414,18 @@ tags: [sql, gotcha]
     );
     assert.equal(wrongDialect.ok, false);
     assert.match(wrongDialect.text, /does not match active SQL dialect/i);
+    const runbook = await dispatchTool(
+      "save_skill",
+      JSON.stringify({
+        name: "automatic-runbook",
+        content: content
+          .replaceAll("verified-gotcha", "automatic-runbook")
+          .replace("category: sql-dialect", "category: analysis-runbook"),
+      }),
+      maintenanceCtx,
+    );
+    assert.equal(runbook.ok, false);
+    assert.match(runbook.text, /cannot create analysis-runbook/i);
   }
 
   // 未知工具名不崩，返回错误文本
