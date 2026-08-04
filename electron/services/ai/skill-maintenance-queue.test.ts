@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 
-import { enqueueSkillMaintenance } from "./skill-maintenance-queue";
+import {
+  cancelSkillMaintenance,
+  enqueueSkillMaintenance,
+  registerSkillMaintenanceActivity,
+} from "./skill-maintenance-queue";
 
 let releaseFirst!: () => void;
 const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
@@ -26,3 +30,10 @@ releaseFirst();
 await thirdDone;
 assert.equal(secondDropped, true);
 assert.deepEqual(order, ["first-start", "first-end", "third"]);
+
+const parent = new AbortController();
+const activity = registerSkillMaintenanceActivity("refresh-vault", parent.signal);
+assert.equal(activity.signal.aborted, false);
+cancelSkillMaintenance("refresh-vault");
+assert.equal(activity.signal.aborted, true);
+activity.dispose();

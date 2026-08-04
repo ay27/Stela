@@ -7,6 +7,7 @@ import type {
   AiParseSqlQueryResponse,
   AiProviderStatus,
   AiSettings,
+  AgentInlineDisposition,
 } from "@shared/types";
 
 export function getAiStatus(): Promise<AiProviderStatus> {
@@ -50,4 +51,8 @@ export function onInlineCompletionEvent(
   callback: (event: AiInlineCompletionEvent) => void,
 ): () => void {
   return window.stela.ai.onInlineCompletionEvent(callback);
+}
+
+export function recordInlineDisposition(input: AgentInlineDisposition): Promise<void> {
+  return window.stela.agentMetrics.recordInlineDisposition(input);
 }

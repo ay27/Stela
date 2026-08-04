@@ -17,6 +17,7 @@ const legacy = normalizeSettings({
 assert.equal(legacy.ai.agentMaxIterations, 200);
 assert.equal(legacy.ai.agentWallClockMs, 300_000);
 assert.equal(legacy.ai.agentAllowMutations, false);
+assert.equal(legacy.ai.automaticSkillMaintenanceEnabled, true);
 assert.equal(legacy.ai.contextWindow, 128_000);
 assert.equal(legacy.ai.profiles.length >= 1, true);
 assert.equal(typeof legacy.ai.activeProfileId, "string");
@@ -35,5 +36,6 @@ const patched = normalizeSettings({
 
 assert.equal(patched.ai.agentAllowMutations, true);
 assert.equal(patched.ai.agentMaxIterations, 200);
+assert.equal(patched.ai.automaticSkillMaintenanceEnabled, true);
 
 console.log("settings-store tests passed.");

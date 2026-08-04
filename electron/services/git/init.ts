@@ -32,6 +32,7 @@ export const DEFAULT_GITIGNORE = `# Stela machine-local cache (never commit)
 .stela.sqlite-shm
 .stela-knowledge.sqlite
 .stela/recent-files.local.json
+.stela/agent-metrics.local.sqlite*
 
 # NOTE: .stela/connections.json (non-secret config) and
 # .stela/secrets/secrets_*.json (per-device safeStorage-wrapped secrets) are
@@ -52,7 +53,10 @@ export const DEFAULT_GITIGNORE = `# Stela machine-local cache (never commit)
 `;
 
 /** 老 vault 的 .gitignore 可能缺这些行；打开 vault 时按需追加。 */
-const MACHINE_LOCAL_GITIGNORE_LINES = [".stela/recent-files.local.json"];
+const MACHINE_LOCAL_GITIGNORE_LINES = [
+  ".stela/recent-files.local.json",
+  ".stela/agent-metrics.local.sqlite*",
+];
 
 /** vault 是否是 git 仓库（存在 `.git`）。 */
 export async function isRepo(vaultPath: string): Promise<boolean> {

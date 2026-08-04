@@ -6,6 +6,7 @@ const electron = require("electron");
 
 const tests = [
   "electron/services/result-store.test.ts",
+  "electron/services/ai/agent-metrics.test.ts",
   "electron/services/history-journal.test.ts",
 ];
 

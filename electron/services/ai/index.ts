@@ -6,8 +6,10 @@ import type {
   AiProviderStatus,
   AiSettings,
 } from "@shared/types";
-import { AppError } from "@shared/errors";
+import { AppError, isAppError } from "@shared/errors";
 import { resolveDialect } from "@shared/sql-dialect";
+import { randomUUID } from "node:crypto";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 import * as settingsStore from "../settings-store";
 import * as connectionsStore from "../connections-store";
@@ -30,8 +32,25 @@ import {
   deleteProfile,
   upsertProfile,
 } from "./provider";
+import * as agentMetrics from "./agent-metrics";
 
 const log = getLogger("ai");
+
+function metricError(err: unknown): { code: string; message: string } {
+  return {
+    code: isAppError(err) ? err.code : "unknown_error",
+    message: err instanceof Error ? err.message : String(err),
+  };
+}
+
+function messageUsage(message: AssistantMessage | null) {
+  return {
+    inputTokens: message?.usage.input ?? 0,
+    outputTokens: message?.usage.output ?? 0,
+    cacheReadTokens: message?.usage.cacheRead ?? 0,
+    cacheWriteTokens: message?.usage.cacheWrite ?? 0,
+  };
+}
 
 function extractSql(text: string): string | null {
   const match = /```sql\s*([\s\S]*?)```/i.exec(text);
@@ -169,6 +188,8 @@ export async function complete(
   slug: string,
   request: AiCompleteRequest,
 ): Promise<AiCompleteResponse> {
+  const metricRunId = `action:${randomUUID()}`;
+  const startedAt = Date.now();
   const settings = await settingsStore.loadAppSettings(vaultPath);
   const enrichedRequest = await enrichConnectorContext(vaultPath, slug, request);
   const schemaRequest = await enrichSchemaContext(vaultPath, slug, enrichedRequest);
@@ -179,21 +200,52 @@ export async function complete(
   const prompt = buildPrompt(bundle);
   log.info("\n" + formatPromptDebugLog(bundle, prompt));
   const profile = getActiveProfile(settings.ai);
-  const apiKey = await loadApiKey(vaultPath, slug, profile.id);
-  const text = await callChatCompletions({
-    settings: settings.ai,
-    apiKey,
-    system: prompt.system,
-    user: prompt.user,
-    profileId: profile.id,
-  });
-  return {
-    action: schemaRequest.action,
-    text,
-    sql: extractSql(text),
-    warnings: bundle.summary,
-    contextSummary: bundle.summary,
-  };
+  let message: AssistantMessage | null = null;
+  if (agentMetrics.isOpen()) {
+    agentMetrics.startRun({
+      runId: metricRunId,
+      surface: "ai_action",
+      operation: schemaRequest.action,
+      startedAt,
+      profileId: profile.id,
+      vendorId: profile.vendorId,
+      model: profile.model,
+      request: { request: schemaRequest, prompt },
+    });
+  }
+  try {
+    const apiKey = await loadApiKey(vaultPath, slug, profile.id);
+    const text = await callChatCompletions({
+      settings: settings.ai,
+      apiKey,
+      system: prompt.system,
+      user: prompt.user,
+      profileId: profile.id,
+      onMessage: (result) => { message = result; },
+    });
+    const response: AiCompleteResponse = {
+      action: schemaRequest.action,
+      text,
+      sql: extractSql(text),
+      warnings: bundle.summary,
+      contextSummary: bundle.summary,
+    };
+    if (agentMetrics.isOpen()) {
+      agentMetrics.finishRun(metricRunId, { status: "completed", ...messageUsage(message), response });
+    }
+    return response;
+  } catch (err) {
+    if (agentMetrics.isOpen()) {
+      const failure = metricError(err);
+      agentMetrics.finishRun(metricRunId, {
+        status: failure.code === "ai_aborted" ? "cancelled" : "error",
+        ...messageUsage(message),
+        errorCode: failure.code,
+        errorMessage: failure.message,
+      });
+    }
+    throw err;
+  }
 }
 
 /**
@@ -205,31 +257,64 @@ export async function parseSqlQuery(
   slug: string,
   request: AiParseSqlQueryRequest,
 ): Promise<AiParseSqlQueryResponse> {
+  const metricRunId = `parse:${randomUUID()}`;
+  const startedAt = Date.now();
   const settings = await settingsStore.loadAppSettings(vaultPath);
   const profile = getActiveProfile(settings.ai);
-  const apiKey = await loadApiKey(vaultPath, slug, profile.id);
   const facetsData = await sqlIndex.facets();
   const locale = request.locale ?? "zh";
   const { system, instructions } = buildSqlQueryParsePrompt(facetsData, locale);
-  const text = await callChatCompletions({
-    settings: settings.ai,
-    apiKey,
-    system: `${system}\n\n${instructions}`,
-    user: request.question,
-    profileId: profile.id,
-  });
-  try {
-    const { filter, warnings } = parseModelFilterOutput(text);
-    return { filter, warnings };
-  } catch (err) {
-    log.error("parseSqlQuery: failed to parse model output", {
-      err: err instanceof Error ? err.message : String(err),
-      text: text.slice(0, 500),
+  const prompt = { system: `${system}\n\n${instructions}`, user: request.question };
+  let message: AssistantMessage | null = null;
+  if (agentMetrics.isOpen()) {
+    agentMetrics.startRun({
+      runId: metricRunId,
+      surface: "sql_query_parse",
+      operation: "parse_sql_query",
+      startedAt,
+      profileId: profile.id,
+      vendorId: profile.vendorId,
+      model: profile.model,
+      request: { request, prompt },
     });
-    throw new AppError(
+  }
+  try {
+    const apiKey = await loadApiKey(vaultPath, slug, profile.id);
+    const text = await callChatCompletions({
+      settings: settings.ai,
+      apiKey,
+      system: prompt.system,
+      user: prompt.user,
+      profileId: profile.id,
+      onMessage: (result) => { message = result; },
+    });
+    const { filter, warnings } = parseModelFilterOutput(text);
+    const response = { filter, warnings };
+    if (agentMetrics.isOpen()) {
+      agentMetrics.finishRun(metricRunId, { status: "completed", ...messageUsage(message), response });
+    }
+    return response;
+  } catch (err) {
+    if (!isAppError(err)) {
+      log.error("parseSqlQuery: failed to parse model output", {
+        err: err instanceof Error ? err.message : String(err),
+        text: "Model output omitted from application log; see local Agent Dashboard trace.",
+      });
+    }
+    const wrapped = isAppError(err) ? err : new AppError(
       "ai_parse_sql_query_failed",
       "AI did not return a valid filter JSON for the SQL query.",
     );
+    if (agentMetrics.isOpen()) {
+      const failure = metricError(wrapped);
+      agentMetrics.finishRun(metricRunId, {
+        status: failure.code === "ai_aborted" ? "cancelled" : "error",
+        ...messageUsage(message),
+        errorCode: failure.code,
+        errorMessage: failure.message,
+      });
+    }
+    throw wrapped;
   }
 }
 

@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BookOpen,
+  Activity,
   FileCode2,
   FolderSync,
   Link2,
@@ -98,6 +99,8 @@ export function AppDockBar() {
             <DockSep />
             <SkillLibraryButton />
             <DockSep />
+            <AgentDashboardButton />
+            <DockSep />
             <SqlTemplateLibraryButton />
           </>
         ) : null}
@@ -132,6 +135,24 @@ function SkillLibraryButton() {
       onClick={() => setExperienceKnowledge(true)}
     >
       <BookOpen className="h-3.5 w-3.5 flex-none" />
+      <span className="whitespace-nowrap">{title}</span>
+    </button>
+  );
+}
+
+function AgentDashboardButton() {
+  const t = useT();
+  const setAgentDashboard = useDialogs((state) => state.setAgentDashboard);
+  const title = t("agentDashboard.title");
+  return (
+    <button
+      type="button"
+      className={dockItem}
+      title={title}
+      aria-label={title}
+      onClick={() => setAgentDashboard(true)}
+    >
+      <Activity className="h-3.5 w-3.5 flex-none" />
       <span className="whitespace-nowrap">{title}</span>
     </button>
   );

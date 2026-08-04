@@ -102,6 +102,7 @@ const partialSettingsSchema = z
         agentMaxIterations: z.number().int().min(1).max(10_000),
         agentWallClockMs: z.number().int().min(5_000).max(600_000),
         agentAllowMutations: z.boolean(),
+        automaticSkillMaintenanceEnabled: z.boolean(),
         inlineCompletionEnabled: z.boolean(),
         completionProfileId: z.string().min(1).max(128).nullable(),
       })
@@ -320,6 +321,7 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
           agentMaxIterations: z.number().int().min(1).max(10_000).optional(),
           agentWallClockMs: z.number().int().min(5_000).max(600_000).optional(),
           agentAllowMutations: z.boolean().optional(),
+          automaticSkillMaintenanceEnabled: z.boolean().optional(),
           inlineCompletionEnabled: z.boolean().optional(),
           completionProfileId: z.string().min(1).max(128).nullable().optional(),
           activeProfileId: z.string().min(1).max(128).optional(),
@@ -504,6 +506,32 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
   [IPC.AI_INLINE_COMPLETION_CANCEL]: z
     .object({ requestId: z.string().min(1).max(128) })
     .strict(),
+  [IPC.AI_METRICS_GET_DASHBOARD]: z
+    .object({ range: z.enum(["7d", "30d", "90d"]) })
+    .strict(),
+  [IPC.AI_METRICS_LIST_RUNS]: z
+    .object({
+      filter: z.object({
+        range: z.enum(["7d", "30d", "90d"]),
+        surface: z.enum([
+          "agent", "tool", "inline_completion", "skill_maintenance", "ai_action", "sql_query_parse",
+        ]).optional(),
+        status: z.enum(["running", "completed", "error", "cancelled", "timeout", "dropped"]).optional(),
+        cursor: z.string().max(256).regex(/^\d+:.+$/).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      }).strict(),
+    })
+    .strict(),
+  [IPC.AI_METRICS_GET_TRACE]: z.object({ runId: z.string().min(1).max(256) }).strict(),
+  [IPC.AI_METRICS_RECORD_INLINE_DISPOSITION]: z.object({
+    input: z.object({
+      requestId: z.string().min(1).max(256),
+      outcome: z.enum(["shown", "accepted", "dismissed"]),
+      visibleMs: z.number().int().nonnegative().max(86_400_000).optional(),
+      suggestedChars: z.number().int().nonnegative().max(1_000_000).optional(),
+    }).strict(),
+  }).strict(),
+  [IPC.AI_METRICS_CLEAR]: z.object({}).strict(),
 
   [IPC.AI_AGENT_RUN]: z
     .object({

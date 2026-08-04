@@ -15,6 +15,12 @@ import type {
   AgentProposalResponse,
   AgentRunRequest,
   AgentRunResponse,
+  AgentInlineDisposition,
+  AgentMetricRange,
+  AgentMetricRunFilter,
+  AgentMetricRunPage,
+  AgentMetricTrace,
+  AgentMetricsDashboard,
   AiCompleteRequest,
   AiCompleteResponse,
   AiInlineCompletionEvent,
@@ -236,6 +242,13 @@ interface StelaBridge {
     respondProposal: (response: AgentProposalResponse) => Promise<{ ok: boolean }>;
     /** 订阅 agent 单步事件流；返回 unsubscribe 函数。 */
     onEvent: (callback: (event: AgentEvent) => void) => () => void;
+  };
+  agentMetrics: {
+    getDashboard: (range: AgentMetricRange) => Promise<AgentMetricsDashboard>;
+    listRuns: (filter: AgentMetricRunFilter) => Promise<AgentMetricRunPage>;
+    getTrace: (runId: string) => Promise<AgentMetricTrace>;
+    recordInlineDisposition: (input: AgentInlineDisposition) => Promise<void>;
+    clear: () => Promise<void>;
   };
   git: {
     isRepo: () => Promise<boolean>;

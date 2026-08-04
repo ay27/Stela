@@ -13,6 +13,7 @@ out
 .stela/secrets/
 .stela/history/*.local.jsonl
 .stela/recent-files.local.json
+.stela/agent-metrics.local.sqlite*
 examples/demo-vault/.stela/plugins/
 
 # Non-public connector plugins (allowlist below)

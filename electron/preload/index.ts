@@ -27,6 +27,12 @@ import type {
   AgentProposalResponse,
   AgentRunRequest,
   AgentRunResponse,
+  AgentInlineDisposition,
+  AgentMetricRange,
+  AgentMetricRunFilter,
+  AgentMetricRunPage,
+  AgentMetricTrace,
+  AgentMetricsDashboard,
   AiCompleteRequest,
   AiCompleteResponse,
   AiInlineCompletionEvent,
@@ -341,6 +347,18 @@ const stela = {
         ipcRenderer.removeListener(IPC_EVENTS.AI_AGENT_EVENT, handler);
       };
     },
+  },
+
+  agentMetrics: {
+    getDashboard: (range: AgentMetricRange) =>
+      call<AgentMetricsDashboard>(IPC.AI_METRICS_GET_DASHBOARD, { range }),
+    listRuns: (filter: AgentMetricRunFilter) =>
+      call<AgentMetricRunPage>(IPC.AI_METRICS_LIST_RUNS, { filter }),
+    getTrace: (runId: string) =>
+      call<AgentMetricTrace>(IPC.AI_METRICS_GET_TRACE, { runId }),
+    recordInlineDisposition: (input: AgentInlineDisposition) =>
+      call<void>(IPC.AI_METRICS_RECORD_INLINE_DISPOSITION, { input }),
+    clear: () => call<void>(IPC.AI_METRICS_CLEAR, {}),
   },
 
   git: {

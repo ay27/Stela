@@ -150,6 +150,7 @@ const AI_DEFAULT: AiSettings = syncActiveMirrors({
   agentMaxIterations: 200,
   agentWallClockMs: 300_000,
   agentAllowMutations: false,
+  automaticSkillMaintenanceEnabled: true,
 });
 
 /** 单次查询默认最多保存/展示的结果行数；`0` = 不限制。 */
@@ -253,6 +254,10 @@ function sanitizeAi(input: unknown): AiSettings {
     agentMaxIterations,
     agentWallClockMs,
     agentAllowMutations: r.agentAllowMutations === true,
+    automaticSkillMaintenanceEnabled:
+      r.automaticSkillMaintenanceEnabled === undefined
+        ? AI_DEFAULT.automaticSkillMaintenanceEnabled
+        : r.automaticSkillMaintenanceEnabled === true,
   });
 }
 

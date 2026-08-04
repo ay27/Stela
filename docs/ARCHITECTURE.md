@@ -8,9 +8,9 @@ Stela is a local-first desktop app for SQL data notes. Users write Markdown, run
 
 Stela notes are plain `.md` files with YAML frontmatter, `runsql` fenced code blocks, and `<detail>` HTML summaries. The app never owns the prose — it only reads and writes files. Any tool that understands Markdown (VS Code, GitHub, Obsidian) can open a Stela vault without Stela installed. `runsql` blocks degrade to ordinary code blocks in those viewers.
 
-### Three authorities, three disposable layers
+### Four authorities, three disposable layers
 
-SQL result sets and Agent sessions are too large to live in Markdown. Stela therefore has **three authoritative stores** and **three disposable caches**:
+SQL result sets, Agent sessions, and local Agent traces are too large to live in Markdown. Stela therefore has **four authoritative stores** and **three disposable caches**:
 
 | Layer | Location | Authority | Role |
 |-------|----------|-----------|------|
@@ -19,9 +19,10 @@ SQL result sets and Agent sessions are too large to live in Markdown. Stela ther
 | Result cache | `{vault}/.stela.sqlite` | Disposable | Query cache (`runs` / `result_schemas` / `result_rows`); rebuildable from JSONL |
 | Vault config | `{vault}/.stela/*.json` | Authoritative | Settings, connections, plugin manifests |
 | Agent session history | `{vault}/.stela/agent-history/<deviceSlug>/*.jsonl` | **Authoritative** | pi AgentHarness context and Agent Panel timeline; newest 20 per device |
+| Local Agent observability | `{vault}/.stela/agent-metrics.local.sqlite` | **Authoritative (local, 90 days)** | AI/Agent runs, tool events, completion disposition, maintenance outcomes, redacted traces |
 | Session state | Zustand + localStorage + `{userData}/` | Disposable | Panel widths, open tabs, recent vaults |
 
-When in doubt: **Markdown + JSONL win**. SQLite, in-memory indexes, and transient React state must be reconstructible by deleting them.
+Markdown + JSONL win for synced product data. `.stela.sqlite` remains disposable; the separately named `agent-metrics.local.sqlite` is a bounded machine-local observability authority and is never used for note or execution recovery.
 
 ```mermaid
 flowchart LR
@@ -52,7 +53,7 @@ flowchart LR
 1. **Write order on success**: SQLite cache → JSONL append → `<detail>` write-back to Markdown (via editor autosave).
 2. **`<detail>` is a summary only**: readable metadata + `result-ref-id`; full result rows live in SQLite/JSONL.
 3. **Per-device JSONL**: each machine appends only to its own `history_{slug}.jsonl`; Git merges without line conflicts.
-4. **SQLite never enters Git**: `.stela.sqlite*` is gitignored; cross-device sync relies on Markdown + JSONL.
+4. **SQLite never enters Git**: `.stela.sqlite*` and `.stela/agent-metrics.local.sqlite*` are gitignored; cross-device sync relies on Markdown + JSONL.
 5. **Disk-first for vault writes**: all vault mutations go through main-process services with `ensureWithinVault` before updating renderer state.
 
 ### Vault vs. machine settings
@@ -66,6 +67,7 @@ When deciding where to persist data, ask: **"Should this follow the vault across
 | `.stela/secrets/secrets_{slug}.json` (safeStorage-wrapped DB passwords) | Panel widths, open tabs, transient UI state |
 | `.stela/secrets/ai_{slug}.json` (safeStorage-wrapped AI API key) | Panel widths, open tabs, transient UI state |
 | `.stela/agent-history/<deviceSlug>/*.jsonl` | — |
+| — | `.stela/agent-metrics.local.sqlite` (90-day AI/Agent metrics and redacted traces) |
 | `.stela/connector_plugins.json` + `.stela/plugins/` | Command palette transient input |
 | `.stela/sql-templates/*.md` (reusable SQL templates) | — |
 | Markdown frontmatter `connection_name` | Dev-mode isolated userData (`Stela-dev`) |
@@ -361,6 +363,31 @@ refreshed. Live connector schema overrides any conflicting Skill. See
 [ADR-0049](./adr/0049-independent-bounded-skill-maintenance.md),
 [ADR-0050](./adr/0050-source-tracked-template-driven-skills.md),
 [ADR-0036](./adr/0036-user-deletion-of-experience-knowledge.md).
+
+### Agent Dashboard
+
+The Dock-level **Agent Dashboard** queries a separate local observability store
+through typed `window.stela.agentMetrics.*` methods. One-shot AI actions, SQL
+query parsing, inline completion, Harness Agent turns, tool calls, and Skill
+maintenance use correlated run/event records. The Dashboard reports
+surface-specific completion/error/cancellation funnels, p50/p95 latency, token
+usage, completion shown/accepted disposition, tool rankings, maintenance
+outcomes, daily activity, and a redacted local trace drill-down. It does not
+compute a single cross-surface success score. Overview run reliability and the
+daily chart include only root user-facing runs; child tool and maintenance runs
+remain in their dedicated breakdowns and traces. Token usage includes input,
+output, cache-read, and cache-write usage from all model-backed runs. Knowledge
+maintenance records saved Skill categories and reports their count/share. A
+`no_source` outcome stores an explicit skip reason and lookup context because it
+means the maintenance model was not called, not that a maintenance write
+succeeded.
+
+`{vault}/.stela/agent-metrics.local.sqlite` is gitignored, retains 90 days, and
+caps each trace JSON payload at 256 KiB. Full SQL result rows and API keys are
+never recorded. Settings → AI exposes `automaticSkillMaintenanceEnabled`
+(default true); disabling it cancels queued/running maintenance, prevents
+post-run creation and stale-Skill refresh, and leaves explicit `save_skill`
+requests intact. See [ADR-0051](./adr/0051-local-agent-observability-store.md).
 
 ### Agent retrieval
 

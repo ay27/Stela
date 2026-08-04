@@ -749,6 +749,17 @@ export function AiTab() {
             onChange={(v) => void patch({ ai: { agentAllowMutations: v } })}
           />
         </Row>
+        <Row
+          label={t("ai.agent.automaticKnowledge.label")}
+          description={t("ai.agent.automaticKnowledge.description")}
+        >
+          <Toggle
+            checked={settings.automaticSkillMaintenanceEnabled}
+            onChange={(v) =>
+              void patch({ ai: { automaticSkillMaintenanceEnabled: v } })
+            }
+          />
+        </Row>
       </Section>
 
     </TabContainer>

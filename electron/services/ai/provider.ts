@@ -14,6 +14,7 @@ import {
   type Model,
   type Models,
   type Provider,
+  type AssistantMessage,
 } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
@@ -229,6 +230,9 @@ export async function configureProvider(
       agentMaxIterations: settingsPatch.agentMaxIterations ?? current.ai.agentMaxIterations,
       agentWallClockMs: settingsPatch.agentWallClockMs ?? current.ai.agentWallClockMs,
       agentAllowMutations: settingsPatch.agentAllowMutations ?? current.ai.agentAllowMutations,
+      automaticSkillMaintenanceEnabled:
+        settingsPatch.automaticSkillMaintenanceEnabled
+        ?? current.ai.automaticSkillMaintenanceEnabled,
       inlineCompletionEnabled:
         settingsPatch.inlineCompletionEnabled ?? current.ai.inlineCompletionEnabled,
       completionProfileId:
@@ -463,12 +467,14 @@ export async function callChatCompletions({
   system,
   user,
   profileId,
+  onMessage,
 }: {
   settings: AiSettings;
   apiKey: string;
   system: string;
   user: string;
   profileId?: string | null;
+  onMessage?: (message: AssistantMessage) => void;
 }): Promise<string> {
   const { models, model } = createTransportForProfile(settings, apiKey, profileId);
   const message = await models.completeSimple(model, {
@@ -481,6 +487,7 @@ export async function callChatCompletions({
       },
     ],
   });
+  onMessage?.(message);
 
   if (message.stopReason === "aborted") {
     throw new AppError("ai_aborted", message.errorMessage ?? "AI request was aborted.");
@@ -506,6 +513,7 @@ export async function streamChatCompletions({
   profileId,
   signal,
   onDelta,
+  onMessage,
 }: {
   settings: AiSettings;
   apiKey: string;
@@ -514,6 +522,7 @@ export async function streamChatCompletions({
   profileId: string;
   signal: AbortSignal;
   onDelta: (text: string) => void;
+  onMessage?: (message: AssistantMessage) => void;
 }): Promise<void> {
   try {
     if (signal.aborted) {
@@ -532,6 +541,7 @@ export async function streamChatCompletions({
       if (event.type === "text_delta" && event.delta) onDelta(event.delta);
     }
     const message = await stream.result();
+    onMessage?.(message);
     if (message.stopReason === "aborted") {
       throw new AppError("ai_aborted", message.errorMessage ?? "AI request was aborted.");
     }

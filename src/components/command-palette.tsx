@@ -16,6 +16,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Command } from "cmdk";
 import {
   Bot,
+  Activity,
   Code2,
   Database,
   FileText,
@@ -40,6 +41,7 @@ export interface CommandHandlers {
   /** 往当前激活编辑器光标处插入一个空 runsql 块；无打开文件时返回 false（静默 no-op）。 */
   insertRunSqlBlock: () => boolean;
   openAgent: () => void;
+  openAgentDashboard: () => void;
 }
 
 interface Props {
@@ -168,6 +170,14 @@ export function CommandPalette({ open, onOpenChange, handlers }: Props) {
                   onSelect={() => {
                     close();
                     handlers.openAgent();
+                  }}
+                />
+                <CmdItem
+                  icon={<Activity className="h-3.5 w-3.5" />}
+                  label={t("commandPalette.openAgentDashboard.label")}
+                  onSelect={() => {
+                    close();
+                    handlers.openAgentDashboard();
                   }}
                 />
                 <CmdItem

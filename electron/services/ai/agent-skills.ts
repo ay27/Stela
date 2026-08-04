@@ -63,6 +63,7 @@ export interface LoadedAgentSkill {
 export interface AgentSkillMaintenanceRecord {
   action: "saved" | "archived";
   name: string;
+  category: AgentSkillCategory | null;
   path: string;
   reason: string;
 }
@@ -421,7 +422,13 @@ export async function saveAgentSkill(
     throw new AppError("write_failed", `Write verification failed for ${metadata.relativePath}.`);
   }
   notifyFileChanged(target);
-  return { action: "saved", name: skillName, path: metadata.relativePath, reason: reason.trim().slice(0, 240) };
+  return {
+    action: "saved",
+    name: skillName,
+    category: metadata.category,
+    path: metadata.relativePath,
+    reason: reason.trim().slice(0, 240),
+  };
 }
 
 export async function archiveAgentSkill(
@@ -431,9 +438,11 @@ export async function archiveAgentSkill(
 ): Promise<AgentSkillMaintenanceRecord> {
   const skillName = assertSkillName(name);
   const source = await vaultFs.ensureWithinVault(vaultPath, path.join(skillDir(vaultPath), skillName));
-  if (!(await vaultFs.pathExists(path.join(source, "SKILL.md")))) {
+  const skillFile = path.join(source, "SKILL.md");
+  if (!(await vaultFs.pathExists(skillFile))) {
     throw new AppError("not_found", `Skill '${skillName}' does not exist.`);
   }
+  const metadata = validateSkillContent(skillName, await fs.readFile(skillFile, "utf-8"));
   const archiveDir = await vaultFs.ensureWithinVault(
     vaultPath,
     path.join(skillDir(vaultPath), ".archive", `${skillName}-${Date.now()}`),
@@ -444,6 +453,7 @@ export async function archiveAgentSkill(
   return {
     action: "archived",
     name: skillName,
+    category: metadata.category,
     path: path.relative(vaultPath, archiveDir).split(path.sep).join("/"),
     reason: reason.trim().slice(0, 240),
   };

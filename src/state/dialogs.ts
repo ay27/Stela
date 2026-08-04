@@ -16,6 +16,7 @@ interface DialogsState {
   /** 打开 Settings 时落到的 tab；null 表示用默认 connections */
   settingsTab: string | null;
   experienceKnowledgeOpen: boolean;
+  agentDashboardOpen: boolean;
   sqlTemplateOpen: boolean;
   paletteOpen: boolean;
   /** 当前要导出的笔记路径；null 表示对话框关闭 */
@@ -23,6 +24,7 @@ interface DialogsState {
   setConnections: (open: boolean) => void;
   setSettings: (open: boolean, tab?: string) => void;
   setExperienceKnowledge: (open: boolean) => void;
+  setAgentDashboard: (open: boolean) => void;
   setSqlTemplate: (open: boolean) => void;
   setPalette: (open: boolean) => void;
   togglePalette: () => void;
@@ -35,6 +37,7 @@ export const useDialogs = create<DialogsState>((set, get) => ({
   settingsOpen: false,
   settingsTab: null,
   experienceKnowledgeOpen: false,
+  agentDashboardOpen: false,
   sqlTemplateOpen: false,
   paletteOpen: false,
   exportNoteFilePath: null,
@@ -45,6 +48,7 @@ export const useDialogs = create<DialogsState>((set, get) => ({
       settingsTab: open ? (tab ?? null) : null,
     }),
   setExperienceKnowledge: (open) => set({ experienceKnowledgeOpen: open }),
+  setAgentDashboard: (open) => set({ agentDashboardOpen: open }),
   setSqlTemplate: (open) => set({ sqlTemplateOpen: open }),
   setPalette: (open) => set({ paletteOpen: open }),
   togglePalette: () => set({ paletteOpen: !get().paletteOpen }),

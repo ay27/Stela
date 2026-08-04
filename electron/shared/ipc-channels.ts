@@ -94,6 +94,13 @@ export const IPC = {
   AI_INLINE_COMPLETION_START: "ai:inline-completion-start",
   AI_INLINE_COMPLETION_CANCEL: "ai:inline-completion-cancel",
 
+  // Local Agent observability dashboard
+  AI_METRICS_GET_DASHBOARD: "ai-metrics:get-dashboard",
+  AI_METRICS_LIST_RUNS: "ai-metrics:list-runs",
+  AI_METRICS_GET_TRACE: "ai-metrics:get-trace",
+  AI_METRICS_RECORD_INLINE_DISPOSITION: "ai-metrics:record-inline-disposition",
+  AI_METRICS_CLEAR: "ai-metrics:clear",
+
   // Harness agent（原生 function-calling 循环，见 electron/services/ai/agent.ts）
   AI_AGENT_RUN: "ai:agent-run",
   AI_AGENT_CANCEL: "ai:agent-cancel",

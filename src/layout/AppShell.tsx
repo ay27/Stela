@@ -14,6 +14,7 @@ import { useLayout } from "@/state/layout";
 import { useTabSwitcher } from "@/state/tab-switcher";
 import { ConnectionsDialog } from "@/components/connections-dialog";
 import { ExperienceKnowledgeDialog } from "@/components/experience-knowledge-dialog";
+import { AgentDashboardDialog } from "@/components/agent-dashboard-dialog";
 import { SqlTemplateDialog } from "@/components/sql-template-dialog";
 import { SqlTemplatePicker } from "@/components/sql-template-picker";
 import { ExportNoteDialog } from "@/components/export-note-dialog";
@@ -57,6 +58,8 @@ export function AppShell() {
   const setSettingsOpen = useDialogs((s) => s.setSettings);
   const experienceKnowledgeOpen = useDialogs((s) => s.experienceKnowledgeOpen);
   const setExperienceKnowledgeOpen = useDialogs((s) => s.setExperienceKnowledge);
+  const agentDashboardOpen = useDialogs((s) => s.agentDashboardOpen);
+  const setAgentDashboardOpen = useDialogs((s) => s.setAgentDashboard);
   const sqlTemplateOpen = useDialogs((s) => s.sqlTemplateOpen);
   const setSqlTemplateOpen = useDialogs((s) => s.setSqlTemplate);
   const paletteOpen = useDialogs((s) => s.paletteOpen);
@@ -156,6 +159,7 @@ export function AppShell() {
     newStelaNote: () => createNewStelaNote(vaultPath),
     insertRunSqlBlock: () => insertRunSqlIntoActiveEditor(),
     openAgent: () => focusAgentPanel(),
+    openAgentDashboard: () => setAgentDashboardOpen(true),
   };
 
   // Hotkeys：key 规则见 docs/keybindings.md
@@ -344,6 +348,10 @@ export function AppShell() {
       <ExperienceKnowledgeDialog
         open={experienceKnowledgeOpen}
         onOpenChange={setExperienceKnowledgeOpen}
+      />
+      <AgentDashboardDialog
+        open={agentDashboardOpen}
+        onOpenChange={setAgentDashboardOpen}
       />
       <SqlTemplateDialog
         open={sqlTemplateOpen}

@@ -245,9 +245,14 @@ interface AppSettings {
   persistence: PersistenceSettings; // cleanupMonths
   ui: UISettings;                 // defaultPageSize, editorWidth
   git: GitSettings;               // enabled, autoCommit, autoPush, autoPull
-  ai: AiSettings;                 // provider, model, agent mutation policy
+  ai: AiSettings;                 // provider, model, Agent policies and automatic Skill maintenance
 }
 ```
+
+`AiSettings.automaticSkillMaintenanceEnabled` defaults to `true`. When false,
+Stela cancels automatic maintenance, does not enqueue post-answer maintenance,
+and withholds stale Skills instead of refreshing them. A direct user-requested
+`save_skill` remains available.
 
 `execution.maxRows` limits how many query rows Stela saves and displays after a connector returns. It does not rewrite user SQL or append dialect-specific `LIMIT` clauses; `0` means unlimited.
 
@@ -608,7 +613,31 @@ application-level dialog using `agent.listSkills()` to show metadata (name,
 description, category, tags, relative path, and active/archived status). After
 confirmation, `agent.removeSkill(relativePath)` may move only that listed Skill
 directory to the system trash; it cannot read bodies or mutate other Vault paths.
-Skills have no user-facing Settings or slash-command contract.
+Skill bodies have no renderer edit or slash-command contract; Settings exposes
+only the automatic-maintenance policy toggle.
+
+### Agent observability
+
+Agent observability is local and Vault-scoped but not Git-synced. A metric run
+has a `surface` (`agent`, `tool`, `inline_completion`, `skill_maintenance`,
+`ai_action`, or `sql_query_parse`), operation, terminal status, optional
+surface-specific outcome, duration, first-result latency, provider/model,
+token usage, error metadata, and optional parent run. Ordered metric events
+carry the redacted trace. Tool and maintenance runs use their Agent run as
+`parentRunId`.
+
+The renderer can only call `agentMetrics.getDashboard`, `listRuns`, `getTrace`,
+`recordInlineDisposition`, and `clear`. Date ranges are exactly `7d`, `30d`, or
+`90d`; trace pagination is bounded to 100 records. Completion acceptance is
+`accepted / shown`; cancellations are reported separately from provider errors.
+Knowledge maintenance reports saved, no-change, no-source, input-too-large,
+dropped, timeout, error, and disabled outcomes rather than a generic success
+rate. Root user-facing runs alone feed the overview reliability and daily
+activity totals; child maintenance and tool runs stay in their own breakdowns.
+Saved maintenance actions carry their validated Skill category so the dashboard
+can report generated-category counts and shares. A no-source run contains a
+structured response explaining why no verified Vault Markdown source matched;
+it exits before invoking the maintenance model ([ADR-0051](./adr/0051-local-agent-observability-store.md)).
 
 Retrieval results ([ADR-0026](./adr/0026-ranked-lexical-retrieval-for-agent.md)):
 

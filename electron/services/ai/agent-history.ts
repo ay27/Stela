@@ -111,6 +111,7 @@ function isSkillMaintenanceAction(value: unknown): boolean {
   return !!action &&
     (action.action === "saved" || action.action === "archived") &&
     typeof action.name === "string" &&
+    (action.category === undefined || action.category === null || typeof action.category === "string") &&
     typeof action.path === "string" &&
     typeof action.reason === "string";
 }

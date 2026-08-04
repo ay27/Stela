@@ -10,6 +10,7 @@ import * as connectionsStore from "../connections-store";
 import { getLogger } from "../logger";
 import * as settingsStore from "../settings-store";
 import { loadApiKey, streamChatCompletions } from "./provider";
+import * as agentMetrics from "./agent-metrics";
 import { redactForPrompt } from "./redaction";
 import { loadSchemaDirTableSchemas } from "./schema-context";
 import { extractSqlSymbols } from "./sql-symbols";
@@ -162,6 +163,9 @@ export async function runInlineCompletion(
   signal: AbortSignal,
   onEvent: (event: AiInlineCompletionEvent) => void,
 ): Promise<void> {
+  const startedAt = Date.now();
+  let metricStarted = false;
+  let firstResultAt: number | null = null;
   log.info("request received", {
     requestId: request.requestId,
     connectionName: request.connectionName,
@@ -196,6 +200,19 @@ export async function runInlineCompletion(
       requestId: request.requestId,
       profileId: profile.id,
     });
+    if (agentMetrics.isOpen()) {
+      agentMetrics.startRun({
+        runId: request.requestId,
+        surface: "inline_completion",
+        operation: "sql_inline",
+        startedAt,
+        profileId: profile.id,
+        vendorId: profile.vendorId,
+        model: profile.model,
+        request,
+      });
+      metricStarted = true;
+    }
 
     const connections = await connectionsStore.loadConnections(vaultPath, slug);
     const connection = request.connectionName
@@ -234,6 +251,7 @@ export async function runInlineCompletion(
       schemas,
     });
     const apiKey = await loadApiKey(vaultPath, slug, profile.id);
+    if (metricStarted) agentMetrics.addEvent(request.requestId, { type: "provider_prompt", payload: { system, user } });
     await streamChatCompletions({
       settings: settings.ai,
       apiKey,
@@ -241,15 +259,30 @@ export async function runInlineCompletion(
       user,
       profileId: profile.id,
       signal,
-      onDelta: (text) =>
-        onEvent({ type: "delta", requestId: request.requestId, text }),
+      onDelta: (text) => {
+        if (firstResultAt === null) {
+          firstResultAt = Date.now();
+          if (metricStarted) agentMetrics.setFirstResult(request.requestId, firstResultAt - startedAt);
+        }
+        onEvent({ type: "delta", requestId: request.requestId, text });
+      },
+      onMessage: (message) => {
+        if (metricStarted) agentMetrics.addUsage(request.requestId, message.usage);
+      },
     });
     log.info("stream completed", { requestId: request.requestId });
     onEvent({ type: "final", requestId: request.requestId });
+    if (metricStarted) {
+      agentMetrics.finishRun(request.requestId, {
+        status: "completed",
+        firstResultMs: firstResultAt === null ? null : firstResultAt - startedAt,
+      });
+    }
   } catch (err) {
     if (isCancellation(err, signal)) {
       log.info("request cancelled", { requestId: request.requestId });
       onEvent({ type: "cancelled", requestId: request.requestId });
+      if (metricStarted) agentMetrics.finishRun(request.requestId, { status: "cancelled" });
       return;
     }
     log.warn("request failed", {
@@ -261,5 +294,12 @@ export async function runInlineCompletion(
       requestId: request.requestId,
       message: err instanceof Error ? err.message : String(err),
     });
+    if (metricStarted) {
+      agentMetrics.finishRun(request.requestId, {
+        status: "error",
+        errorCode: err instanceof AppError ? err.code : "unknown_error",
+        errorMessage: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 }

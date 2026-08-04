@@ -13,6 +13,29 @@ interface VaultQueue {
 }
 
 const queues = new Map<string, VaultQueue>();
+const auxiliaryControllers = new Map<string, Set<AbortController>>();
+
+/** Register synchronous stale-Skill refresh under the same Vault cancellation boundary. */
+export function registerSkillMaintenanceActivity(
+  vaultPath: string,
+  parentSignal: AbortSignal,
+): { signal: AbortSignal; dispose(): void } {
+  const controller = new AbortController();
+  const controllers = auxiliaryControllers.get(vaultPath) ?? new Set<AbortController>();
+  controllers.add(controller);
+  auxiliaryControllers.set(vaultPath, controllers);
+  const onParentAbort = () => controller.abort(parentSignal.reason ?? "cancelled");
+  if (parentSignal.aborted) onParentAbort();
+  else parentSignal.addEventListener("abort", onParentAbort, { once: true });
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      parentSignal.removeEventListener("abort", onParentAbort);
+      controllers.delete(controller);
+      if (controllers.size === 0) auxiliaryControllers.delete(vaultPath);
+    },
+  };
+}
 
 function queueFor(vaultPath: string): VaultQueue {
   const existing = queues.get(vaultPath);
@@ -31,7 +54,7 @@ async function drain(vaultPath: string): Promise<void> {
   queue.running = true;
   const controller = new AbortController();
   queue.active = controller;
-  const timer = setTimeout(() => controller.abort(), SKILL_MAINTENANCE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort("timeout"), SKILL_MAINTENANCE_TIMEOUT_MS);
   try {
     await job.run(controller.signal);
   } finally {
@@ -61,7 +84,15 @@ export function cancelSkillMaintenance(vaultPath?: string): void {
     if (!queue) continue;
     queue.pending?.dropped();
     queue.pending = null;
-    queue.active?.abort();
+    queue.active?.abort("cancelled");
     if (!queue.running) queues.delete(key);
+  }
+  const activityTargets = vaultPath
+    ? [[vaultPath, auxiliaryControllers.get(vaultPath)] as const]
+    : [...auxiliaryControllers.entries()];
+  for (const [key, controllers] of activityTargets) {
+    if (!controllers) continue;
+    for (const controller of controllers) controller.abort("cancelled");
+    auxiliaryControllers.delete(key);
   }
 }

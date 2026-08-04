@@ -299,6 +299,149 @@ export interface AiSettings {
    * after user confirmation. Default false = mutations are always blocked.
    */
   agentAllowMutations: boolean;
+  /** Run opportunistic post-answer Skill maintenance and stale-Skill refresh. */
+  automaticSkillMaintenanceEnabled: boolean;
+}
+
+// ---------- Local AI / Agent observability ----------
+
+export type AgentMetricRange = "7d" | "30d" | "90d";
+export type AgentMetricSurface =
+  | "agent"
+  | "tool"
+  | "inline_completion"
+  | "skill_maintenance"
+  | "ai_action"
+  | "sql_query_parse";
+export type AgentMetricStatus =
+  | "running"
+  | "completed"
+  | "error"
+  | "cancelled"
+  | "timeout"
+  | "dropped";
+
+export interface AgentMetricRunSummary {
+  runId: string;
+  parentRunId: string | null;
+  surface: AgentMetricSurface;
+  operation: string;
+  status: AgentMetricStatus;
+  outcome: string | null;
+  startedAt: number;
+  endedAt: number | null;
+  durationMs: number | null;
+  firstResultMs: number | null;
+  profileId: string | null;
+  vendorId: string | null;
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  errorCode: string | null;
+  errorMessage: string | null;
+  traceTruncated: boolean;
+}
+
+export interface AgentMetricEventRecord {
+  id: number;
+  runId: string;
+  type: string;
+  occurredAt: number;
+  durationMs: number | null;
+  ok: boolean | null;
+  name: string | null;
+  payload: unknown;
+  truncated: boolean;
+}
+
+export interface AgentMetricBreakdown {
+  key: string;
+  total: number;
+  completed: number;
+  errors: number;
+  cancelled: number;
+  p50DurationMs: number | null;
+  p95DurationMs: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+export interface AgentMetricUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+export interface AgentMetricKnowledgeCategory {
+  category: string;
+  count: number;
+  share: number;
+}
+
+export interface AgentMetricDailyPoint {
+  day: string;
+  total: number;
+  completed: number;
+  errors: number;
+  cancelled: number;
+  durationMs: number;
+}
+
+export interface AgentMetricsDashboard {
+  range: AgentMetricRange;
+  generatedAt: number;
+  overview: AgentMetricBreakdown;
+  usage: AgentMetricUsage;
+  surfaces: AgentMetricBreakdown[];
+  tools: AgentMetricBreakdown[];
+  knowledgeOutcomes: Array<{ key: string; count: number }>;
+  knowledgeCategories: AgentMetricKnowledgeCategory[];
+  completion: {
+    requested: number;
+    providerCompleted: number;
+    shown: number;
+    accepted: number;
+    dismissed: number;
+    errors: number;
+    cancelled: number;
+    acceptanceRate: number | null;
+    p50FirstResultMs: number | null;
+    p95FirstResultMs: number | null;
+  };
+  daily: AgentMetricDailyPoint[];
+  recentRuns: AgentMetricRunSummary[];
+}
+
+export interface AgentMetricRunPage {
+  runs: AgentMetricRunSummary[];
+  nextCursor: string | null;
+}
+
+export interface AgentMetricTrace {
+  run: AgentMetricRunSummary;
+  request: unknown;
+  response: unknown;
+  events: AgentMetricEventRecord[];
+}
+
+export interface AgentMetricRunFilter {
+  range: AgentMetricRange;
+  surface?: AgentMetricSurface;
+  status?: AgentMetricStatus;
+  cursor?: string;
+  limit?: number;
+}
+
+export interface AgentInlineDisposition {
+  requestId: string;
+  outcome: "shown" | "accepted" | "dismissed";
+  visibleMs?: number;
+  suggestedChars?: number;
 }
 
 /**
@@ -709,6 +852,7 @@ export type AgentEvent =
       actions: Array<{
         action: "saved" | "archived";
         name: string;
+        category: string | null;
         path: string;
         reason: string;
       }>;

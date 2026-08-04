@@ -17,6 +17,7 @@ import {
 } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { isContextOverflow } from "@earendil-works/pi-ai";
+import { randomUUID } from "node:crypto";
 
 import type {
   AgentEvent,
@@ -49,6 +50,7 @@ import {
   type ProposalRequest,
 } from "./agent-tools";
 import { createTransportForProfile, getActiveProfile, loadApiKey } from "./provider";
+import * as agentMetrics from "./agent-metrics";
 import {
   buildSkillMaintenanceEvidence,
   formatSkillMaintenanceEvidence,
@@ -73,6 +75,7 @@ import {
 import {
   cancelSkillMaintenance,
   enqueueSkillMaintenance,
+  registerSkillMaintenanceActivity,
   SKILL_MAINTENANCE_MAX_TURNS,
 } from "./skill-maintenance-queue";
 
@@ -343,27 +346,93 @@ async function runSkillMaintenance(options: {
   signal: AbortSignal;
   refreshSkill?: LoadedAgentSkill;
   emitStatus?: boolean;
+  metricRunId?: string;
 }): Promise<boolean> {
   const { vaultPath, request, conversation, evidence, models, model, skills, connection, dialect, aiSettings, onEvent, signal, refreshSkill } = options;
+  const metricRunId = options.metricRunId ?? `maintenance:${request.runId}:${randomUUID()}`;
+  const metricStartedAt = Date.now();
+  if (agentMetrics.isOpen() && !options.metricRunId) {
+    const profile = getActiveProfile(aiSettings, request.profileId);
+    agentMetrics.startRun({
+      runId: metricRunId,
+      parentRunId: `agent:${request.runId}`,
+      surface: "skill_maintenance",
+      operation: refreshSkill ? "stale_refresh" : "post_run_create",
+      startedAt: metricStartedAt,
+      profileId: profile.id,
+      vendorId: profile.vendorId,
+      model: profile.model,
+      request: { conversation, evidence, refreshSkill: refreshSkill?.metadata ?? null },
+    });
+    agentMetrics.addEvent(metricRunId, { type: "eligible" });
+  }
+  if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "started" });
+  const finishMetric = (
+    status: "completed" | "error" | "cancelled" | "timeout" | "dropped",
+    outcome: string,
+    response?: unknown,
+    error?: unknown,
+  ) => {
+    if (!agentMetrics.isOpen()) return;
+    agentMetrics.finishRun(metricRunId, {
+      status,
+      outcome,
+      response,
+      errorCode: error ? "skill_maintenance_failed" : null,
+      errorMessage: error instanceof Error ? error.message : error ? String(error) : null,
+    });
+  };
+  const finishWithoutSource = (reasonCode: string, message: string, details: Record<string, unknown>) => {
+    const response = { reasonCode, message, ...details };
+    if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "skipped", payload: response });
+    finishMetric("completed", "no_source", response);
+    return false;
+  };
   const actions: AgentSkillMaintenanceRecord[] = [];
   const promptSkills = rankAgentSkills(skills.loaded, request.prompt, SKILL_PROMPT_LIMIT);
   const maintenanceTables = refreshSkill
     ? tablesFromSkill(refreshSkill)
     : Array.from(new Set(evidence.flatMap((item) => item.tables ?? []))).slice(0, 8);
   if (refreshSkill?.metadata.category === "analysis-runbook" && refreshSkill.metadata.sources.length === 0) {
+    return finishWithoutSource(
+      "untracked_analysis_runbook",
+      "The analysis-runbook has no tracked source documents, so it cannot be refreshed safely.",
+      { skill: refreshSkill.metadata.name, sourceDocuments: [] },
+    );
+  }
+  let sourceNotes;
+  try {
+    sourceNotes = await collectSkillSourceNotes(vaultPath, maintenanceTables, sqlIndex.query);
+  } catch (err) {
+    finishMetric("error", "error", undefined, err);
     return false;
   }
-  const sourceNotes = await collectSkillSourceNotes(vaultPath, maintenanceTables, sqlIndex.query);
-  if (sourceNotes.length === 0) return false;
+  if (sourceNotes.length === 0) {
+    return finishWithoutSource(
+      "no_matching_source_documents",
+      "No verified Vault Markdown source documents matched the tables found in this run, so the maintenance model was not called.",
+      {
+        sourceTables: maintenanceTables,
+        evidenceItems: evidence.length,
+        suggestion: "Link reusable knowledge to a Vault Markdown note, then run the Agent again.",
+      },
+    );
+  }
   const maxInputChars = Math.max(16_000, Math.floor(model.contextWindow * 2.5));
-  if (conversation.length > maxInputChars - 8_000) return false;
+  if (conversation.length > maxInputChars - 8_000) {
+    finishMetric("completed", "input_too_large");
+    return false;
+  }
   let remaining = Math.max(4_000, maxInputChars - conversation.length - 8_000);
   const boundedNotes = sourceNotes.map((note) => {
     const content = note.content.slice(0, remaining);
     remaining = Math.max(0, remaining - content.length);
     return { ...note, content };
   }).filter((note) => note.content.length > 0);
-  if (boundedNotes.length === 0) return false;
+  if (boundedNotes.length === 0) {
+    finishMetric("completed", "input_too_large");
+    return false;
+  }
   if (options.emitStatus !== false) onEvent({ type: "skill_maintenance_started", runId: request.runId });
   const maintenanceHarness = new AgentHarness({
     env: new NodeExecutionEnv({ cwd: vaultPath }),
@@ -407,17 +476,25 @@ async function runSkillMaintenance(options: {
     if (event.type === "turn_end" && ++turns >= SKILL_MAINTENANCE_MAX_TURNS) {
       void maintenanceHarness.abort();
     }
+    if (event.type === "message_end" && event.message.role === "assistant" && agentMetrics.isOpen()) {
+      agentMetrics.addUsage(metricRunId, event.message.usage);
+      agentMetrics.addEvent(metricRunId, { type: "assistant_message", payload: event.message });
+    }
   });
   const onAbort = () => void maintenanceHarness.abort();
   signal.addEventListener("abort", onAbort, { once: true });
   try {
-    const result = await maintenanceHarness.prompt(buildSkillMaintenanceInput(
+    const maintenanceInput = buildSkillMaintenanceInput(
       conversation,
       evidence,
       boundedNotes,
       promptSkills,
       refreshSkill,
-    ));
+    );
+    if (agentMetrics.isOpen()) {
+      agentMetrics.addEvent(metricRunId, { type: "provider_prompt", payload: maintenanceInput });
+    }
+    const result = await maintenanceHarness.prompt(maintenanceInput);
     const completed = !signal.aborted && result.stopReason !== "aborted";
     if (options.emitStatus !== false) {
       onEvent({
@@ -430,6 +507,19 @@ async function runSkillMaintenance(options: {
             ? `Updated ${actions.length} internal knowledge Skill${actions.length === 1 ? "" : "s"}.`
             : assistantText(result).trim().slice(0, 120) || "No durable knowledge required a Skill update.",
       });
+    }
+    if (!completed) {
+      const timeout = signal.reason === "timeout";
+      finishMetric(timeout ? "timeout" : "cancelled", timeout ? "timeout" : "cancelled", result);
+    } else {
+      for (const action of actions) {
+        if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "skill_action", name: action.name, payload: action });
+      }
+      finishMetric(
+        "completed",
+        actions.length > 0 ? "saved" : "no_change",
+        { result, actions },
+      );
     }
     return completed && actions.length > 0;
   } catch (err) {
@@ -445,6 +535,7 @@ async function runSkillMaintenance(options: {
         summary: "Skill maintenance could not complete; the answer above is unaffected.",
       });
     }
+    finishMetric("error", "error", undefined, err);
     return false;
   } finally {
     unsubscribe();
@@ -477,11 +568,38 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
     request = { ...request, sessionId: session.sessionId };
   }
   const runId = request.runId;
+  const metricRunId = `agent:${runId}`;
+  const metricStartedAt = Date.now();
+  let metricStarted = false;
+  let metricFinished = false;
+  let metricFirstResult = false;
   const pending = new Map<string, ProposalResolver>();
   const historyEvents: AgentEvent[] = [];
   const emit = (event: AgentEvent) => {
     historyEvents.push(event);
     onEvent(event);
+    if (!metricStarted || !agentMetrics.isOpen()) return;
+    agentMetrics.addEvent(metricRunId, { type: event.type, payload: event });
+    if (!metricFirstResult && (event.type === "tool_call" || event.type === "final")) {
+      metricFirstResult = true;
+      agentMetrics.setFirstResult(metricRunId, Date.now() - metricStartedAt);
+    }
+    if (metricFinished) return;
+    if (event.type === "final") {
+      metricFinished = true;
+      agentMetrics.finishRun(metricRunId, { status: "completed", response: event });
+    } else if (event.type === "error") {
+      metricFinished = true;
+      agentMetrics.finishRun(metricRunId, {
+        status: "error",
+        errorCode: "agent_error",
+        errorMessage: event.message,
+        response: event,
+      });
+    } else if (event.type === "cancelled") {
+      metricFinished = true;
+      agentMetrics.finishRun(metricRunId, { status: "cancelled", response: event });
+    }
   };
   activeProposals.set(runId, pending);
   historyResponses.set(runId, []);
@@ -510,12 +628,33 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       return;
     }
     const profile = getActiveProfile(settings.ai, request.profileId);
+    if (agentMetrics.isOpen()) {
+      agentMetrics.startRun({
+        runId: metricRunId,
+        surface: "agent",
+        operation: "chat",
+        startedAt: metricStartedAt,
+        profileId: profile.id,
+        vendorId: profile.vendorId,
+        model: profile.model,
+        request,
+      });
+      metricStarted = true;
+      agentMetrics.addEvent(metricRunId, { type: "started", payload: { runId } });
+    }
     const apiKey = await loadApiKey(vaultPath, slug, profile.id);
     const { connection, dialect } = await resolveConnection(vaultPath, slug, request.connectionName);
     const skills = await loadAgentSkills(vaultPath);
     const promptSkills = rankAgentSkills(skills.loaded, request.prompt, SKILL_PROMPT_LIMIT);
     const { models, model } = createTransportForProfile(settings.ai, apiKey, profile.id);
     const contextWindow = model.contextWindow;
+    const systemPrompt =
+      `${buildSystemPrompt(request, connection, dialect, AGENT_SKILL_LIMITS_PROMPT)}\n` +
+      "Use search_skills before relying on domain knowledge that may exist in the internal Skill library.\n" +
+      formatSkillsForSystemPrompt(promptSkills.map((item) => item.skill));
+    if (agentMetrics.isOpen()) {
+      agentMetrics.addEvent(metricRunId, { type: "system_prompt", payload: systemPrompt });
+    }
     plan = new ExecutionPlanStore(runId, (snapshot) => {
       emit({ type: "plan_updated", runId, plan: snapshot });
     });
@@ -549,10 +688,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       models,
       model,
       thinkingLevel: "off",
-      systemPrompt:
-        `${buildSystemPrompt(request, connection, dialect, AGENT_SKILL_LIMITS_PROMPT)}\n` +
-        "Use search_skills before relying on domain knowledge that may exist in the internal Skill library.\n" +
-        formatSkillsForSystemPrompt(promptSkills.map((item) => item.skill)),
+      systemPrompt,
       resources: { skills: promptSkills.map((item) => item.skill) },
       tools: createAgentTools({
         ctx: {
@@ -572,26 +708,33 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           mode: "normal",
           ensureSkillFresh: async (skill) => {
             if (!(await isSkillStale(vaultPath, skill, sqlIndex.query))) return skill;
+            if (!settings.ai.automaticSkillMaintenanceEnabled) return null;
             if (skill.metadata.category === "analysis-runbook" && skill.metadata.sources.length === 0) {
               return null;
             }
             cancelSkillMaintenance(vaultPath);
-            const refreshed = await runSkillMaintenance({
-              vaultPath,
-              request,
-              conversation: conversationForMaintenance((await session!.buildContext()).messages),
-              evidence: maintenanceEvidence.slice(-24),
-              models,
-              model,
-              skills,
-              connection,
-              dialect,
-              aiSettings: settings.ai,
-              onEvent: emit,
-              signal,
-              refreshSkill: skill,
-              emitStatus: false,
-            });
+            const activity = registerSkillMaintenanceActivity(vaultPath, signal);
+            let refreshed: boolean;
+            try {
+              refreshed = await runSkillMaintenance({
+                vaultPath,
+                request,
+                conversation: conversationForMaintenance((await session!.buildContext()).messages),
+                evidence: maintenanceEvidence.slice(-24),
+                models,
+                model,
+                skills,
+                connection,
+                dialect,
+                aiSettings: settings.ai,
+                onEvent: emit,
+                signal: activity.signal,
+                refreshSkill: skill,
+                emitStatus: false,
+              });
+            } finally {
+              activity.dispose();
+            }
             if (!refreshed) return null;
             const reloaded = await loadAgentSkills(vaultPath);
             skills.loaded.splice(0, skills.loaded.length, ...reloaded.loaded);
@@ -607,10 +750,30 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       }),
     });
 
-    const toolCalls = new Map<string, { name: string; args: unknown }>();
+    const toolCalls = new Map<string, { name: string; args: unknown; startedAt: number; metricRunId: string }>();
     const unsubscribe = harness.subscribe((event) => {
       if (event.type === "tool_execution_start") {
-        toolCalls.set(event.toolCallId, { name: event.toolName, args: event.args ?? {} });
+        const startedAt = Date.now();
+        const toolMetricRunId = `tool:${runId}:${event.toolCallId}`;
+        toolCalls.set(event.toolCallId, {
+          name: event.toolName,
+          args: event.args ?? {},
+          startedAt,
+          metricRunId: toolMetricRunId,
+        });
+        if (agentMetrics.isOpen()) {
+          agentMetrics.startRun({
+            runId: toolMetricRunId,
+            parentRunId: metricRunId,
+            surface: "tool",
+            operation: event.toolName,
+            startedAt,
+            profileId: profile.id,
+            vendorId: profile.vendorId,
+            model: profile.model,
+            request: event.args ?? {},
+          });
+        }
         emit({
           type: "tool_call",
           runId,
@@ -632,6 +795,15 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
             event.isError,
           ));
           toolCalls.delete(event.toolCallId);
+          if (agentMetrics.isOpen()) {
+            agentMetrics.finishRun(call.metricRunId, {
+              status: event.isError ? "error" : "completed",
+              endedAt: Date.now(),
+              errorCode: event.isError ? "tool_error" : null,
+              errorMessage: event.isError ? toolResultSummary(event.result) : null,
+              response: event.result,
+            });
+          }
         }
         emit({
           type: "tool_result",
@@ -641,6 +813,15 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           summary: toolResultSummary(event.result),
         });
         void emitUsage(true);
+        return;
+      }
+      if (event.type === "message_end" && event.message.role === "assistant" && agentMetrics.isOpen()) {
+        agentMetrics.addUsage(metricRunId, event.message.usage);
+        agentMetrics.addEvent(metricRunId, { type: "assistant_message", payload: event.message });
+        return;
+      }
+      if (event.type === "before_provider_payload" && agentMetrics.isOpen()) {
+        agentMetrics.addEvent(metricRunId, { type: "provider_payload", payload: event.payload });
       }
     });
 
@@ -715,8 +896,23 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           actions: normalSkillActions,
           summary: `Updated ${normalSkillActions.length} internal knowledge Skill${normalSkillActions.length === 1 ? "" : "s"}.`,
         });
-      } else if (hasSkillMaintenanceEvidence(maintenanceEvidence)) {
+      } else if (hasSkillMaintenanceEvidence(maintenanceEvidence) && settings.ai.automaticSkillMaintenanceEnabled) {
         const context = await session.buildContext();
+        const maintenanceMetricRunId = `maintenance:${runId}:${randomUUID()}`;
+        if (agentMetrics.isOpen()) {
+          agentMetrics.startRun({
+            runId: maintenanceMetricRunId,
+            parentRunId: metricRunId,
+            surface: "skill_maintenance",
+            operation: "post_run_create",
+            profileId: profile.id,
+            vendorId: profile.vendorId,
+            model: profile.model,
+            request: { evidence: maintenanceEvidence.slice(-24) },
+          });
+          agentMetrics.addEvent(maintenanceMetricRunId, { type: "eligible" });
+          agentMetrics.addEvent(maintenanceMetricRunId, { type: "enqueued" });
+        }
         const jobOptions = {
           vaultPath,
           request,
@@ -729,18 +925,40 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           dialect,
           aiSettings: settings.ai,
           onEvent,
+          metricRunId: maintenanceMetricRunId,
         };
         maintenanceJob = {
           run: async (maintenanceSignal) => {
             await runSkillMaintenance({ ...jobOptions, signal: maintenanceSignal });
           },
-          dropped: () => onEvent({
-            type: "skill_maintenance",
-            runId,
-            actions: [],
-            summary: "A newer knowledge-maintenance task replaced this pending task.",
-          }),
+          dropped: () => {
+            if (agentMetrics.isOpen()) {
+              agentMetrics.finishRun(maintenanceMetricRunId, { status: "dropped", outcome: "dropped" });
+            }
+            onEvent({
+              type: "skill_maintenance",
+              runId,
+              actions: [],
+              summary: "A newer knowledge-maintenance task replaced this pending task.",
+            });
+          },
         };
+      } else if (hasSkillMaintenanceEvidence(maintenanceEvidence)) {
+        const disabledMetricRunId = `maintenance:${runId}:${randomUUID()}`;
+        if (agentMetrics.isOpen()) {
+          agentMetrics.startRun({
+            runId: disabledMetricRunId,
+            parentRunId: metricRunId,
+            surface: "skill_maintenance",
+            operation: "post_run_create",
+            profileId: profile.id,
+            vendorId: profile.vendorId,
+            model: profile.model,
+            request: { evidence: maintenanceEvidence.slice(-24) },
+          });
+          agentMetrics.addEvent(disabledMetricRunId, { type: "eligible" });
+          agentMetrics.finishRun(disabledMetricRunId, { status: "completed", outcome: "disabled" });
+        }
       }
     } finally {
       unsubscribe();
@@ -754,6 +972,14 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       emit({ type: "error", runId, message: err instanceof Error ? err.message : String(err) });
     }
   } finally {
+    if (metricStarted && !metricFinished && agentMetrics.isOpen()) {
+      metricFinished = true;
+      agentMetrics.finishRun(metricRunId, {
+        status: signal.aborted ? "cancelled" : "error",
+        errorCode: signal.aborted ? null : "agent_unsettled",
+        errorMessage: signal.aborted ? null : "Agent run ended without a terminal event.",
+      });
+    }
     if (historyStorage) {
       try {
         for (const event of historyEvents) {

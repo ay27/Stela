@@ -25,6 +25,12 @@ import type {
   AgentProposalResponse,
   AgentRunRequest,
   AgentRunResponse,
+  AgentInlineDisposition,
+  AgentMetricRange,
+  AgentMetricRunFilter,
+  AgentMetricRunPage,
+  AgentMetricTrace,
+  AgentMetricsDashboard,
   AiCompleteRequest,
   AiCompleteResponse,
   AiInlineCompletionEvent,
@@ -105,6 +111,8 @@ import * as ai from "../services/ai";
 import * as agent from "../services/ai/agent";
 import * as agentHistory from "../services/ai/agent-history";
 import * as agentSkills from "../services/ai/agent-skills";
+import * as agentMetrics from "../services/ai/agent-metrics";
+import { cancelSkillMaintenance } from "../services/ai/skill-maintenance-queue";
 import { runInlineCompletion } from "../services/ai/inline-completion";
 
 /** 共用：所有 vault-级 handler 的入口拿当前 vault；没有时按 IPC 错误返回。 */
@@ -281,8 +289,34 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
   );
   registerHandler<{ patch: PartialAppSettings }, AppSettings>(
     IPC.SETTINGS_PATCH,
-    async ({ patch }) => settingsStore.patchAppSettings(requireVault(), patch),
+    async ({ patch }) => {
+      const vaultPath = requireVault();
+      const updated = await settingsStore.patchAppSettings(vaultPath, patch);
+      if (patch.ai?.automaticSkillMaintenanceEnabled === false) {
+        cancelSkillMaintenance(vaultPath);
+      }
+      return updated;
+    },
   );
+
+  // ---------- Local Agent observability ----------
+  registerHandler<{ range: AgentMetricRange }, AgentMetricsDashboard>(
+    IPC.AI_METRICS_GET_DASHBOARD,
+    ({ range }) => agentMetrics.getDashboard(range),
+  );
+  registerHandler<{ filter: AgentMetricRunFilter }, AgentMetricRunPage>(
+    IPC.AI_METRICS_LIST_RUNS,
+    ({ filter }) => agentMetrics.listRuns(filter),
+  );
+  registerHandler<{ runId: string }, AgentMetricTrace>(
+    IPC.AI_METRICS_GET_TRACE,
+    ({ runId }) => agentMetrics.getTrace(runId),
+  );
+  registerHandler<{ input: AgentInlineDisposition }, void>(
+    IPC.AI_METRICS_RECORD_INLINE_DISPOSITION,
+    ({ input }) => agentMetrics.recordInlineDisposition(input),
+  );
+  registerHandler<Record<string, never>, void>(IPC.AI_METRICS_CLEAR, () => agentMetrics.clear());
 
   // ---------- Connections (vault-scoped) ----------
   registerHandler<Record<string, never>, ConnectionMap>(
@@ -487,15 +521,20 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
       profileId?: string | null;
     },
     AiProviderStatus
-  >(IPC.AI_CONFIGURE, async ({ settings, apiKey, profileId }) =>
-    ai.configure(
-      requireVault(),
+  >(IPC.AI_CONFIGURE, async ({ settings, apiKey, profileId }) => {
+    const vaultPath = requireVault();
+    const result = await ai.configure(
+      vaultPath,
       (await deviceProfile.loadDeviceProfile()).slug,
       settings,
       apiKey,
       profileId,
-    ),
-  );
+    );
+    if (settings.automaticSkillMaintenanceEnabled === false) {
+      cancelSkillMaintenance(vaultPath);
+    }
+    return result;
+  });
   registerHandler<{ profileId?: string | null }, AiProviderStatus>(
     IPC.AI_CLEAR_API_KEY,
     async ({ profileId }) =>

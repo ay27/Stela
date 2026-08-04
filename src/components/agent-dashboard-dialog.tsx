@@ -1,0 +1,278 @@
+import * as Dialog from "@radix-ui/react-dialog";
+import { Activity, AlertTriangle, Clock3, Database, RefreshCw, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+
+import type {
+  AgentMetricBreakdown,
+  AgentMetricRange,
+  AgentMetricRunSummary,
+  AgentMetricTrace,
+  AgentMetricsDashboard,
+} from "@shared/types";
+
+import { useT } from "@/i18n/use-t";
+import { cn } from "@/lib/utils";
+
+interface AgentDashboardDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+function formatDuration(value: number | null): string {
+  if (value === null) return "—";
+  if (value < 1_000) return `${Math.round(value)} ms`;
+  if (value < 60_000) return `${(value / 1_000).toFixed(1)} s`;
+  return `${(value / 60_000).toFixed(1)} min`;
+}
+
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat().format(value);
+}
+
+function rate(numerator: number, denominator: number): string {
+  return denominator > 0 ? `${Math.round((numerator / denominator) * 100)}%` : "—";
+}
+
+function knowledgeOutcomeLabel(key: string, t: ReturnType<typeof useT>): string {
+  const labels: Record<string, string> = {
+    saved: t("agentDashboard.outcome.saved"),
+    no_change: t("agentDashboard.outcome.noChange"),
+    no_source: t("agentDashboard.outcome.noSource"),
+    input_too_large: t("agentDashboard.outcome.inputTooLarge"),
+    disabled: t("agentDashboard.outcome.disabled"),
+    dropped: t("agentDashboard.outcome.dropped"),
+    timeout: t("agentDashboard.outcome.timeout"),
+    error: t("agentDashboard.outcome.error"),
+  };
+  return labels[key] ?? key;
+}
+
+function MetricCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="rounded-lg border border-border bg-card/60 p-3">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-1 text-xl font-semibold tabular-nums text-foreground">{value}</div>
+      {hint ? <div className="mt-0.5 text-[10px] text-muted-foreground">{hint}</div> : null}
+    </div>
+  );
+}
+
+function StatusPill({ run }: { run: AgentMetricRunSummary }) {
+  return (
+    <span className={cn(
+      "rounded px-1.5 py-0.5 text-[10px] font-medium",
+      run.status === "completed" && "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+      run.status === "error" && "bg-destructive/15 text-destructive",
+      (run.status === "cancelled" || run.status === "dropped") && "bg-muted text-muted-foreground",
+      run.status === "timeout" && "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+      run.status === "running" && "bg-primary/15 text-primary",
+    )}>
+      {run.outcome ?? run.status}
+    </span>
+  );
+}
+
+function BreakdownTable({ rows }: { rows: AgentMetricBreakdown[] }) {
+  const t = useT();
+  return (
+    <div className="overflow-hidden rounded-md border border-border">
+      <table className="w-full text-left text-[11px]">
+        <thead className="bg-muted/50 text-muted-foreground">
+          <tr>
+            <th className="px-3 py-2 font-medium">{t("agentDashboard.type")}</th>
+            <th className="px-3 py-2 text-right font-medium">{t("agentDashboard.requests")}</th>
+            <th className="px-3 py-2 text-right font-medium">{t("agentDashboard.completionRate")}</th>
+            <th className="px-3 py-2 text-right font-medium">{t("agentDashboard.errors")}</th>
+            <th className="px-3 py-2 text-right font-medium">P50</th>
+            <th className="px-3 py-2 text-right font-medium">P95</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key} className="border-t border-border">
+              <td className="px-3 py-2 font-mono text-foreground">{row.key}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{row.total}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{rate(row.completed, row.completed + row.errors)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{row.errors}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{formatDuration(row.p50DurationMs)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{formatDuration(row.p95DurationMs)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function AgentDashboardDialog({ open, onOpenChange }: AgentDashboardDialogProps) {
+  const t = useT();
+  const [range, setRange] = useState<AgentMetricRange>("7d");
+  const [data, setData] = useState<AgentMetricsDashboard | null>(null);
+  const [trace, setTrace] = useState<AgentMetricTrace | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setData(await window.stela.agentMetrics.getDashboard(range));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (open) void load();
+    else setTrace(null);
+  }, [open, range]);
+
+  const maxDaily = useMemo(
+    () => Math.max(1, ...(data?.daily.map((point) => point.total) ?? [1])),
+    [data],
+  );
+  const totalTokens = data
+    ? data.usage.inputTokens + data.usage.outputTokens + data.usage.cacheReadTokens + data.usage.cacheWriteTokens
+    : 0;
+
+  const showTrace = async (runId: string) => {
+    try {
+      setTrace(await window.stela.agentMetrics.getTrace(runId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const clearAll = async () => {
+    if (!window.confirm(t("agentDashboard.clearConfirm"))) return;
+    await window.stela.agentMetrics.clear();
+    setTrace(null);
+    await load();
+  };
+
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/45 backdrop-blur-sm" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[88vh] w-[1120px] max-w-[96vw] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl">
+          <header className="flex items-center justify-between border-b border-border px-5 py-3">
+            <div className="flex items-center gap-2.5">
+              <Activity className="h-4 w-4 text-primary" />
+              <div>
+                <Dialog.Title className="text-sm font-semibold">{t("agentDashboard.title")}</Dialog.Title>
+                <Dialog.Description className="text-[11px] text-muted-foreground">{t("agentDashboard.description")}</Dialog.Description>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex rounded-md border border-border p-0.5">
+                {(["7d", "30d", "90d"] as const).map((value) => (
+                  <button key={value} type="button" onClick={() => setRange(value)} className={cn("rounded px-2 py-1 text-[11px]", range === value ? "bg-accent text-foreground" : "text-muted-foreground")}>{value}</button>
+                ))}
+              </div>
+              <button type="button" onClick={() => void load()} className="rounded-md border border-border p-1.5 text-muted-foreground hover:text-foreground" aria-label={t("agentDashboard.refresh")}><RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} /></button>
+              <Dialog.Close asChild><button type="button" className="rounded-md p-1.5 text-muted-foreground hover:bg-accent"><X className="h-4 w-4" /></button></Dialog.Close>
+            </div>
+          </header>
+
+          <div className="flex min-h-0 flex-1">
+            <div className="min-w-0 flex-1 overflow-auto p-5">
+              {error ? <div className="mb-4 flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"><AlertTriangle className="h-4 w-4" />{error}</div> : null}
+              {!data && loading ? <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{t("agentDashboard.loading")}</div> : null}
+              {data ? (
+                <div className="space-y-5">
+                  <section className="grid grid-cols-5 gap-3">
+                    <MetricCard label={t("agentDashboard.requests")} value={formatNumber(data.overview.total)} hint={t("agentDashboard.topLevelOnly")} />
+                    <MetricCard label={t("agentDashboard.completionRate")} value={rate(data.overview.completed, data.overview.completed + data.overview.errors)} hint={t("agentDashboard.cancelSeparate")} />
+                    <MetricCard label={t("agentDashboard.errors")} value={formatNumber(data.overview.errors)} />
+                    <MetricCard label={t("agentDashboard.p95Latency")} value={formatDuration(data.overview.p95DurationMs)} />
+                    <MetricCard label={t("agentDashboard.tokens")} value={formatNumber(totalTokens)} hint={`${formatNumber(data.usage.inputTokens)} ${t("agentDashboard.tokensIn")} · ${formatNumber(data.usage.outputTokens)} ${t("agentDashboard.tokensOut")} · ${formatNumber(data.usage.cacheReadTokens)} ${t("agentDashboard.tokensCached")} · ${formatNumber(data.usage.cacheWriteTokens)} ${t("agentDashboard.tokensCacheWrite")}`} />
+                  </section>
+
+                  <section className="rounded-lg border border-border p-4">
+                    <div className="mb-3 flex items-center gap-2 text-xs font-semibold"><Clock3 className="h-3.5 w-3.5 text-muted-foreground" />{t("agentDashboard.daily")}</div>
+                    {data.daily.length === 0 ? <div className="py-8 text-center text-xs text-muted-foreground">{t("agentDashboard.empty")}</div> : (
+                      <div className="flex h-28 items-end gap-1.5">
+                        {data.daily.map((point) => (
+                          <div key={point.day} className="group flex min-w-0 flex-1 flex-col items-center justify-end gap-1" title={`${point.day}: ${point.total}`}>
+                            <div className="w-full rounded-t bg-primary/70 transition-colors group-hover:bg-primary" style={{ height: `${Math.max(4, (point.total / maxDaily) * 88)}px` }} />
+                            <span className="max-w-full truncate text-[8px] text-muted-foreground">{point.day.slice(5)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <section className="rounded-lg border border-border p-4">
+                      <h3 className="mb-3 text-xs font-semibold">{t("agentDashboard.completion")}</h3>
+                      <div className="grid grid-cols-4 gap-2 text-center">
+                        {[
+                          [t("agentDashboard.requested"), data.completion.requested],
+                          [t("agentDashboard.shown"), data.completion.shown],
+                          [t("agentDashboard.accepted"), data.completion.accepted],
+                          [t("agentDashboard.dismissed"), data.completion.dismissed],
+                        ].map(([label, value]) => <div key={String(label)} className="rounded bg-muted/50 p-2"><div className="text-base font-semibold tabular-nums">{value}</div><div className="text-[9px] text-muted-foreground">{label}</div></div>)}
+                      </div>
+                      <div className="mt-3 text-[11px] text-muted-foreground">{t("agentDashboard.acceptanceRate")}: <span className="font-medium text-foreground">{data.completion.acceptanceRate === null ? "—" : `${Math.round(data.completion.acceptanceRate * 100)}%`}</span> · {t("agentDashboard.p95FirstResult")} {formatDuration(data.completion.p95FirstResultMs)}</div>
+                    </section>
+                    <section className="rounded-lg border border-border p-4">
+                      <h3 className="mb-3 text-xs font-semibold">{t("agentDashboard.knowledge")}</h3>
+                      <div className="flex flex-wrap gap-2">
+                        {data.knowledgeOutcomes.length === 0 ? <span className="text-xs text-muted-foreground">{t("agentDashboard.empty")}</span> : data.knowledgeOutcomes.map((item) => <span key={item.key} className="rounded-full border border-border bg-muted/40 px-2 py-1 text-[10px]"><span>{knowledgeOutcomeLabel(item.key, t)}</span> · {item.count}</span>)}
+                      </div>
+                      {data.knowledgeOutcomes.some((item) => item.key === "no_source") ? <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">{t("agentDashboard.noSourceHelp")}</p> : null}
+                      <div className="mt-3 border-t border-border pt-3">
+                        <div className="mb-2 text-[10px] font-medium text-muted-foreground">{t("agentDashboard.generatedTypes")}</div>
+                        {data.knowledgeCategories.length === 0 ? <div className="text-[10px] text-muted-foreground">{t("agentDashboard.noGeneratedSkills")}</div> : (
+                          <div className="space-y-2">
+                            {data.knowledgeCategories.map((item) => (
+                              <div key={item.category} className="grid grid-cols-[110px_1fr_68px] items-center gap-2 text-[10px]">
+                                <span className="truncate font-mono" title={item.category}>{item.category}</span>
+                                <div className="h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(2, item.share * 100)}%` }} /></div>
+                                <span className="text-right tabular-nums text-muted-foreground">{item.count} · {Math.round(item.share * 100)}%</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </section>
+                  </div>
+
+                  <section><h3 className="mb-2 text-xs font-semibold">{t("agentDashboard.surfaces")}</h3><BreakdownTable rows={data.surfaces} /></section>
+                  <section><h3 className="mb-2 text-xs font-semibold">{t("agentDashboard.tools")}</h3>{data.tools.length ? <BreakdownTable rows={data.tools} /> : <div className="rounded-md border border-border py-6 text-center text-xs text-muted-foreground">{t("agentDashboard.empty")}</div>}</section>
+
+                  <section>
+                    <div className="mb-2 flex items-center justify-between"><h3 className="text-xs font-semibold">{t("agentDashboard.recent")}</h3><button type="button" onClick={() => void clearAll()} className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-muted-foreground hover:bg-destructive/10 hover:text-destructive"><Trash2 className="h-3 w-3" />{t("agentDashboard.clear")}</button></div>
+                    <div className="overflow-hidden rounded-md border border-border">
+                      {data.recentRuns.map((run) => (
+                        <button key={run.runId} type="button" onClick={() => void showTrace(run.runId)} className="grid w-full grid-cols-[150px_1fr_110px_90px] items-center gap-3 border-b border-border px-3 py-2 text-left text-[11px] last:border-b-0 hover:bg-accent/50">
+                          <span className="font-mono text-muted-foreground">{new Date(run.startedAt).toLocaleString()}</span>
+                          <span className="min-w-0 truncate"><span className="font-medium text-foreground">{run.surface}</span><span className="ml-2 font-mono text-muted-foreground">{run.operation}</span></span>
+                          <StatusPill run={run} />
+                          <span className="text-right tabular-nums text-muted-foreground">{formatDuration(run.durationMs)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+
+                  <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-[10px] text-amber-800 dark:text-amber-300"><Database className="mt-0.5 h-3.5 w-3.5 flex-none" />{t("agentDashboard.privacy")}</div>
+                </div>
+              ) : null}
+            </div>
+
+            {trace ? (
+              <aside className="w-[390px] flex-none overflow-auto border-l border-border bg-muted/15 p-4">
+                <div className="mb-3 flex items-center justify-between"><h3 className="text-xs font-semibold">{t("agentDashboard.trace")}</h3><button type="button" onClick={() => setTrace(null)} className="rounded p-1 text-muted-foreground hover:bg-accent"><X className="h-3.5 w-3.5" /></button></div>
+                <div className="mb-3 space-y-1 rounded-md border border-border bg-background p-3 text-[10px]"><div className="font-mono break-all">{trace.run.runId}</div><div>{trace.run.surface} · {trace.run.operation} · {formatDuration(trace.run.durationMs)}</div><StatusPill run={trace.run} /></div>
+                {[{ title: t("agentDashboard.request"), value: trace.request }, { title: t("agentDashboard.response"), value: trace.response }].map((item) => <details key={item.title} open className="mb-3 rounded-md border border-border bg-background"><summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold">{item.title}</summary><pre className="max-h-64 overflow-auto border-t border-border p-3 text-[9px] whitespace-pre-wrap break-all">{JSON.stringify(item.value, null, 2)}</pre></details>)}
+                <div className="space-y-2">{trace.events.map((event) => <details key={event.id} className="rounded-md border border-border bg-background"><summary className="cursor-pointer px-3 py-2 text-[10px]"><span className="font-mono">{event.type}</span>{event.name ? ` · ${event.name}` : ""}{event.durationMs !== null ? ` · ${formatDuration(event.durationMs)}` : ""}</summary><pre className="max-h-56 overflow-auto border-t border-border p-3 text-[9px] whitespace-pre-wrap break-all">{JSON.stringify(event.payload, null, 2)}</pre></details>)}</div>
+              </aside>
+            ) : null}
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}

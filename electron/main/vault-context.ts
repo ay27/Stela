@@ -20,6 +20,7 @@ import * as syncOrchestrator from "../services/sync-orchestrator";
 import * as vaultIndex from "../services/vault-index";
 import * as vaultWatcher from "../services/vault-watcher";
 import { cancelSkillMaintenance } from "../services/ai/skill-maintenance-queue";
+import * as agentMetrics from "../services/ai/agent-metrics";
 
 const log = getLogger("vault-context");
 
@@ -49,6 +50,7 @@ export async function setCurrentVault(
     to: vaultPath,
   });
   if (currentVaultPath) cancelSkillMaintenance(currentVaultPath);
+  agentMetrics.close();
   if (vaultPath) {
     await maybeSeedFromLegacy(vaultPath).catch((err: unknown) => {
       // seed 失败不致命：日志记录后继续，让用户至少能用空 vault settings
@@ -67,6 +69,14 @@ export async function setCurrentVault(
     });
     await ensureGitignore(vaultPath).catch((err: unknown) => {
       log.error("ensure gitignore failed", {
+        vaultPath,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+  if (vaultPath) {
+    await agentMetrics.open(vaultPath).catch((err: unknown) => {
+      log.error("open agent metrics failed", {
         vaultPath,
         err: err instanceof Error ? err.message : String(err),
       });
@@ -121,6 +131,7 @@ export async function setCurrentVault(
 /** 主进程最终退出前调用。Connector 由 main 的独立 shutdown 步骤处理。 */
 export function shutdownVaultContext(): void {
   cancelSkillMaintenance();
+  agentMetrics.close();
   vaultWatcher.releaseForAppQuit();
   void vaultIndex.stop().catch(() => {});
   void sqlIndex.stop().catch(() => {});
