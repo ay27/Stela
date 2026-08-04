@@ -514,7 +514,7 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
       filter: z.object({
         range: z.enum(["7d", "30d", "90d"]),
         surface: z.enum([
-          "agent", "tool", "inline_completion", "skill_maintenance", "ai_action", "sql_query_parse",
+          "agent", "tool", "skill_maintenance", "ai_action", "sql_query_parse",
         ]).optional(),
         status: z.enum(["running", "completed", "error", "cancelled", "timeout", "dropped"]).optional(),
         cursor: z.string().max(256).regex(/^\d+:.+$/).optional(),
@@ -523,14 +523,6 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
     })
     .strict(),
   [IPC.AI_METRICS_GET_TRACE]: z.object({ runId: z.string().min(1).max(256) }).strict(),
-  [IPC.AI_METRICS_RECORD_INLINE_DISPOSITION]: z.object({
-    input: z.object({
-      requestId: z.string().min(1).max(256),
-      outcome: z.enum(["shown", "accepted", "dismissed"]),
-      visibleMs: z.number().int().nonnegative().max(86_400_000).optional(),
-      suggestedChars: z.number().int().nonnegative().max(1_000_000).optional(),
-    }).strict(),
-  }).strict(),
   [IPC.AI_METRICS_CLEAR]: z.object({}).strict(),
 
   [IPC.AI_AGENT_RUN]: z

@@ -103,4 +103,5 @@ proposed → active → superseded
 | [0048](0048-vault-markdown-sql-template-library.md) | Vault Markdown SQL template library | active |
 | [0049](0049-independent-bounded-skill-maintenance.md) | Independent bounded Skill maintenance | active |
 | [0050](0050-source-tracked-template-driven-skills.md) | Source-tracked template-driven Skills | active |
-| [0051](0051-local-agent-observability-store.md) | Local Agent observability store | active |
+| [0051](0051-local-agent-observability-store.md) | Local Agent observability store | superseded → [0052](0052-signal-focused-agent-observability.md) |
+| [0052](0052-signal-focused-agent-observability.md) | Signal-focused Agent observability | active |

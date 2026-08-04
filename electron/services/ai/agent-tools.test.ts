@@ -390,6 +390,28 @@ Inspect the live schema first.`;
       maintenanceCtx,
     );
     assert.equal(created.ok, true);
+    const skillUsage: Array<{ type: string; source: string; name: string; category: string | null }> = [];
+    const usageCtx = {
+      ...baseCtx,
+      skills: maintenanceCtx.skills,
+      onSkillUsage: (record: typeof skillUsage[number]) => skillUsage.push(record),
+    };
+    const searched = await dispatchTool(
+      "search_skills",
+      JSON.stringify({ query: "verified gotcha" }),
+      usageCtx,
+    );
+    assert.equal(searched.ok, true);
+    const loaded = await dispatchTool(
+      "load_skill",
+      JSON.stringify({ name: "verified-gotcha" }),
+      usageCtx,
+    );
+    assert.equal(loaded.ok, true);
+    assert.deepEqual(skillUsage.map(({ type, source, name }) => ({ type, source, name })), [
+      { type: "candidate", source: "search", name: "verified-gotcha" },
+      { type: "loaded", source: "load", name: "verified-gotcha" },
+    ]);
     const overwrite = await dispatchTool(
       "save_skill",
       JSON.stringify({ name: "verified-gotcha", content, reason: "Must not overwrite automatically." }),

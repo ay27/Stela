@@ -309,7 +309,6 @@ export type AgentMetricRange = "7d" | "30d" | "90d";
 export type AgentMetricSurface =
   | "agent"
   | "tool"
-  | "inline_completion"
   | "skill_maintenance"
   | "ai_action"
   | "sql_query_parse";
@@ -383,6 +382,23 @@ export interface AgentMetricKnowledgeCategory {
   share: number;
 }
 
+export interface AgentMetricSkillUsageItem {
+  name: string;
+  category: string | null;
+  matchedRuns: number;
+  usedRuns: number;
+  loadCount: number;
+  usageRate: number;
+}
+
+export interface AgentMetricSkillUsage {
+  matchedRuns: number;
+  usedRuns: number;
+  loadCount: number;
+  usageRate: number | null;
+  items: AgentMetricSkillUsageItem[];
+}
+
 export interface AgentMetricDailyPoint {
   day: string;
   total: number;
@@ -401,20 +417,8 @@ export interface AgentMetricsDashboard {
   tools: AgentMetricBreakdown[];
   knowledgeOutcomes: Array<{ key: string; count: number }>;
   knowledgeCategories: AgentMetricKnowledgeCategory[];
-  completion: {
-    requested: number;
-    providerCompleted: number;
-    shown: number;
-    accepted: number;
-    dismissed: number;
-    errors: number;
-    cancelled: number;
-    acceptanceRate: number | null;
-    p50FirstResultMs: number | null;
-    p95FirstResultMs: number | null;
-  };
+  skillUsage: AgentMetricSkillUsage;
   daily: AgentMetricDailyPoint[];
-  recentRuns: AgentMetricRunSummary[];
 }
 
 export interface AgentMetricRunPage {
@@ -435,13 +439,6 @@ export interface AgentMetricRunFilter {
   status?: AgentMetricStatus;
   cursor?: string;
   limit?: number;
-}
-
-export interface AgentInlineDisposition {
-  requestId: string;
-  outcome: "shown" | "accepted" | "dismissed";
-  visibleMs?: number;
-  suggestedChars?: number;
 }
 
 /**

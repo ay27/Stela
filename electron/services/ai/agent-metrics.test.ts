@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import Database from "better-sqlite3";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,9 +13,9 @@ import {
   getTrace,
   listRuns,
   open,
-  recordInlineDisposition,
   startRun,
 } from "./agent-metrics";
+import type { AgentMetricSurface } from "@shared/types";
 
 const root = await mkdtemp(join(tmpdir(), "stela-agent-metrics-"));
 try {
@@ -46,16 +47,26 @@ try {
     response: { text: "done" },
   });
 
-  startRun({
-    runId: "inline-1",
-    surface: "inline_completion",
-    operation: "sql_inline",
-    request: { prefix: "select " },
+  addEvent("agent-1", {
+    type: "skill_candidate",
+    name: "orders-metric",
+    payload: { category: "metric-definition", source: "prompt" },
   });
-  finishRun("inline-1", { status: "completed", firstResultMs: 40 });
-  recordInlineDisposition({ requestId: "inline-1", outcome: "shown", suggestedChars: 8 });
-  recordInlineDisposition({ requestId: "inline-1", outcome: "shown", suggestedChars: 8 });
-  recordInlineDisposition({ requestId: "inline-1", outcome: "accepted", visibleMs: 20 });
+  addEvent("agent-1", {
+    type: "skill_candidate",
+    name: "orders-metric",
+    payload: { category: "metric-definition", source: "search" },
+  });
+  addEvent("agent-1", {
+    type: "skill_loaded",
+    name: "orders-metric",
+    payload: { category: "metric-definition", source: "load" },
+  });
+  addEvent("agent-1", {
+    type: "skill_loaded",
+    name: "orders-metric",
+    payload: { category: "metric-definition", source: "load" },
+  });
 
   startRun({
     runId: "maintenance-1",
@@ -71,13 +82,24 @@ try {
   finishRun("maintenance-1", { status: "completed", outcome: "saved" });
 
   const dashboard = getDashboard("7d");
-  assert.equal(dashboard.overview.total, 2);
+  assert.equal(dashboard.overview.total, 1);
   assert.equal(dashboard.usage.cacheReadTokens, 7);
   assert.equal(dashboard.tools[0]?.key, "run_sql");
   assert.equal(dashboard.tools[0]?.completed, 1);
-  assert.equal(dashboard.completion.shown, 1);
-  assert.equal(dashboard.completion.accepted, 1);
-  assert.equal(dashboard.completion.acceptanceRate, 1);
+  assert.deepEqual(dashboard.skillUsage, {
+    matchedRuns: 1,
+    usedRuns: 1,
+    loadCount: 2,
+    usageRate: 1,
+    items: [{
+      name: "orders-metric",
+      category: "metric-definition",
+      matchedRuns: 1,
+      usedRuns: 1,
+      loadCount: 2,
+      usageRate: 1,
+    }],
+  });
   assert.deepEqual(dashboard.knowledgeCategories, [
     { category: "metric-definition", count: 1, share: 1 },
   ]);
@@ -107,7 +129,7 @@ try {
   assert.equal(page.runs.length, 3);
   assert.ok(page.nextCursor);
   const next = listRuns({ range: "7d", limit: 3, cursor: page.nextCursor! });
-  assert.equal(next.runs.length, 3);
+  assert.equal(next.runs.length, 2);
   assert.equal(next.nextCursor, null);
 
   startRun({
@@ -118,9 +140,19 @@ try {
   });
   finishRun("too-old", { status: "completed" });
   startRun({ runId: "interrupted", surface: "agent", operation: "chat" });
+  startRun({
+    runId: "legacy-inline",
+    surface: "inline_completion" as AgentMetricSurface,
+    operation: "sql_inline",
+  });
+  finishRun("legacy-inline", { status: "completed" });
   __resetForTests();
+  const legacyDb = new Database(join(root, ".stela", "agent-metrics.local.sqlite"));
+  legacyDb.pragma("user_version = 1");
+  legacyDb.close();
   await open(root);
   assert.throws(() => getTrace("too-old"), /not found/i);
+  assert.throws(() => getTrace("legacy-inline"), /not found/i);
   assert.equal(getTrace("interrupted").run.outcome, "interrupted");
   assert.equal(getTrace("interrupted").run.status, "cancelled");
 

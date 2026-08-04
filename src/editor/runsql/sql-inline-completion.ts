@@ -24,7 +24,6 @@ import {
   cancelInlineCompletion,
   onInlineCompletionEvent,
   startInlineCompletion,
-  recordInlineDisposition,
 } from "@/services/ai";
 import { useSettings } from "@/state/settings";
 
@@ -53,8 +52,6 @@ interface CompletionContext {
 interface GhostState {
   pos: number;
   text: string;
-  requestId: string;
-  shownAt: number;
 }
 
 type EventHandler = (event: AiInlineCompletionEvent) => void;
@@ -256,12 +253,6 @@ function normalizeSuggestion(
 function acceptCompletion(view: EditorView): boolean {
   const ghost = currentGhost(view);
   if (!ghost) return false;
-  void recordInlineDisposition({
-    requestId: ghost.requestId,
-    outcome: "accepted",
-    visibleMs: Math.max(0, Date.now() - ghost.shownAt),
-    suggestedChars: ghost.text.length,
-  }).catch(() => {});
   view.dispatch({
     changes: { from: ghost.pos, insert: ghost.text },
     selection: EditorSelection.cursor(ghost.pos + ghost.text.length),
@@ -442,15 +433,6 @@ export function sqlInlineCompletionExtension({
           clearTimeout(this.timeout);
           this.timeout = null;
         }
-        const ghost = currentGhost(this.view);
-        if (ghost) {
-          void recordInlineDisposition({
-            requestId: ghost.requestId,
-            outcome: "dismissed",
-            visibleMs: Math.max(0, Date.now() - ghost.shownAt),
-            suggestedChars: ghost.text.length,
-          }).catch(() => {});
-        }
         setGhost(this.view, null);
         if (this.requestId) {
           const requestId = this.requestId;
@@ -532,15 +514,6 @@ export function sqlInlineCompletionExtension({
           this.requestId = null;
           this.context = null;
           this.rawText = "";
-          const ghost = currentGhost(this.view);
-          if (ghost) {
-            void recordInlineDisposition({
-              requestId: ghost.requestId,
-              outcome: "dismissed",
-              visibleMs: Math.max(0, Date.now() - ghost.shownAt),
-              suggestedChars: ghost.text.length,
-            }).catch(() => {});
-          }
           setGhost(this.view, null);
         }
       }
@@ -572,31 +545,11 @@ export function sqlInlineCompletionExtension({
             final,
             rawTextLength: this.rawText.length,
           });
-          const ghost = currentGhost(this.view);
-          if (ghost) {
-            void recordInlineDisposition({
-              requestId: ghost.requestId,
-              outcome: "dismissed",
-              visibleMs: Math.max(0, Date.now() - ghost.shownAt),
-              suggestedChars: ghost.text.length,
-            }).catch(() => {});
-          }
           setGhost(this.view, null);
           return;
         }
-        const requestId = this.requestId;
-        if (!requestId) return;
-        const existing = currentGhost(this.view);
-        const shownAt = existing?.requestId === requestId ? existing.shownAt : Date.now();
-        setGhost(this.view, { pos: context.pos, text, requestId, shownAt });
-        if (!existing || existing.requestId !== requestId) {
-          void recordInlineDisposition({
-            requestId,
-            outcome: "shown",
-            visibleMs: Math.max(0, Math.round(performance.now() - this.scheduledAt)),
-            suggestedChars: text.length,
-          }).catch(() => {});
-        }
+        if (!this.requestId) return;
+        setGhost(this.view, { pos: context.pos, text });
         if (import.meta.env.DEV && !this.performanceLogged) {
           this.performanceLogged = true;
           console.debug(

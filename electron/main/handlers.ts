@@ -25,7 +25,6 @@ import type {
   AgentProposalResponse,
   AgentRunRequest,
   AgentRunResponse,
-  AgentInlineDisposition,
   AgentMetricRange,
   AgentMetricRunFilter,
   AgentMetricRunPage,
@@ -311,10 +310,6 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
   registerHandler<{ runId: string }, AgentMetricTrace>(
     IPC.AI_METRICS_GET_TRACE,
     ({ runId }) => agentMetrics.getTrace(runId),
-  );
-  registerHandler<{ input: AgentInlineDisposition }, void>(
-    IPC.AI_METRICS_RECORD_INLINE_DISPOSITION,
-    ({ input }) => agentMetrics.recordInlineDisposition(input),
   );
   registerHandler<Record<string, never>, void>(IPC.AI_METRICS_CLEAR, () => agentMetrics.clear());
 

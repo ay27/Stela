@@ -15,7 +15,6 @@ import type {
   AgentProposalResponse,
   AgentRunRequest,
   AgentRunResponse,
-  AgentInlineDisposition,
   AgentMetricRange,
   AgentMetricRunFilter,
   AgentMetricRunPage,
@@ -247,7 +246,6 @@ interface StelaBridge {
     getDashboard: (range: AgentMetricRange) => Promise<AgentMetricsDashboard>;
     listRuns: (filter: AgentMetricRunFilter) => Promise<AgentMetricRunPage>;
     getTrace: (runId: string) => Promise<AgentMetricTrace>;
-    recordInlineDisposition: (input: AgentInlineDisposition) => Promise<void>;
     clear: () => Promise<void>;
   };
   git: {

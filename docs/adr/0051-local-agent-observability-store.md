@@ -2,7 +2,8 @@
 type: ADR
 id: "0051"
 title: "Local Agent observability store"
-status: active
+status: superseded
+superseded_by: "0052"
 date: 2026-08-03
 ---
 

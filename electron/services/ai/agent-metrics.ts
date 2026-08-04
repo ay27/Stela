@@ -4,7 +4,6 @@ import path from "node:path";
 
 import { AppError } from "@shared/errors";
 import type {
-  AgentInlineDisposition,
   AgentMetricBreakdown,
   AgentMetricEventRecord,
   AgentMetricRange,
@@ -65,9 +64,6 @@ CREATE TABLE IF NOT EXISTS metric_events (
   FOREIGN KEY(run_id) REFERENCES metric_runs(run_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_metric_events_run ON metric_events(run_id, id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_metric_inline_disposition
-  ON metric_events(run_id, event_type)
-  WHERE event_type IN ('inline_shown', 'inline_accepted', 'inline_dismissed');
 `;
 
 let current: { vaultPath: string; db: Database.Database; lastCleanupAt: number } | null = null;
@@ -159,7 +155,14 @@ export async function open(vaultPath: string): Promise<void> {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA_SQL);
-  db.pragma("user_version = 1");
+  const schemaVersion = db.pragma("user_version", { simple: true }) as number;
+  if (schemaVersion < 2) {
+    db.exec(`
+      DELETE FROM metric_runs WHERE surface = 'inline_completion';
+      DROP INDEX IF EXISTS idx_metric_inline_disposition;
+    `);
+    db.pragma("user_version = 2");
+  }
   const openedAt = Date.now();
   db.prepare(`
     UPDATE metric_runs SET
@@ -269,26 +272,6 @@ export function addEvent(runId: string, event: AddAgentMetricEvent): void {
   );
 }
 
-export function recordInlineDisposition(input: AgentInlineDisposition): void {
-  const type = `inline_${input.outcome}`;
-  const db = ensureOpen();
-  const insert = db.prepare(`
-    INSERT OR IGNORE INTO metric_events (run_id, event_type, occurred_at, duration_ms, payload_json)
-    SELECT run_id, ?, ?, ?, ? FROM metric_runs
-    WHERE run_id = ? AND surface = 'inline_completion'
-  `).run(
-    type,
-    Date.now(),
-    input.visibleMs ?? null,
-    storedPayload({ suggestedChars: input.suggestedChars ?? null }).json,
-    input.requestId,
-  );
-  if (insert.changes === 0) return;
-  if (input.outcome !== "shown") {
-    db.prepare("UPDATE metric_runs SET outcome = ? WHERE run_id = ?").run(input.outcome, input.requestId);
-  }
-}
-
 interface RunRow {
   run_id: string;
   parent_run_id: string | null;
@@ -390,21 +373,6 @@ export function getDashboard(range: AgentMetricRange): AgentMetricsDashboard {
     .all(rangeStart(range)) as RunRow[];
   const rootRuns = rows.filter((row) => row.parent_run_id === null);
   const nonToolRuns = rows.filter((row) => row.surface !== "tool");
-  const inline = rows.filter((row) => row.surface === "inline_completion");
-  let dispositions: Array<{ event_type: string; count: number }> = [];
-  if (inline.length > 0) {
-    dispositions = db.prepare(`
-      SELECT e.event_type, COUNT(*) AS count
-      FROM metric_events e
-      JOIN metric_runs r ON r.run_id = e.run_id
-      WHERE r.started_at >= ? AND r.surface = 'inline_completion'
-        AND event_type IN ('inline_shown', 'inline_accepted', 'inline_dismissed')
-      GROUP BY e.event_type
-    `).all(rangeStart(range)) as Array<{ event_type: string; count: number }>;
-  }
-  const dispositionCount = (type: string) => dispositions.find((item) => item.event_type === type)?.count ?? 0;
-  const shown = dispositionCount("inline_shown");
-  const accepted = dispositionCount("inline_accepted");
   const knowledge = rows.filter((row) => row.surface === "skill_maintenance");
   const outcomeMap = new Map<string, number>();
   for (const row of knowledge) {
@@ -428,12 +396,62 @@ export function getDashboard(range: AgentMetricRange): AgentMetricsDashboard {
     categoryMap.set(category, (categoryMap.get(category) ?? 0) + 1);
   }
   const savedSkillCount = [...categoryMap.values()].reduce((sum, count) => sum + count, 0);
+  const skillRows = db.prepare(`
+    SELECT e.run_id, e.event_type, e.name, e.payload_json
+    FROM metric_events e
+    JOIN metric_runs r ON r.run_id = e.run_id
+    WHERE r.started_at >= ? AND r.surface = 'agent'
+      AND e.event_type IN ('skill_candidate', 'skill_loaded')
+  `).all(rangeStart(range)) as Array<{
+    run_id: string;
+    event_type: "skill_candidate" | "skill_loaded";
+    name: string | null;
+    payload_json: string | null;
+  }>;
+  const skillMap = new Map<string, {
+    category: string | null;
+    matchedRunIds: Set<string>;
+    usedRunIds: Set<string>;
+    loadCount: number;
+  }>();
+  for (const row of skillRows) {
+    if (!row.name) continue;
+    const payload = parsePayload(row.payload_json);
+    const category = payload && typeof payload === "object" && "category" in payload && typeof payload.category === "string"
+      ? payload.category
+      : null;
+    const item = skillMap.get(row.name) ?? {
+      category,
+      matchedRunIds: new Set<string>(),
+      usedRunIds: new Set<string>(),
+      loadCount: 0,
+    };
+    if (!item.category && category) item.category = category;
+    item.matchedRunIds.add(row.run_id);
+    if (row.event_type === "skill_loaded") {
+      item.usedRunIds.add(row.run_id);
+      item.loadCount += 1;
+    }
+    skillMap.set(row.name, item);
+  }
+  const skillItems = [...skillMap.entries()]
+    .map(([name, item]) => ({
+      name,
+      category: item.category,
+      matchedRuns: item.matchedRunIds.size,
+      usedRuns: item.usedRunIds.size,
+      loadCount: item.loadCount,
+      usageRate: item.matchedRunIds.size > 0 ? item.usedRunIds.size / item.matchedRunIds.size : 0,
+    }))
+    .sort((a, b) => b.usedRuns - a.usedRuns || b.matchedRuns - a.matchedRuns || a.name.localeCompare(b.name));
+  const matchedSkillRuns = skillItems.reduce((sum, item) => sum + item.matchedRuns, 0);
+  const usedSkillRuns = skillItems.reduce((sum, item) => sum + item.usedRuns, 0);
+  const skillLoadCount = skillItems.reduce((sum, item) => sum + item.loadCount, 0);
   const dailyGroups = new Map<string, RunRow[]>();
   for (const row of rootRuns) {
     const day = localDay(row.started_at);
     dailyGroups.set(day, [...(dailyGroups.get(day) ?? []), row]);
   }
-  const firstResults = inline.flatMap((row) => row.first_result_ms === null ? [] : [row.first_result_ms]);
   return {
     range,
     generatedAt: Date.now(),
@@ -456,17 +474,12 @@ export function getDashboard(range: AgentMetricRange): AgentMetricsDashboard {
         share: savedSkillCount > 0 ? count / savedSkillCount : 0,
       }))
       .sort((a, b) => b.count - a.count || a.category.localeCompare(b.category)),
-    completion: {
-      requested: inline.length,
-      providerCompleted: inline.filter((row) => row.status === "completed").length,
-      shown,
-      accepted,
-      dismissed: dispositionCount("inline_dismissed"),
-      errors: inline.filter((row) => row.status === "error").length,
-      cancelled: inline.filter((row) => row.status === "cancelled").length,
-      acceptanceRate: shown > 0 ? accepted / shown : null,
-      p50FirstResultMs: percentile(firstResults, 0.5),
-      p95FirstResultMs: percentile(firstResults, 0.95),
+    skillUsage: {
+      matchedRuns: matchedSkillRuns,
+      usedRuns: usedSkillRuns,
+      loadCount: skillLoadCount,
+      usageRate: matchedSkillRuns > 0 ? usedSkillRuns / matchedSkillRuns : null,
+      items: skillItems,
     },
     daily: [...dailyGroups.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
@@ -481,14 +494,13 @@ export function getDashboard(range: AgentMetricRange): AgentMetricsDashboard {
           durationMs: dayRows.reduce((sum, row) => sum + (row.duration_ms ?? 0), 0),
         };
       }),
-    recentRuns: rows.slice(0, 30).map(runSummary),
   };
 }
 
 export function listRuns(filter: AgentMetricRunFilter): AgentMetricRunPage {
   const limit = Math.max(1, Math.min(filter.limit ?? 50, 100));
   const params: Array<string | number> = [rangeStart(filter.range)];
-  const clauses = ["started_at >= ?"];
+  const clauses = ["started_at >= ?", "surface <> 'inline_completion'"];
   if (filter.surface) {
     clauses.push("surface = ?");
     params.push(filter.surface);

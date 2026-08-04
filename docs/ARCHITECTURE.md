@@ -19,7 +19,7 @@ SQL result sets, Agent sessions, and local Agent traces are too large to live in
 | Result cache | `{vault}/.stela.sqlite` | Disposable | Query cache (`runs` / `result_schemas` / `result_rows`); rebuildable from JSONL |
 | Vault config | `{vault}/.stela/*.json` | Authoritative | Settings, connections, plugin manifests |
 | Agent session history | `{vault}/.stela/agent-history/<deviceSlug>/*.jsonl` | **Authoritative** | pi AgentHarness context and Agent Panel timeline; newest 20 per device |
-| Local Agent observability | `{vault}/.stela/agent-metrics.local.sqlite` | **Authoritative (local, 90 days)** | AI/Agent runs, tool events, completion disposition, maintenance outcomes, redacted traces |
+| Local Agent observability | `{vault}/.stela/agent-metrics.local.sqlite` | **Authoritative (local, 90 days)** | AI/Agent runs, tool events, Skill usage, maintenance outcomes, redacted traces |
 | Session state | Zustand + localStorage + `{userData}/` | Disposable | Panel widths, open tabs, recent vaults |
 
 Markdown + JSONL win for synced product data. `.stela.sqlite` remains disposable; the separately named `agent-metrics.local.sqlite` is a bounded machine-local observability authority and is never used for note or execution recovery.
@@ -368,26 +368,30 @@ refreshed. Live connector schema overrides any conflicting Skill. See
 
 The Dock-level **Agent Dashboard** queries a separate local observability store
 through typed `window.stela.agentMetrics.*` methods. One-shot AI actions, SQL
-query parsing, inline completion, Harness Agent turns, tool calls, and Skill
-maintenance use correlated run/event records. The Dashboard reports
-surface-specific completion/error/cancellation funnels, p50/p95 latency, token
-usage, completion shown/accepted disposition, tool rankings, maintenance
-outcomes, daily activity, and a redacted local trace drill-down. It does not
-compute a single cross-surface success score. Overview run reliability and the
-daily chart include only root user-facing runs; child tool and maintenance runs
-remain in their dedicated breakdowns and traces. Token usage includes input,
-output, cache-read, and cache-write usage from all model-backed runs. Knowledge
-maintenance records saved Skill categories and reports their count/share. A
-`no_source` outcome stores an explicit skip reason and lookup context because it
-means the maintenance model was not called, not that a maintenance write
-succeeded.
+query parsing, Harness Agent turns, tool calls, and Skill maintenance use
+correlated run/event records. Inline completion deliberately emits no metrics
+or traces because its high-frequency requests obscure Agent diagnostics. The
+Dashboard reports surface-specific completion/error/cancellation funnels,
+p50/p95 latency, token usage, tool rankings, maintenance outcomes, daily
+activity, local Skill candidate-to-load usage, and a redacted trace drill-down.
+It does not compute a single cross-surface success score. Overview run
+reliability and the daily chart include only root user-facing runs; child tool
+and maintenance runs remain in their dedicated breakdowns and traces. Token
+usage includes input, output, cache-read, and cache-write usage from all
+model-backed runs. Skill candidates come from prompt ranking or `search_skills`;
+successful `load_skill` calls count as usage, with repeated candidates deduped
+per Agent run. Knowledge maintenance records saved Skill categories and reports
+their count/share. A `no_source` outcome stores an explicit skip reason and
+lookup context because it means the maintenance model was not called, not that
+a maintenance write succeeded. Recent traces use cursor pagination with ten
+rows per UI page.
 
 `{vault}/.stela/agent-metrics.local.sqlite` is gitignored, retains 90 days, and
 caps each trace JSON payload at 256 KiB. Full SQL result rows and API keys are
 never recorded. Settings → AI exposes `automaticSkillMaintenanceEnabled`
 (default true); disabling it cancels queued/running maintenance, prevents
 post-run creation and stale-Skill refresh, and leaves explicit `save_skill`
-requests intact. See [ADR-0051](./adr/0051-local-agent-observability-store.md).
+requests intact. See [ADR-0052](./adr/0052-signal-focused-agent-observability.md).
 
 ### Agent retrieval
 

@@ -654,6 +654,13 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       formatSkillsForSystemPrompt(promptSkills.map((item) => item.skill));
     if (agentMetrics.isOpen()) {
       agentMetrics.addEvent(metricRunId, { type: "system_prompt", payload: systemPrompt });
+      for (const skill of promptSkills) {
+        agentMetrics.addEvent(metricRunId, {
+          type: "skill_candidate",
+          name: skill.metadata.name,
+          payload: { category: skill.metadata.category, source: "prompt" },
+        });
+      }
     }
     plan = new ExecutionPlanStore(runId, (snapshot) => {
       emit({ type: "plan_updated", runId, plan: snapshot });
@@ -744,6 +751,14 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           plan,
           recordRun: recordAgentRun(vaultPath),
           onSkillMaintenance: (record) => normalSkillActions.push(record),
+          onSkillUsage: (record) => {
+            if (!agentMetrics.isOpen()) return;
+            agentMetrics.addEvent(metricRunId, {
+              type: record.type === "loaded" ? "skill_loaded" : "skill_candidate",
+              name: record.name,
+              payload: { category: record.category, source: record.source },
+            });
+          },
         },
         requestProposal: (toolCallId, proposal) =>
           makeRequestProposal(runId, toolCallId, emit, pending, signal)(proposal),

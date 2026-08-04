@@ -159,6 +159,12 @@ export interface AgentToolContext {
   mode: "normal" | "maintenance" | "refresh";
   ensureSkillFresh?: (skill: LoadedAgentSkill) => Promise<LoadedAgentSkill | null>;
   onSkillMaintenance?: (record: AgentSkillMaintenanceRecord) => void;
+  onSkillUsage?: (record: {
+    type: "candidate" | "loaded";
+    source: "prompt" | "search" | "load";
+    name: string;
+    category: string | null;
+  }) => void;
   /**
    * 单次 run 的可变状态：`runId` / `notePath` 用于给执行历史生成
    * `agent:<runId>` 形式的 blockId；`questionsAsked` 由 `ask_user` 自增。
@@ -873,6 +879,12 @@ async function runLoadSkill(args: { name?: unknown }, ctx: AgentToolContext): Pr
       return fail(`stale_skill_unavailable: '${name}' could not be refreshed from current Vault documents. Use live schema and note retrieval instead.`);
     }
   }
+  ctx.onSkillUsage?.({
+    type: "loaded",
+    source: "load",
+    name: skill.metadata.name,
+    category: skill.metadata.category,
+  });
   const content = skill.skill.content;
   const truncated = content.length > MAX_AGENT_SKILL_CHARS;
   return ok({
@@ -892,6 +904,14 @@ function runSearchSkills(args: { query?: unknown; limit?: unknown }, ctx: AgentT
     category: metadata.category,
     tags: metadata.tags,
   }));
+  for (const skill of skills) {
+    ctx.onSkillUsage?.({
+      type: "candidate",
+      source: "search",
+      name: skill.name,
+      category: skill.category,
+    });
+  }
   return ok({ skills, totalSkills: ctx.skills.length, truncated: skills.length < ctx.skills.length });
 }
 

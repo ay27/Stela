@@ -619,25 +619,30 @@ only the automatic-maintenance policy toggle.
 ### Agent observability
 
 Agent observability is local and Vault-scoped but not Git-synced. A metric run
-has a `surface` (`agent`, `tool`, `inline_completion`, `skill_maintenance`,
-`ai_action`, or `sql_query_parse`), operation, terminal status, optional
+has a `surface` (`agent`, `tool`, `skill_maintenance`, `ai_action`, or
+`sql_query_parse`), operation, terminal status, optional
 surface-specific outcome, duration, first-result latency, provider/model,
 token usage, error metadata, and optional parent run. Ordered metric events
 carry the redacted trace. Tool and maintenance runs use their Agent run as
 `parentRunId`.
 
 The renderer can only call `agentMetrics.getDashboard`, `listRuns`, `getTrace`,
-`recordInlineDisposition`, and `clear`. Date ranges are exactly `7d`, `30d`, or
-`90d`; trace pagination is bounded to 100 records. Completion acceptance is
-`accepted / shown`; cancellations are reported separately from provider errors.
-Knowledge maintenance reports saved, no-change, no-source, input-too-large,
-dropped, timeout, error, and disabled outcomes rather than a generic success
-rate. Root user-facing runs alone feed the overview reliability and daily
-activity totals; child maintenance and tool runs stay in their own breakdowns.
-Saved maintenance actions carry their validated Skill category so the dashboard
-can report generated-category counts and shares. A no-source run contains a
-structured response explaining why no verified Vault Markdown source matched;
-it exits before invoking the maintenance model ([ADR-0051](./adr/0051-local-agent-observability-store.md)).
+and `clear`. Date ranges are exactly `7d`, `30d`, or `90d`; trace queries are
+cursor-paginated, bounded to 100 records by IPC, and displayed ten at a time.
+Inline completion does not enter this store; schema version 2 removes legacy
+inline runs and their events. Cancellations are reported separately from
+provider errors. Knowledge maintenance reports saved, no-change, no-source,
+input-too-large, dropped, timeout, error, and disabled outcomes rather than a
+generic success rate. Root user-facing runs alone feed the overview reliability
+and daily activity totals; child maintenance and tool runs stay in their own
+breakdowns. Prompt-ranked and `search_skills` results create per-run Skill
+candidate events; a successful `load_skill` creates a usage event. Candidate and
+used counts are deduplicated by Agent run and Skill, while load count preserves
+repeated calls. Saved maintenance actions carry their validated Skill category
+so the dashboard can report generated-category counts and shares. A no-source
+run contains a structured response explaining why no verified Vault Markdown
+source matched; it exits before invoking the maintenance model
+([ADR-0052](./adr/0052-signal-focused-agent-observability.md)).
 
 Retrieval results ([ADR-0026](./adr/0026-ranked-lexical-retrieval-for-agent.md)):
 

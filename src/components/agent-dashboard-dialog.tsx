@@ -1,11 +1,12 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { Activity, AlertTriangle, Clock3, Database, RefreshCw, Trash2, X } from "lucide-react";
+import { Activity, AlertTriangle, ChevronLeft, ChevronRight, Clock3, Database, RefreshCw, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import type {
   AgentMetricBreakdown,
   AgentMetricRange,
   AgentMetricRunSummary,
+  AgentMetricRunPage,
   AgentMetricTrace,
   AgentMetricsDashboard,
 } from "@shared/types";
@@ -17,6 +18,8 @@ interface AgentDashboardDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
+
+const TRACE_PAGE_SIZE = 10;
 
 function formatDuration(value: number | null): string {
   if (value === null) return "—";
@@ -108,6 +111,9 @@ export function AgentDashboardDialog({ open, onOpenChange }: AgentDashboardDialo
   const t = useT();
   const [range, setRange] = useState<AgentMetricRange>("7d");
   const [data, setData] = useState<AgentMetricsDashboard | null>(null);
+  const [runPage, setRunPage] = useState<AgentMetricRunPage | null>(null);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [pageCursors, setPageCursors] = useState<Array<string | null>>([null]);
   const [trace, setTrace] = useState<AgentMetricTrace | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,7 +122,14 @@ export function AgentDashboardDialog({ open, onOpenChange }: AgentDashboardDialo
     setLoading(true);
     setError(null);
     try {
-      setData(await window.stela.agentMetrics.getDashboard(range));
+      const [dashboard, firstPage] = await Promise.all([
+        window.stela.agentMetrics.getDashboard(range),
+        window.stela.agentMetrics.listRuns({ range, limit: TRACE_PAGE_SIZE }),
+      ]);
+      setData(dashboard);
+      setRunPage(firstPage);
+      setPageIndex(0);
+      setPageCursors([null]);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -143,6 +156,34 @@ export function AgentDashboardDialog({ open, onOpenChange }: AgentDashboardDialo
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
+  };
+
+  const loadRunPage = async (cursor: string | null, index: number) => {
+    setError(null);
+    try {
+      setRunPage(await window.stela.agentMetrics.listRuns({
+        range,
+        limit: TRACE_PAGE_SIZE,
+        ...(cursor ? { cursor } : {}),
+      }));
+      setPageIndex(index);
+      setTrace(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const nextRunPage = () => {
+    const cursor = runPage?.nextCursor;
+    if (!cursor) return;
+    const nextIndex = pageIndex + 1;
+    setPageCursors((current) => [...current.slice(0, nextIndex), cursor]);
+    void loadRunPage(cursor, nextIndex);
+  };
+
+  const previousRunPage = () => {
+    if (pageIndex === 0) return;
+    void loadRunPage(pageCursors[pageIndex - 1] ?? null, pageIndex - 1);
   };
 
   const clearAll = async () => {
@@ -206,16 +247,24 @@ export function AgentDashboardDialog({ open, onOpenChange }: AgentDashboardDialo
 
                   <div className="grid grid-cols-2 gap-4">
                     <section className="rounded-lg border border-border p-4">
-                      <h3 className="mb-3 text-xs font-semibold">{t("agentDashboard.completion")}</h3>
+                      <h3 className="mb-1 text-xs font-semibold">{t("agentDashboard.skillUsage")}</h3>
+                      <p className="mb-3 text-[10px] text-muted-foreground">{t("agentDashboard.skillUsageHelp")}</p>
                       <div className="grid grid-cols-4 gap-2 text-center">
                         {[
-                          [t("agentDashboard.requested"), data.completion.requested],
-                          [t("agentDashboard.shown"), data.completion.shown],
-                          [t("agentDashboard.accepted"), data.completion.accepted],
-                          [t("agentDashboard.dismissed"), data.completion.dismissed],
+                          [t("agentDashboard.skillMatched"), data.skillUsage.matchedRuns],
+                          [t("agentDashboard.skillUsed"), data.skillUsage.usedRuns],
+                          [t("agentDashboard.skillLoads"), data.skillUsage.loadCount],
+                          [t("agentDashboard.skillHitRate"), data.skillUsage.usageRate === null ? "—" : `${Math.round(data.skillUsage.usageRate * 100)}%`],
                         ].map(([label, value]) => <div key={String(label)} className="rounded bg-muted/50 p-2"><div className="text-base font-semibold tabular-nums">{value}</div><div className="text-[9px] text-muted-foreground">{label}</div></div>)}
                       </div>
-                      <div className="mt-3 text-[11px] text-muted-foreground">{t("agentDashboard.acceptanceRate")}: <span className="font-medium text-foreground">{data.completion.acceptanceRate === null ? "—" : `${Math.round(data.completion.acceptanceRate * 100)}%`}</span> · {t("agentDashboard.p95FirstResult")} {formatDuration(data.completion.p95FirstResultMs)}</div>
+                      {data.skillUsage.items.length > 0 ? (
+                        <div className="mt-3 max-h-56 overflow-auto rounded border border-border">
+                          <table className="w-full text-[10px]">
+                            <thead className="bg-muted/50 text-muted-foreground"><tr><th className="px-2 py-1.5 text-left font-medium">Skill</th><th className="px-2 py-1.5 text-left font-medium">{t("skills.library.category")}</th><th className="px-2 py-1.5 text-right font-medium">{t("agentDashboard.skillMatched")}</th><th className="px-2 py-1.5 text-right font-medium">{t("agentDashboard.skillUsed")}</th><th className="px-2 py-1.5 text-right font-medium">{t("agentDashboard.skillLoads")}</th><th className="px-2 py-1.5 text-right font-medium">{t("agentDashboard.skillHitRate")}</th></tr></thead>
+                            <tbody>{data.skillUsage.items.map((item) => <tr key={item.name} className="border-t border-border"><td className="max-w-[120px] truncate px-2 py-1.5 font-mono" title={item.name}>{item.name}</td><td className="max-w-[90px] truncate px-2 py-1.5 text-muted-foreground" title={item.category ?? "—"}>{item.category ?? "—"}</td><td className="px-2 py-1.5 text-right tabular-nums">{item.matchedRuns}</td><td className="px-2 py-1.5 text-right tabular-nums">{item.usedRuns}</td><td className="px-2 py-1.5 text-right tabular-nums">{item.loadCount}</td><td className="px-2 py-1.5 text-right tabular-nums">{Math.round(item.usageRate * 100)}%</td></tr>)}</tbody>
+                          </table>
+                        </div>
+                      ) : <div className="mt-3 text-[10px] text-muted-foreground">{t("agentDashboard.noSkillUsage")}</div>}
                     </section>
                     <section className="rounded-lg border border-border p-4">
                       <h3 className="mb-3 text-xs font-semibold">{t("agentDashboard.knowledge")}</h3>
@@ -246,7 +295,7 @@ export function AgentDashboardDialog({ open, onOpenChange }: AgentDashboardDialo
                   <section>
                     <div className="mb-2 flex items-center justify-between"><h3 className="text-xs font-semibold">{t("agentDashboard.recent")}</h3><button type="button" onClick={() => void clearAll()} className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-muted-foreground hover:bg-destructive/10 hover:text-destructive"><Trash2 className="h-3 w-3" />{t("agentDashboard.clear")}</button></div>
                     <div className="overflow-hidden rounded-md border border-border">
-                      {data.recentRuns.map((run) => (
+                      {(runPage?.runs ?? []).map((run) => (
                         <button key={run.runId} type="button" onClick={() => void showTrace(run.runId)} className="grid w-full grid-cols-[150px_1fr_110px_90px] items-center gap-3 border-b border-border px-3 py-2 text-left text-[11px] last:border-b-0 hover:bg-accent/50">
                           <span className="font-mono text-muted-foreground">{new Date(run.startedAt).toLocaleString()}</span>
                           <span className="min-w-0 truncate"><span className="font-medium text-foreground">{run.surface}</span><span className="ml-2 font-mono text-muted-foreground">{run.operation}</span></span>
@@ -254,6 +303,12 @@ export function AgentDashboardDialog({ open, onOpenChange }: AgentDashboardDialo
                           <span className="text-right tabular-nums text-muted-foreground">{formatDuration(run.durationMs)}</span>
                         </button>
                       ))}
+                      {runPage?.runs.length === 0 ? <div className="py-6 text-center text-xs text-muted-foreground">{t("agentDashboard.empty")}</div> : null}
+                    </div>
+                    <div className="mt-2 flex items-center justify-end gap-2 text-[10px] text-muted-foreground">
+                      <button type="button" onClick={previousRunPage} disabled={pageIndex === 0} className="rounded border border-border p-1 disabled:opacity-40" aria-label={t("agentDashboard.previousPage")}><ChevronLeft className="h-3.5 w-3.5" /></button>
+                      <span>{t("agentDashboard.page")} {pageIndex + 1}</span>
+                      <button type="button" onClick={nextRunPage} disabled={!runPage?.nextCursor} className="rounded border border-border p-1 disabled:opacity-40" aria-label={t("agentDashboard.nextPage")}><ChevronRight className="h-3.5 w-3.5" /></button>
                     </div>
                   </section>
 
