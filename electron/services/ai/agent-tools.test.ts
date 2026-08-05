@@ -192,6 +192,49 @@ try {
       throw new Error("requestProposal should not be called when mutations are blocked by default");
     },
   };
+
+  // create_chart 只能引用本轮真实 run_sql 结果，并校验字段。
+  {
+    const chartRuns = new Map();
+    const ctx = {
+      ...withConnection,
+      chartRuns,
+      connector: {
+        ...fakeConnector,
+        execute: async () => ({
+          kind: "query" as const,
+          columns: [
+            { name: "category", typeName: "VARCHAR" },
+            { name: "count", typeName: "BIGINT" },
+          ],
+          rows: [["A", 12], ["B", 8]],
+          elapsedMs: 1,
+        }),
+      },
+      recordRun: async () => {},
+    };
+    const query = await dispatchTool("run_sql", JSON.stringify({ sql: "SELECT category, count FROM demo" }), ctx);
+    assert.equal(query.ok, true, query.text);
+    const runId = JSON.parse(query.text).runId as string;
+    const chart = await dispatchTool("create_chart", JSON.stringify({
+      runId,
+      type: "bar",
+      title: "Demo",
+      category: "category",
+      value: "count",
+    }), ctx);
+    assert.equal(chart.ok, true, chart.text);
+    assert.match(chart.text, /```stela-chart/);
+    const invalid = await dispatchTool("create_chart", JSON.stringify({
+      runId,
+      type: "bar",
+      category: "missing",
+      value: "count",
+    }), ctx);
+    assert.equal(invalid.ok, false);
+    assert.match(invalid.text, /does not exist/);
+  }
+
   {
     const r = await dispatchTool("run_sql", JSON.stringify({ sql: "DELETE FROM orders" }), withConnection);
     assert.equal(r.ok, false);

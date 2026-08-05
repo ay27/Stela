@@ -700,6 +700,32 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
       title: z.string().min(1).max(256).optional(),
     })
     .strict(),
+  [IPC.EXPORT_SAVE_MARKDOWN_BUNDLE]: z
+    .object({
+      suggestedName: z.string().min(1).max(255),
+      content: z.string().max(20 * 1024 * 1024),
+      title: z.string().min(1).max(256).optional(),
+      assets: z
+        .array(
+          z.object({
+            id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+            extension: z.literal("svg"),
+            content: z.string().max(5 * 1024 * 1024),
+          }).strict(),
+        )
+        .max(32),
+    })
+    .strict()
+    .superRefine((value, ctx) => {
+      const ids = new Set(value.assets.map((asset) => asset.id));
+      if (ids.size !== value.assets.length) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["assets"], message: "asset ids must be unique" });
+      }
+      const total = value.assets.reduce((sum, asset) => sum + asset.content.length, 0);
+      if (total > 20 * 1024 * 1024) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["assets"], message: "asset bundle is too large" });
+      }
+    }),
   [IPC.EXPORT_SAVE_FILE]: z
     .object({
       suggestedName: z.string().min(1).max(255),

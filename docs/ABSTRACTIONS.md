@@ -139,6 +139,24 @@ interface IStorage {
 
 Renderer adapter: `src/services/storage/electron-storage.ts` → `window.stela.storage.*`.
 
+### StelaChartSpec
+
+Analytical charts are stored as versioned JSON in a fenced `stela-chart` block.
+The shared Zod schema in `electron/shared/chart-spec.ts` is the single parser for
+Agent output, editor rendering, and export. The initial discriminated chart set
+is `kpi | bar | line | pie | funnel | histogram`; each type names result columns
+instead of containing result rows or executable expressions.
+
+`source.kind = "run"` pins a conversation chart to one audited execution.
+`source.kind = "previous-runsql"` makes a note chart resolve the immediately
+preceding RunSQL node's current `<result-ref-id>`, with an optional
+`fallbackRunId` for preview before that block has run locally. Missing cache data
+may be restored by exact run id from the JSONL journal.
+
+The validator rejects unknown properties, missing/non-numeric fields, empty
+results, more than 5,000 rows, and type-specific category limits. Aggregation and
+business calculations belong in SQL; charts do not silently sample results.
+
 ### JSONL execution history (authoritative)
 
 Append-only, per-device files at `{vault}/.stela/history/history_{deviceSlug}.jsonl`. Each line is a complete run package (record + schema + rows). Git-synced; import cursor tracked in SQLite `journal_cursors`.
@@ -697,6 +715,13 @@ Renderer parsing: `src/lib/ipc-error.ts`. IPC rejections carry `[code] message` 
 ## Export bridge
 
 `window.stela.export.saveMarkdown()` and `saveFile()` open a native save dialog in main and return the chosen path plus an ephemeral `revealToken`. The renderer may pass that token only to `revealSavedFile()` to select the just-saved file in Finder, Explorer, or the platform file manager. The token is process-local and avoids extending the vault-only shell bridge to arbitrary filesystem paths.
+
+`window.stela.export.saveMarkdownBundle()` accepts a Markdown template plus a
+bounded list of identified SVG strings. After the user chooses the destination,
+Main derives `<markdown-stem>.assets/`, creates unique files, replaces only
+`stela-asset://<id>` placeholders with relative Markdown paths, and writes the
+Markdown last. Asset ids, counts, extensions, and byte sizes are Zod validated;
+the renderer never receives a general-purpose arbitrary-path write API.
 
 ## Renderer State Stores
 

@@ -927,5 +927,9 @@
   "resizer.agent.title": "Drag to resize · double-click to reset",
   "agent.panel.removeAttachment": "Remove chat attachment",
   "commandPalette.aria": "Stela commands",
-  "app.title": "Stela"
+  "app.title": "Stela",
+  "chart.loading": "Loading chart…",
+  "chart.noData": "No data available for this chart",
+  "chart.exportSvg": "Export SVG",
+  "chart.saveToNote": "Save to current note"
 }

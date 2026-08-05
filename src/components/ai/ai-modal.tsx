@@ -5,7 +5,13 @@ import { Bot, Check, Clipboard, Loader2, RefreshCw, X } from "lucide-react";
 import type { AiActionKind } from "@shared/types";
 import { useAiModal } from "@/state/ai-modal";
 import { useT } from "@/i18n/use-t";
+import { i18n } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { StelaChart } from "@/components/charts/stela-chart";
+import { parseStelaChartSpec, stringifyStelaChartSpec } from "@shared/chart-spec";
+import { useAgentPanel } from "@/state/agent-panel";
+import { useWorkspace } from "@/state/workspace";
+import { getRunContext } from "@/editor/runsql/run-context";
 
 const SCHEMA_ACTIONS: { action: AiActionKind; labelKey: string }[] = [
   { action: "explain-table", labelKey: "ai.action.explain-table" },
@@ -158,7 +164,7 @@ export function renderMarkdown(markdown: string): ReactNode {
   let i = 0;
   while (i < lines.length) {
     const line = lines[i] ?? "";
-    const fence = /^```(\w*)\s*$/.exec(line);
+    const fence = /^```([\w-]*)\s*$/.exec(line);
     if (fence) {
       const lang = fence[1] ?? "";
       const buf: string[] = [];
@@ -168,8 +174,11 @@ export function renderMarkdown(markdown: string): ReactNode {
         i += 1;
       }
       i += 1;
+      const code = buf.join("\n");
       out.push(
-        <MarkdownCodeBlock key={out.length} lang={lang} code={buf.join("\n")} />,
+        lang === "stela-chart"
+          ? <MarkdownChartBlock key={out.length} code={code} />
+          : <MarkdownCodeBlock key={out.length} lang={lang} code={code} />,
       );
       continue;
     }
@@ -252,6 +261,67 @@ export function renderMarkdown(markdown: string): ReactNode {
   return out;
 }
 
+function safeChartFileName(title: string): string {
+  const stem = title.trim().replace(/[^\p{L}\p{N}._-]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+  return `${stem || "stela-chart"}.svg`;
+}
+
+function MarkdownChartBlock({ code }: { code: string }) {
+  const t = useT();
+  const start = useAgentPanel((state) => state.start);
+  const busy = useAgentPanel((state) => state.tabs.find((tab) => tab.id === state.activeTabId)?.status === "running");
+  const activeNotePath = useWorkspace((state) => {
+    const tab = state.tabs.find((item) => item.id === state.activeTabId);
+    return tab?.path ?? null;
+  });
+  const parsed = useMemo(() => {
+    try {
+      return { spec: parseStelaChartSpec(code), error: null };
+    } catch (error) {
+      return { spec: null, error: error instanceof Error ? error.message : String(error) };
+    }
+  }, [code]);
+
+  if (!parsed.spec) {
+    return <MarkdownCodeBlock lang="stela-chart" code={`${code}\n\n${parsed.error ?? "Invalid chart"}`} />;
+  }
+  const spec = parsed.spec;
+  const saveToNote = () => {
+    if (!activeNotePath || spec.source.kind !== "run" || busy) return;
+    const ctx = getRunContext();
+    void start({
+      prompt: [
+        `Save this chart to the current note: ${activeNotePath}.`,
+        `Query result runId: ${spec.source.runId}.`,
+        "Use the original SQL that produced this runId in this conversation. Call propose_edit for approval and append a runsql block followed immediately by a stela-chart block. Do not create a <detail> block. Change the chart source to previous-runsql and preserve this runId as fallbackRunId.",
+        `Chart spec:\n\`\`\`stela-chart\n${stringifyStelaChartSpec(spec)}\n\`\`\``,
+      ].join("\n\n"),
+      connectionName: ctx?.connectionName ?? null,
+      notePath: activeNotePath,
+      referencedNotes: [activeNotePath],
+      locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
+    });
+  };
+  const exportSvg = async (svg: string, title: string) => {
+    await window.stela.export.saveFile(safeChartFileName(title), svg, {
+      title: t("chart.exportSvg"),
+      filters: [{ name: "SVG", extensions: ["svg"] }],
+    });
+  };
+  return (
+    <div className="my-3">
+      <StelaChart spec={spec} onExportSvg={exportSvg} />
+      {spec.source.kind === "run" ? (
+        <div className="mt-1 flex justify-end">
+          <button type="button" onClick={saveToNote} disabled={!activeNotePath || busy} className="rounded-md border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-40">
+            {t("chart.saveToNote")}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function MarkdownCodeBlock({ lang, code }: { lang: string; code: string }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
@@ -301,4 +371,3 @@ function renderInline(text: string): ReactNode {
     return <Fragment key={idx}>{part}</Fragment>;
   });
 }
-

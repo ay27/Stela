@@ -14,6 +14,11 @@ import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 
 import { AppError } from "@shared/errors";
+import {
+  stelaChartSpecSchema,
+  stringifyStelaChartSpec,
+  validateStelaChartData,
+} from "@shared/chart-spec";
 import type {
   AgentToolName,
   AgentProposalKind,
@@ -165,6 +170,8 @@ export interface AgentToolContext {
     name: string;
     category: string | null;
   }) => void;
+  /** 本次 Agent 会话内 run_sql 的真实结果，只供 create_chart 校验。 */
+  chartRuns?: Map<string, { sql: string; columns: ColumnDef[]; rows: unknown[][] }>;
   /**
    * 单次 run 的可变状态：`runId` / `notePath` 用于给执行历史生成
    * `agent:<runId>` 形式的 blockId；`questionsAsked` 由 `ask_user` 自增。
@@ -244,6 +251,41 @@ export function createAgentTools(options: {
       }),
       executionMode: "parallel",
       execute: (toolCallId, params) => runTool("run_sql", toolCallId, params, ctx, requestProposal),
+    },
+    {
+      name: "create_chart",
+      label: "Create chart",
+      description:
+        "Validate and render a concise Stela chart from a successful run_sql result. Use only real result columns. Choose KPI for one scalar row, bar for categorical comparison, line for ordered/time trends, pie only for at most 5 categories, funnel for ordered stages, and histogram for a numeric distribution. Returns a stela-chart Markdown fence for the final answer.",
+      parameters: Type.Object({
+        runId: Type.String({ description: "Exact runId returned by run_sql in this Agent run." }),
+        type: Type.Union([
+          Type.Literal("kpi"),
+          Type.Literal("bar"),
+          Type.Literal("line"),
+          Type.Literal("pie"),
+          Type.Literal("funnel"),
+          Type.Literal("histogram"),
+        ]),
+        title: Type.Optional(Type.String()),
+        description: Type.Optional(Type.String()),
+        value: Type.String({ description: "Numeric result column." }),
+        label: Type.Optional(Type.String()),
+        prefix: Type.Optional(Type.String()),
+        suffix: Type.Optional(Type.String()),
+        category: Type.Optional(Type.String()),
+        series: Type.Optional(Type.String()),
+        orientation: Type.Optional(Type.Union([Type.Literal("horizontal"), Type.Literal("vertical")])),
+        stacked: Type.Optional(Type.Boolean()),
+        sort: Type.Optional(Type.Union([Type.Literal("none"), Type.Literal("asc"), Type.Literal("desc")])),
+        x: Type.Optional(Type.String()),
+        area: Type.Optional(Type.Boolean()),
+        donut: Type.Optional(Type.Boolean()),
+        stage: Type.Optional(Type.String()),
+        bins: Type.Optional(Type.Number()),
+      }),
+      executionMode: "sequential",
+      execute: (toolCallId, params) => runTool("create_chart", toolCallId, params, ctx, requestProposal),
     },
     {
       name: "search_vault",
@@ -645,7 +687,34 @@ async function runSql(args: { sql?: string }, ctx: AgentToolContext): Promise<To
     throw err;
   }
   const runId = await recordAgentRun(ctx, sql, startedAt, result, null);
+  if (runId && result.kind === "query") {
+    ctx.chartRuns?.set(runId, { sql, columns: result.columns, rows: result.rows });
+  }
   return ok({ runId, result: formatQueryResult(result) });
+}
+
+function runCreateChart(args: Record<string, unknown>, ctx: AgentToolContext): ToolOutcome {
+  const runId = typeof args.runId === "string" ? args.runId : "";
+  const run = ctx.chartRuns?.get(runId);
+  if (!run) return fail("runId must refer to a successful run_sql query from this Agent run.");
+  const { runId: _discardRunId, ...chartArgs } = args;
+  void _discardRunId;
+  const candidate = {
+    ...chartArgs,
+    version: 1,
+    source: { kind: "run", runId },
+  };
+  const parsed = stelaChartSpecSchema.safeParse(candidate);
+  if (!parsed.success) {
+    return fail(parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; "));
+  }
+  validateStelaChartData(parsed.data, run.columns, run.rows);
+  const source = stringifyStelaChartSpec(parsed.data);
+  return ok({
+    chart: parsed.data,
+    markdown: `\`\`\`stela-chart\n${source}\n\`\`\``,
+    instruction: "Include this exact fenced block in the final answer, followed by a concise evidence line.",
+  });
 }
 
 /** 记录失败不应影响 agent 继续工作——落盘异常只记日志。 */
@@ -1103,6 +1172,8 @@ export async function dispatchTool(
         return await runGetTableSchema(args, ctx);
       case "run_sql":
         return await runSql(args, ctx);
+      case "create_chart":
+        return runCreateChart(args, ctx);
       case "search_vault":
         return await runSearchVault(args, ctx);
       case "search_sql_usage":

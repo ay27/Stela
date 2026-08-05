@@ -222,6 +222,27 @@ execution.ts runBlock()
 
 On failure: `runState: "error"`, no `<detail>` write (preserves round-trip integrity). Failed runs still record a `status: "err"` RunRecord for Run History.
 
+## Analytical Chart Flow
+
+`stela-chart` code fences contain a small versioned JSON contract rather than
+rows or executable ECharts configuration. `electron/shared/chart-spec.ts`
+validates the same contract for Agent tools, the renderer, and Markdown export.
+The editor's custom CodeBlock NodeView provides source/preview modes; Agent
+Markdown uses the same React chart component.
+
+Conversation charts bind to the exact `runId` returned by Agent `run_sql`.
+Persistent charts normally resolve the immediately preceding RunSQL node's
+`<result-ref-id>`, so rerunning that block refreshes the chart without rewriting
+its JSON. Result reads use SQLite first and recover an exact missing run from
+the JSONL journal. ECharts chart/component modules and its SVG renderer are
+loaded only when the first chart mounts.
+
+Markdown export renders valid charts to SVG before opening the save dialog. A
+typed bundle IPC sends a Markdown template and bounded SVG assets to Main; Main
+derives `<selected-name>.assets/`, replaces asset tokens with relative paths,
+creates unique files, and writes the Markdown. Invalid or missing chart data is
+kept as source with a warning instead of aborting the rest of the export.
+
 ## Connector Architecture
 
 All database access goes through a **plugin registry** (`electron/services/connectors/registry.ts`). The core ships no in-process connectors — only bundled module plugins:
@@ -315,7 +336,7 @@ flowchart TB
 
 1. **Action complete** — one-shot `AiActionKind` (rewrite-sql, ask-sql, explain-result, explain-table, …). Prompt assembled in main; returns text + optional extracted SQL. UI: RunSQL inline panel, AI modal, schema browser actions. ([ADR-0014](./adr/0014-ai-context-redaction-and-schema-enrichment.md))
 2. **SQL inline completion** — `AI_INLINE_COMPLETION_START` / `AI_INLINE_COMPLETION_CANCEL` invoke channels and the `ai:inline-completion-event` push channel stream insertion text correlated by `requestId`; preload exposes `window.stela.ai.startInlineCompletion`, `cancelInlineCompletion`, and `onInlineCompletionEvent`. The selected completion profile's model receives bounded prefix/suffix sections, up to 8K characters of nearest-first sibling RunSQL blocks, the nearest heading plus a 500-character prose excerpt, and table schemas from two sources: columns the renderer already has in `column-cache` (sent in the request, preferred per table) and DDL for referenced tables found in the connection's local `schemaDir`. Requests never trigger a column probe; the probe is warmed on block focus instead. This path uses pi-ai `streamSimple`, not AgentHarness, and never falls back to connector list/execute calls. RunSQL triggers only after an edit, waits 120 ms at a line tail, and shows at most one ghost-text line; focus, click, or selection movement never starts a model request. A native completion popup takes priority, then a pending edited context is re-scheduled after it closes. Stale requests are cancelled, Tab accepts, Escape dismisses, and IME composition, blur, or editor destruction suppress or cancel completion. ([ADR-0028](./adr/0028-inline-completion-schema-and-note-context.md))
-3. **Harness agent** — `AgentHarness` tool loop with streaming `ai:agent-event`. Tools browse live connector schema, run SQL, search/read notes, search SQL usage, ask the user a question, propose edits, and manage a bounded linear execution plan. The plan lives in main-process memory for a run, emits typed progress snapshots, and is injected as the latest pi Session custom entry on every context build so compaction cannot discard its active step or evidence. Same-turn tools may run in parallel except plan tools and `propose_edit` (sequential). Mutations and note writes wait for user approve. Agent chat accepts `@table` mentions, `[[note]]` references, a default current-note reference, and Add to Chat content attachments. Sessions and Panel timelines persist as native pi JSONL below `.stela/agent-history/<deviceSlug>/`; every device writes only its own shard, reads all shards, and forks a remote session before continuing it. Runs continue until the model finishes, errors, or the user cancels. Compacts when near `ai.contextWindow` budget and once on provider context overflow; Panel shows approximate usage, compacting status, plan progress, and a collapsed ordinary-tool activity log. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md), [ADR-0016](./adr/0016-agent-chat-references-and-add-to-chat.md), [ADR-0017](./adr/0017-user-cancelled-agent-runs.md), [ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0026](./adr/0026-ranked-lexical-retrieval-for-agent.md), [ADR-0027](./adr/0027-agent-ask-user-clarification.md), [ADR-0038](./adr/0038-runtime-agent-execution-plans.md), [ADR-0041](./adr/0041-agent-live-schema-authority.md), [ADR-0046](./adr/0046-device-sharded-agent-session-history.md))
+3. **Harness agent** — `AgentHarness` tool loop with streaming `ai:agent-event`. Tools browse live connector schema, run SQL, validate charts against the current run's real rows, search/read notes, search SQL usage, ask the user a question, propose edits, and manage a bounded linear execution plan. The plan lives in main-process memory for a run, emits typed progress snapshots, and is injected as the latest pi Session custom entry on every context build so compaction cannot discard its active step or evidence. Same-turn tools may run in parallel except plan tools, chart validation, and `propose_edit` (sequential). Mutations and note writes wait for user approve. Agent chat accepts `@table` mentions, `[[note]]` references, a default current-note reference, and Add to Chat content attachments. Sessions and Panel timelines persist as native pi JSONL below `.stela/agent-history/<deviceSlug>/`; every device writes only its own shard, reads all shards, and forks a remote session before continuing it. Runs continue until the model finishes, errors, or the user cancels. Compacts when near `ai.contextWindow` budget and once on provider context overflow; Panel shows approximate usage, compacting status, plan progress, and a collapsed ordinary-tool activity log. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md), [ADR-0016](./adr/0016-agent-chat-references-and-add-to-chat.md), [ADR-0017](./adr/0017-user-cancelled-agent-runs.md), [ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0026](./adr/0026-ranked-lexical-retrieval-for-agent.md), [ADR-0027](./adr/0027-agent-ask-user-clarification.md), [ADR-0038](./adr/0038-runtime-agent-execution-plans.md), [ADR-0041](./adr/0041-agent-live-schema-authority.md), [ADR-0046](./adr/0046-device-sharded-agent-session-history.md), [ADR-0053](./adr/0053-declarative-result-bound-analytical-charts.md))
 4. **SQL query parse** — model only emits a `SqlIndexFilter`; hits always come from deterministic `sql-index`.
 
 ### Agent Skills
@@ -472,7 +493,7 @@ window.stela.journal.*          — JSONL history import/export
 window.stela.ai.* / agent.*   — actions; start/cancel/subscribe inline completion; agent harness
 window.stela.index.*          — vault wiki index
 window.stela.sqlIndex.*       — SQL fact index
-window.stela.export.*         — native file save and restricted reveal of just-saved exports
+window.stela.export.*         — native file/bundle save and restricted reveal of just-saved exports
 window.stela.updater.*        — auto-update check
 ```
 
@@ -484,7 +505,7 @@ Types: `src/types/stela-bridge.d.ts` (renderer), `electron/shared/types.ts` (sha
 electron/
 ├── main/           # Entry, window, IPC handlers, vault-context, security
 ├── preload/        # contextBridge → window.stela
-├── shared/         # IPC channels/schema/events, DTO types, detail-meta, runsql-fences
+├── shared/         # IPC channels/schema/events, DTO types, detail-meta, runsql/chart specs
 └── services/       # All main-process business logic
     ├── vault-fs.ts, result-store.ts, history-journal.ts
     ├── connectors/ (registry, module-loader, subprocess, bundled-plugins)
@@ -495,7 +516,7 @@ src/
 ├── contracts/      # Renderer-facing interfaces (IStorage, IConnectorRegistry, AppSettings)
 ├── services/       # Thin adapters over window.stela.*
 ├── state/          # Zustand stores
-├── editor/         # Milkdown, runsql, wiki, find-in-file, search, mermaid
+├── editor/         # Milkdown, runsql, chart/mermaid views, wiki, find-in-file, search
 ├── layout/         # AppShell, Sidebar, TabBar, FileTree, panels
 ├── views/          # EditorView, WelcomeView
 ├── components/     # UI, settings tabs, AI panel, export dialog

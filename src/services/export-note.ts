@@ -19,6 +19,9 @@ import { matchDetail, parseDetail } from "@/editor/runsql/detail-meta";
 import { loadResultPage, type ResultLoaderDeps } from "@/services/result-loader";
 import { computeResultDiff } from "@/services/result-diff";
 import { electronStorage } from "@/services/storage/electron-storage";
+import { loadStelaChartData } from "@/components/charts/chart-data";
+import { renderStelaChartSvg } from "@/components/charts/chart-export";
+import { parseStelaChartSpec, type StelaChartSpec } from "@shared/chart-spec";
 
 // ─── 公开常量 ────────────────────────────────────────────────────────────────
 
@@ -110,6 +113,12 @@ export interface ExportNoteOpts {
       content: string,
       opts?: { title?: string },
     ) => Promise<{ canceled: boolean; path: string | null; revealToken?: string | null }>;
+    saveMarkdownBundle?: (
+      suggestedName: string,
+      content: string,
+      assets: Array<{ id: string; extension: "svg"; content: string }>,
+      opts?: { title?: string },
+    ) => Promise<{ canceled: boolean; path: string | null; revealToken?: string | null }>;
   };
   saveDialogTitle?: string;
   labels?: ExportMarkdownLabels;
@@ -121,6 +130,40 @@ export interface ExportNoteResult {
   revealToken: string | null;
   /** 导出时有数据拉取失败的块数（已保留原 <detail>） */
   failedBlocks: number;
+  failedCharts: number;
+}
+
+export interface StelaChartBlockInfo {
+  start: number;
+  end: number;
+  raw: string;
+  spec: StelaChartSpec | null;
+  parseError?: string;
+}
+
+export function parseStelaChartBlocks(md: string): StelaChartBlockInfo[] {
+  const blocks: StelaChartBlockInfo[] = [];
+  const pattern = /^```stela-chart\s*\r?\n([\s\S]*?)^```\s*$/gm;
+  for (const match of md.matchAll(pattern)) {
+    if (match.index === undefined) continue;
+    try {
+      blocks.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        raw: match[0],
+        spec: parseStelaChartSpec(match[1] ?? ""),
+      });
+    } catch (error) {
+      blocks.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        raw: match[0],
+        spec: null,
+        parseError: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return blocks;
 }
 
 // ─── 解析 ─────────────────────────────────────────────────────────────────────
@@ -507,6 +550,10 @@ export async function exportNoteToMarkdown(
     opts.deps?.saveMarkdown ??
     ((name, content, saveOpts) =>
       window.stela.export.saveMarkdown(name, content, saveOpts));
+  const saveMarkdownBundle =
+    opts.deps?.saveMarkdownBundle ??
+    ((name, content, assets, saveOpts) =>
+      window.stela.export.saveMarkdownBundle(name, content, assets, saveOpts));
   const loaderDeps: ResultLoaderDeps = opts.deps?.loaderDeps ?? {
     storage: {
       getSchema: electronStorage.getSchema,
@@ -526,9 +573,10 @@ export async function exportNoteToMarkdown(
 
   const md = await readFile(filePath);
   const blocks = parseRunsqlBlocks(md);
+  const chartBlocks = parseStelaChartBlocks(md);
 
-  // 没有 RunSQL 块 → 直接导出原文（仅改写 fence 语言标签）
-  if (blocks.length === 0) {
+  // 没有 RunSQL 或图表块 → 直接导出原文（仅改写 fence 语言标签）
+  if (blocks.length === 0 && chartBlocks.length === 0) {
     const result = await saveMarkdown(
       suggestExportName(filePath),
       finalizeExportMarkdown(md),
@@ -539,6 +587,7 @@ export async function exportNoteToMarkdown(
       savedPath: result.path,
       revealToken: result.revealToken ?? null,
       failedBlocks: 0,
+      failedCharts: 0,
     };
   }
 
@@ -557,8 +606,36 @@ export async function exportNoteToMarkdown(
       }),
   );
 
-  // 从后往前替换，确保偏移量不因前面的替换失效
-  let output = md;
+  const chartBuilt = await pMapSettled<StelaChartBlockInfo, { replacement: string; asset?: { id: string; extension: "svg"; content: string }; failed: boolean }>(
+    chartBlocks,
+    2,
+    async (chartBlock, index) => {
+      const previous = blocks.find((block) =>
+        block.detailEnd <= chartBlock.start && md.slice(block.detailEnd, chartBlock.start).trim() === "",
+      );
+      try {
+        if (!chartBlock.spec) throw new Error(chartBlock.parseError ?? "Invalid stela-chart source.");
+        const data = await loadStelaChartData(chartBlock.spec, previous?.detail.resultRefId ?? null);
+        const svg = await renderStelaChartSvg(chartBlock.spec, data);
+        const id = `chart-${index + 1}`;
+        const title = chartBlock.spec.title ?? `Chart ${index + 1}`;
+        return {
+          replacement: `![${title.replace(/[\[\]]/g, "") }](stela-asset://${id})`,
+          asset: { id, extension: "svg", content: svg },
+          failed: false,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          replacement: `> ⚠️ Chart export failed: ${message.replace(/\r?\n/g, " ")}\n\n${chartBlock.raw}`,
+          failed: true,
+        };
+      }
+    },
+  );
+
+  // 合并两种原文 offset 后统一倒序替换，避免相互影响。
+  const replacements: Array<{ start: number; end: number; content: string }> = [];
   let failedBlocks = 0;
   for (let i = built.length - 1; i >= 0; i--) {
     const r = built[i];
@@ -575,22 +652,40 @@ export async function exportNoteToMarkdown(
       if (r.value.failed) failedBlocks++;
       replacement = r.value.replacement;
     }
-    output =
-      output.slice(0, block.detailStart) +
-      replacement +
-      output.slice(block.detailEnd);
+    replacements.push({ start: block.detailStart, end: block.detailEnd, content: replacement });
   }
 
-  const result = await saveMarkdown(
-    suggestExportName(filePath),
-    finalizeExportMarkdown(output),
-    { title: opts.saveDialogTitle },
-  );
+  let failedCharts = 0;
+  const assets: Array<{ id: string; extension: "svg"; content: string }> = [];
+  for (let i = 0; i < chartBuilt.length; i++) {
+    const result = chartBuilt[i];
+    const block = chartBlocks[i];
+    if (result.status === "rejected") {
+      failedCharts++;
+      replacements.push({ start: block.start, end: block.end, content: block.raw });
+      continue;
+    }
+    if (result.value.failed) failedCharts++;
+    if (result.value.asset) assets.push(result.value.asset);
+    replacements.push({ start: block.start, end: block.end, content: result.value.replacement });
+  }
+
+  let output = md;
+  replacements.sort((a, b) => b.start - a.start);
+  for (const replacement of replacements) {
+    output = output.slice(0, replacement.start) + replacement.content + output.slice(replacement.end);
+  }
+
+  const finalized = finalizeExportMarkdown(output);
+  const result = assets.length > 0
+    ? await saveMarkdownBundle(suggestExportName(filePath), finalized, assets, { title: opts.saveDialogTitle })
+    : await saveMarkdown(suggestExportName(filePath), finalized, { title: opts.saveDialogTitle });
   return {
     canceled: result.canceled,
     savedPath: result.path,
     revealToken: result.revealToken ?? null,
     failedBlocks,
+    failedCharts,
   };
 }
 

@@ -312,6 +312,16 @@ interface StelaBridge {
       path: string | null;
       revealToken: string | null;
     }>;
+    saveMarkdownBundle: (
+      suggestedName: string,
+      content: string,
+      assets: Array<{ id: string; extension: "svg"; content: string }>,
+      opts?: { title?: string },
+    ) => Promise<{
+      canceled: boolean;
+      path: string | null;
+      revealToken: string | null;
+    }>;
     saveFile: (
       suggestedName: string,
       content: string,

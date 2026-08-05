@@ -507,6 +507,16 @@ const stela = {
         IPC.EXPORT_SAVE_MARKDOWN,
         { suggestedName, content, title: opts.title },
       ),
+    saveMarkdownBundle: (
+      suggestedName: string,
+      content: string,
+      assets: Array<{ id: string; extension: "svg"; content: string }>,
+      opts: { title?: string } = {},
+    ) =>
+      call<{ canceled: boolean; path: string | null; revealToken: string | null }>(
+        IPC.EXPORT_SAVE_MARKDOWN_BUNDLE,
+        { suggestedName, content, assets, title: opts.title },
+      ),
     saveFile: (
       suggestedName: string,
       content: string,

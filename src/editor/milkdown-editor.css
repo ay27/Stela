@@ -1294,10 +1294,12 @@
  * 不用重新 init + 恢复光标。
  */
 
-.stela-cb--mermaid[data-preview="true"] .stela-cb__cm {
+.stela-cb--mermaid[data-preview="true"] .stela-cb__cm,
+.stela-cb--chart[data-preview="true"] .stela-cb__cm {
   display: none;
 }
-.stela-cb--mermaid[data-preview="false"] .stela-cb__preview-host {
+.stela-cb--mermaid[data-preview="false"] .stela-cb__preview-host,
+.stela-cb--chart[data-preview="false"] .stela-cb__preview-host {
   display: none;
 }
 
@@ -1315,6 +1317,16 @@
   max-width: 100%;
   height: auto;
   background: transparent;
+}
+
+.stela-cb--chart .stela-cb__preview-host {
+  display: block;
+  width: 100%;
+}
+
+.stela-cb--chart .stela-cb__preview-host svg {
+  width: 100%;
+  height: 100%;
 }
 
 .stela-cb__mermaid-empty,
@@ -1336,9 +1348,21 @@
   margin-bottom: 8px;
 }
 
+.stela-cb__chart-error {
+  min-height: 7rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  color: hsl(var(--destructive));
+  font-size: 0.75rem;
+}
+
 /* 贴 stela-cb__run 的风格，做成中性 outline 按钮 */
 .milkdown .stela-cb__mermaid-toggle,
-.stela-cb__mermaid-toggle {
+.stela-cb__mermaid-toggle,
+.milkdown .stela-cb__chart-toggle,
+.stela-cb__chart-toggle {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
@@ -1360,7 +1384,9 @@
 }
 
 .milkdown .stela-cb__mermaid-toggle:hover,
-.stela-cb__mermaid-toggle:hover {
+.stela-cb__mermaid-toggle:hover,
+.milkdown .stela-cb__chart-toggle:hover,
+.stela-cb__chart-toggle:hover {
   background-color: hsl(var(--accent));
   color: hsl(var(--accent-foreground));
 }

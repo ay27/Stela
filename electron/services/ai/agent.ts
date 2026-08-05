@@ -748,6 +748,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
             return skills.loaded.find((item) => item.metadata.name === skill.metadata.name) ?? null;
           },
           run: { runId, notePath: request.notePath ?? null, questionsAsked: 0 },
+          chartRuns: new Map(),
           plan,
           recordRun: recordAgentRun(vaultPath),
           onSkillMaintenance: (record) => normalSkillActions.push(record),

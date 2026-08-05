@@ -927,5 +927,9 @@
   "resizer.agent.title": "拖拽调整宽度 · 双击重置",
   "agent.panel.removeAttachment": "移除聊天附件",
   "commandPalette.aria": "Stela 命令",
-  "app.title": "Stela"
+  "app.title": "Stela",
+  "chart.loading": "正在加载图表…",
+  "chart.noData": "没有可用于绘图的数据",
+  "chart.exportSvg": "导出 SVG",
+  "chart.saveToNote": "保存到当前笔记"
 }

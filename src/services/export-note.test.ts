@@ -22,6 +22,7 @@ import {
   normalizeExportHtmlTags,
   unescapeMilkdownLiterals,
   parseRunsqlBlocks,
+  parseStelaChartBlocks,
   renderMarkdownTable,
   renderResultBlock,
   rewriteRunsqlFencesToSql,
@@ -299,6 +300,23 @@ async function testParseRunsqlBlocks(): Promise<Check[]> {
   }
 
   return out;
+}
+
+async function testParseStelaChartBlocks(): Promise<Check[]> {
+  const md = `# Chart\n\n\`\`\`stela-chart\n${JSON.stringify({
+    version: 1,
+    type: "bar",
+    source: { kind: "run", runId: "run-1" },
+    category: "category",
+    value: "count",
+  })}\n\`\`\`\n`;
+  const blocks = parseStelaChartBlocks(md);
+  return [
+    expect("chart: finds one block", blocks.length === 1),
+    expect("chart: parses type", blocks[0]?.spec?.type === "bar"),
+    expect("chart: keeps exact raw fence", blocks[0]?.raw.startsWith("```stela-chart") === true),
+    expect("chart: keeps invalid block for warning", parseStelaChartBlocks("```stela-chart\n{}\n```")[0]?.spec === null),
+  ];
 }
 
 // ─── renderMarkdownTable ──────────────────────────────────────────────────────
@@ -743,6 +761,7 @@ async function main() {
     ["unescapeMilkdownLiterals", testUnescapeMilkdownLiterals],
     ["rewriteRunsqlFencesToSql", testRewriteRunsqlFencesToSql],
     ["parseRunsqlBlocks", testParseRunsqlBlocks],
+    ["parseStelaChartBlocks", testParseStelaChartBlocks],
     ["renderMarkdownTable", testRenderMarkdownTable],
     ["renderResultBlock", testRenderResultBlock],
     ["exportNoteToMarkdown (主流程)", testExportNoteToMarkdown],

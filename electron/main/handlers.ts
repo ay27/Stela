@@ -991,6 +991,45 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
       suggestedName: string;
       content: string;
       title?: string;
+      assets: Array<{ id: string; extension: "svg"; content: string }>;
+    },
+    { canceled: boolean; path: string | null; revealToken: string | null }
+  >(IPC.EXPORT_SAVE_MARKDOWN_BUNDLE, async ({ suggestedName, content, title, assets }) => {
+    const win = ctx.getMainWindow();
+    const opts: Electron.SaveDialogOptions = {
+      title: title ?? "Export Markdown",
+      defaultPath: path.join(app.getPath("documents"), suggestedName),
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    };
+    const r = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (r.canceled || !r.filePath) {
+      return { canceled: true, path: null, revealToken: null };
+    }
+
+    const parsed = path.parse(r.filePath);
+    const assetDirName = `${parsed.name}.assets`;
+    const assetDir = path.join(parsed.dir, assetDirName);
+    await fs.mkdir(assetDir, { recursive: true });
+    let output = content;
+    for (const asset of assets) {
+      const fileName = `${asset.id}-${randomUUID().slice(0, 8)}.${asset.extension}`;
+      const filePath = path.join(assetDir, fileName);
+      await fs.writeFile(filePath, asset.content, { encoding: "utf-8", flag: "wx" });
+      const markdownPath = `<./${assetDirName}/${fileName}>`;
+      output = output.replaceAll(`stela-asset://${asset.id}`, markdownPath);
+    }
+    await fs.writeFile(r.filePath, output, "utf-8");
+    return {
+      canceled: false,
+      path: r.filePath,
+      revealToken: rememberSavedExport(r.filePath),
+    };
+  });
+  registerHandler<
+    {
+      suggestedName: string;
+      content: string;
+      title?: string;
       filters: Electron.FileFilter[];
     },
     { canceled: boolean; path: string | null; revealToken: string | null }
