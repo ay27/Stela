@@ -728,6 +728,7 @@ export type AgentToolName =
   | "get_table_schema"
   | "run_sql"
   | "create_chart"
+  | "save_chart_to_note"
   | "search_vault"
   | "search_sql_usage"
   | "list_vault_files"

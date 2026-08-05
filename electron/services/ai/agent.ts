@@ -749,6 +749,10 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           },
           run: { runId, notePath: request.notePath ?? null, questionsAsked: 0 },
           chartRuns: new Map(),
+          resolveChartRun: async (chartRunId) => {
+            if (!resultStore.runExists(chartRunId)) await journal.importRun(vaultPath, chartRunId);
+            return resultStore.getRun(chartRunId);
+          },
           plan,
           recordRun: recordAgentRun(vaultPath),
           onSkillMaintenance: (record) => normalSkillActions.push(record),

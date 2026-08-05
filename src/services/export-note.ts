@@ -7,7 +7,7 @@
  *   2. 并发（上限 4）拉取每个 runId 的前 N 行（通过 `loadResultPage`，含远端回灌 fallback）。
  *   3. 将 `<detail>` HTML 替换为 GFM Markdown 表格（含 blockquote 元信息摘要）。
  *      - 无结果集 → `> 无结果集（mutation 或 0 rows）`
- *      - 数据缺失（拉取失败）→ 保留原 `<detail>` HTML + 警告 blockquote
+ *      - 数据缺失（拉取失败）→ 输出警告 blockquote，不泄漏内部 `<detail>`
  *   4. 调 `window.stela.export.saveMarkdown` 弹原生 Save 对话框写出。
  *
  * 不修改原文件；所有输出写到用户选择的目标路径。
@@ -21,7 +21,7 @@ import { computeResultDiff } from "@/services/result-diff";
 import { electronStorage } from "@/services/storage/electron-storage";
 import { loadStelaChartData } from "@/components/charts/chart-data";
 import { renderStelaChartSvg } from "@/components/charts/chart-export";
-import { parseStelaChartSpec, type StelaChartSpec } from "@shared/chart-spec";
+import type { StelaEmbeddedChartSpec } from "@shared/chart-spec";
 
 // ─── 公开常量 ────────────────────────────────────────────────────────────────
 
@@ -119,6 +119,7 @@ export interface ExportNoteOpts {
       assets: Array<{ id: string; extension: "svg"; content: string }>,
       opts?: { title?: string },
     ) => Promise<{ canceled: boolean; path: string | null; revealToken?: string | null }>;
+    renderChart?: (spec: StelaEmbeddedChartSpec, runId: string) => Promise<string>;
   };
   saveDialogTitle?: string;
   labels?: ExportMarkdownLabels;
@@ -128,42 +129,9 @@ export interface ExportNoteResult {
   canceled: boolean;
   savedPath: string | null;
   revealToken: string | null;
-  /** 导出时有数据拉取失败的块数（已保留原 <detail>） */
+  /** 导出时有数据拉取失败的块数（输出可读警告） */
   failedBlocks: number;
   failedCharts: number;
-}
-
-export interface StelaChartBlockInfo {
-  start: number;
-  end: number;
-  raw: string;
-  spec: StelaChartSpec | null;
-  parseError?: string;
-}
-
-export function parseStelaChartBlocks(md: string): StelaChartBlockInfo[] {
-  const blocks: StelaChartBlockInfo[] = [];
-  const pattern = /^```stela-chart\s*\r?\n([\s\S]*?)^```\s*$/gm;
-  for (const match of md.matchAll(pattern)) {
-    if (match.index === undefined) continue;
-    try {
-      blocks.push({
-        start: match.index,
-        end: match.index + match[0].length,
-        raw: match[0],
-        spec: parseStelaChartSpec(match[1] ?? ""),
-      });
-    } catch (error) {
-      blocks.push({
-        start: match.index,
-        end: match.index + match[0].length,
-        raw: match[0],
-        spec: null,
-        parseError: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-  return blocks;
 }
 
 // ─── 解析 ─────────────────────────────────────────────────────────────────────
@@ -573,10 +541,9 @@ export async function exportNoteToMarkdown(
 
   const md = await readFile(filePath);
   const blocks = parseRunsqlBlocks(md);
-  const chartBlocks = parseStelaChartBlocks(md);
 
-  // 没有 RunSQL 或图表块 → 直接导出原文（仅改写 fence 语言标签）
-  if (blocks.length === 0 && chartBlocks.length === 0) {
+  // 没有 RunSQL → 直接导出原文（仅改写 fence 语言标签）
+  if (blocks.length === 0) {
     const result = await saveMarkdown(
       suggestExportName(filePath),
       finalizeExportMarkdown(md),
@@ -606,28 +573,31 @@ export async function exportNoteToMarkdown(
       }),
   );
 
-  const chartBuilt = await pMapSettled<StelaChartBlockInfo, { replacement: string; asset?: { id: string; extension: "svg"; content: string }; failed: boolean }>(
-    chartBlocks,
+  const renderChart = opts.deps?.renderChart ?? (async (spec, runId) => {
+    const data = await loadStelaChartData(spec, runId);
+    return renderStelaChartSvg(spec, data);
+  });
+  const chartBuilt = await pMapSettled<RunsqlBlockInfo, { markdown: string; asset?: { id: string; extension: "svg"; content: string }; failed: boolean }>(
+    blocks,
     2,
-    async (chartBlock, index) => {
-      const previous = blocks.find((block) =>
-        block.detailEnd <= chartBlock.start && md.slice(block.detailEnd, chartBlock.start).trim() === "",
-      );
+    async (block, index) => {
+      if (!block.detail.chart && !block.detail.chartError) return { markdown: "", failed: false };
       try {
-        if (!chartBlock.spec) throw new Error(chartBlock.parseError ?? "Invalid stela-chart source.");
-        const data = await loadStelaChartData(chartBlock.spec, previous?.detail.resultRefId ?? null);
-        const svg = await renderStelaChartSvg(chartBlock.spec, data);
+        if (block.detail.chartError) throw new Error(block.detail.chartError);
+        if (!block.detail.chart) throw new Error("Invalid chart configuration.");
+        if (!block.detail.resultRefId) throw new Error("Run the query before exporting its chart.");
+        const svg = await renderChart(block.detail.chart, block.detail.resultRefId);
         const id = `chart-${index + 1}`;
-        const title = chartBlock.spec.title ?? `Chart ${index + 1}`;
+        const title = block.detail.chart.title ?? `Chart ${index + 1}`;
         return {
-          replacement: `![${title.replace(/[\[\]]/g, "") }](stela-asset://${id})`,
+          markdown: `![${title.replace(/[\[\]]/g, "") }](stela-asset://${id})`,
           asset: { id, extension: "svg", content: svg },
           failed: false,
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return {
-          replacement: `> ⚠️ Chart export failed: ${message.replace(/\r?\n/g, " ")}\n\n${chartBlock.raw}`,
+          markdown: `> ⚠️ Chart export failed: ${message.replace(/\r?\n/g, " ")}`,
           failed: true,
         };
       }
@@ -643,15 +613,14 @@ export async function exportNoteToMarkdown(
     let replacement: string;
     if (r.status === "rejected") {
       failedBlocks++;
-      replacement = [
-        labels.missingData(block.detail.resultRefId ?? "unknown"),
-        "",
-        block.detailRaw,
-      ].join("\n");
+      replacement = labels.missingData(block.detail.resultRefId ?? "unknown");
     } else {
       if (r.value.failed) failedBlocks++;
       replacement = r.value.replacement;
     }
+    const chart = chartBuilt[i];
+    const chartMarkdown = chart.status === "fulfilled" ? chart.value.markdown : "> ⚠️ Chart export failed";
+    if (chartMarkdown) replacement = insertChartAfterLatestResult(replacement, chartMarkdown);
     replacements.push({ start: block.detailStart, end: block.detailEnd, content: replacement });
   }
 
@@ -659,15 +628,12 @@ export async function exportNoteToMarkdown(
   const assets: Array<{ id: string; extension: "svg"; content: string }> = [];
   for (let i = 0; i < chartBuilt.length; i++) {
     const result = chartBuilt[i];
-    const block = chartBlocks[i];
     if (result.status === "rejected") {
       failedCharts++;
-      replacements.push({ start: block.start, end: block.end, content: block.raw });
       continue;
     }
     if (result.value.failed) failedCharts++;
     if (result.value.asset) assets.push(result.value.asset);
-    replacements.push({ start: block.start, end: block.end, content: result.value.replacement });
   }
 
   let output = md;
@@ -687,6 +653,13 @@ export async function exportNoteToMarkdown(
     failedBlocks,
     failedCharts,
   };
+}
+
+function insertChartAfterLatestResult(resultMarkdown: string, chartMarkdown: string): string {
+  const historyMarker = "\n\n<details>";
+  const historyAt = resultMarkdown.indexOf(historyMarker);
+  if (historyAt < 0) return `${resultMarkdown}\n\n${chartMarkdown}`;
+  return `${resultMarkdown.slice(0, historyAt)}\n\n${chartMarkdown}${resultMarkdown.slice(historyAt)}`;
 }
 
 interface BuildBlockDeps {
@@ -772,11 +745,7 @@ async function buildBlockReplacement(
       };
     } catch (err) {
       return {
-        replacement: [
-          labels.missingData(runId),
-          "",
-          block.detailRaw,
-        ].join("\n"),
+        replacement: labels.missingData(runId),
         failed: true,
       };
     }
@@ -823,7 +792,7 @@ async function buildBlockReplacement(
       };
     } catch {
       return {
-        replacement: [labels.missingData(runId), "", block.detailRaw].join("\n"),
+        replacement: labels.missingData(runId),
         failed: true,
       };
     }

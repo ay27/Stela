@@ -506,17 +506,11 @@
   "schema.noConnection": "(no connection)",
   "schema.refresh": "Refresh",
   "schema.fetchFailed": "Failed to fetch schema",
-  "schema.fetchColumnsFailed": "Failed to fetch column metadata",
   "schema.addConnectionHint": "Add a connection in Connections to browse schema",
   "schema.refreshFailed": "Refresh failed. See the error below.",
   "schema.summary": "{{databases}} databases · {{tables}} tables",
   "schema.empty": "No enumerable databases or tables",
   "schema.noDatabase": "(no database)",
-  "schema.loadingColumns": "Reading column metadata…",
-  "schema.noColumns": "No column information",
-  "schema.copyQualifiedNameTitle": "Copy fully qualified table name",
-  "schema.copyName": "Copy name",
-  "schema.copySelect": "Copy SELECT",
   "welcome.title": "Welcome to Stela",
   "welcome.slogan": "Run SQL in Markdown. Analyze data in Stela.",
   "welcome.currentVault": "Current vault",
@@ -931,5 +925,6 @@
   "chart.loading": "Loading chart…",
   "chart.noData": "No data available for this chart",
   "chart.exportSvg": "Export SVG",
-  "chart.saveToNote": "Save to current note"
+  "chart.saveToNote": "Save to current note",
+  "chart.remove": "Remove chart"
 }

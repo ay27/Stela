@@ -506,17 +506,11 @@
   "schema.noConnection": "（无连接）",
   "schema.refresh": "刷新",
   "schema.fetchFailed": "拉取 schema 失败",
-  "schema.fetchColumnsFailed": "拉取列结构失败",
   "schema.addConnectionHint": "在 Connections 里添加连接后可浏览 schema",
   "schema.refreshFailed": "刷新失败，见下方错误",
   "schema.summary": "{{databases}} 个库 · {{tables}} 张表",
   "schema.empty": "没有可枚举的库或表",
   "schema.noDatabase": "(no database)",
-  "schema.loadingColumns": "读取列结构…",
-  "schema.noColumns": "没有列信息",
-  "schema.copyQualifiedNameTitle": "复制完全限定表名",
-  "schema.copyName": "复制名",
-  "schema.copySelect": "复制 SELECT",
   "welcome.title": "Welcome to Stela",
   "welcome.slogan": "Run SQL in Markdown. Analyze data in Stela.",
   "welcome.currentVault": "Current vault",
@@ -931,5 +925,6 @@
   "chart.loading": "正在加载图表…",
   "chart.noData": "没有可用于绘图的数据",
   "chart.exportSvg": "导出 SVG",
-  "chart.saveToNote": "保存到当前笔记"
+  "chart.saveToNote": "保存到当前笔记",
+  "chart.remove": "移除图表"
 }

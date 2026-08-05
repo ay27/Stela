@@ -19,6 +19,7 @@ import {
   ChevronsRight,
   Download,
   Sparkles,
+  Trash2,
 } from "lucide-react";
 
 import type { ColumnDef, RunRecord } from "@/contracts";
@@ -45,6 +46,7 @@ import {
 } from "@/services/result-diff";
 import { cn } from "@/lib/utils";
 import type { DetailMeta } from "@/core/types";
+import { StelaChart } from "@/components/charts/stela-chart";
 
 const PAGE_SIZES = [10, 50, 100, 1000] as const;
 const DEFAULT_PAGE_SIZE = 10;
@@ -95,6 +97,7 @@ export interface BlockResultProps {
   onToggle: () => void;
   /** 执行失败时从 result-bar 发起 AI 改写 */
   onAiFix?: () => void;
+  onRemoveChart?: () => void;
 }
 
 interface FetchedState {
@@ -130,6 +133,7 @@ export function BlockResult({
   onViewStateChange,
   onToggle,
   onAiFix,
+  onRemoveChart,
 }: BlockResultProps) {
   const t = useT();
   const [state, setState] = useState<FetchedState | null>(null);
@@ -637,6 +641,35 @@ export function BlockResult({
               />
             )}
           </div>
+          {!inCompare && (detail?.chart || detail?.chartError) ? (
+            <div className="border-t border-border px-3 py-3">
+              <div className="mb-2 flex items-center justify-end gap-1">
+                {onRemoveChart && detail?.chart ? (
+                  <button type="button" onClick={onRemoveChart} className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-destructive/10 hover:text-destructive">
+                    <Trash2 className="h-3 w-3" />{t("chart.remove")}
+                  </button>
+                ) : null}
+              </div>
+              {detail.chartError ? (
+                <ErrorBox message={detail.chartError} />
+              ) : detail.chart ? (
+                <StelaChart
+                  spec={detail.chart}
+                  previousRunId={effectiveRunId}
+                  onExportSvg={async (svg, title) => {
+                    await window.stela.export.saveFile(
+                      `${title.replace(/[^\p{L}\p{N}._-]+/gu, "-") || "stela-chart"}.svg`,
+                      svg,
+                      {
+                        title: t("chart.exportSvg"),
+                        filters: [{ name: "SVG", extensions: ["svg"] }],
+                      },
+                    );
+                  }}
+                />
+              ) : null}
+            </div>
+          ) : null}
           {showRunTabs ? (
             <RunTabs
               tabs={tabItems}

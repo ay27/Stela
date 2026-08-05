@@ -73,13 +73,9 @@ import { useColumnCache } from "./column-cache";
 import { formatSqlCommand } from "./sql-format";
 import { formatHotkey } from "@/lib/hotkeys";
 import type { DetailMeta } from "@/core/types";
+import { serializeDetail } from "./detail-meta";
 import { useWorkspace } from "@/state/workspace";
 import { renderMermaid } from "@/editor/mermaid/render";
-import { StelaChart } from "@/components/charts/stela-chart";
-import {
-  parseStelaChartSpec,
-  STELA_CHART_LANGUAGE,
-} from "@shared/chart-spec";
 import { i18n } from "@/i18n";
 import { isRunsqlBlockPending } from "./pending-runs";
 import { extractScope } from "./sql-scope";
@@ -196,9 +192,6 @@ export class CodeBlockNodeView implements NodeView {
    * 避免短时间连续改源码时旧的 promise 把新 SVG 覆盖掉。
    */
   private mermaidRenderToken = 0;
-  /** stela-chart 复用 preview host，但由 React/ECharts 管理内容。 */
-  private chartRoot: Root | null = null;
-  private chartDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   /** mermaid 每个 NodeView 独占一个 id，避免 mermaid 内部对 id 做 document.querySelector 冲突 */
   private readonly mermaidId = `stela-mermaid-${
     typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -222,17 +215,14 @@ export class CodeBlockNodeView implements NodeView {
 
     const isRunsql = node.attrs.language === RUNSQL_LANGUAGE;
     const isMermaid = node.attrs.language === MERMAID_LANGUAGE;
-    const isChart = node.attrs.language === STELA_CHART_LANGUAGE;
 
     this.dom = document.createElement("div");
     this.dom.className = isRunsql
       ? "stela-cb stela-cb--runsql"
       : isMermaid
         ? "stela-cb stela-cb--mermaid"
-        : isChart
-          ? "stela-cb stela-cb--chart"
         : "stela-cb";
-    if (isMermaid || isChart) this.dom.dataset.preview = this.previewMode ? "true" : "false";
+    if (isMermaid) this.dom.dataset.preview = this.previewMode ? "true" : "false";
     this.dom.addEventListener("contextmenu", this.onContextMenu);
 
     this.headerEl = document.createElement("div");
@@ -274,10 +264,6 @@ export class CodeBlockNodeView implements NodeView {
       this.ensurePreviewHost();
       this.scheduleMermaidRender(node.textContent, /*immediate*/ true);
     }
-    if (isChart) {
-      this.ensurePreviewHost();
-      this.scheduleChartRender(node.textContent, /* immediate */ true);
-    }
     this.installShield(this.headerEl);
 
     // 订阅主题切换：运行时切 light/dark 时 reconfigure compartment 即可，无需重建 CM。
@@ -299,7 +285,7 @@ export class CodeBlockNodeView implements NodeView {
 
     if (prevLang !== node.attrs.language) {
       if (
-        (prevLang === MERMAID_LANGUAGE || prevLang === STELA_CHART_LANGUAGE) &&
+        prevLang === MERMAID_LANGUAGE &&
         prevLang !== node.attrs.language
       ) {
         this.teardownPreviewHost();
@@ -317,11 +303,7 @@ export class CodeBlockNodeView implements NodeView {
         "stela-cb--mermaid",
         node.attrs.language === MERMAID_LANGUAGE,
       );
-      this.dom.classList.toggle(
-        "stela-cb--chart",
-        node.attrs.language === STELA_CHART_LANGUAGE,
-      );
-      if (node.attrs.language === MERMAID_LANGUAGE || node.attrs.language === STELA_CHART_LANGUAGE) {
+      if (node.attrs.language === MERMAID_LANGUAGE) {
         this.dom.dataset.preview = this.previewMode ? "true" : "false";
       } else {
         delete this.dom.dataset.preview;
@@ -351,9 +333,6 @@ export class CodeBlockNodeView implements NodeView {
       // 源码态切 language 进来不需要渲染（只等切回 preview 时再渲染）；
       // 进入 mermaid 时如果在预览态，用 node.textContent 防抖渲染一次
       if (this.previewMode) this.scheduleMermaidRender(node.textContent);
-    } else if (node.attrs.language === STELA_CHART_LANGUAGE) {
-      this.ensurePreviewHost();
-      if (this.previewMode) this.scheduleChartRender(node.textContent);
     } else if (this.previewHostEl) {
       this.teardownPreviewHost();
     }
@@ -390,9 +369,6 @@ export class CodeBlockNodeView implements NodeView {
     // 事务，这里统一防抖后重渲染（300ms 内连续改源码只渲一次，避免 CPU 占用）。
     if (node.attrs.language === MERMAID_LANGUAGE && this.previewMode) {
       this.scheduleMermaidRender(newText);
-    }
-    if (node.attrs.language === STELA_CHART_LANGUAGE && this.previewMode) {
-      this.scheduleChartRender(newText);
     }
     return true;
   }
@@ -530,15 +506,6 @@ export class CodeBlockNodeView implements NodeView {
     if (this.mermaidDebounceTimer) {
       clearTimeout(this.mermaidDebounceTimer);
       this.mermaidDebounceTimer = null;
-    }
-    if (this.chartDebounceTimer) {
-      clearTimeout(this.chartDebounceTimer);
-      this.chartDebounceTimer = null;
-    }
-    if (this.chartRoot) {
-      const root = this.chartRoot;
-      this.chartRoot = null;
-      queueMicrotask(() => root.unmount());
     }
     if (this.previewHostEl) {
       this.previewHostEl.remove();
@@ -1233,7 +1200,6 @@ export class CodeBlockNodeView implements NodeView {
     const attrs = node.attrs as RunSqlAttrs;
     const isRunsql = language === RUNSQL_LANGUAGE;
     const isMermaid = language === MERMAID_LANGUAGE;
-    const isChart = language === STELA_CHART_LANGUAGE;
     if (isRunsql) {
       const runState = this.effectiveRunState(node);
       const running = runState === "running";
@@ -1332,25 +1298,6 @@ export class CodeBlockNodeView implements NodeView {
         });
         btn.addEventListener("click", this.onToggleMermaid);
       }
-    } else if (isChart) {
-      const nextLabel = this.previewMode ? "源码" : "预览";
-      const nextIcon = this.previewMode ? CODE_ICON_HTML : EYE_ICON_HTML;
-      const title = this.previewMode ? "显示源码" : "显示预览";
-      this.headerEl.innerHTML = `
-        <span class="stela-cb__icon">${WORKFLOW_ICON_HTML}</span>
-        <span class="stela-cb__title">Stela Chart</span>
-        <button type="button" class="stela-cb__chart-toggle" data-preview="${this.previewMode ? "true" : "false"}" title="${title}">${nextIcon}${escapeHtml(nextLabel)}</button>
-      `;
-      const btn = this.headerEl.querySelector<HTMLButtonElement>("button.stela-cb__chart-toggle");
-      btn?.addEventListener("pointerdown", (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-      });
-      btn?.addEventListener("mousedown", (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-      });
-      btn?.addEventListener("click", this.onToggleChart);
     } else {
       this.headerEl.innerHTML = `<span class="stela-cb__lang">${escapeHtml(language)}</span>`;
     }
@@ -1796,6 +1743,25 @@ export class CodeBlockNodeView implements NodeView {
           runState === "error" && this.lastErrorMessage
             ? () => this.triggerAiFixRewrite()
             : undefined,
+        onRemoveChart: detail?.chart ? () => this.removeAttachedChart() : undefined,
+      }),
+    );
+  }
+
+  private removeAttachedChart(): void {
+    const pos = this.getPos();
+    if (pos === undefined) return;
+    const node = this.view.state.doc.nodeAt(pos);
+    const detail = (node?.attrs.detail as DetailMeta | null | undefined) ?? null;
+    if (!node || !detail?.chart) return;
+    const { chart: _chart, chartError: _chartError, ...nextDetail } = detail;
+    void _chart;
+    void _chartError;
+    this.view.dispatch(
+      this.view.state.tr.setNodeMarkup(pos, undefined, {
+        ...node.attrs,
+        detail: nextDetail,
+        detailRaw: serializeDetail(nextDetail),
       }),
     );
   }
@@ -1862,12 +1828,6 @@ export class CodeBlockNodeView implements NodeView {
       clearTimeout(this.mermaidDebounceTimer);
       this.mermaidDebounceTimer = null;
     }
-    if (this.chartDebounceTimer) {
-      clearTimeout(this.chartDebounceTimer);
-      this.chartDebounceTimer = null;
-    }
-    this.chartRoot?.unmount();
-    this.chartRoot = null;
     this.previewHostEl?.remove();
     this.previewHostEl = null;
   }
@@ -1944,66 +1904,6 @@ export class CodeBlockNodeView implements NodeView {
     }
   };
 
-  private scheduleChartRender(source: string, immediate = false): void {
-    if (this.chartDebounceTimer) clearTimeout(this.chartDebounceTimer);
-    if (immediate) {
-      this.renderChartPreview(source);
-      return;
-    }
-    this.chartDebounceTimer = setTimeout(() => {
-      this.chartDebounceTimer = null;
-      this.renderChartPreview(source);
-    }, MERMAID_RENDER_DEBOUNCE_MS);
-  }
-
-  private previousRunsqlRunId(): string | null {
-    const pos = this.getPos();
-    if (pos === undefined) return null;
-    const previous = this.view.state.doc.resolve(pos).nodeBefore;
-    if (previous?.type.name !== "code_block" || previous.attrs.language !== RUNSQL_LANGUAGE) return null;
-    const attrs = previous.attrs as RunSqlAttrs;
-    return attrs.detail?.resultRefId ?? null;
-  }
-
-  private renderChartPreview(source: string): void {
-    if (!this.previewHostEl) return;
-    try {
-      const spec = parseStelaChartSpec(source);
-      this.previewHostEl.classList.remove("stela-cb__chart-error");
-      if (!this.chartRoot) {
-        this.previewHostEl.innerHTML = "";
-        this.chartRoot = createRoot(this.previewHostEl);
-      }
-      this.chartRoot.render(createElement(StelaChart, {
-        spec,
-        previousRunId: this.previousRunsqlRunId(),
-        onExportSvg: async (svg: string, title: string) => {
-          await window.stela.export.saveFile(`${title.replace(/[^\p{L}\p{N}._-]+/gu, "-") || "stela-chart"}.svg`, svg, {
-            title: i18n.t("chart.exportSvg"),
-            filters: [{ name: "SVG", extensions: ["svg"] }],
-          });
-        },
-      }));
-    } catch (error) {
-      this.chartRoot?.unmount();
-      this.chartRoot = null;
-      this.previewHostEl.textContent = error instanceof Error ? error.message : String(error);
-      this.previewHostEl.classList.add("stela-cb__chart-error");
-    }
-  }
-
-  private onToggleChart = (ev: MouseEvent) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    this.previewMode = !this.previewMode;
-    this.dom.dataset.preview = this.previewMode ? "true" : "false";
-    this.renderHeader(this.node);
-    if (this.previewMode) {
-      this.scheduleChartRender(this.node.textContent, true);
-    } else {
-      queueMicrotask(() => !this.destroyed && this.cm.focus());
-    }
-  };
 }
 
 type SqlDiffOp =

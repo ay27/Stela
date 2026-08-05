@@ -12,6 +12,7 @@ import { parseStelaChartSpec, stringifyStelaChartSpec } from "@shared/chart-spec
 import { useAgentPanel } from "@/state/agent-panel";
 import { useWorkspace } from "@/state/workspace";
 import { getRunContext } from "@/editor/runsql/run-context";
+import { normalizeAgentMarkdownCodeLanguage } from "@/components/ai/markdown-code-language";
 
 const SCHEMA_ACTIONS: { action: AiActionKind; labelKey: string }[] = [
   { action: "explain-table", labelKey: "ai.action.explain-table" },
@@ -175,10 +176,11 @@ export function renderMarkdown(markdown: string): ReactNode {
       }
       i += 1;
       const code = buf.join("\n");
+      const displayLang = normalizeAgentMarkdownCodeLanguage(lang);
       out.push(
         lang === "stela-chart"
           ? <MarkdownChartBlock key={out.length} code={code} />
-          : <MarkdownCodeBlock key={out.length} lang={lang} code={code} />,
+          : <MarkdownCodeBlock key={out.length} lang={displayLang} code={code} />,
       );
       continue;
     }
@@ -293,7 +295,7 @@ function MarkdownChartBlock({ code }: { code: string }) {
       prompt: [
         `Save this chart to the current note: ${activeNotePath}.`,
         `Query result runId: ${spec.source.runId}.`,
-        "Use the original SQL that produced this runId in this conversation. Call propose_edit for approval and append a runsql block followed immediately by a stela-chart block. Do not create a <detail> block. Change the chart source to previous-runsql and preserve this runId as fallbackRunId.",
+        "Call save_chart_to_note with this exact path, runId, and chart JSON. Do not reconstruct the SQL or use propose_edit directly.",
         `Chart spec:\n\`\`\`stela-chart\n${stringifyStelaChartSpec(spec)}\n\`\`\``,
       ].join("\n\n"),
       connectionName: ctx?.connectionName ?? null,

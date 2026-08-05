@@ -2,7 +2,6 @@ import { z } from "zod";
 
 import type { ColumnDef } from "./types";
 
-export const STELA_CHART_LANGUAGE = "stela-chart";
 export const STELA_CHART_VERSION = 1 as const;
 export const MAX_CHART_SOURCE_CHARS = 20_000;
 export const MAX_CHART_ROWS = 5_000;
@@ -14,12 +13,7 @@ const common = {
   description: z.string().trim().max(500).optional(),
   source: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("run"), runId: z.string().min(1).max(256) }).strict(),
-    z
-      .object({
-        kind: z.literal("previous-runsql"),
-        fallbackRunId: z.string().min(1).max(256).optional(),
-      })
-      .strict(),
+    z.object({ kind: z.literal("block"), blockId: z.string().min(1).max(256) }).strict(),
   ]),
 };
 
@@ -98,6 +92,12 @@ export const stelaChartSpecSchema = z.discriminatedUnion("type", [
 export type StelaChartSpec = z.infer<typeof stelaChartSpecSchema>;
 export type StelaChartType = StelaChartSpec["type"];
 export type StelaChartSource = StelaChartSpec["source"];
+export type StelaRunChartSpec = StelaChartSpec & {
+  source: { kind: "run"; runId: string };
+};
+export type StelaEmbeddedChartSpec = StelaChartSpec & {
+  source: { kind: "block"; blockId: string };
+};
 
 export class StelaChartError extends Error {
   constructor(message: string) {
@@ -127,6 +127,14 @@ export function parseStelaChartSpec(source: string): StelaChartSpec {
 
 export function stringifyStelaChartSpec(spec: StelaChartSpec): string {
   return JSON.stringify(stelaChartSpecSchema.parse(spec), null, 2);
+}
+
+export function parseEmbeddedStelaChartSpec(source: string): StelaEmbeddedChartSpec {
+  const spec = parseStelaChartSpec(source);
+  if (spec.source.kind !== "block") {
+    throw new StelaChartError("A note chart must be associated with a RunSQL block.");
+  }
+  return spec as StelaEmbeddedChartSpec;
 }
 
 export function chartFields(spec: StelaChartSpec): string[] {

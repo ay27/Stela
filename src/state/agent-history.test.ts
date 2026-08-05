@@ -15,7 +15,12 @@ const history: AgentHistorySession = {
   },
   runs: [
     {
-      request: { runId: "run_1", sessionId: "sess_1", prompt: "Inspect revenue" },
+      request: {
+        runId: "run_1",
+        sessionId: "sess_1",
+        prompt: "Inspect revenue",
+        attachments: [{ kind: "runsql", label: "Revenue SQL", sql: "SELECT revenue FROM orders" }],
+      },
       startedAt: 1,
       finishedAt: null,
       events: [
@@ -34,6 +39,7 @@ const history: AgentHistorySession = {
 
 const timeline = replayAgentHistory(history);
 assert.equal(timeline[0]?.kind, "user");
+assert.equal(timeline[0]?.kind === "user" && timeline[0].attachments?.[0]?.kind, "runsql");
 assert.equal(timeline[1]?.kind, "proposal");
 assert.equal(timeline[1]?.kind === "proposal" && timeline[1].resolution, "expired");
 assert.equal(timeline[2]?.kind, "interrupted");

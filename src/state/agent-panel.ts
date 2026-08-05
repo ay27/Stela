@@ -54,6 +54,7 @@ export type AgentTimelineEntry =
       /** 发送时输入框里的 @表 与 [[笔记]] 引用，用于在气泡里回显 pill。 */
       mentionedTables?: string[];
       referencedNotes?: string[];
+      attachments?: AgentAttachment[];
     }
   | {
       kind: "tool";
@@ -303,6 +304,7 @@ export function replayAgentHistory(history: AgentHistorySession): AgentTimelineE
         content: run.request.prompt,
         ...(run.request.mentionedTables?.length ? { mentionedTables: run.request.mentionedTables } : {}),
         ...(run.request.referencedNotes?.length ? { referencedNotes: run.request.referencedNotes } : {}),
+        ...(run.request.attachments?.length ? { attachments: run.request.attachments } : {}),
       },
     ];
     for (const event of run.events) timeline = applyEvent(timeline, event);
@@ -390,12 +392,9 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
     try {
       const history = await listAgentHistory();
       if (get().vaultPath !== vaultPath) return;
+      // 启动/切换 vault 只刷新历史列表，不自动打开最近会话。空白 tab 是明确的
+      // 新对话入口；需要续聊时由用户从 History 主动选择。
       set({ history, historyLoaded: true });
-      const latestLocal = history.find((item) => item.isLocal);
-      const active = get().tabs.find((tab) => tab.id === get().activeTabId);
-      if (latestLocal && active?.timeline.length === 0) {
-        await get().openHistory(latestLocal);
-      }
     } catch {
       if (get().vaultPath === vaultPath) set({ history: [], historyLoaded: true });
     }
@@ -516,6 +515,7 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
             content: prompt,
             ...(mentionedTables?.length ? { mentionedTables } : {}),
             ...(referencedNotes?.length ? { referencedNotes } : {}),
+            ...(attachments?.length ? { attachments } : {}),
           },
         ],
         draft: emptyDraft(),

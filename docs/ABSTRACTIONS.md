@@ -82,10 +82,15 @@ interface DetailMeta {
   rowCount: number;
   firstRow: Record<string, unknown> | null;  // JSON object for quick preview
   resultRefId: string;   // FK into SQLite runs table
+  chart?: StelaEmbeddedChartSpec | null;
+  chartError?: string;   // runtime-only validation state
 }
 ```
 
-Serialization preserves `detailRaw` verbatim during editing to avoid JSON whitespace drift. Only successful runs rewrite `detailRaw` via `serializeDetail()`.
+Serialization preserves `detailRaw` verbatim during ordinary editing. A pending
+detail may contain only `<block-id>` and `<chart>`; successful execution rewrites
+the execution fields while preserving the chart. The embedded chart's block id
+must equal `DetailMeta.blockId`.
 
 ## RunRecord and Storage
 
@@ -141,17 +146,16 @@ Renderer adapter: `src/services/storage/electron-storage.ts` → `window.stela.s
 
 ### StelaChartSpec
 
-Analytical charts are stored as versioned JSON in a fenced `stela-chart` block.
-The shared Zod schema in `electron/shared/chart-spec.ts` is the single parser for
-Agent output, editor rendering, and export. The initial discriminated chart set
-is `kpi | bar | line | pie | funnel | histogram`; each type names result columns
-instead of containing result rows or executable expressions.
+Analytical charts are versioned JSON owned by `DetailMeta.chart`. The shared Zod
+schema in `electron/shared/chart-spec.ts` is the single parser for Agent output,
+RunSQL rendering, and export. The initial discriminated chart set is
+`kpi | bar | line | pie | funnel | histogram`; each type names result columns
+instead of containing rows or executable expressions.
 
 `source.kind = "run"` pins a conversation chart to one audited execution.
-`source.kind = "previous-runsql"` makes a note chart resolve the immediately
-preceding RunSQL node's current `<result-ref-id>`, with an optional
-`fallbackRunId` for preview before that block has run locally. Missing cache data
-may be restored by exact run id from the JSONL journal.
+`source.kind = "block"` strongly associates a persisted chart with its enclosing
+RunSQL block. The current or selected historical `<result-ref-id>` supplies data;
+missing cache data may be restored by exact run id from the JSONL journal.
 
 The validator rejects unknown properties, missing/non-numeric fields, empty
 results, more than 5,000 rows, and type-specific category limits. Aggregation and

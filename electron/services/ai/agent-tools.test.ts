@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -7,6 +7,7 @@ import type { AiSettings } from "@shared/types";
 
 import { ExecutionPlanStore } from "./execution-plan";
 import { createAgentTools, dispatchTool } from "./agent-tools";
+import { parseRunsqlFences } from "@shared/runsql-fences";
 
 const AI_SETTINGS = {
   providerMode: "openai-compatible",
@@ -494,6 +495,121 @@ Inspect the live schema first.`;
   }
 
   // 未知工具名不崩，返回错误文本
+  {
+    const chartNote = join(root, "chart-note.md");
+    await writeFile(chartNote, "# Chart\n\n```runsql\nSELECT category, count FROM demo\n```\n");
+    const chart = JSON.stringify({
+      version: 1,
+      type: "bar",
+      source: { kind: "run", runId: "chart-run" },
+      title: "Demo",
+      category: "category",
+      value: "count",
+    });
+    const saved = await dispatchTool(
+      "save_chart_to_note",
+      JSON.stringify({ path: "chart-note.md", runId: "chart-run", chart }),
+      {
+        ...baseCtx,
+        resolveChartRun: async () => ({
+          runId: "chart-run",
+          blockId: "agent:test-run",
+          sql: "SELECT category, count FROM demo",
+          status: "ok" as const,
+          message: null,
+          startedAt: Date.now(),
+          elapsedMs: 1,
+          rowCount: 2,
+          connectionName: "demo",
+          notePath: null,
+        }),
+      },
+    );
+    assert.equal(saved.ok, true, saved.text);
+    const content = await readFile(chartNote, "utf8");
+    const fences = parseRunsqlFences(content);
+    assert.equal(fences.length, 1, content);
+    assert.equal(fences[0]?.detail?.chart?.source.kind, "block");
+    assert.equal(fences[0]?.detail?.chart?.source.kind === "block" && fences[0].detail.chart.source.blockId, fences[0]?.blockId);
+    assert.doesNotMatch(content, /```stela-chart/);
+
+    const replaced = await dispatchTool(
+      "save_chart_to_note",
+      JSON.stringify({ path: "chart-note.md", runId: "chart-run", chart: chart.replace("Demo", "Updated") }),
+      {
+        ...baseCtx,
+        resolveChartRun: async () => ({
+          runId: "chart-run",
+          blockId: "agent:test-run",
+          sql: "SELECT category, count FROM demo",
+          status: "ok" as const,
+          message: null,
+          startedAt: Date.now(),
+          elapsedMs: 1,
+          rowCount: 2,
+          connectionName: "demo",
+          notePath: null,
+        }),
+      },
+    );
+    assert.equal(replaced.ok, true, replaced.text);
+    assert.equal(parseRunsqlFences(await readFile(chartNote, "utf8"))[0]?.detail?.chart?.title, "Updated");
+
+    const duplicatePath = join(root, "chart-duplicate.md");
+    await writeFile(
+      duplicatePath,
+      "```runsql\nSELECT category, count FROM demo\n```\n\n<detail>\n   <block-id>blk-first</block-id>\n</detail>\n\n```runsql\nSELECT category, count FROM demo\n```\n\n<detail>\n   <block-id>blk-last</block-id>\n</detail>\n",
+    );
+    const duplicate = await dispatchTool(
+      "save_chart_to_note",
+      JSON.stringify({ path: "chart-duplicate.md", runId: "chart-run", chart }),
+      {
+        ...baseCtx,
+        resolveChartRun: async () => ({
+          runId: "chart-run",
+          blockId: "agent:test-run",
+          sql: "SELECT category, count FROM demo",
+          status: "ok" as const,
+          message: null,
+          startedAt: Date.now(),
+          elapsedMs: 1,
+          rowCount: 2,
+          connectionName: "demo",
+          notePath: null,
+        }),
+      },
+    );
+    assert.equal(duplicate.ok, true, duplicate.text);
+    const duplicateFences = parseRunsqlFences(await readFile(duplicatePath, "utf8"));
+    assert.equal(duplicateFences[0]?.detail?.chart, null);
+    assert.equal(duplicateFences[1]?.detail?.chart?.source.kind === "block" && duplicateFences[1].detail.chart.source.blockId, "blk-last");
+
+    const rejectedPath = join(root, "chart-rejected.md");
+    await writeFile(rejectedPath, "# Keep\n");
+    const rejected = await dispatchTool(
+      "save_chart_to_note",
+      JSON.stringify({ path: "chart-rejected.md", runId: "chart-run", chart }),
+      {
+        ...baseCtx,
+        requestProposal: async () => false,
+        resolveChartRun: async () => ({
+          runId: "chart-run",
+          blockId: "agent:test-run",
+          sql: "SELECT category, count FROM demo",
+          status: "ok" as const,
+          message: null,
+          startedAt: Date.now(),
+          elapsedMs: 1,
+          rowCount: 2,
+          connectionName: "demo",
+          notePath: null,
+        }),
+      },
+    );
+    assert.equal(rejected.ok, false);
+    assert.equal(await readFile(rejectedPath, "utf8"), "# Keep\n");
+  }
+
   {
     const r = await dispatchTool("not_a_real_tool", "{}", baseCtx);
     assert.equal(r.ok, false);

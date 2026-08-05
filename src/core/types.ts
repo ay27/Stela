@@ -3,14 +3,8 @@
  * 相关类型。运行时类型由 codeblock-nodeview 内部消费；磁盘 round-trip 由
  * `editor/runsql/stela-codeblock-schema.ts` 与 `remark-detail-merge.ts` 配合完成。
  */
-export interface DetailMeta {
-  blockId?: string;
-  runDate: string;
-  elapsed: string;
-  rowCount: number;
-  firstRow: Record<string, unknown> | null;
-  resultRefId: string;
-}
+export type { DetailMeta } from "@shared/detail-meta";
+import type { DetailMeta } from "@shared/detail-meta";
 
 /**
  * RunSQL 块的内存视图（不进 ProseMirror schema，仅用作执行链/UI 摘要的方便结构）。

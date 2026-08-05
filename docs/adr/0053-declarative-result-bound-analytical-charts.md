@@ -2,7 +2,8 @@
 type: ADR
 id: "0053"
 title: "Declarative result-bound analytical charts"
-status: active
+status: superseded
+superseded_by: "0054"
 date: 2026-08-05
 ---
 

@@ -22,7 +22,6 @@ import {
   normalizeExportHtmlTags,
   unescapeMilkdownLiterals,
   parseRunsqlBlocks,
-  parseStelaChartBlocks,
   renderMarkdownTable,
   renderResultBlock,
   rewriteRunsqlFencesToSql,
@@ -302,23 +301,6 @@ async function testParseRunsqlBlocks(): Promise<Check[]> {
   return out;
 }
 
-async function testParseStelaChartBlocks(): Promise<Check[]> {
-  const md = `# Chart\n\n\`\`\`stela-chart\n${JSON.stringify({
-    version: 1,
-    type: "bar",
-    source: { kind: "run", runId: "run-1" },
-    category: "category",
-    value: "count",
-  })}\n\`\`\`\n`;
-  const blocks = parseStelaChartBlocks(md);
-  return [
-    expect("chart: finds one block", blocks.length === 1),
-    expect("chart: parses type", blocks[0]?.spec?.type === "bar"),
-    expect("chart: keeps exact raw fence", blocks[0]?.raw.startsWith("```stela-chart") === true),
-    expect("chart: keeps invalid block for warning", parseStelaChartBlocks("```stela-chart\n{}\n```")[0]?.spec === null),
-  ];
-}
-
 // ─── renderMarkdownTable ──────────────────────────────────────────────────────
 
 async function testRenderMarkdownTable(): Promise<Check[]> {
@@ -531,7 +513,7 @@ async function testExportNoteToMarkdown(): Promise<Check[]> {
     );
   }
 
-  // 数据加载失败 → 保留原 <detail> + failedBlocks = 1
+  // 数据加载失败 → 只输出可读警告，不泄漏内部 <detail>
   {
     let savedContent = "";
     const result = await exportNoteToMarkdown({
@@ -565,11 +547,50 @@ async function testExportNoteToMarkdown(): Promise<Check[]> {
     });
     out.push(expect("data-fail: failedBlocks = 1", result.failedBlocks === 1));
     out.push(
-      expect("data-fail: original detail preserved", savedContent.includes("<detail>")),
+      expect("data-fail: no internal detail", !savedContent.includes("<detail>")),
     );
     out.push(
       expect("data-fail: warning added", savedContent.includes("Result data missing")),
     );
+  }
+
+  // detail 内图表 → 在结果表后输出 SVG asset，不输出配置 JSON
+  {
+    const chartJson = JSON.stringify({
+      version: 1,
+      type: "bar",
+      source: { kind: "block", blockId: "blk-chart" },
+      category: "category",
+      value: "count",
+      orientation: "horizontal",
+      stacked: false,
+      sort: "desc",
+    });
+    const chartMd = `\`\`\`runsql\nSELECT category, count FROM demo\n\`\`\`\n<detail>\n   <block-id>blk-chart</block-id>\n   <run-date>2026-08-05 12:00:00</run-date>\n   <elapsed>10ms</elapsed>\n   <row-count>2</row-count>\n   <first-row>{"category":"A","count":2}</first-row>\n   <result-ref-id>run-chart</result-ref-id>\n   <chart>${chartJson}</chart>\n</detail>`;
+    let savedContent = "";
+    let assets: Array<{ id: string; extension: "svg"; content: string }> = [];
+    const result = await exportNoteToMarkdown({
+      filePath: "/vault/chart.md",
+      rowCap: 10,
+      deps: {
+        readFile: async () => chartMd,
+        loaderDeps: makeLoaderDeps(
+          [{ name: "category", typeName: "TEXT" }, { name: "count", typeName: "INT" }],
+          [["A", 2], ["B", 1]],
+          2,
+        ),
+        renderChart: async () => "<svg>chart</svg>",
+        saveMarkdownBundle: async (_name, content, nextAssets) => {
+          savedContent = content;
+          assets = nextAssets;
+          return { canceled: false, path: "/out/chart-export.md" };
+        },
+      },
+    });
+    out.push(expect("chart-export: succeeds", result.failedCharts === 0));
+    out.push(expect("chart-export: image after result", savedContent.indexOf("| A | 2 |") < savedContent.indexOf("stela-asset://chart-1")));
+    out.push(expect("chart-export: one svg asset", assets.length === 1 && assets[0]?.content.includes("svg")));
+    out.push(expect("chart-export: hides detail json", !savedContent.includes("<chart>") && !savedContent.includes('"blockId"')));
   }
 
   // 多块：两块都有数据，第二块失败
@@ -761,7 +782,6 @@ async function main() {
     ["unescapeMilkdownLiterals", testUnescapeMilkdownLiterals],
     ["rewriteRunsqlFencesToSql", testRewriteRunsqlFencesToSql],
     ["parseRunsqlBlocks", testParseRunsqlBlocks],
-    ["parseStelaChartBlocks", testParseStelaChartBlocks],
     ["renderMarkdownTable", testRenderMarkdownTable],
     ["renderResultBlock", testRenderResultBlock],
     ["exportNoteToMarkdown (主流程)", testExportNoteToMarkdown],

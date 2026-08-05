@@ -217,6 +217,9 @@ export async function runBlock(
     rowCount,
     firstRow,
     resultRefId: runId,
+    ...((node.attrs.detail as DetailMeta | null | undefined)?.chart
+      ? { chart: (node.attrs.detail as DetailMeta).chart }
+      : {}),
   };
   const detailRaw = serializeDetail(detail);
   endPendingRun(pendingRunKey);

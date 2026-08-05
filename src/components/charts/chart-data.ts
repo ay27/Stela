@@ -21,9 +21,9 @@ export async function loadStelaChartData(
   const runId =
     spec.source.kind === "run"
       ? spec.source.runId
-      : previousRunId ?? spec.source.fallbackRunId ?? null;
+      : previousRunId ?? null;
   if (!runId) {
-    throw new StelaChartError("Run the query immediately above this chart to load its data.");
+    throw new StelaChartError("Run this query to load its chart data.");
   }
 
   const read = async () => {

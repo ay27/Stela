@@ -12,6 +12,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { AppError } from "@shared/errors";
 import type {
   AgentEvent,
+  AgentAttachment,
   AgentHistoryRef,
   AgentHistoryRun,
   AgentHistorySession,
@@ -198,12 +199,44 @@ function asRunRequest(value: unknown): AgentRunRequest | null {
     Array.isArray(input) && input.every((item) => typeof item === "string")
       ? input
       : undefined;
+  const attachments = (input: unknown): AgentAttachment[] | undefined => {
+    if (!Array.isArray(input)) return undefined;
+    const parsed: AgentAttachment[] = [];
+    for (const item of input) {
+      const attachment = asRecord(item);
+      if (
+        !attachment ||
+        (attachment.kind !== "runsql" && attachment.kind !== "selection") ||
+        typeof attachment.label !== "string"
+      ) {
+        continue;
+      }
+      if (attachment.kind === "runsql" && typeof attachment.sql === "string") {
+        parsed.push({
+          kind: "runsql",
+          label: attachment.label,
+          sql: attachment.sql,
+          ...(typeof attachment.sourcePath === "string" ? { sourcePath: attachment.sourcePath } : {}),
+        });
+      } else if (attachment.kind === "selection" && typeof attachment.text === "string") {
+        parsed.push({
+          kind: "selection",
+          label: attachment.label,
+          text: attachment.text,
+          ...(typeof attachment.sourcePath === "string" ? { sourcePath: attachment.sourcePath } : {}),
+        });
+      }
+    }
+    return parsed.length > 0 ? parsed : undefined;
+  };
+  const parsedAttachments = attachments(request.attachments);
   return {
     runId: request.runId,
     prompt: request.prompt,
     ...(typeof request.sessionId === "string" ? { sessionId: request.sessionId } : {}),
     ...(strings(request.mentionedTables) ? { mentionedTables: strings(request.mentionedTables) } : {}),
     ...(strings(request.referencedNotes) ? { referencedNotes: strings(request.referencedNotes) } : {}),
+    ...(parsedAttachments ? { attachments: parsedAttachments } : {}),
   };
 }
 

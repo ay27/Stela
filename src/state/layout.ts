@@ -22,7 +22,7 @@ export const SIDEBAR_DEFAULT_WIDTH = 260;
 
 /** Agent 全局栏宽度限制（px）。比左侧略宽——聊天内容比文件名更需要横向空间。 */
 export const AGENT_PANEL_MIN_WIDTH = 280;
-export const AGENT_PANEL_MAX_WIDTH = 560;
+export const AGENT_PANEL_MAX_WIDTH = 840;
 export const AGENT_PANEL_DEFAULT_WIDTH = 340;
 
 const STORAGE_KEY_WIDTH = "stela.layout.sidebarWidth";

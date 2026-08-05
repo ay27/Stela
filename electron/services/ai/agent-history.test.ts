@@ -21,6 +21,9 @@ const request: AgentRunRequest = {
   runId: "run_1",
   sessionId: "session_1",
   prompt: "Show daily revenue",
+  attachments: [
+    { kind: "runsql", label: "Revenue SQL", sql: "SELECT sum(revenue) FROM orders", sourcePath: "reports/revenue.md" },
+  ],
 };
 
 try {
@@ -62,6 +65,7 @@ try {
   assert.equal(history.summary.title, "Show daily revenue");
   assert.equal(history.runs.length, 1);
   assert.equal(history.runs[0]?.finishedAt !== null, true);
+  assert.deepEqual(history.runs[0]?.request.attachments, request.attachments);
   assert.deepEqual(history.runs[0]?.events, [
     { type: "final", runId: "run_1", content: "Revenue is 42." },
   ]);

@@ -15,10 +15,13 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 
 import { AppError } from "@shared/errors";
 import {
+  parseStelaChartSpec,
   stelaChartSpecSchema,
   stringifyStelaChartSpec,
   validateStelaChartData,
 } from "@shared/chart-spec";
+import { serializeDetail, type DetailMeta } from "@shared/detail-meta";
+import { parseRunsqlFences, patchRunsqlDetail } from "@shared/runsql-fences";
 import type {
   AgentToolName,
   AgentProposalKind,
@@ -28,6 +31,7 @@ import type {
   ConnectionEntry,
   ConnectorKindMeta,
   QueryResult,
+  RunRecord,
   SqlIndexFilter,
   SqlIndexHit,
   SqlIndexOperation,
@@ -172,6 +176,7 @@ export interface AgentToolContext {
   }) => void;
   /** 本次 Agent 会话内 run_sql 的真实结果，只供 create_chart 校验。 */
   chartRuns?: Map<string, { sql: string; columns: ColumnDef[]; rows: unknown[][] }>;
+  resolveChartRun?: (runId: string) => Promise<RunRecord | null>;
   /**
    * 单次 run 的可变状态：`runId` / `notePath` 用于给执行历史生成
    * `agent:<runId>` 形式的 blockId；`questionsAsked` 由 `ask_user` 自增。
@@ -286,6 +291,19 @@ export function createAgentTools(options: {
       }),
       executionMode: "sequential",
       execute: (toolCallId, params) => runTool("create_chart", toolCallId, params, ctx, requestProposal),
+    },
+    {
+      name: "save_chart_to_note",
+      label: "Save chart to note",
+      description:
+        "Attach a validated conversation chart to its RunSQL block in the current note. The tool resolves the original SQL from runId, reuses the last exact SQL match or appends a new RunSQL block, and always requires edit approval.",
+      parameters: Type.Object({
+        path: Type.String({ description: "Vault-relative Markdown note path." }),
+        runId: Type.String({ description: "Exact runId from the chart source." }),
+        chart: Type.String({ description: "Exact stela-chart JSON from the conversation." }),
+      }),
+      executionMode: "sequential",
+      execute: (toolCallId, params) => runTool("save_chart_to_note", toolCallId, params, ctx, requestProposal),
     },
     {
       name: "search_vault",
@@ -715,6 +733,89 @@ function runCreateChart(args: Record<string, unknown>, ctx: AgentToolContext): T
     markdown: `\`\`\`stela-chart\n${source}\n\`\`\``,
     instruction: "Include this exact fenced block in the final answer, followed by a concise evidence line.",
   });
+}
+
+function normalizeChartSql(sql: string): string {
+  return sql.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").trim();
+}
+
+function pendingDetail(blockId: string): DetailMeta {
+  return {
+    blockId,
+    runDate: "",
+    elapsed: "",
+    rowCount: 0,
+    firstRow: null,
+    resultRefId: "",
+  };
+}
+
+function runsqlFence(sql: string): string {
+  const longest = Math.max(0, ...Array.from(sql.matchAll(/`+/g), (match) => match[0].length));
+  const marker = "`".repeat(Math.max(3, longest + 1));
+  return `${marker}runsql\n${sql.trim()}\n${marker}`;
+}
+
+async function runSaveChartToNote(
+  args: { path?: unknown; runId?: unknown; chart?: unknown },
+  ctx: AgentToolContext,
+): Promise<ToolOutcome> {
+  if (typeof args.path !== "string" || !args.path.trim()) return fail("path must be a non-empty string.");
+  if (typeof args.runId !== "string" || !args.runId.trim()) return fail("runId must be a non-empty string.");
+  if (typeof args.chart !== "string" || !args.chart.trim()) return fail("chart must be the exact chart JSON.");
+  if (!ctx.resolveChartRun) return fail("Chart run lookup is unavailable.");
+
+  const conversationSpec = parseStelaChartSpec(args.chart);
+  if (conversationSpec.source.kind !== "run" || conversationSpec.source.runId !== args.runId) {
+    return fail("The chart source must match the supplied conversation runId.");
+  }
+  const run = await ctx.resolveChartRun(args.runId);
+  if (!run || run.status !== "ok" || !run.sql.trim()) {
+    return fail("The original successful SQL run is no longer available locally.");
+  }
+
+  const target = await vaultFs.ensureWithinVault(ctx.vaultPath, resolveVaultTarget(ctx.vaultPath, args.path));
+  const oldContent = await vaultFs.readFile(target);
+  const normalizedSql = normalizeChartSql(run.sql);
+  const matches = parseRunsqlFences(oldContent).filter((fence) => normalizeChartSql(fence.sql) === normalizedSql);
+  const existing = matches.at(-1) ?? null;
+  const blockId = existing?.blockId ?? `blk_${Date.now().toString(36)}_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  const embeddedSpec = stelaChartSpecSchema.parse({
+    ...conversationSpec,
+    source: { kind: "block", blockId },
+  });
+  const nextDetail: DetailMeta = {
+    ...(existing?.detail ?? pendingDetail(blockId)),
+    blockId,
+    chart: embeddedSpec as DetailMeta["chart"],
+  };
+  const detailRaw = serializeDetail(nextDetail);
+  const nextContent = existing
+    ? patchRunsqlDetail(oldContent, {
+        blockId: existing.blockId,
+        blockIndex: existing.index,
+        sql: existing.sql,
+        detailRaw,
+      })
+    : `${oldContent.replace(/\s*$/, "")}\n\n${runsqlFence(run.sql)}\n\n${detailRaw}\n`;
+  const approved = await ctx.requestProposal({
+    kind: "edit_note",
+    payload: {
+      notePath: args.path,
+      description: existing?.detail?.chart
+        ? "Replace the chart attached to an existing RunSQL block"
+        : existing
+          ? "Attach a chart to an existing RunSQL block"
+          : "Append the chart's RunSQL block to this note",
+      oldContent: truncate(oldContent, 6_000),
+      newContent: truncate(nextContent, 6_000),
+    },
+  });
+  if (!approved) return fail("The user rejected this chart edit. Do not retry it as-is.");
+  await vaultFs.writeFile(target, nextContent);
+  if ((await vaultFs.readFile(target)) !== nextContent) return fail(`Write verification failed for ${args.path}.`);
+  notifyFileChanged(target);
+  return ok({ path: args.path, blockId, reusedRunsql: Boolean(existing), replacedChart: Boolean(existing?.detail?.chart) });
 }
 
 /** 记录失败不应影响 agent 继续工作——落盘异常只记日志。 */
@@ -1174,6 +1275,8 @@ export async function dispatchTool(
         return await runSql(args, ctx);
       case "create_chart":
         return runCreateChart(args, ctx);
+      case "save_chart_to_note":
+        return await runSaveChartToNote(args, ctx);
       case "search_vault":
         return await runSearchVault(args, ctx);
       case "search_sql_usage":

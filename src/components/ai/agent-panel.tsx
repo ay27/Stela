@@ -643,7 +643,7 @@ function TimelineItem({
       return (
         <div className="flex justify-end">
           <div className="max-w-[80%] rounded-lg bg-muted px-3 py-2 text-sm text-foreground">
-            {entry.mentionedTables?.length || entry.referencedNotes?.length ? (
+            {entry.mentionedTables?.length || entry.referencedNotes?.length || entry.attachments?.length ? (
               <div className="mb-1.5 flex flex-wrap gap-1">
                 {entry.mentionedTables?.map((table) => (
                   <span
@@ -662,6 +662,23 @@ function TimelineItem({
                   >
                     <FileText className="h-3 w-3 flex-none text-primary" />
                     <span className="truncate">{path.split("/").pop() || path}</span>
+                  </span>
+                ))}
+                {entry.attachments?.map((attachment, index) => (
+                  <span
+                    key={`a-${attachment.kind}-${index}`}
+                    title={attachment.kind === "runsql" ? attachment.sql : attachment.text}
+                    className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                  >
+                    {attachment.kind === "runsql" ? (
+                      <Database className="h-3 w-3 flex-none text-primary" />
+                    ) : (
+                      <MessageSquareQuote className="h-3 w-3 flex-none text-primary" />
+                    )}
+                    <span className="max-w-[220px] truncate">
+                      {attachment.label}
+                      {attachment.sourcePath ? ` · ${attachment.sourcePath.split("/").pop() || attachment.sourcePath}` : ""}
+                    </span>
                   </span>
                 ))}
               </div>

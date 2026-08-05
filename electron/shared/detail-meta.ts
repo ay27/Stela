@@ -18,6 +18,12 @@
  * ```
  */
 
+import {
+  parseEmbeddedStelaChartSpec,
+  stelaChartSpecSchema,
+  type StelaEmbeddedChartSpec,
+} from "./chart-spec";
+
 export interface DetailMeta {
   blockId?: string;
   runDate: string;
@@ -25,6 +31,9 @@ export interface DetailMeta {
   rowCount: number;
   firstRow: Record<string, unknown> | null;
   resultRefId: string;
+  chart?: StelaEmbeddedChartSpec | null;
+  /** Runtime-only validation message. The original detailRaw remains authoritative. */
+  chartError?: string;
 }
 
 const DETAIL_RE = /<detail>([\s\S]*?)<\/detail>/i;
@@ -55,6 +64,19 @@ export function parseDetail(inner: string): DetailMeta {
   }
 
   const blockId = tag("block-id") || undefined;
+  const chartRaw = tag("chart");
+  let chart: StelaEmbeddedChartSpec | null = null;
+  let chartError: string | undefined;
+  if (chartRaw) {
+    try {
+      chart = parseEmbeddedStelaChartSpec(chartRaw);
+      if (!blockId || chart.source.blockId !== blockId) {
+        chartError = "Chart blockId does not match its RunSQL block.";
+      }
+    } catch (error) {
+      chartError = error instanceof Error ? error.message : String(error);
+    }
+  }
 
   return {
     blockId,
@@ -63,6 +85,8 @@ export function parseDetail(inner: string): DetailMeta {
     rowCount: parseInt(tag("row-count"), 10) || 0,
     firstRow,
     resultRefId: tag("result-ref-id"),
+    chart,
+    ...(chartError ? { chartError } : {}),
   };
 }
 
@@ -70,13 +94,22 @@ export function serializeDetail(d: DetailMeta): string {
   const fr = d.firstRow !== null ? JSON.stringify(d.firstRow) : "null";
   const lines = ["<detail>"];
   if (d.blockId) lines.push(`   <block-id>${d.blockId}</block-id>`);
-  lines.push(
-    `   <run-date>${d.runDate}</run-date>`,
-    `   <elapsed>${d.elapsed}</elapsed>`,
-    `   <row-count>${d.rowCount}</row-count>`,
-    `   <first-row>${fr}</first-row>`,
-    `   <result-ref-id>${d.resultRefId}</result-ref-id>`,
-    "</detail>",
-  );
+  if (d.resultRefId || d.runDate || d.elapsed) {
+    lines.push(
+      `   <run-date>${d.runDate}</run-date>`,
+      `   <elapsed>${d.elapsed}</elapsed>`,
+      `   <row-count>${d.rowCount}</row-count>`,
+      `   <first-row>${fr}</first-row>`,
+      `   <result-ref-id>${d.resultRefId}</result-ref-id>`,
+    );
+  }
+  if (d.chart) {
+    const chart = JSON.stringify(stelaChartSpecSchema.parse(d.chart)).replace(
+      /[<>&]/g,
+      (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    );
+    lines.push(`   <chart>${chart}</chart>`);
+  }
+  lines.push("</detail>");
   return lines.join("\n");
 }
