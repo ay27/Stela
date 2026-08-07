@@ -14,14 +14,12 @@ import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 
 import { AppError } from "@shared/errors";
+import { parseAnalysisCanvas, type AnalysisCanvas } from "@shared/analysis-canvas";
 import {
-  parseStelaChartSpec,
   stelaChartSpecSchema,
   stringifyStelaChartSpec,
   validateStelaChartData,
 } from "@shared/chart-spec";
-import { serializeDetail, type DetailMeta } from "@shared/detail-meta";
-import { parseRunsqlFences, patchRunsqlDetail } from "@shared/runsql-fences";
 import type {
   AgentToolName,
   AgentProposalKind,
@@ -38,6 +36,7 @@ import type {
 } from "@shared/types";
 
 import { getLogger } from "../logger";
+import * as analysisCanvasService from "../analysis-canvas";
 import * as search from "../search";
 import * as vaultFs from "../vault-fs";
 import { notifyFileChanged } from "../vault-watcher";
@@ -177,11 +176,12 @@ export interface AgentToolContext {
   /** 本次 Agent 会话内 run_sql 的真实结果，只供 create_chart 校验。 */
   chartRuns?: Map<string, { sql: string; columns: ColumnDef[]; rows: unknown[][] }>;
   resolveChartRun?: (runId: string) => Promise<RunRecord | null>;
+  onCanvasUpdated?: (event: { path: string; title: string; action: "created" | "updated" }) => void;
   /**
    * 单次 run 的可变状态：`runId` / `notePath` 用于给执行历史生成
    * `agent:<runId>` 形式的 blockId；`questionsAsked` 由 `ask_user` 自增。
    */
-  run: { runId: string; notePath: string | null; questionsAsked: number };
+  run: { runId: string; sessionId?: string; notePath: string | null; questionsAsked: number };
   plan?: ExecutionPlanStore;
   recordRun: AgentRunRecorder;
   requestProposal: (proposal: ProposalRequest) => Promise<boolean | string>;
@@ -293,17 +293,31 @@ export function createAgentTools(options: {
       execute: (toolCallId, params) => runTool("create_chart", toolCallId, params, ctx, requestProposal),
     },
     {
-      name: "save_chart_to_note",
-      label: "Save chart to note",
+      name: "create_analysis_canvas",
+      label: "Create analysis Canvas",
       description:
-        "Attach a validated conversation chart to its RunSQL block in the current note. The tool resolves the original SQL from runId, reuses the last exact SQL match or appends a new RunSQL block, and always requires edit approval.",
+        "Create a read-only .stela.canvas analysis artifact. Use early for a multi-stage analysis with several evidence views, or whenever the user asks for a Canvas, report, or dashboard. Updates do not require edit approval.",
       parameters: Type.Object({
-        path: Type.String({ description: "Vault-relative Markdown note path." }),
-        runId: Type.String({ description: "Exact runId from the chart source." }),
-        chart: Type.String({ description: "Exact stela-chart JSON from the conversation." }),
+        title: Type.String(),
+        directory: Type.Optional(Type.String({ description: "Vault-relative directory. Defaults to the current note directory or vault root." })),
       }),
       executionMode: "sequential",
-      execute: (toolCallId, params) => runTool("save_chart_to_note", toolCallId, params, ctx, requestProposal),
+      execute: (toolCallId, params) => runTool("create_analysis_canvas", toolCallId, params, ctx, requestProposal),
+    },
+    {
+      name: "read_analysis_canvas", label: "Read analysis Canvas",
+      description: "Read and validate an existing .stela.canvas file before updating it.",
+      parameters: Type.Object({ path: Type.String() }), executionMode: "parallel",
+      execute: (toolCallId, params) => runTool("read_analysis_canvas", toolCallId, params, ctx, requestProposal),
+    },
+    {
+      name: "update_analysis_canvas", label: "Update analysis Canvas",
+      description: "Replace a Canvas with a validated structured version. Bind every new or changed SQL source to a successful run_sql runId; Stela copies the audited SQL and connection metadata. Canvas sources must be refreshable table-backed queries: never turn fetched values into SELECT literals, VALUES, or constant UNION rows. Preserve stable source, section, and card ids across updates.",
+      parameters: Type.Object({
+        path: Type.String(), etag: Type.String(), content: Type.String({ description: "Complete version 1 .stela.canvas JSON." }),
+        sourceRuns: Type.Array(Type.Object({ sourceId: Type.String(), runId: Type.String() })),
+      }), executionMode: "sequential",
+      execute: (toolCallId, params) => runTool("update_analysis_canvas", toolCallId, params, ctx, requestProposal),
     },
     {
       name: "search_vault",
@@ -552,6 +566,10 @@ function resolveVaultTarget(vaultPath: string, target: string): string {
   return path.isAbsolute(target) ? target : path.join(vaultPath, target);
 }
 
+function vaultRelativePath(vaultPath: string, target: string): string {
+  return path.relative(vaultPath, target).split(path.sep).join("/");
+}
+
 function formatQueryResult(result: QueryResult): unknown {
   if (result.kind === "mutation") {
     return { kind: "mutation", affectedRows: result.affectedRows, elapsedMs: result.elapsedMs };
@@ -735,87 +753,75 @@ function runCreateChart(args: Record<string, unknown>, ctx: AgentToolContext): T
   });
 }
 
-function normalizeChartSql(sql: string): string {
-  return sql.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").trim();
+async function runCreateAnalysisCanvas(args: Record<string, unknown>, ctx: AgentToolContext): Promise<ToolOutcome> {
+  if (typeof args.title !== "string" || !args.title.trim()) return fail("title must be a non-empty string.");
+  const directory = typeof args.directory === "string" && args.directory.trim()
+    ? resolveVaultTarget(ctx.vaultPath, args.directory)
+    : ctx.run.notePath ? path.dirname(ctx.run.notePath) : ctx.vaultPath;
+  const file = await analysisCanvasService.createAnalysisCanvas(
+    ctx.vaultPath,
+    directory,
+    args.title.trim(),
+    ctx.run.sessionId ?? null,
+  );
+  const canvas = parseAnalysisCanvas(file.content);
+  ctx.onCanvasUpdated?.({ path: vaultRelativePath(ctx.vaultPath, file.path), title: canvas.title, action: "created" });
+  return ok({ path: file.path, etag: file.etag, content: file.content, instruction: "Populate this Canvas incrementally with update_analysis_canvas after verified run_sql results." });
 }
 
-function pendingDetail(blockId: string): DetailMeta {
-  return {
-    blockId,
-    runDate: "",
-    elapsed: "",
-    rowCount: 0,
-    firstRow: null,
-    resultRefId: "",
-  };
-}
-
-function runsqlFence(sql: string): string {
-  const longest = Math.max(0, ...Array.from(sql.matchAll(/`+/g), (match) => match[0].length));
-  const marker = "`".repeat(Math.max(3, longest + 1));
-  return `${marker}runsql\n${sql.trim()}\n${marker}`;
-}
-
-async function runSaveChartToNote(
-  args: { path?: unknown; runId?: unknown; chart?: unknown },
-  ctx: AgentToolContext,
-): Promise<ToolOutcome> {
+async function runReadAnalysisCanvas(args: Record<string, unknown>, ctx: AgentToolContext): Promise<ToolOutcome> {
   if (typeof args.path !== "string" || !args.path.trim()) return fail("path must be a non-empty string.");
-  if (typeof args.runId !== "string" || !args.runId.trim()) return fail("runId must be a non-empty string.");
-  if (typeof args.chart !== "string" || !args.chart.trim()) return fail("chart must be the exact chart JSON.");
-  if (!ctx.resolveChartRun) return fail("Chart run lookup is unavailable.");
+  return ok(await analysisCanvasService.readAnalysisCanvas(ctx.vaultPath, resolveVaultTarget(ctx.vaultPath, args.path)));
+}
 
-  const conversationSpec = parseStelaChartSpec(args.chart);
-  if (conversationSpec.source.kind !== "run" || conversationSpec.source.runId !== args.runId) {
-    return fail("The chart source must match the supplied conversation runId.");
+async function runUpdateAnalysisCanvas(args: Record<string, unknown>, ctx: AgentToolContext): Promise<ToolOutcome> {
+  if (typeof args.path !== "string" || typeof args.etag !== "string" || typeof args.content !== "string") return fail("path, etag, and content are required.");
+  const target = resolveVaultTarget(ctx.vaultPath, args.path);
+  const currentFile = await analysisCanvasService.readAnalysisCanvas(ctx.vaultPath, target);
+  const current = parseAnalysisCanvas(currentFile.content);
+  let desired: AnalysisCanvas;
+  try { desired = parseAnalysisCanvas(args.content); } catch (error) { return fail(`Invalid Canvas JSON: ${error instanceof Error ? error.message : String(error)}`); }
+  if (
+    desired.id !== current.id ||
+    desired.createdAt !== current.createdAt ||
+    desired.createdBySessionId !== current.createdBySessionId
+  ) {
+    return fail("Canvas id, createdAt, and createdBySessionId are immutable.");
   }
-  const run = await ctx.resolveChartRun(args.runId);
-  if (!run || run.status !== "ok" || !run.sql.trim()) {
-    return fail("The original successful SQL run is no longer available locally.");
+  const rawBindings = Array.isArray(args.sourceRuns) ? args.sourceRuns : [];
+  const bindings = new Map<string, string>();
+  for (const raw of rawBindings) {
+    if (!raw || typeof raw !== "object") return fail("sourceRuns entries must be objects.");
+    const item = raw as Record<string, unknown>;
+    if (typeof item.sourceId !== "string" || typeof item.runId !== "string") return fail("Each sourceRuns entry needs sourceId and runId.");
+    bindings.set(item.sourceId, item.runId);
   }
-
-  const target = await vaultFs.ensureWithinVault(ctx.vaultPath, resolveVaultTarget(ctx.vaultPath, args.path));
-  const oldContent = await vaultFs.readFile(target);
-  const normalizedSql = normalizeChartSql(run.sql);
-  const matches = parseRunsqlFences(oldContent).filter((fence) => normalizeChartSql(fence.sql) === normalizedSql);
-  const existing = matches.at(-1) ?? null;
-  const blockId = existing?.blockId ?? `blk_${Date.now().toString(36)}_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
-  const embeddedSpec = stelaChartSpecSchema.parse({
-    ...conversationSpec,
-    source: { kind: "block", blockId },
-  });
-  const nextDetail: DetailMeta = {
-    ...(existing?.detail ?? pendingDetail(blockId)),
-    blockId,
-    chart: embeddedSpec as DetailMeta["chart"],
-  };
-  const detailRaw = serializeDetail(nextDetail);
-  const nextContent = existing
-    ? patchRunsqlDetail(oldContent, {
-        blockId: existing.blockId,
-        blockIndex: existing.index,
-        sql: existing.sql,
-        detailRaw,
-      })
-    : `${oldContent.replace(/\s*$/, "")}\n\n${runsqlFence(run.sql)}\n\n${detailRaw}\n`;
-  const approved = await ctx.requestProposal({
-    kind: "edit_note",
-    payload: {
-      notePath: args.path,
-      description: existing?.detail?.chart
-        ? "Replace the chart attached to an existing RunSQL block"
-        : existing
-          ? "Attach a chart to an existing RunSQL block"
-          : "Append the chart's RunSQL block to this note",
-      oldContent: truncate(oldContent, 6_000),
-      newContent: truncate(nextContent, 6_000),
-    },
-  });
-  if (!approved) return fail("The user rejected this chart edit. Do not retry it as-is.");
-  await vaultFs.writeFile(target, nextContent);
-  if ((await vaultFs.readFile(target)) !== nextContent) return fail(`Write verification failed for ${args.path}.`);
-  notifyFileChanged(target);
-  return ok({ path: args.path, blockId, reusedRunsql: Boolean(existing), replacedChart: Boolean(existing?.detail?.chart) });
+  const sources = [] as AnalysisCanvas["sources"];
+  for (const source of desired.sources) {
+    const boundRunId = bindings.get(source.id);
+    if (boundRunId) {
+      const currentRun = ctx.chartRuns?.get(boundRunId);
+      if (!currentRun) {
+        return fail(`runId ${boundRunId} must come from a successful query in this Agent run.`);
+      }
+      const run = await ctx.resolveChartRun?.(boundRunId);
+      if (!run || run.status !== "ok") return fail(`runId ${boundRunId} is not an audited successful run.`);
+      const sqlIssue = analysisCanvasService.analysisCanvasSqlIssue(currentRun.sql);
+      if (sqlIssue) return fail(`Canvas source ${source.id} is not refreshable: ${sqlIssue}`);
+      sources.push({ ...source, connectionName: run.connectionName, sql: currentRun.sql, lastRunId: run.runId, lastRunAt: run.startedAt, lastError: null });
+      continue;
+    }
+    const existing = current.sources.find((item) => item.id === source.id);
+    if (!existing) return fail(`New source ${source.id} must be bound through sourceRuns.`);
+    if (source.sql !== existing.sql || source.connectionName !== existing.connectionName) return fail(`Changed source ${source.id} must be rebound through sourceRuns.`);
+    const sqlIssue = analysisCanvasService.analysisCanvasSqlIssue(existing.sql);
+    if (sqlIssue) return fail(`Canvas source ${source.id} is not refreshable: ${sqlIssue}`);
+    sources.push({ ...source, sql: existing.sql, connectionName: existing.connectionName, lastRunId: existing.lastRunId, lastRunAt: existing.lastRunAt, lastError: existing.lastError });
+  }
+  const nextDesired = { ...desired, sources };
+  const updated = await analysisCanvasService.updateAnalysisCanvas(ctx.vaultPath, target, args.etag, () => nextDesired);
+  ctx.onCanvasUpdated?.({ path: vaultRelativePath(ctx.vaultPath, updated.path), title: desired.title, action: "updated" });
+  return ok({ path: updated.path, etag: updated.etag, status: desired.status, sections: desired.sections.length, cards: desired.sections.reduce((sum, section) => sum + section.cards.length, 0) });
 }
 
 /** 记录失败不应影响 agent 继续工作——落盘异常只记日志。 */
@@ -1275,8 +1281,12 @@ export async function dispatchTool(
         return await runSql(args, ctx);
       case "create_chart":
         return runCreateChart(args, ctx);
-      case "save_chart_to_note":
-        return await runSaveChartToNote(args, ctx);
+      case "create_analysis_canvas":
+        return await runCreateAnalysisCanvas(args, ctx);
+      case "read_analysis_canvas":
+        return await runReadAnalysisCanvas(args, ctx);
+      case "update_analysis_canvas":
+        return await runUpdateAnalysisCanvas(args, ctx);
       case "search_vault":
         return await runSearchVault(args, ctx);
       case "search_sql_usage":

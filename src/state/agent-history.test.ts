@@ -25,6 +25,13 @@ const history: AgentHistorySession = {
       finishedAt: null,
       events: [
         {
+          type: "canvas_updated",
+          runId: "run_1",
+          path: "revenue.stela.canvas",
+          title: "Revenue",
+          action: "created",
+        },
+        {
           type: "proposal",
           runId: "run_1",
           callId: "proposal_1",
@@ -40,9 +47,10 @@ const history: AgentHistorySession = {
 const timeline = replayAgentHistory(history);
 assert.equal(timeline[0]?.kind, "user");
 assert.equal(timeline[0]?.kind === "user" && timeline[0].attachments?.[0]?.kind, "runsql");
-assert.equal(timeline[1]?.kind, "proposal");
-assert.equal(timeline[1]?.kind === "proposal" && timeline[1].resolution, "expired");
-assert.equal(timeline[2]?.kind, "interrupted");
+assert.equal(timeline[1]?.kind, "canvas");
+assert.equal(timeline[2]?.kind, "proposal");
+assert.equal(timeline[2]?.kind === "proposal" && timeline[2].resolution, "expired");
+assert.equal(timeline[3]?.kind, "interrupted");
 
 const localRef: AgentHistoryRef = { sessionId: "sess_1", deviceSlug: "laptop" };
 assert.equal(

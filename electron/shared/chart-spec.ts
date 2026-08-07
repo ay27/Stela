@@ -11,10 +11,7 @@ const common = {
   version: z.literal(STELA_CHART_VERSION),
   title: z.string().trim().max(200).optional(),
   description: z.string().trim().max(500).optional(),
-  source: z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("run"), runId: z.string().min(1).max(256) }).strict(),
-    z.object({ kind: z.literal("block"), blockId: z.string().min(1).max(256) }).strict(),
-  ]),
+  source: z.object({ kind: z.literal("run"), runId: z.string().min(1).max(256) }).strict(),
 };
 
 const kpiSchema = z
@@ -89,14 +86,22 @@ export const stelaChartSpecSchema = z.discriminatedUnion("type", [
   histogramSchema,
 ]);
 
+/** Presentation-only chart configuration. Data ownership is supplied by the host surface. */
+export const stelaChartConfigSchema = z.discriminatedUnion("type", [
+  kpiSchema.omit({ version: true, source: true }),
+  barSchema.omit({ version: true, source: true }),
+  lineSchema.omit({ version: true, source: true }),
+  pieSchema.omit({ version: true, source: true }),
+  funnelSchema.omit({ version: true, source: true }),
+  histogramSchema.omit({ version: true, source: true }),
+]);
+
 export type StelaChartSpec = z.infer<typeof stelaChartSpecSchema>;
+export type StelaChartConfig = z.infer<typeof stelaChartConfigSchema>;
 export type StelaChartType = StelaChartSpec["type"];
 export type StelaChartSource = StelaChartSpec["source"];
 export type StelaRunChartSpec = StelaChartSpec & {
   source: { kind: "run"; runId: string };
-};
-export type StelaEmbeddedChartSpec = StelaChartSpec & {
-  source: { kind: "block"; blockId: string };
 };
 
 export class StelaChartError extends Error {
@@ -127,14 +132,6 @@ export function parseStelaChartSpec(source: string): StelaChartSpec {
 
 export function stringifyStelaChartSpec(spec: StelaChartSpec): string {
   return JSON.stringify(stelaChartSpecSchema.parse(spec), null, 2);
-}
-
-export function parseEmbeddedStelaChartSpec(source: string): StelaEmbeddedChartSpec {
-  const spec = parseStelaChartSpec(source);
-  if (spec.source.kind !== "block") {
-    throw new StelaChartError("A note chart must be associated with a RunSQL block.");
-  }
-  return spec as StelaEmbeddedChartSpec;
 }
 
 export function chartFields(spec: StelaChartSpec): string[] {

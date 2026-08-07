@@ -2,6 +2,7 @@ import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   Bot,
+  ChartNoAxesCombined,
   ChevronDown,
   FileText,
   Loader2,
@@ -545,6 +546,8 @@ function OverflowItem({
     >
       {tab.pinned ? (
         <Pin className="h-3.5 w-3.5 flex-none text-primary" />
+      ) : tab.kind === "analysis" ? (
+        <ChartNoAxesCombined className="h-3.5 w-3.5 flex-none text-muted-foreground" />
       ) : (
         <FileText className="h-3.5 w-3.5 flex-none text-muted-foreground" />
       )}

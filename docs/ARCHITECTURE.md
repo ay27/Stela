@@ -8,13 +8,13 @@ Stela is a local-first desktop app for SQL data notes. Users write Markdown, run
 
 Stela notes are plain `.md` files with YAML frontmatter, `runsql` fenced code blocks, and `<detail>` HTML summaries. The app never owns the prose — it only reads and writes files. Any tool that understands Markdown (VS Code, GitHub, Obsidian) can open a Stela vault without Stela installed. `runsql` blocks degrade to ordinary code blocks in those viewers.
 
-### Four authorities, three disposable layers
+### Four authority categories, three disposable layers
 
-SQL result sets, Agent sessions, and local Agent traces are too large to live in Markdown. Stela therefore has **four authoritative stores** and **three disposable caches**:
+SQL result sets, Agent sessions, and local Agent traces are too large to live in Markdown. Stela therefore groups durable data into **four authority categories** beside **three disposable layers**:
 
 | Layer | Location | Authority | Role |
 |-------|----------|-----------|------|
-| Semantic | `{vault}/**/*.md` | **Authoritative** | Prose, SQL, `<detail>` summaries, `connection_name` |
+| Semantic | `{vault}/**/*.md`, `{vault}/**/*.stela.canvas` | **Authoritative** | Notes plus structured analysis presentations; both are Git-trackable Vault files |
 | Execution history | `{vault}/.stela/history/history_{deviceSlug}.jsonl` | **Authoritative** | Append-only run packages; Git-synced, per-device write isolation |
 | Result cache | `{vault}/.stela.sqlite` | Disposable | Query cache (`runs` / `result_schemas` / `result_rows`); rebuildable from JSONL |
 | Vault config | `{vault}/.stela/*.json` | Authoritative | Settings, connections, plugin manifests |
@@ -22,17 +22,19 @@ SQL result sets, Agent sessions, and local Agent traces are too large to live in
 | Local Agent observability | `{vault}/.stela/agent-metrics.local.sqlite` | **Authoritative (local, 90 days)** | AI/Agent runs, tool events, Skill usage, maintenance outcomes, redacted traces |
 | Session state | Zustand + localStorage + `{userData}/` | Disposable | Panel widths, open tabs, recent vaults |
 
-Markdown + JSONL win for synced product data. `.stela.sqlite` remains disposable; the separately named `agent-metrics.local.sqlite` is a bounded machine-local observability authority and is never used for note or execution recovery.
+Vault source files + JSONL win for synced product data. `.stela.sqlite` remains disposable; the separately named `agent-metrics.local.sqlite` is a bounded machine-local observability authority and is never used for note or execution recovery.
 
 ```mermaid
 flowchart LR
     MD["📝 Markdown\n.md files\n(semantic authority)"]
+    CANVAS["📊 Analysis Canvas\n.stela.canvas files\n(presentation authority)"]
     JSONL["📜 JSONL\n.stela/history/\n(execution authority)"]
     SQL["⚡ SQLite\n.stela.sqlite\n(query cache)"]
     IDX["🧠 In-memory\nvault-index / sql-index"]
     UI["⚛️ React State\nZustand stores"]
 
     MD -->|"RunSQL execute"| SQL
+    CANVAS -->|"explicit source refresh"| SQL
     SQL -->|"appendRun"| JSONL
     MD -->|"detail round-trip"| MD
     JSONL -->|"importIncremental"| SQL
@@ -42,6 +44,7 @@ flowchart LR
     SQL --> UI
 
     style MD fill:#d4edda,stroke:#28a745,color:#000
+    style CANVAS fill:#d4edda,stroke:#28a745,color:#000
     style JSONL fill:#d4edda,stroke:#28a745,color:#000
     style SQL fill:#fff3cd,stroke:#ffc107,color:#000
     style IDX fill:#cce5ff,stroke:#004085,color:#000
@@ -70,6 +73,7 @@ When deciding where to persist data, ask: **"Should this follow the vault across
 | — | `.stela/agent-metrics.local.sqlite` (90-day AI/Agent metrics and redacted traces) |
 | `.stela/connector_plugins.json` + `.stela/plugins/` | Command palette transient input |
 | `.stela/sql-templates/*.md` (reusable SQL templates) | — |
+| `**/*.stela.canvas` (structured analysis presentations) | — |
 | Markdown frontmatter `connection_name` | Dev-mode isolated userData (`Stela-dev`) |
 
 Passwords are stored per-device in `secrets_{slug}.json` (Git-synced ciphertext, decryptable only on the originating machine via `safeStorage`).
@@ -222,27 +226,28 @@ execution.ts runBlock()
 
 On failure: `runState: "error"`, no `<detail>` write (preserves round-trip integrity). Failed runs still record a `status: "err"` RunRecord for Run History.
 
-## Analytical Chart Flow
+## Analytical Chart and Canvas Flow
 
-`electron/shared/chart-spec.ts` defines a small versioned JSON contract rather
-than rows or executable ECharts configuration. Conversation charts bind to the
-exact `runId` returned by Agent `run_sql`. A persistent chart is stored inside
-its RunSQL `<detail>` with `source.kind = "block"`; the source block id must
-equal the detail block id, and each RunSQL owns at most one chart.
+`electron/shared/chart-spec.ts` defines a small versioned chart contract rather
+than rows or executable ECharts configuration. A simple Agent chart binds to the
+exact `runId` returned by `run_sql` and renders only in the Agent timeline.
+Charts are not a Markdown or RunSQL abstraction.
 
-The RunSQL NodeView renders the chart after its result table. It uses the
-currently browsed run id, hides the chart during diff comparison, and reports
-schema/data drift as a chart error. A pending detail may contain only block id
-and chart before first execution; successful execution fills the result summary
-while preserving the chart. Result reads use SQLite first and recover an exact
-missing run from the JSONL journal. ECharts modules and its SVG renderer are
-loaded only when a chart mounts.
+Long or multi-stage analyses use a normal Vault file named `*.stela.canvas`.
+`electron/shared/analysis-canvas.ts` validates embedded read-only SQL sources,
+sections, and `markdown | kpi | chart | table` cards. Cards bind to a source id;
+the source points to its latest audited run, while result rows stay in the same
+SQLite/JSONL stores used by RunSQL. The read-only renderer workspace loads those
+snapshots and lazily mounts ECharts with its SVG renderer.
 
-Markdown export renders valid charts to SVG before opening the save dialog. A
-typed bundle IPC sends a Markdown template and bounded SVG assets to Main; Main
-derives `<selected-name>.assets/`, replaces asset tokens with relative paths,
-creates unique files, and writes the Markdown. Invalid or missing chart data is
-reported as a readable warning; internal detail and chart JSON are not exported.
+Canvas creation, reads, and source refresh cross dedicated typed IPC methods.
+Writes are path-confined, atomic, and etag-protected. The Agent may update a
+Canvas without an edit proposal, but Stela replaces every new or changed SQL
+source with SQL and connection metadata from a successful query in that Agent
+run. Users explicitly refresh one source or all sources; a failed refresh keeps
+the previous run reference and records the latest error. Static HTML export
+freezes current SVGs and tables and includes collapsed source SQL without any
+runtime execution bridge. See [ADR-0055](./adr/0055-vault-analysis-canvas-artifacts.md).
 
 ## Connector Architecture
 
@@ -337,7 +342,28 @@ flowchart TB
 
 1. **Action complete** — one-shot `AiActionKind` (rewrite-sql, ask-sql, explain-result, explain-table, …). Prompt assembled in main; returns text + optional extracted SQL. UI: RunSQL inline panel, AI modal, schema browser actions. ([ADR-0014](./adr/0014-ai-context-redaction-and-schema-enrichment.md))
 2. **SQL inline completion** — `AI_INLINE_COMPLETION_START` / `AI_INLINE_COMPLETION_CANCEL` invoke channels and the `ai:inline-completion-event` push channel stream insertion text correlated by `requestId`; preload exposes `window.stela.ai.startInlineCompletion`, `cancelInlineCompletion`, and `onInlineCompletionEvent`. The selected completion profile's model receives bounded prefix/suffix sections, up to 8K characters of nearest-first sibling RunSQL blocks, the nearest heading plus a 500-character prose excerpt, and table schemas from two sources: columns the renderer already has in `column-cache` (sent in the request, preferred per table) and DDL for referenced tables found in the connection's local `schemaDir`. Requests never trigger a column probe; the probe is warmed on block focus instead. This path uses pi-ai `streamSimple`, not AgentHarness, and never falls back to connector list/execute calls. RunSQL triggers only after an edit, waits 120 ms at a line tail, and shows at most one ghost-text line; focus, click, or selection movement never starts a model request. A native completion popup takes priority, then a pending edited context is re-scheduled after it closes. Stale requests are cancelled, Tab accepts, Escape dismisses, and IME composition, blur, or editor destruction suppress or cancel completion. ([ADR-0028](./adr/0028-inline-completion-schema-and-note-context.md))
-3. **Harness agent** — `AgentHarness` tool loop with streaming `ai:agent-event`. Tools browse live connector schema, run SQL, validate charts against the current run's real rows, save charts into RunSQL details through an edit proposal, search/read notes, search SQL usage, ask the user a question, propose edits, and manage a bounded linear execution plan. The plan lives in main-process memory for a run, emits typed progress snapshots, and is injected as the latest pi Session custom entry on every context build so compaction cannot discard its active step or evidence. Same-turn tools may run in parallel except plan tools, chart validation/saving, and `propose_edit` (sequential). Mutations and note writes wait for user approve. Agent chat accepts `@table` mentions, `[[note]]` references, a default current-note reference, and Add to Chat content attachments. Sessions and Panel timelines persist as native pi JSONL below `.stela/agent-history/<deviceSlug>/`; every device writes only its own shard, reads all shards, and forks a remote session before continuing it. Runs continue until the model finishes, errors, or the user cancels. Compacts when near `ai.contextWindow` budget and once on provider context overflow; Panel shows approximate usage, compacting status, plan progress, and a collapsed ordinary-tool activity log. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md), [ADR-0016](./adr/0016-agent-chat-references-and-add-to-chat.md), [ADR-0017](./adr/0017-user-cancelled-agent-runs.md), [ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0026](./adr/0026-ranked-lexical-retrieval-for-agent.md), [ADR-0027](./adr/0027-agent-ask-user-clarification.md), [ADR-0038](./adr/0038-runtime-agent-execution-plans.md), [ADR-0041](./adr/0041-agent-live-schema-authority.md), [ADR-0046](./adr/0046-device-sharded-agent-session-history.md), [ADR-0054](./adr/0054-runsql-owned-analytical-charts.md))
+3. **Harness agent** — `AgentHarness` tool loop with streaming `ai:agent-event`.
+   Tools browse live connector schema, run SQL, validate timeline charts against
+   the current run's real rows, create/read/update Analysis Canvas artifacts,
+   search/read notes, ask the user questions, propose edits, and manage a bounded
+   linear execution plan. Requested reports/dashboards and multi-stage analyses
+   create a Canvas; simple answers remain in chat. New or changed Canvas sources
+   bind to same-run audited SQL and do not use a note-edit proposal. Plan state is
+   persisted into pi session context so compaction cannot discard the active step
+   or evidence. Read tools may run in parallel; plan tools, chart creation, Canvas
+   writes, and `propose_edit` are sequential. Mutations and note writes wait for
+   user approval. Agent chat accepts table/note references, Add to Chat content,
+   and the active Canvas path. Device-sharded session history restores timelines,
+   including Canvas artifact links. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md),
+   [ADR-0016](./adr/0016-agent-chat-references-and-add-to-chat.md),
+   [ADR-0017](./adr/0017-user-cancelled-agent-runs.md),
+   [ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md),
+   [ADR-0026](./adr/0026-ranked-lexical-retrieval-for-agent.md),
+   [ADR-0027](./adr/0027-agent-ask-user-clarification.md),
+   [ADR-0038](./adr/0038-runtime-agent-execution-plans.md),
+   [ADR-0041](./adr/0041-agent-live-schema-authority.md),
+   [ADR-0046](./adr/0046-device-sharded-agent-session-history.md),
+   [ADR-0055](./adr/0055-vault-analysis-canvas-artifacts.md))
 4. **SQL query parse** — model only emits a `SqlIndexFilter`; hits always come from deterministic `sql-index`.
 
 ### Agent Skills
@@ -477,7 +503,7 @@ Before any action prompt leaves the machine ([ADR-0014](./adr/0014-ai-context-re
 ### Event channels (main → renderer, push-only)
 
 - `electron/shared/ipc-events.ts`
-- `vault:external-change`, `index:changed`, `sql-index:changed`, `ai:agent-event` (including `plan_updated`), `ai:inline-completion-event`, and `app:quit-checkpoint-started`
+- `vault:external-change`, `index:changed`, `sql-index:changed`, `ai:agent-event` (including `plan_updated` and `canvas_updated`), `ai:inline-completion-event`, and `app:quit-checkpoint-started`
 
 ### Preload API shape
 
@@ -487,6 +513,7 @@ window.stela.dialog.*       — pick vault / directory / file
 window.stela.settings.*       — load / patch AppSettings
 window.stela.connections.*    — CRUD connection map
 window.stela.storage.*        — SQLite run store
+window.stela.canvas.*         — read/create/refresh Analysis Canvas artifacts
 window.stela.connector.*      — execute + plugin management
 window.stela.search.*         — vault search + file list
 window.stela.git.*            — Git operations
@@ -494,7 +521,7 @@ window.stela.journal.*          — JSONL history import/export
 window.stela.ai.* / agent.*   — actions; start/cancel/subscribe inline completion; agent harness
 window.stela.index.*          — vault wiki index
 window.stela.sqlIndex.*       — SQL fact index
-window.stela.export.*         — native file/bundle save and restricted reveal of just-saved exports
+window.stela.export.*         — native file save and restricted reveal of just-saved exports
 window.stela.updater.*        — auto-update check
 ```
 
@@ -519,7 +546,7 @@ src/
 ├── state/          # Zustand stores
 ├── editor/         # Milkdown, runsql, chart/mermaid views, wiki, find-in-file, search
 ├── layout/         # AppShell, Sidebar, TabBar, FileTree, panels
-├── views/          # EditorView, WelcomeView
+├── views/          # EditorView, AnalysisCanvasView, WelcomeView
 ├── components/     # UI, settings tabs, AI panel, export dialog
 └── core/           # stela-file.ts, markdown.ts, types.ts
 

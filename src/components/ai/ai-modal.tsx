@@ -1,18 +1,15 @@
-import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Bot, Check, Clipboard, Loader2, RefreshCw, X } from "lucide-react";
 
 import type { AiActionKind } from "@shared/types";
 import { useAiModal } from "@/state/ai-modal";
 import { useT } from "@/i18n/use-t";
-import { i18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { StelaChart } from "@/components/charts/stela-chart";
-import { parseStelaChartSpec, stringifyStelaChartSpec } from "@shared/chart-spec";
-import { useAgentPanel } from "@/state/agent-panel";
-import { useWorkspace } from "@/state/workspace";
-import { getRunContext } from "@/editor/runsql/run-context";
+import { parseStelaChartSpec } from "@shared/chart-spec";
 import { normalizeAgentMarkdownCodeLanguage } from "@/components/ai/markdown-code-language";
+import { renderMermaid } from "@/editor/mermaid/render";
 
 const SCHEMA_ACTIONS: { action: AiActionKind; labelKey: string }[] = [
   { action: "explain-table", labelKey: "ai.action.explain-table" },
@@ -159,7 +156,10 @@ export function AiModal() {
   );
 }
 
-export function renderMarkdown(markdown: string): ReactNode {
+export function renderMarkdown(
+  markdown: string,
+  options: { charts?: boolean; mermaid?: boolean } = {},
+): ReactNode {
   const lines = markdown.split(/\r?\n/);
   const out: ReactNode[] = [];
   let i = 0;
@@ -178,8 +178,10 @@ export function renderMarkdown(markdown: string): ReactNode {
       const code = buf.join("\n");
       const displayLang = normalizeAgentMarkdownCodeLanguage(lang);
       out.push(
-        lang === "stela-chart"
+        lang === "stela-chart" && options.charts !== false
           ? <MarkdownChartBlock key={out.length} code={code} />
+          : lang === "mermaid" && options.mermaid === true
+            ? <MarkdownMermaidBlock key={out.length} code={code} />
           : <MarkdownCodeBlock key={out.length} lang={displayLang} code={code} />,
       );
       continue;
@@ -270,12 +272,6 @@ function safeChartFileName(title: string): string {
 
 function MarkdownChartBlock({ code }: { code: string }) {
   const t = useT();
-  const start = useAgentPanel((state) => state.start);
-  const busy = useAgentPanel((state) => state.tabs.find((tab) => tab.id === state.activeTabId)?.status === "running");
-  const activeNotePath = useWorkspace((state) => {
-    const tab = state.tabs.find((item) => item.id === state.activeTabId);
-    return tab?.path ?? null;
-  });
   const parsed = useMemo(() => {
     try {
       return { spec: parseStelaChartSpec(code), error: null };
@@ -288,40 +284,39 @@ function MarkdownChartBlock({ code }: { code: string }) {
     return <MarkdownCodeBlock lang="stela-chart" code={`${code}\n\n${parsed.error ?? "Invalid chart"}`} />;
   }
   const spec = parsed.spec;
-  const saveToNote = () => {
-    if (!activeNotePath || spec.source.kind !== "run" || busy) return;
-    const ctx = getRunContext();
-    void start({
-      prompt: [
-        `Save this chart to the current note: ${activeNotePath}.`,
-        `Query result runId: ${spec.source.runId}.`,
-        "Call save_chart_to_note with this exact path, runId, and chart JSON. Do not reconstruct the SQL or use propose_edit directly.",
-        `Chart spec:\n\`\`\`stela-chart\n${stringifyStelaChartSpec(spec)}\n\`\`\``,
-      ].join("\n\n"),
-      connectionName: ctx?.connectionName ?? null,
-      notePath: activeNotePath,
-      referencedNotes: [activeNotePath],
-      locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
-    });
-  };
   const exportSvg = async (svg: string, title: string) => {
     await window.stela.export.saveFile(safeChartFileName(title), svg, {
       title: t("chart.exportSvg"),
       filters: [{ name: "SVG", extensions: ["svg"] }],
     });
   };
-  return (
-    <div className="my-3">
-      <StelaChart spec={spec} onExportSvg={exportSvg} />
-      {spec.source.kind === "run" ? (
-        <div className="mt-1 flex justify-end">
-          <button type="button" onClick={saveToNote} disabled={!activeNotePath || busy} className="rounded-md border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-40">
-            {t("chart.saveToNote")}
-          </button>
-        </div>
-      ) : null}
-    </div>
-  );
+  return <div className="my-3"><StelaChart spec={spec} onExportSvg={exportSvg} /></div>;
+}
+
+function MarkdownMermaidBlock({ code }: { code: string }) {
+  const t = useT();
+  const renderId = useRef(`stela-canvas-mermaid-${crypto.randomUUID()}`);
+  const [svg, setSvg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const source = code.trim();
+    setSvg(null);
+    setError(null);
+    if (!source) {
+      setError(t("analysisCanvas.mermaidEmpty"));
+      return () => { active = false; };
+    }
+    void renderMermaid(renderId.current, source)
+      .then((nextSvg) => { if (active) setSvg(nextSvg); })
+      .catch((err) => { if (active) setError(err instanceof Error ? err.message : String(err)); });
+    return () => { active = false; };
+  }, [code, t]);
+
+  if (error) return <div className="my-3 rounded-md bg-destructive/10 p-3 text-xs text-destructive">{error}</div>;
+  if (!svg) return <div className="my-3 flex min-h-20 items-center justify-center rounded-md border bg-background text-xs text-muted-foreground"><Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />{t("analysisCanvas.mermaidLoading")}</div>;
+  return <div className="my-3 overflow-auto rounded-md border bg-background p-4 [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svg }} />;
 }
 
 function MarkdownCodeBlock({ lang, code }: { lang: string; code: string }) {

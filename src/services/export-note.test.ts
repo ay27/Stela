@@ -554,45 +554,6 @@ async function testExportNoteToMarkdown(): Promise<Check[]> {
     );
   }
 
-  // detail 内图表 → 在结果表后输出 SVG asset，不输出配置 JSON
-  {
-    const chartJson = JSON.stringify({
-      version: 1,
-      type: "bar",
-      source: { kind: "block", blockId: "blk-chart" },
-      category: "category",
-      value: "count",
-      orientation: "horizontal",
-      stacked: false,
-      sort: "desc",
-    });
-    const chartMd = `\`\`\`runsql\nSELECT category, count FROM demo\n\`\`\`\n<detail>\n   <block-id>blk-chart</block-id>\n   <run-date>2026-08-05 12:00:00</run-date>\n   <elapsed>10ms</elapsed>\n   <row-count>2</row-count>\n   <first-row>{"category":"A","count":2}</first-row>\n   <result-ref-id>run-chart</result-ref-id>\n   <chart>${chartJson}</chart>\n</detail>`;
-    let savedContent = "";
-    let assets: Array<{ id: string; extension: "svg"; content: string }> = [];
-    const result = await exportNoteToMarkdown({
-      filePath: "/vault/chart.md",
-      rowCap: 10,
-      deps: {
-        readFile: async () => chartMd,
-        loaderDeps: makeLoaderDeps(
-          [{ name: "category", typeName: "TEXT" }, { name: "count", typeName: "INT" }],
-          [["A", 2], ["B", 1]],
-          2,
-        ),
-        renderChart: async () => "<svg>chart</svg>",
-        saveMarkdownBundle: async (_name, content, nextAssets) => {
-          savedContent = content;
-          assets = nextAssets;
-          return { canceled: false, path: "/out/chart-export.md" };
-        },
-      },
-    });
-    out.push(expect("chart-export: succeeds", result.failedCharts === 0));
-    out.push(expect("chart-export: image after result", savedContent.indexOf("| A | 2 |") < savedContent.indexOf("stela-asset://chart-1")));
-    out.push(expect("chart-export: one svg asset", assets.length === 1 && assets[0]?.content.includes("svg")));
-    out.push(expect("chart-export: hides detail json", !savedContent.includes("<chart>") && !savedContent.includes('"blockId"')));
-  }
-
   // 多块：两块都有数据，第二块失败
   {
     let savedContent = "";

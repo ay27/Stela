@@ -106,4 +106,5 @@ proposed → active → superseded
 | [0051](0051-local-agent-observability-store.md) | Local Agent observability store | superseded → [0052](0052-signal-focused-agent-observability.md) |
 | [0052](0052-signal-focused-agent-observability.md) | Signal-focused Agent observability | active |
 | [0053](0053-declarative-result-bound-analytical-charts.md) | Declarative result-bound analytical charts | superseded → [0054](0054-runsql-owned-analytical-charts.md) |
-| [0054](0054-runsql-owned-analytical-charts.md) | RunSQL-owned analytical charts | active |
+| [0054](0054-runsql-owned-analytical-charts.md) | RunSQL-owned analytical charts | superseded → [0055](0055-vault-analysis-canvas-artifacts.md) |
+| [0055](0055-vault-analysis-canvas-artifacts.md) | Vault analysis Canvas artifacts | active |

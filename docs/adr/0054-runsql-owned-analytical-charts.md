@@ -2,8 +2,9 @@
 type: ADR
 id: "0054"
 title: "RunSQL-owned analytical charts"
-status: active
+status: superseded
 date: 2026-08-05
+superseded_by: "0055"
 ---
 
 ## Context

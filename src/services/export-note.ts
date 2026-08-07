@@ -19,9 +19,6 @@ import { matchDetail, parseDetail } from "@/editor/runsql/detail-meta";
 import { loadResultPage, type ResultLoaderDeps } from "@/services/result-loader";
 import { computeResultDiff } from "@/services/result-diff";
 import { electronStorage } from "@/services/storage/electron-storage";
-import { loadStelaChartData } from "@/components/charts/chart-data";
-import { renderStelaChartSvg } from "@/components/charts/chart-export";
-import type { StelaEmbeddedChartSpec } from "@shared/chart-spec";
 
 // ─── 公开常量 ────────────────────────────────────────────────────────────────
 
@@ -113,13 +110,6 @@ export interface ExportNoteOpts {
       content: string,
       opts?: { title?: string },
     ) => Promise<{ canceled: boolean; path: string | null; revealToken?: string | null }>;
-    saveMarkdownBundle?: (
-      suggestedName: string,
-      content: string,
-      assets: Array<{ id: string; extension: "svg"; content: string }>,
-      opts?: { title?: string },
-    ) => Promise<{ canceled: boolean; path: string | null; revealToken?: string | null }>;
-    renderChart?: (spec: StelaEmbeddedChartSpec, runId: string) => Promise<string>;
   };
   saveDialogTitle?: string;
   labels?: ExportMarkdownLabels;
@@ -131,7 +121,6 @@ export interface ExportNoteResult {
   revealToken: string | null;
   /** 导出时有数据拉取失败的块数（输出可读警告） */
   failedBlocks: number;
-  failedCharts: number;
 }
 
 // ─── 解析 ─────────────────────────────────────────────────────────────────────
@@ -518,10 +507,6 @@ export async function exportNoteToMarkdown(
     opts.deps?.saveMarkdown ??
     ((name, content, saveOpts) =>
       window.stela.export.saveMarkdown(name, content, saveOpts));
-  const saveMarkdownBundle =
-    opts.deps?.saveMarkdownBundle ??
-    ((name, content, assets, saveOpts) =>
-      window.stela.export.saveMarkdownBundle(name, content, assets, saveOpts));
   const loaderDeps: ResultLoaderDeps = opts.deps?.loaderDeps ?? {
     storage: {
       getSchema: electronStorage.getSchema,
@@ -554,7 +539,6 @@ export async function exportNoteToMarkdown(
       savedPath: result.path,
       revealToken: result.revealToken ?? null,
       failedBlocks: 0,
-      failedCharts: 0,
     };
   }
 
@@ -573,37 +557,6 @@ export async function exportNoteToMarkdown(
       }),
   );
 
-  const renderChart = opts.deps?.renderChart ?? (async (spec, runId) => {
-    const data = await loadStelaChartData(spec, runId);
-    return renderStelaChartSvg(spec, data);
-  });
-  const chartBuilt = await pMapSettled<RunsqlBlockInfo, { markdown: string; asset?: { id: string; extension: "svg"; content: string }; failed: boolean }>(
-    blocks,
-    2,
-    async (block, index) => {
-      if (!block.detail.chart && !block.detail.chartError) return { markdown: "", failed: false };
-      try {
-        if (block.detail.chartError) throw new Error(block.detail.chartError);
-        if (!block.detail.chart) throw new Error("Invalid chart configuration.");
-        if (!block.detail.resultRefId) throw new Error("Run the query before exporting its chart.");
-        const svg = await renderChart(block.detail.chart, block.detail.resultRefId);
-        const id = `chart-${index + 1}`;
-        const title = block.detail.chart.title ?? `Chart ${index + 1}`;
-        return {
-          markdown: `![${title.replace(/[\[\]]/g, "") }](stela-asset://${id})`,
-          asset: { id, extension: "svg", content: svg },
-          failed: false,
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return {
-          markdown: `> ⚠️ Chart export failed: ${message.replace(/\r?\n/g, " ")}`,
-          failed: true,
-        };
-      }
-    },
-  );
-
   // 合并两种原文 offset 后统一倒序替换，避免相互影响。
   const replacements: Array<{ start: number; end: number; content: string }> = [];
   let failedBlocks = 0;
@@ -618,22 +571,7 @@ export async function exportNoteToMarkdown(
       if (r.value.failed) failedBlocks++;
       replacement = r.value.replacement;
     }
-    const chart = chartBuilt[i];
-    const chartMarkdown = chart.status === "fulfilled" ? chart.value.markdown : "> ⚠️ Chart export failed";
-    if (chartMarkdown) replacement = insertChartAfterLatestResult(replacement, chartMarkdown);
     replacements.push({ start: block.detailStart, end: block.detailEnd, content: replacement });
-  }
-
-  let failedCharts = 0;
-  const assets: Array<{ id: string; extension: "svg"; content: string }> = [];
-  for (let i = 0; i < chartBuilt.length; i++) {
-    const result = chartBuilt[i];
-    if (result.status === "rejected") {
-      failedCharts++;
-      continue;
-    }
-    if (result.value.failed) failedCharts++;
-    if (result.value.asset) assets.push(result.value.asset);
   }
 
   let output = md;
@@ -643,23 +581,13 @@ export async function exportNoteToMarkdown(
   }
 
   const finalized = finalizeExportMarkdown(output);
-  const result = assets.length > 0
-    ? await saveMarkdownBundle(suggestExportName(filePath), finalized, assets, { title: opts.saveDialogTitle })
-    : await saveMarkdown(suggestExportName(filePath), finalized, { title: opts.saveDialogTitle });
+  const result = await saveMarkdown(suggestExportName(filePath), finalized, { title: opts.saveDialogTitle });
   return {
     canceled: result.canceled,
     savedPath: result.path,
     revealToken: result.revealToken ?? null,
     failedBlocks,
-    failedCharts,
   };
-}
-
-function insertChartAfterLatestResult(resultMarkdown: string, chartMarkdown: string): string {
-  const historyMarker = "\n\n<details>";
-  const historyAt = resultMarkdown.indexOf(historyMarker);
-  if (historyAt < 0) return `${resultMarkdown}\n\n${chartMarkdown}`;
-  return `${resultMarkdown.slice(0, historyAt)}\n\n${chartMarkdown}${resultMarkdown.slice(historyAt)}`;
 }
 
 interface BuildBlockDeps {

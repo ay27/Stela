@@ -2,6 +2,7 @@ import { useWorkspace } from "@/state/workspace";
 import { WelcomeView } from "@/views/WelcomeView";
 import { EditorView } from "@/views/EditorView";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { AnalysisCanvasView } from "@/views/AnalysisCanvasView";
 
 /**
  * Editor 区域。
@@ -23,6 +24,13 @@ export function Workspace() {
     return (
       <ErrorBoundary resetKey={active.id}>
         <EditorView key={active.id} tabId={active.id} path={active.path} />
+      </ErrorBoundary>
+    );
+  }
+  if (active && active.kind === "analysis" && active.path) {
+    return (
+      <ErrorBoundary resetKey={active.id}>
+        <AnalysisCanvasView key={active.id} tabId={active.id} path={active.path} />
       </ErrorBoundary>
     );
   }

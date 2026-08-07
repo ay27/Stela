@@ -30,6 +30,8 @@ import type {
   AgentMetricRunPage,
   AgentMetricTrace,
   AgentMetricsDashboard,
+  AnalysisCanvasFile,
+  AnalysisCanvasRefreshResult,
   AiCompleteRequest,
   AiCompleteResponse,
   AiInlineCompletionEvent,
@@ -111,6 +113,7 @@ import * as agent from "../services/ai/agent";
 import * as agentHistory from "../services/ai/agent-history";
 import * as agentSkills from "../services/ai/agent-skills";
 import * as agentMetrics from "../services/ai/agent-metrics";
+import * as analysisCanvas from "../services/analysis-canvas";
 import { cancelSkillMaintenance } from "../services/ai/skill-maintenance-queue";
 import { runInlineCompletion } from "../services/ai/inline-completion";
 
@@ -410,6 +413,38 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
   registerHandler<{ keepDays: number }, number>(
     IPC.STORAGE_CLEANUP,
     ({ keepDays }) => resultStore.cleanup(keepDays),
+  );
+
+  // ---------- Analysis Canvas ----------
+  registerHandler<{ path: string }, AnalysisCanvasFile>(IPC.CANVAS_READ, ({ path: filePath }) =>
+    analysisCanvas.readAnalysisCanvas(requireVault(), filePath),
+  );
+  registerHandler<{ directory: string; title: string }, AnalysisCanvasFile>(
+    IPC.CANVAS_CREATE,
+    ({ directory, title }) => analysisCanvas.createAnalysisCanvas(requireVault(), directory, title, null),
+  );
+  registerHandler<{ path: string; etag: string; sourceId: string }, AnalysisCanvasRefreshResult>(
+    IPC.CANVAS_REFRESH_SOURCE,
+    async ({ path: filePath, etag, sourceId }) => {
+      const vaultPath = requireVault();
+      const profile = await deviceProfile.loadDeviceProfile();
+      return analysisCanvas.refreshAnalysisCanvasSource(vaultPath, filePath, etag, sourceId, {
+        execute: async (connectionName, sql) => {
+          const entries = await connectionsStore.loadConnections(vaultPath, profile.slug);
+          const connection = entries[connectionName];
+          if (!connection) throw new AppError("connection_not_found", `Connection not found: ${connectionName}`);
+          return connectorRegistry.execute(connection.kind, connection.config, sql);
+        },
+        record: async (record, result) => {
+          resultStore.saveRun(record);
+          if (result?.kind === "query") {
+            resultStore.saveSchema(record.runId, result.columns);
+            resultStore.saveRows(record.runId, result.rows);
+          }
+          await journal.appendRunById(vaultPath, record.runId, profile);
+        },
+      });
+    },
   );
 
   // ---------- Connectors ----------
@@ -980,45 +1015,6 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
       return { canceled: true, path: null, revealToken: null };
     }
     await fs.writeFile(r.filePath, content, "utf-8");
-    return {
-      canceled: false,
-      path: r.filePath,
-      revealToken: rememberSavedExport(r.filePath),
-    };
-  });
-  registerHandler<
-    {
-      suggestedName: string;
-      content: string;
-      title?: string;
-      assets: Array<{ id: string; extension: "svg"; content: string }>;
-    },
-    { canceled: boolean; path: string | null; revealToken: string | null }
-  >(IPC.EXPORT_SAVE_MARKDOWN_BUNDLE, async ({ suggestedName, content, title, assets }) => {
-    const win = ctx.getMainWindow();
-    const opts: Electron.SaveDialogOptions = {
-      title: title ?? "Export Markdown",
-      defaultPath: path.join(app.getPath("documents"), suggestedName),
-      filters: [{ name: "Markdown", extensions: ["md"] }],
-    };
-    const r = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
-    if (r.canceled || !r.filePath) {
-      return { canceled: true, path: null, revealToken: null };
-    }
-
-    const parsed = path.parse(r.filePath);
-    const assetDirName = `${parsed.name}.assets`;
-    const assetDir = path.join(parsed.dir, assetDirName);
-    await fs.mkdir(assetDir, { recursive: true });
-    let output = content;
-    for (const asset of assets) {
-      const fileName = `${asset.id}-${randomUUID().slice(0, 8)}.${asset.extension}`;
-      const filePath = path.join(assetDir, fileName);
-      await fs.writeFile(filePath, asset.content, { encoding: "utf-8", flag: "wx" });
-      const markdownPath = `<./${assetDirName}/${fileName}>`;
-      output = output.replaceAll(`stela-asset://${asset.id}`, markdownPath);
-    }
-    await fs.writeFile(r.filePath, output, "utf-8");
     return {
       canceled: false,
       path: r.filePath,

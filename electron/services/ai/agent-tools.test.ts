@@ -7,7 +7,6 @@ import type { AiSettings } from "@shared/types";
 
 import { ExecutionPlanStore } from "./execution-plan";
 import { createAgentTools, dispatchTool } from "./agent-tools";
-import { parseRunsqlFences } from "@shared/runsql-fences";
 
 const AI_SETTINGS = {
   providerMode: "openai-compatible",
@@ -494,120 +493,119 @@ Inspect the live schema first.`;
     assert.match(runbook.text, /cannot create analysis-runbook/i);
   }
 
-  // 未知工具名不崩，返回错误文本
+  // Canvas writes are validated artifacts, and every new SQL source must bind
+  // to a successful query from this Agent run.
   {
-    const chartNote = join(root, "chart-note.md");
-    await writeFile(chartNote, "# Chart\n\n```runsql\nSELECT category, count FROM demo\n```\n");
-    const chart = JSON.stringify({
-      version: 1,
-      type: "bar",
-      source: { kind: "run", runId: "chart-run" },
-      title: "Demo",
-      category: "category",
-      value: "count",
+    const events: Array<{ action: "created" | "updated"; path: string }> = [];
+    const chartRuns = new Map([["canvas-run", {
+      sql: "SELECT category, total FROM demo",
+      columns: [{ name: "category", typeName: "VARCHAR" }, { name: "total", typeName: "BIGINT" }],
+      rows: [["A", 2]],
+    }], ["constant-canvas-run", {
+      sql: "SELECT 'A' AS category, 2 AS total UNION ALL SELECT 'B', 1",
+      columns: [{ name: "category", typeName: "VARCHAR" }, { name: "total", typeName: "BIGINT" }],
+      rows: [["A", 2], ["B", 1]],
+    }]]);
+    const canvasCtx = {
+      ...baseCtx,
+      run: { ...baseCtx.run, notePath: join(root, "note.md") },
+      chartRuns,
+      resolveChartRun: async (runId: string) => chartRuns.has(runId) ? {
+        runId,
+        blockId: "agent:test-run",
+        sql: chartRuns.get(runId)!.sql,
+        status: "ok" as const,
+        message: null,
+        startedAt: 123,
+        elapsedMs: 1,
+        rowCount: 1,
+        connectionName: "demo",
+        notePath: null,
+      } : null,
+      onCanvasUpdated: (event: { action: "created" | "updated"; path: string }) => events.push(event),
+    };
+    const created = await dispatchTool(
+      "create_analysis_canvas",
+      JSON.stringify({ title: "Agent Report" }),
+      canvasCtx,
+    );
+    assert.equal(created.ok, true, created.text);
+    const createdPayload = JSON.parse(created.text) as { path: string; etag: string; content: string };
+    const content = JSON.parse(createdPayload.content) as Record<string, unknown> & {
+      sources: unknown[];
+      sections: unknown[];
+    };
+    content.sources = [{
+      id: "overview",
+      title: "Overview",
+      connectionName: "ignored",
+      sql: "SELECT invented FROM nowhere",
+      lastRunId: null,
+      lastRunAt: null,
+      lastError: null,
+    }];
+    content.sections = [{
+      id: "summary",
+      title: "Summary",
+      cards: [{
+        id: "totals",
+        type: "table",
+        sourceId: "overview",
+        width: "full",
+        maxRows: 20,
+      }],
+    }];
+    const updated = await dispatchTool(
+      "update_analysis_canvas",
+      JSON.stringify({
+        path: createdPayload.path,
+        etag: createdPayload.etag,
+        content: JSON.stringify(content),
+        sourceRuns: [{ sourceId: "overview", runId: "canvas-run" }],
+      }),
+      canvasCtx,
+    );
+    assert.equal(updated.ok, true, updated.text);
+    const saved = JSON.parse(await readFile(createdPayload.path, "utf8")) as {
+      sources: Array<Record<string, unknown>>;
+    };
+    assert.deepEqual(saved.sources[0], {
+      id: "overview",
+      title: "Overview",
+      connectionName: "demo",
+      sql: "SELECT category, total FROM demo",
+      lastRunId: "canvas-run",
+      lastRunAt: 123,
+      lastError: null,
     });
-    const saved = await dispatchTool(
-      "save_chart_to_note",
-      JSON.stringify({ path: "chart-note.md", runId: "chart-run", chart }),
-      {
-        ...baseCtx,
-        resolveChartRun: async () => ({
-          runId: "chart-run",
-          blockId: "agent:test-run",
-          sql: "SELECT category, count FROM demo",
-          status: "ok" as const,
-          message: null,
-          startedAt: Date.now(),
-          elapsedMs: 1,
-          rowCount: 2,
-          connectionName: "demo",
-          notePath: null,
-        }),
-      },
-    );
-    assert.equal(saved.ok, true, saved.text);
-    const content = await readFile(chartNote, "utf8");
-    const fences = parseRunsqlFences(content);
-    assert.equal(fences.length, 1, content);
-    assert.equal(fences[0]?.detail?.chart?.source.kind, "block");
-    assert.equal(fences[0]?.detail?.chart?.source.kind === "block" && fences[0].detail.chart.source.blockId, fences[0]?.blockId);
-    assert.doesNotMatch(content, /```stela-chart/);
 
-    const replaced = await dispatchTool(
-      "save_chart_to_note",
-      JSON.stringify({ path: "chart-note.md", runId: "chart-run", chart: chart.replace("Demo", "Updated") }),
-      {
-        ...baseCtx,
-        resolveChartRun: async () => ({
-          runId: "chart-run",
-          blockId: "agent:test-run",
-          sql: "SELECT category, count FROM demo",
-          status: "ok" as const,
-          message: null,
-          startedAt: Date.now(),
-          elapsedMs: 1,
-          rowCount: 2,
-          connectionName: "demo",
-          notePath: null,
-        }),
-      },
+    const updatedPayload = JSON.parse(updated.text) as { etag: string };
+    const constantContent = JSON.parse(await readFile(createdPayload.path, "utf8")) as {
+      sources: Array<Record<string, unknown>>;
+      sections: unknown[];
+    };
+    constantContent.sources.push({
+      id: "constant_snapshot",
+      title: "Constant snapshot",
+      connectionName: "ignored",
+      sql: "SELECT ignored",
+      lastRunId: null,
+      lastRunAt: null,
+      lastError: null,
+    });
+    const rejectedConstant = await dispatchTool(
+      "update_analysis_canvas",
+      JSON.stringify({
+        path: createdPayload.path,
+        etag: updatedPayload.etag,
+        content: JSON.stringify(constantContent),
+        sourceRuns: [{ sourceId: "constant_snapshot", runId: "constant-canvas-run" }],
+      }),
+      canvasCtx,
     );
-    assert.equal(replaced.ok, true, replaced.text);
-    assert.equal(parseRunsqlFences(await readFile(chartNote, "utf8"))[0]?.detail?.chart?.title, "Updated");
-
-    const duplicatePath = join(root, "chart-duplicate.md");
-    await writeFile(
-      duplicatePath,
-      "```runsql\nSELECT category, count FROM demo\n```\n\n<detail>\n   <block-id>blk-first</block-id>\n</detail>\n\n```runsql\nSELECT category, count FROM demo\n```\n\n<detail>\n   <block-id>blk-last</block-id>\n</detail>\n",
-    );
-    const duplicate = await dispatchTool(
-      "save_chart_to_note",
-      JSON.stringify({ path: "chart-duplicate.md", runId: "chart-run", chart }),
-      {
-        ...baseCtx,
-        resolveChartRun: async () => ({
-          runId: "chart-run",
-          blockId: "agent:test-run",
-          sql: "SELECT category, count FROM demo",
-          status: "ok" as const,
-          message: null,
-          startedAt: Date.now(),
-          elapsedMs: 1,
-          rowCount: 2,
-          connectionName: "demo",
-          notePath: null,
-        }),
-      },
-    );
-    assert.equal(duplicate.ok, true, duplicate.text);
-    const duplicateFences = parseRunsqlFences(await readFile(duplicatePath, "utf8"));
-    assert.equal(duplicateFences[0]?.detail?.chart, null);
-    assert.equal(duplicateFences[1]?.detail?.chart?.source.kind === "block" && duplicateFences[1].detail.chart.source.blockId, "blk-last");
-
-    const rejectedPath = join(root, "chart-rejected.md");
-    await writeFile(rejectedPath, "# Keep\n");
-    const rejected = await dispatchTool(
-      "save_chart_to_note",
-      JSON.stringify({ path: "chart-rejected.md", runId: "chart-run", chart }),
-      {
-        ...baseCtx,
-        requestProposal: async () => false,
-        resolveChartRun: async () => ({
-          runId: "chart-run",
-          blockId: "agent:test-run",
-          sql: "SELECT category, count FROM demo",
-          status: "ok" as const,
-          message: null,
-          startedAt: Date.now(),
-          elapsedMs: 1,
-          rowCount: 2,
-          connectionName: "demo",
-          notePath: null,
-        }),
-      },
-    );
-    assert.equal(rejected.ok, false);
-    assert.equal(await readFile(rejectedPath, "utf8"), "# Keep\n");
+    assert.equal(rejectedConstant.ok, false);
+    assert.match(rejectedConstant.text, /must read a real table/i);
+    assert.deepEqual(events.map((event) => event.action), ["created", "updated"]);
   }
 
   {

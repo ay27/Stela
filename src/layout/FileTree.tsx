@@ -42,6 +42,7 @@ import {
   ChevronRight,
   ChevronsDownUp,
   Crosshair,
+  ChartNoAxesCombined,
   Download,
   ExternalLink,
   File as FileIcon,
@@ -75,6 +76,7 @@ import { useDialogs } from "@/state/dialogs";
 import { cn } from "@/lib/utils";
 import { formatHotkey } from "@/lib/hotkeys";
 import { useT } from "@/i18n/use-t";
+import { scheduleAutoGit } from "@/services/auto-git";
 
 type DraftAction =
   | { kind: "newNote"; parentPath: string }
@@ -282,6 +284,12 @@ export function FileTree({ rootPath }: { rootPath: string }) {
     },
     [ensureExpanded],
   );
+  const createAnalysisCanvas = useCallback(async (parentPath: string) => {
+    const file = await window.stela.canvas.create(parentPath, "Untitled Analysis");
+    scheduleAutoGit("canvas-create");
+    await refresh(parentPath);
+    openFile(file.path);
+  }, [openFile, refresh]);
   const startRename = useCallback((node: FileNode) => {
     setDraft({ kind: "rename", node });
   }, []);
@@ -529,6 +537,11 @@ export function FileTree({ rootPath }: { rootPath: string }) {
                 icon={<FolderPlus className="h-3.5 w-3.5" />}
                 label={t("fileTree.newFolder")}
                 onSelect={() => startNewDir(target.path)}
+              />
+              <CtxItem
+                icon={<ChartNoAxesCombined className="h-3.5 w-3.5" />}
+                label={t("fileTree.newAnalysisCanvas")}
+                onSelect={() => void createAnalysisCanvas(target.path)}
               />
               <ContextMenu.Separator className="my-1 h-px bg-border" />
             </>
@@ -866,6 +879,13 @@ function TreeRow({
                 ) : (
                   <Folder className="h-3.5 w-3.5 flex-none text-muted-foreground" />
                 )
+              ) : node.path.endsWith(".stela.canvas") ? (
+                <ChartNoAxesCombined
+                  className={cn(
+                    "h-3.5 w-3.5 flex-none",
+                    isActive ? "text-primary" : "text-muted-foreground",
+                  )}
+                />
               ) : (
                 <FileIcon
                   className={cn(

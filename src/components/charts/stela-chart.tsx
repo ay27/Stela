@@ -9,11 +9,10 @@ import { toFiniteChartNumber } from "@shared/chart-spec";
 
 import { loadStelaChartData, type StelaChartData } from "./chart-data";
 import { buildStelaChartOption } from "./chart-option";
-import { mountEChart } from "./echarts-runtime";
+import { canMountEChart, EChartHostUnavailableError, mountEChart } from "./echarts-runtime";
 
 export interface StelaChartProps {
   spec: StelaChartSpec;
-  previousRunId?: string | null;
   className?: string;
   onExportSvg?: (svg: string, title: string) => void | Promise<void>;
 }
@@ -29,13 +28,14 @@ function kpiText(spec: Extract<StelaChartSpec, { type: "kpi" }>, data: StelaChar
   };
 }
 
-export function StelaChart({ spec, previousRunId, className, onExportSvg }: StelaChartProps) {
+export function StelaChart({ spec, className, onExportSvg }: StelaChartProps) {
   const t = useT();
   const hostRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<EChartsType | null>(null);
   const [data, setData] = useState<StelaChartData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [renderError, setRenderError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
   const key = JSON.stringify(spec);
@@ -52,7 +52,7 @@ export function StelaChart({ spec, previousRunId, className, onExportSvg }: Stel
     let cancelled = false;
     setLoading(true);
     setError(null);
-    void loadStelaChartData(spec, previousRunId)
+    void loadStelaChartData(spec)
       .then((next) => {
         if (!cancelled) setData(next);
       })
@@ -63,7 +63,7 @@ export function StelaChart({ spec, previousRunId, className, onExportSvg }: Stel
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [key, previousRunId]);
+  }, [key]);
 
   const option = useMemo(
     () => data && spec.type !== "kpi" ? buildStelaChartOption(spec, data.columns, data.rows, dark) : null,
@@ -71,23 +71,46 @@ export function StelaChart({ spec, previousRunId, className, onExportSvg }: Stel
   );
 
   useEffect(() => {
-    if (!hostRef.current || !option) return;
+    const host = hostRef.current;
+    if (!host || !option) return;
     let disposed = false;
-    let observer: ResizeObserver | null = null;
-    void mountEChart(hostRef.current, option, dark).then((chart) => {
-      if (disposed) {
-        chart.dispose();
-        return;
+    let mounting = false;
+    let chart: EChartsType | null = null;
+    setRenderError(null);
+
+    const tryMount = async () => {
+      if (disposed || mounting || chart || !canMountEChart(host)) return;
+      mounting = true;
+      try {
+        const next = await mountEChart(host, option, dark);
+        if (disposed || !canMountEChart(host)) {
+          next.dispose();
+          return;
+        }
+        chart = next;
+        chartRef.current = next;
+        next.resize();
+      } catch (reason: unknown) {
+        if (!disposed && !(reason instanceof EChartHostUnavailableError)) {
+          setRenderError(reason instanceof Error ? reason.message : String(reason));
+        }
+      } finally {
+        mounting = false;
       }
-      chartRef.current = chart;
-      observer = new ResizeObserver(() => chart.resize());
-      observer.observe(hostRef.current!);
+    };
+
+    const observer = new ResizeObserver(() => {
+      if (disposed) return;
+      if (chart) chart.resize();
+      else void tryMount();
     });
+    observer.observe(host);
+    void tryMount();
     return () => {
       disposed = true;
-      observer?.disconnect();
-      chartRef.current?.dispose();
-      chartRef.current = null;
+      observer.disconnect();
+      chart?.dispose();
+      if (chartRef.current === chart) chartRef.current = null;
     };
   }, [option, dark]);
 
@@ -108,8 +131,8 @@ export function StelaChart({ spec, previousRunId, className, onExportSvg }: Stel
   if (loading) {
     return <div className={cn("flex h-56 items-center justify-center text-xs text-muted-foreground", className)}><Loader2 className="mr-2 h-4 w-4 animate-spin" />{t("chart.loading")}</div>;
   }
-  if (error || !data) {
-    return <div className={cn("flex min-h-28 items-center justify-center rounded-md border border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive", className)}><AlertCircle className="mr-2 h-4 w-4 flex-none" /><span>{error ?? t("chart.noData")}</span></div>;
+  if (error || renderError || !data) {
+    return <div className={cn("flex min-h-28 items-center justify-center rounded-md border border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive", className)}><AlertCircle className="mr-2 h-4 w-4 flex-none" /><span>{error ?? renderError ?? t("chart.noData")}</span></div>;
   }
   if (spec.type === "kpi") {
     const kpi = kpiText(spec, data);

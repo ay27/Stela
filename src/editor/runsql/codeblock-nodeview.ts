@@ -73,7 +73,6 @@ import { useColumnCache } from "./column-cache";
 import { formatSqlCommand } from "./sql-format";
 import { formatHotkey } from "@/lib/hotkeys";
 import type { DetailMeta } from "@/core/types";
-import { serializeDetail } from "./detail-meta";
 import { useWorkspace } from "@/state/workspace";
 import { renderMermaid } from "@/editor/mermaid/render";
 import { i18n } from "@/i18n";
@@ -1743,25 +1742,6 @@ export class CodeBlockNodeView implements NodeView {
           runState === "error" && this.lastErrorMessage
             ? () => this.triggerAiFixRewrite()
             : undefined,
-        onRemoveChart: detail?.chart ? () => this.removeAttachedChart() : undefined,
-      }),
-    );
-  }
-
-  private removeAttachedChart(): void {
-    const pos = this.getPos();
-    if (pos === undefined) return;
-    const node = this.view.state.doc.nodeAt(pos);
-    const detail = (node?.attrs.detail as DetailMeta | null | undefined) ?? null;
-    if (!node || !detail?.chart) return;
-    const { chart: _chart, chartError: _chartError, ...nextDetail } = detail;
-    void _chart;
-    void _chartError;
-    this.view.dispatch(
-      this.view.state.tr.setNodeMarkup(pos, undefined, {
-        ...node.attrs,
-        detail: nextDetail,
-        detailRaw: serializeDetail(nextDetail),
       }),
     );
   }

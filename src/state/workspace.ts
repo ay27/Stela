@@ -16,9 +16,10 @@ import type { VaultFsEvent } from "@shared/ipc-events";
  * 历史：v0.1 之前 "welcome" 是一个常驻 tab；为它在 close/pin/reorder/拖拽
  * 处处开豁免分支。重构后 Welcome 不再作为 tab 存在——`tabs` 真为空时
  * `Workspace` 直接渲染 `<WelcomeView />`（参考 obsidian 的 empty editor）。
- * `TabKind` 暂时只剩 `"file"`，但保留这个 union 以便未来扩展（settings / search 等）。
+ * Markdown notes and Analysis Canvas artifacts share the same tab lifecycle;
+ * `kind` selects the corresponding workspace renderer.
  */
-export type TabKind = "file";
+export type TabKind = "file" | "analysis";
 
 export interface Tab {
   id: string;
@@ -283,7 +284,7 @@ function pushClosedSnapshot(
 }
 
 function snapshotFor(tab: Tab): ClosedTabSnapshot | null {
-  if (tab.kind !== "file" || !tab.path) return null;
+  if (!tab.path) return null;
   return { path: tab.path, title: tab.title, closedAt: Date.now() };
 }
 
@@ -581,7 +582,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const wantEphemeral = opts.ephemeral === true;
     const { tabs, pendingReveal, vaultPath, mruTabIds, navStack, navIndex } =
       get();
-    const existing = tabs.find((t) => t.kind === "file" && t.path === path);
+    const permanentMatch = tabs.findIndex((t) => t.path === path && !t.ephemeral);
+    const existingIndex = permanentMatch >= 0
+      ? permanentMatch
+      : tabs.findIndex((t) => t.path === path);
+    const existing = existingIndex >= 0 ? tabs[existingIndex] : undefined;
 
     const hasReveal =
       opts.scrollToLine !== undefined ||
@@ -616,11 +621,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // Case 1：命中已开 tab → 复用；如果命中的是 ephemeral 且本次想要永久，则升级
     if (existing) {
       const shouldPromote = !!existing.ephemeral && !wantEphemeral;
+      const deduplicated = tabs.filter((t, index) => t.path !== path || index === existingIndex);
       const nextTabs = shouldPromote
-        ? tabs.map((t) =>
+        ? deduplicated.map((t) =>
             t.id === existing.id ? { ...t, ephemeral: false } : t,
           )
-        : tabs;
+        : deduplicated;
       set({
         tabs: nextTabs,
         activeTabId: existing.id,
@@ -636,7 +642,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const id = `file:${path}`;
     const newTab: Tab = {
       id,
-      kind: "file",
+      kind: path.endsWith(".stela.canvas") ? "analysis" : "file",
       title: opts.title ?? basename(path),
       path,
       ...(wantEphemeral ? { ephemeral: true } : {}),
@@ -687,7 +693,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const { activeTabId, tabs, pendingReveal } = get();
     if (!activeTabId) return;
     const active = tabs.find((t) => t.id === activeTabId);
-    if (!active || active.kind !== "file" || !active.path) return;
+    if (!active?.path) return;
     set({
       pendingReveal: {
         path: active.path,
@@ -774,7 +780,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const { tabs, activeTabId, closedTabsStack, mruTabIds } = get();
     let stack = closedTabsStack;
     const next = tabs.filter((t) => {
-      if (t.kind !== "file") return true;
+      if (!t.path) return true;
       if (t.dirty) return true;
       // pinned tab 视为「明确想留下来」，即便 saved 也不关
       if (t.pinned) return true;
@@ -812,7 +818,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const tab = id ? tabs.find((t) => t.id === id) : undefined;
     // Tab 切换也记一条 path-only 历史，避免只靠 openFile 时丢了点选 tab 的链路。
     const navPatch =
-      tab?.kind === "file" && tab.path
+      tab?.path
         ? pushNav(navStack, navIndex, { path: tab.path })
         : null;
     set({
@@ -826,9 +832,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const { tabs, activeTabId, mruTabIds, navStack, navIndex } = get();
     const isMatch = (p: string) => p === path || p.startsWith(`${path}/`);
     tabs.forEach((t) => {
-      if (t.kind === "file" && t.path && isMatch(t.path)) clearTabBuffer(t.id);
+      if (t.path && isMatch(t.path)) clearTabBuffer(t.id);
     });
-    const next = tabs.filter((t) => !(t.kind === "file" && t.path && isMatch(t.path)));
+    const next = tabs.filter((t) => !(t.path && isMatch(t.path)));
     const navPatch = dropNavForPath(navStack, navIndex, path);
     if (next.length === tabs.length) {
       if (navPatch.navStack !== navStack || navPatch.navIndex !== navIndex) {
@@ -855,14 +861,21 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     let nextActive = activeTabId;
     const idRemap = new Map<string, string>();
     const next = tabs.map((t) => {
-      if (t.kind !== "file" || !t.path) return t;
+      if (!t.path) return t;
       if (t.path === from || t.path.startsWith(`${from}/`)) {
         const remapped = t.path === from ? to : `${to}${t.path.slice(from.length)}`;
         const newId = `file:${remapped}`;
+        const kind: TabKind = remapped.endsWith(".stela.canvas") ? "analysis" : "file";
         idRemap.set(t.id, newId);
         if (activeTabId === t.id) nextActive = newId;
         mutated = true;
-        return { ...t, id: newId, path: remapped, title: basename(remapped) };
+        return {
+          ...t,
+          id: newId,
+          kind,
+          path: remapped,
+          title: basename(remapped),
+        };
       }
       return t;
     });
@@ -898,7 +911,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   getTabIdByPath: (path) => {
-    const tab = get().tabs.find((t) => t.kind === "file" && t.path === path);
+    const tab = get().tabs.find((t) => t.path === path);
     return tab?.id ?? null;
   },
 
@@ -1040,7 +1053,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
     for (const ev of events) {
       for (const tab of tabs) {
-        if (tab.kind !== "file" || !tab.path) continue;
+        if (!tab.path) continue;
         const isMatch =
           ev.path === tab.path ||
           (ev.isDir && tab.path.startsWith(ev.path + "/"));
@@ -1102,7 +1115,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const { tabs } = get();
     let mutated = false;
     const next = tabs.map((t) => {
-      if (t.kind !== "file" || !t.path) return t;
+      if (!t.path) return t;
       // dirty tab 保护本地未保存改动，不重读（watcher 路径会按内容比对决定是否提示）
       if (t.dirty) return t;
       mutated = true;

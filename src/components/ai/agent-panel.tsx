@@ -32,6 +32,7 @@ import {
   peekAutocompleteFor,
 } from "@/editor/runsql/fetch-schema";
 import {
+  resolveCanvasArtifactPath,
   useAgentPanel,
   type AgentDraft,
   type AgentDraftAttachment,
@@ -194,6 +195,7 @@ export function AgentPanel() {
   const history = useAgentPanel((s) => s.history);
   const historyLoaded = useAgentPanel((s) => s.historyLoaded);
   const vaultPath = useWorkspace((s) => s.vaultPath);
+  const activeWorkspaceTab = useWorkspace((s) => s.tabs.find((tab) => tab.id === s.activeTabId));
   const focusToken = useLayout((s) => s.agentFocusToken);
   const aiSettings = useSettings((s) => s.settings.ai);
   const patchSettings = useSettings((s) => s.patch);
@@ -332,6 +334,7 @@ export function AgentPanel() {
       attachments: contentAttachments.length > 0 ? contentAttachments : undefined,
       connectionName,
       notePath: ctx?.path ?? null,
+      canvasPath: activeWorkspaceTab?.kind === "analysis" ? activeWorkspaceTab.path ?? null : null,
       locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
     });
   };
@@ -709,6 +712,8 @@ function TimelineItem({
           {t("agent.panel.interrupted")}
         </div>
       );
+    case "canvas":
+      return <button type="button" onClick={() => useWorkspace.getState().openFile(resolveCanvasArtifactPath(entry.path))} className="w-full rounded-lg border border-primary/30 bg-primary/5 p-3 text-left text-xs hover:bg-primary/10"><div className="font-medium text-foreground">{entry.title}</div><div className="mt-1 text-muted-foreground">{t(entry.action === "created" ? "agent.panel.canvasCreated" : "agent.panel.canvasUpdated")} · {t("agent.panel.openCanvas")}</div></button>;
     case "plan":
       return <ExecutionPlanCard plan={entry.plan} />;
     case "tool":

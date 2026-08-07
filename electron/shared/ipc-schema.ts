@@ -230,6 +230,9 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
   [IPC.STORAGE_CLEANUP]: z.object({
     keepDays: z.number().int().min(0),
   }),
+  [IPC.CANVAS_READ]: z.object({ path: stringPath }).strict(),
+  [IPC.CANVAS_CREATE]: z.object({ directory: stringPath, title: z.string().trim().min(1).max(200) }).strict(),
+  [IPC.CANVAS_REFRESH_SOURCE]: z.object({ path: stringPath, etag: z.string().regex(/^[a-f0-9]{64}$/), sourceId: agentHistorySegment }).strict(),
 
   [IPC.CONNECTOR_LIST_KINDS]: z.object({}).strict(),
   [IPC.CONNECTOR_TEST]: z.object({
@@ -559,6 +562,7 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
             .max(12)
             .optional(),
           notePath: z.string().max(8192).nullable().optional(),
+          canvasPath: z.string().max(8192).nullable().optional(),
           locale: z.enum(["zh", "en"]).optional(),
           profileId: z.string().min(1).max(128).nullable().optional(),
         })
@@ -700,32 +704,6 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
       title: z.string().min(1).max(256).optional(),
     })
     .strict(),
-  [IPC.EXPORT_SAVE_MARKDOWN_BUNDLE]: z
-    .object({
-      suggestedName: z.string().min(1).max(255),
-      content: z.string().max(20 * 1024 * 1024),
-      title: z.string().min(1).max(256).optional(),
-      assets: z
-        .array(
-          z.object({
-            id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
-            extension: z.literal("svg"),
-            content: z.string().max(5 * 1024 * 1024),
-          }).strict(),
-        )
-        .max(32),
-    })
-    .strict()
-    .superRefine((value, ctx) => {
-      const ids = new Set(value.assets.map((asset) => asset.id));
-      if (ids.size !== value.assets.length) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["assets"], message: "asset ids must be unique" });
-      }
-      const total = value.assets.reduce((sum, asset) => sum + asset.content.length, 0);
-      if (total > 20 * 1024 * 1024) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["assets"], message: "asset bundle is too large" });
-      }
-    }),
   [IPC.EXPORT_SAVE_FILE]: z
     .object({
       suggestedName: z.string().min(1).max(255),

@@ -27,6 +27,8 @@ import {
   runAgent,
 } from "@/services/agent";
 import { useLayout } from "@/state/layout";
+import { useWorkspace } from "@/state/workspace";
+import { scheduleAutoGit } from "@/services/auto-git";
 
 export type AgentRunStatus = "idle" | "running" | "done" | "error" | "cancelled";
 
@@ -89,6 +91,7 @@ export type AgentTimelineEntry =
   | { kind: "error"; id: string; message: string }
   | { kind: "cancelled"; id: string }
   | { kind: "interrupted"; id: string }
+  | { kind: "canvas"; id: string; path: string; title: string; action: "created" | "updated" }
   | { kind: "plan"; id: string; runId: string; plan: AgentPlanSnapshot };
 
 export interface AgentTab {
@@ -135,6 +138,7 @@ interface AgentPanelState {
     attachments?: AgentAttachment[];
     connectionName?: string | null;
     notePath?: string | null;
+    canvasPath?: string | null;
     locale?: "zh" | "en";
   }) => Promise<void>;
   cancel: () => Promise<void>;
@@ -183,6 +187,12 @@ function newTab(): AgentTab {
 
 const initialTab = newTab();
 
+export function resolveCanvasArtifactPath(canvasPath: string): string {
+  const vaultPath = useWorkspace.getState().vaultPath;
+  if (!vaultPath || canvasPath === vaultPath || canvasPath.startsWith(`${vaultPath}/`)) return canvasPath;
+  return `${vaultPath.replace(/\/$/, "")}/${canvasPath.replace(/^\//, "")}`;
+}
+
 function toolCallEntry(call: AgentToolCallInfo): AgentTimelineEntry {
   return { kind: "tool", id: nextId(), callId: call.callId, name: call.name, args: call.arguments };
 }
@@ -194,6 +204,13 @@ function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTim
     case "compaction":
     case "history_updated":
       return timeline;
+    case "canvas_updated":
+      if (timeline.some((entry) => entry.kind === "canvas" && entry.path === event.path)) {
+        return timeline.map((entry) => entry.kind === "canvas" && entry.path === event.path
+          ? { ...entry, title: event.title, action: entry.action === "created" ? "created" : event.action }
+          : entry);
+      }
+      return [...timeline, { kind: "canvas", id: nextId(), path: event.path, title: event.title, action: event.action }];
     case "plan_updated": {
       // 同一 run 的计划快照只保留一条 entry：原地更新，位置固定在首次创建处。
       const index = timeline.findIndex(
@@ -495,7 +512,7 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
       }),
     );
   },
-  async start({ prompt, mentionedTables, referencedNotes, attachments, connectionName, notePath, locale }) {
+  async start({ prompt, mentionedTables, referencedNotes, attachments, connectionName, notePath, canvasPath, locale }) {
     const state = get();
     const tab = state.tabs.find((item) => item.id === state.activeTabId);
     if (!tab || tab.status === "running") return;
@@ -531,8 +548,9 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
         referencedNotes,
         attachments,
         connectionName,
-        notePath,
-        locale,
+      notePath,
+      canvasPath,
+      locale,
       });
       if (response.sessionId !== tab.sessionId) {
         set((s) => ({
@@ -647,6 +665,10 @@ if (typeof window !== "undefined") {
     }));
     if (event.type === "history_updated") {
       void useAgentPanel.getState().refreshHistory();
+    }
+    if (event.type === "canvas_updated") {
+      scheduleAutoGit("canvas-agent-update");
+      if (event.action === "created") useWorkspace.getState().openFile(resolveCanvasArtifactPath(event.path));
     }
   });
 }

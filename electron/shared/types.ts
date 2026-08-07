@@ -47,6 +47,19 @@ export interface RowsPage {
   total: number;
 }
 
+export interface AnalysisCanvasFile {
+  path: string;
+  content: string;
+  etag: string;
+}
+
+export interface AnalysisCanvasRefreshResult extends AnalysisCanvasFile {
+  sourceId: string;
+  ok: boolean;
+  runId: string | null;
+  message: string | null;
+}
+
 // ---------- Connectors ----------
 
 export interface ConnectorKindMeta {
@@ -728,7 +741,9 @@ export type AgentToolName =
   | "get_table_schema"
   | "run_sql"
   | "create_chart"
-  | "save_chart_to_note"
+  | "create_analysis_canvas"
+  | "read_analysis_canvas"
+  | "update_analysis_canvas"
   | "search_vault"
   | "search_sql_usage"
   | "list_vault_files"
@@ -784,6 +799,7 @@ export interface AgentRunRequest {
   /** 用户通过 Add to Chat 添加的正文选区或 RunSQL 内容。 */
   attachments?: AgentAttachment[];
   notePath?: string | null;
+  canvasPath?: string | null;
   locale?: AiPromptLocale;
   /** Optional override; defaults to settings.ai.activeProfileId. */
   profileId?: string | null;
@@ -810,6 +826,7 @@ export interface AgentProposalPayload {
 
 export type AgentEvent =
   | { type: "started"; runId: string }
+  | { type: "canvas_updated"; runId: string; path: string; title: string; action: "created" | "updated" } // Vault-relative path
   | { type: "plan_updated"; runId: string; plan: AgentPlanSnapshot }
   | { type: "tool_call"; runId: string; call: AgentToolCallInfo }
   | {

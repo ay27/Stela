@@ -21,6 +21,7 @@ const request: AgentRunRequest = {
   runId: "run_1",
   sessionId: "session_1",
   prompt: "Show daily revenue",
+  canvasPath: "reports/revenue.stela.canvas",
   attachments: [
     { kind: "runsql", label: "Revenue SQL", sql: "SELECT sum(revenue) FROM orders", sourcePath: "reports/revenue.md" },
   ],
@@ -29,6 +30,13 @@ const request: AgentRunRequest = {
 try {
   const storage = await openLocalAgentSessionStorage(vaultPath, "laptop", "session_1");
   await appendAgentHistoryStarted(storage, request);
+  await appendAgentHistoryEvent(storage, {
+    type: "canvas_updated",
+    runId: "run_1",
+    path: "reports/revenue.stela.canvas",
+    title: "Revenue",
+    action: "created",
+  });
   await appendAgentHistoryEvent(storage, { type: "final", runId: "run_1", content: "Revenue is 42." });
   await appendAgentHistoryFinished(storage, "run_1");
   const lastEntry = (await storage.getEntries()).at(-1);
@@ -66,7 +74,15 @@ try {
   assert.equal(history.runs.length, 1);
   assert.equal(history.runs[0]?.finishedAt !== null, true);
   assert.deepEqual(history.runs[0]?.request.attachments, request.attachments);
+  assert.equal(history.runs[0]?.request.canvasPath, request.canvasPath);
   assert.deepEqual(history.runs[0]?.events, [
+    {
+      type: "canvas_updated",
+      runId: "run_1",
+      path: "reports/revenue.stela.canvas",
+      title: "Revenue",
+      action: "created",
+    },
     { type: "final", runId: "run_1", content: "Revenue is 42." },
   ]);
 

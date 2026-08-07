@@ -54,4 +54,41 @@ function resetWorkspace(tabs: Tab[]): void {
   assert.equal(next.reloadToken, undefined);
 }
 
+{
+  const canvasPath = "/vault/report.stela.canvas";
+  resetWorkspace([]);
+  useWorkspace.getState().openFile(canvasPath);
+  useWorkspace.getState().openFile(canvasPath);
+  assert.equal(useWorkspace.getState().tabs.length, 1);
+  assert.equal(useWorkspace.getState().tabs[0]?.kind, "analysis");
+  assert.equal(useWorkspace.getState().tabs[0]?.id, `file:${canvasPath}`);
+}
+
+{
+  const canvasPath = "/vault/duplicate.stela.canvas";
+  const duplicate: Tab = {
+    id: `file:${canvasPath}`,
+    kind: "analysis",
+    title: "duplicate.stela.canvas",
+    path: canvasPath,
+  };
+  resetWorkspace([duplicate, { ...duplicate }]);
+  useWorkspace.getState().openFile(canvasPath);
+  assert.equal(useWorkspace.getState().tabs.length, 1);
+}
+
+{
+  const canvas: Tab = {
+    id: "file:/vault/live.stela.canvas",
+    kind: "analysis",
+    title: "live.stela.canvas",
+    path: "/vault/live.stela.canvas",
+  };
+  resetWorkspace([canvas]);
+  useWorkspace.getState().applyExternalEvents([
+    { type: "changed", path: canvas.path!, isDir: false },
+  ]);
+  assert.equal(useWorkspace.getState().tabs[0]?.reloadToken, 1);
+}
+
 console.log("workspace tests passed.");

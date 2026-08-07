@@ -32,6 +32,8 @@ import type {
   AgentMetricRunPage,
   AgentMetricTrace,
   AgentMetricsDashboard,
+  AnalysisCanvasFile,
+  AnalysisCanvasRefreshResult,
   AiCompleteRequest,
   AiCompleteResponse,
   AiInlineCompletionEvent,
@@ -244,6 +246,12 @@ const stela = {
       }),
     cleanup: (keepDays: number) =>
       call<number>(IPC.STORAGE_CLEANUP, { keepDays }),
+  },
+
+  canvas: {
+    read: (path: string) => call<AnalysisCanvasFile>(IPC.CANVAS_READ, { path }),
+    create: (directory: string, title: string) => call<AnalysisCanvasFile>(IPC.CANVAS_CREATE, { directory, title }),
+    refreshSource: (path: string, etag: string, sourceId: string) => call<AnalysisCanvasRefreshResult>(IPC.CANVAS_REFRESH_SOURCE, { path, etag, sourceId }),
   },
 
   connector: {
@@ -506,16 +514,6 @@ const stela = {
       call<{ canceled: boolean; path: string | null }>(
         IPC.EXPORT_SAVE_MARKDOWN,
         { suggestedName, content, title: opts.title },
-      ),
-    saveMarkdownBundle: (
-      suggestedName: string,
-      content: string,
-      assets: Array<{ id: string; extension: "svg"; content: string }>,
-      opts: { title?: string } = {},
-    ) =>
-      call<{ canceled: boolean; path: string | null; revealToken: string | null }>(
-        IPC.EXPORT_SAVE_MARKDOWN_BUNDLE,
-        { suggestedName, content, assets, title: opts.title },
       ),
     saveFile: (
       suggestedName: string,

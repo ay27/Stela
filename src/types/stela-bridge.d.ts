@@ -20,6 +20,8 @@ import type {
   AgentMetricRunPage,
   AgentMetricTrace,
   AgentMetricsDashboard,
+  AnalysisCanvasFile,
+  AnalysisCanvasRefreshResult,
   AiCompleteRequest,
   AiCompleteResponse,
   AiInlineCompletionEvent,
@@ -171,6 +173,11 @@ interface StelaBridge {
     ) => Promise<RunRecord[]>;
     cleanup: (keepDays: number) => Promise<number>;
   };
+  canvas: {
+    read: (path: string) => Promise<AnalysisCanvasFile>;
+    create: (directory: string, title: string) => Promise<AnalysisCanvasFile>;
+    refreshSource: (path: string, etag: string, sourceId: string) => Promise<AnalysisCanvasRefreshResult>;
+  };
   connector: {
     listKinds: () => Promise<ConnectorKindMeta[]>;
     test: (kind: string, config: unknown) => Promise<TestResult>;
@@ -306,16 +313,6 @@ interface StelaBridge {
     saveMarkdown: (
       suggestedName: string,
       content: string,
-      opts?: { title?: string },
-    ) => Promise<{
-      canceled: boolean;
-      path: string | null;
-      revealToken: string | null;
-    }>;
-    saveMarkdownBundle: (
-      suggestedName: string,
-      content: string,
-      assets: Array<{ id: string; extension: "svg"; content: string }>,
       opts?: { title?: string },
     ) => Promise<{
       canceled: boolean;

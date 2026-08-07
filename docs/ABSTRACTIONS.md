@@ -70,6 +70,10 @@ export const DEFAULT_STELA_EXTENSION = ".md";
 
 Legacy `.mdstela` files from earlier versions are still readable if present, but new notes use `.md`.
 
+An Analysis Canvas is a separate ordinary Vault file ending in
+`.stela.canvas`. It is structured JSON rather than Markdown and opens in the
+read-only Canvas workspace; see `AnalysisCanvas` below.
+
 ## DetailMeta
 
 The parsed form of a `<detail>` HTML block. **Single canonical implementation** in `electron/shared/detail-meta.ts`; renderer re-exports from `src/editor/runsql/detail-meta.ts`.
@@ -82,15 +86,12 @@ interface DetailMeta {
   rowCount: number;
   firstRow: Record<string, unknown> | null;  // JSON object for quick preview
   resultRefId: string;   // FK into SQLite runs table
-  chart?: StelaEmbeddedChartSpec | null;
-  chartError?: string;   // runtime-only validation state
 }
 ```
 
-Serialization preserves `detailRaw` verbatim during ordinary editing. A pending
-detail may contain only `<block-id>` and `<chart>`; successful execution rewrites
-the execution fields while preserving the chart. The embedded chart's block id
-must equal `DetailMeta.blockId`.
+Serialization preserves `detailRaw` verbatim during ordinary editing. Detail is
+execution metadata only; charts and other presentation state never enter a
+RunSQL block or note Markdown.
 
 ## RunRecord and Storage
 
@@ -146,20 +147,68 @@ Renderer adapter: `src/services/storage/electron-storage.ts` → `window.stela.s
 
 ### StelaChartSpec
 
-Analytical charts are versioned JSON owned by `DetailMeta.chart`. The shared Zod
-schema in `electron/shared/chart-spec.ts` is the single parser for Agent output,
-RunSQL rendering, and export. The initial discriminated chart set is
+Analytical charts are versioned JSON. The shared Zod schema in
+`electron/shared/chart-spec.ts` is the single parser for Agent output, Canvas
+rendering, and export. The initial discriminated chart set is
 `kpi | bar | line | pie | funnel | histogram`; each type names result columns
 instead of containing rows or executable expressions.
 
-`source.kind = "run"` pins a conversation chart to one audited execution.
-`source.kind = "block"` strongly associates a persisted chart with its enclosing
-RunSQL block. The current or selected historical `<result-ref-id>` supplies data;
-missing cache data may be restored by exact run id from the JSONL journal.
+`source.kind = "run"` pins a rendered chart to one audited execution. Agent
+timeline charts carry this source directly. A Canvas stores the source-free
+chart configuration on its card, then supplies the current run from the card's
+referenced Canvas source. Missing cache data may be restored by exact run id
+from the JSONL journal.
 
 The validator rejects unknown properties, missing/non-numeric fields, empty
 results, more than 5,000 rows, and type-specific category limits. Aggregation and
 business calculations belong in SQL; charts do not silently sample results.
+
+### AnalysisCanvas
+
+A `*.stela.canvas` file is a versioned, strict JSON artifact validated by
+`electron/shared/analysis-canvas.ts`:
+
+```typescript
+interface AnalysisCanvas {
+  kind: "stela-analysis-canvas";
+  version: 1;
+  id: string;
+  title: string;
+  status: "working" | "complete" | "error";
+  createdAt: number;
+  updatedAt: number;
+  createdBySessionId: string | null;
+  sources: AnalysisCanvasSource[];
+  sections: AnalysisCanvasSection[];
+}
+
+interface AnalysisCanvasSource {
+  id: string;
+  title: string;
+  connectionName: string;
+  sql: string;                 // read-only, table-backed refresh definition
+  lastRunId: string | null;    // exact run in SQLite/JSONL, never result rows
+  lastRunAt: number | null;
+  lastError: { message: string; attemptedAt: number } | null;
+}
+
+type AnalysisCanvasCard =
+  | { type: "markdown"; id: string; markdown: string; width: CanvasCardWidth }
+  | { type: "kpi"; id: string; sourceId: string; value: string; width: CanvasCardWidth }
+  | { type: "chart"; id: string; sourceId: string; chart: StelaChartConfig; width: CanvasCardWidth }
+  | { type: "table"; id: string; sourceId: string; columns?: string[]; maxRows: number; width: CanvasCardWidth };
+```
+
+Source, section, and card ids are unique and stable; every data-backed card must
+reference an existing source. Canvas services enforce Vault confinement, atomic
+writes, and etag conflicts. A source must be a table-backed `SELECT`/`WITH`
+query; constant `SELECT`, `VALUES`, and literal `UNION` snapshots are rejected
+because refreshing them cannot observe source-data changes. Source refresh
+records the run in normal execution history and changes
+`lastRunId` only on success. The UI is read-only except for explicit refresh and
+static HTML export. Agent updates replace the complete validated artifact without
+an edit proposal, but new or changed SQL sources must be rebound to a successful
+query from the same Agent run ([ADR-0055](./adr/0055-vault-analysis-canvas-artifacts.md)).
 
 ### JSONL execution history (authoritative)
 
@@ -490,7 +539,8 @@ columns (with `comment`) directly. Otherwise it falls back to `SHOW CREATE TABLE
 ```typescript
 type AgentToolName =
   | "list_databases" | "list_tables" | "search_tables" | "get_table_schema"
-  | "run_sql" | "search_sql_usage"
+  | "run_sql" | "create_chart" | "search_sql_usage"
+  | "create_analysis_canvas" | "read_analysis_canvas" | "update_analysis_canvas"
   | "search_vault" | "list_vault_files" | "read_note"
   | "create_plan" | "update_plan" | "get_plan"
   | "search_skills" | "load_skill" | "save_skill" | "propose_edit" | "ask_user";
@@ -528,6 +578,7 @@ interface AgentRunRequest {
     | { kind: "runsql"; label: string; sql: string; sourcePath?: string }
   >;
   notePath?: string | null;
+  canvasPath?: string | null;      // active Canvas, if its workspace tab is selected
   locale?: "zh" | "en";
 }
 
@@ -558,6 +609,7 @@ type AgentEvent =
   | { type: "context_usage"; runId: string; usedTokens: number; contextWindow: number; estimated: boolean }
   | { type: "compaction"; runId: string; phase: "started" | "completed" }
   | { type: "history_updated"; runId: string }
+  | { type: "canvas_updated"; runId: string; path: string; title: string; action: "created" | "updated" }
   | { type: "final"; runId: string; content: string }
   | { type: "error"; runId: string; message: string }
   | { type: "cancelled"; runId: string };
@@ -581,7 +633,7 @@ Safety ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md)):
 - `sql-guard` classifies read-only vs mutation vs multi-statement
 - Mutations + `propose_edit` block on `ai:agent-respond-proposal`
 - Runs continue until model completion, error, or explicit user cancellation ([ADR-0017](./adr/0017-user-cancelled-agent-runs.md))
-- Tools use `executionMode: "parallel"` except `propose_edit` (`"sequential"`) ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md)). NodeExecutionEnv is harness cwd only (not exposed as model tools)
+- Read tools and `run_sql` may execute in parallel. Plan mutations, chart creation, Canvas creation/update, and `propose_edit` are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md)). NodeExecutionEnv is harness cwd only (not exposed as model tools)
 - Compaction uses `ai.contextWindow` + one overflow recovery ([ADR-0018](./adr/0018-pi-ai-agent-harness.md))
 - Execution plans are bounded and linear. Their active store is main-process runtime state, while the latest `AgentPlanSnapshot` is appended to the persisted pi session so its context projector can recover after restart ([ADR-0038](./adr/0038-runtime-agent-execution-plans.md), [ADR-0046](./adr/0046-device-sharded-agent-session-history.md))
 - Note references are paths only; the agent should call `read_note` before relying on note contents
@@ -698,6 +750,7 @@ interface NoteSearchResult {
 | RunSQL rewrite / ask | `codeblock-nodeview` + `ai-inline-panel` | `ai:complete` |
 | Schema actions | `SchemaBrowserPanel` + `ai-modal` | `ai:complete` |
 | Agent chat | `AgentSidebar` / `agent-panel` | `ai:agent-run` + events |
+| Analysis Canvas | `AnalysisCanvasView` | `canvas:read` / `canvas:refresh-source` |
 | `@table` mentions | `table-mention-input` | `mentionedTables` on requests |
 | `[[note]]` references | `agent-panel` prompt chips | `referencedNotes` on `ai:agent-run` |
 | Add to Chat | editor context menu / `Mod+I` | `attachments` on `ai:agent-run` |
@@ -720,20 +773,13 @@ Renderer parsing: `src/lib/ipc-error.ts`. IPC rejections carry `[code] message` 
 
 `window.stela.export.saveMarkdown()` and `saveFile()` open a native save dialog in main and return the chosen path plus an ephemeral `revealToken`. The renderer may pass that token only to `revealSavedFile()` to select the just-saved file in Finder, Explorer, or the platform file manager. The token is process-local and avoids extending the vault-only shell bridge to arbitrary filesystem paths.
 
-`window.stela.export.saveMarkdownBundle()` accepts a Markdown template plus a
-bounded list of identified SVG strings. After the user chooses the destination,
-Main derives `<markdown-stem>.assets/`, creates unique files, replaces only
-`stela-asset://<id>` placeholders with relative Markdown paths, and writes the
-Markdown last. Asset ids, counts, extensions, and byte sizes are Zod validated;
-the renderer never receives a general-purpose arbitrary-path write API.
-
 ## Renderer State Stores
 
 Zustand stores in `src/state/`:
 
 | Store | File | Holds |
 |-------|------|-------|
-| Workspace | `workspace.ts` | Open tabs, active file, vault path |
+| Workspace | `workspace.ts` | Open Markdown/Canvas tabs, active file, vault path |
 | Settings | `settings.ts` | Cached AppSettings |
 | Connections | `connections.ts` | ConnectionMap cache |
 | Git | `git.ts` | Status, modified files, sync state |

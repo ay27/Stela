@@ -53,6 +53,11 @@ export const IPC = {
   STORAGE_LIST_RUNS_BY_BLOCK: "storage:list-runs-by-block",
   STORAGE_CLEANUP: "storage:cleanup",
 
+  // Analysis Canvas
+  CANVAS_READ: "canvas:read",
+  CANVAS_CREATE: "canvas:create",
+  CANVAS_REFRESH_SOURCE: "canvas:refresh-source",
+
   // Connectors
   CONNECTOR_LIST_KINDS: "connector:list-kinds",
   CONNECTOR_TEST: "connector:test",
@@ -176,7 +181,6 @@ export const IPC = {
 
   // Export
   EXPORT_SAVE_MARKDOWN: "export:save-markdown",
-  EXPORT_SAVE_MARKDOWN_BUNDLE: "export:save-markdown-bundle",
   EXPORT_SAVE_FILE: "export:save-file",
   EXPORT_REVEAL_SAVED_FILE: "export:reveal-saved-file",
 

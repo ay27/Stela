@@ -16,15 +16,8 @@ export interface StelaChartData {
 
 export async function loadStelaChartData(
   spec: StelaChartSpec,
-  previousRunId?: string | null,
 ): Promise<StelaChartData> {
-  const runId =
-    spec.source.kind === "run"
-      ? spec.source.runId
-      : previousRunId ?? null;
-  if (!runId) {
-    throw new StelaChartError("Run this query to load its chart data.");
-  }
+  const runId = spec.source.runId;
 
   const read = async () => {
     const [columns, page] = await Promise.all([

@@ -32,29 +32,48 @@ assert.throws(
 );
 
 assert.deepEqual(
-  parseInput(IPC.EXPORT_SAVE_MARKDOWN_BUNDLE, {
-    suggestedName: "analysis.md",
-    content: "![Chart](stela-asset://chart-1)",
-    assets: [{ id: "chart-1", extension: "svg", content: "<svg/>" }],
+  parseInput(IPC.AI_AGENT_RUN, {
+    request: {
+      runId: "run_1",
+      prompt: "Update the active analysis",
+      canvasPath: "/vault/reports/revenue.stela.canvas",
+    },
   }),
   {
-    suggestedName: "analysis.md",
-    content: "![Chart](stela-asset://chart-1)",
-    assets: [{ id: "chart-1", extension: "svg", content: "<svg/>" }],
+    request: {
+      runId: "run_1",
+      prompt: "Update the active analysis",
+      canvasPath: "/vault/reports/revenue.stela.canvas",
+    },
   },
 );
-assert.throws(() => parseInput(IPC.EXPORT_SAVE_MARKDOWN_BUNDLE, {
-  suggestedName: "analysis.md",
-  content: "x",
-  assets: [{ id: "../escape", extension: "svg", content: "<svg/>" }],
-}));
-assert.throws(() => parseInput(IPC.EXPORT_SAVE_MARKDOWN_BUNDLE, {
-  suggestedName: "analysis.md",
-  content: "x",
-  assets: [
-    { id: "chart-1", extension: "svg", content: "<svg/>" },
-    { id: "chart-1", extension: "svg", content: "<svg/>" },
-  ],
+
+assert.deepEqual(
+  parseInput(IPC.CANVAS_CREATE, {
+    directory: "/vault/reports",
+    title: "Revenue",
+  }),
+  {
+    directory: "/vault/reports",
+    title: "Revenue",
+  },
+);
+assert.deepEqual(
+  parseInput(IPC.CANVAS_REFRESH_SOURCE, {
+    path: "/vault/reports/revenue.stela.canvas",
+    etag: "a".repeat(64),
+    sourceId: "revenue_daily",
+  }),
+  {
+    path: "/vault/reports/revenue.stela.canvas",
+    etag: "a".repeat(64),
+    sourceId: "revenue_daily",
+  },
+);
+assert.throws(() => parseInput(IPC.CANVAS_REFRESH_SOURCE, {
+  path: "/vault/reports/revenue.stela.canvas",
+  etag: "stale",
+  sourceId: "../escape",
 }));
 
 console.log("ipc-schema tests passed.");

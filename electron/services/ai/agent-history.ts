@@ -151,6 +151,12 @@ function asAgentEvent(value: unknown): AgentEvent | null {
         typeof event.summary === "string"
         ? event as AgentEvent
         : null;
+    case "canvas_updated":
+      return typeof event.path === "string" &&
+        typeof event.title === "string" &&
+        (event.action === "created" || event.action === "updated")
+        ? event as AgentEvent
+        : null;
     case "proposal": {
       const payload = asRecord(event.payload);
       return typeof event.callId === "string" &&
@@ -237,6 +243,7 @@ function asRunRequest(value: unknown): AgentRunRequest | null {
     ...(strings(request.mentionedTables) ? { mentionedTables: strings(request.mentionedTables) } : {}),
     ...(strings(request.referencedNotes) ? { referencedNotes: strings(request.referencedNotes) } : {}),
     ...(parsedAttachments ? { attachments: parsedAttachments } : {}),
+    ...(typeof request.canvasPath === "string" ? { canvasPath: request.canvasPath } : {}),
   };
 }
 

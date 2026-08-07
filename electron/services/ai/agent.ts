@@ -464,7 +464,7 @@ async function runSkillMaintenance(options: {
         sqlIndex: { query: sqlIndex.query },
         skills: skills.loaded,
         mode: refreshSkill ? "refresh" : "maintenance",
-        run: { runId: request.runId, notePath: request.notePath ?? null, questionsAsked: 0 },
+        run: { runId: request.runId, sessionId: request.sessionId, notePath: request.notePath ?? null, questionsAsked: 0 },
         recordRun: recordAgentRun(vaultPath),
         onSkillMaintenance: (record) => actions.push(record),
       },
@@ -747,12 +747,13 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
             skills.loaded.splice(0, skills.loaded.length, ...reloaded.loaded);
             return skills.loaded.find((item) => item.metadata.name === skill.metadata.name) ?? null;
           },
-          run: { runId, notePath: request.notePath ?? null, questionsAsked: 0 },
+          run: { runId, sessionId: request.sessionId, notePath: request.notePath ?? null, questionsAsked: 0 },
           chartRuns: new Map(),
           resolveChartRun: async (chartRunId) => {
             if (!resultStore.runExists(chartRunId)) await journal.importRun(vaultPath, chartRunId);
             return resultStore.getRun(chartRunId);
           },
+          onCanvasUpdated: (event) => emit({ type: "canvas_updated", runId, ...event }),
           plan,
           recordRun: recordAgentRun(vaultPath),
           onSkillMaintenance: (record) => normalSkillActions.push(record),
