@@ -10,6 +10,7 @@
 import { z } from "zod";
 
 import { IPC, type IpcChannel } from "./ipc-channels";
+import { analysisCanvasFlowLayoutPatchSchema } from "./analysis-canvas";
 
 const stringPath = z.string().min(1).max(8192);
 const stringMin1 = z.string().min(1);
@@ -233,6 +234,7 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
   [IPC.CANVAS_READ]: z.object({ path: stringPath }).strict(),
   [IPC.CANVAS_CREATE]: z.object({ directory: stringPath, title: z.string().trim().min(1).max(200) }).strict(),
   [IPC.CANVAS_REFRESH_SOURCE]: z.object({ path: stringPath, etag: z.string().regex(/^[a-f0-9]{64}$/), sourceId: agentHistorySegment }).strict(),
+  [IPC.CANVAS_UPDATE_FLOW_LAYOUT]: z.object({ path: stringPath, etag: z.string().regex(/^[a-f0-9]{64}$/), cardId: agentHistorySegment, patch: analysisCanvasFlowLayoutPatchSchema }).strict(),
 
   [IPC.CONNECTOR_LIST_KINDS]: z.object({}).strict(),
   [IPC.CONNECTOR_TEST]: z.object({

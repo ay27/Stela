@@ -57,6 +57,7 @@ export const IPC = {
   CANVAS_READ: "canvas:read",
   CANVAS_CREATE: "canvas:create",
   CANVAS_REFRESH_SOURCE: "canvas:refresh-source",
+  CANVAS_UPDATE_FLOW_LAYOUT: "canvas:update-flow-layout",
 
   // Connectors
   CONNECTOR_LIST_KINDS: "connector:list-kinds",

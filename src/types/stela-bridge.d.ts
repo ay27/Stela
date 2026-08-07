@@ -76,6 +76,7 @@ import type {
   SqlIndexHit,
   SqlIndexStatus,
 } from "@shared/types";
+import type { AnalysisCanvasFlowLayoutPatch } from "@shared/analysis-canvas";
 import type { VaultExternalChangePayload } from "@shared/ipc-events";
 
 interface StelaBridge {
@@ -177,6 +178,7 @@ interface StelaBridge {
     read: (path: string) => Promise<AnalysisCanvasFile>;
     create: (directory: string, title: string) => Promise<AnalysisCanvasFile>;
     refreshSource: (path: string, etag: string, sourceId: string) => Promise<AnalysisCanvasRefreshResult>;
+    updateFlowLayout: (path: string, etag: string, cardId: string, patch: AnalysisCanvasFlowLayoutPatch) => Promise<AnalysisCanvasFile>;
   };
   connector: {
     listKinds: () => Promise<ConnectorKindMeta[]>;

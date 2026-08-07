@@ -228,26 +228,37 @@ On failure: `runState: "error"`, no `<detail>` write (preserves round-trip integ
 
 ## Analytical Chart and Canvas Flow
 
-`electron/shared/chart-spec.ts` defines a small versioned chart contract rather
-than rows or executable ECharts configuration. A simple Agent chart binds to the
-exact `runId` returned by `run_sql` and renders only in the Agent timeline.
-Charts are not a Markdown or RunSQL abstraction.
+`electron/shared/chart-spec.ts` defines Stela's versioned `preset + semantic
+fields + mark/encoding` chart contract rather than rows, transforms, or
+executable ECharts configuration. It covers trend, ranking, composition,
+distribution, correlation, funnel, retention, comparison, and bounded custom
+views; compatible bar/line/area/point/rule marks may use two shared-x layers.
+Stela validates the contract and compiles it locally to ECharts. A simple Agent
+chart binds to the exact `runId` returned by `run_sql` and renders only in the
+Agent timeline. Charts are not a Markdown or RunSQL abstraction.
 
 Long or multi-stage analyses use a normal Vault file named `*.stela.canvas`.
 `electron/shared/analysis-canvas.ts` validates embedded read-only SQL sources,
-sections, and `markdown | kpi | chart | table` cards. Cards bind to a source id;
-the source points to its latest audited run, while result rows stay in the same
-SQLite/JSONL stores used by RunSQL. The read-only renderer workspace loads those
-snapshots and lazily mounts ECharts with its SVG renderer.
+sections, and `markdown | kpi | chart | table | flow` cards. Data-backed cards
+bind to a source id; the source points to its latest audited run, while result
+rows stay in the same SQLite/JSONL stores used by RunSQL. KPI, table, and chart
+fields share one strict display-format contract. The renderer loads snapshots,
+lazily mounts ECharts with its SVG renderer, and renders source-free controlled
+Flow cards with React Flow. Canvas Markdown does not execute Mermaid.
 
-Canvas creation, reads, and source refresh cross dedicated typed IPC methods.
+Canvas creation, reads, source refresh, and Flow layout updates cross dedicated
+typed IPC methods.
 Writes are path-confined, atomic, and etag-protected. The Agent may update a
 Canvas without an edit proposal, but Stela replaces every new or changed SQL
 source with SQL and connection metadata from a successful query in that Agent
 run. Users explicitly refresh one source or all sources; a failed refresh keeps
 the previous run reference and records the latest error. Static HTML export
 freezes current SVGs and tables and includes collapsed source SQL without any
-runtime execution bridge. See [ADR-0055](./adr/0055-vault-analysis-canvas-artifacts.md).
+runtime execution bridge. A user may drag Flow nodes or request deterministic
+Dagre TB/LR auto-layout; the etag-protected layout write changes only direction
+and existing node coordinates. Agent updates preserve that user-owned layout by
+stable ids. See [ADR-0056](./adr/0056-user-adjustable-react-flow-cards.md) and
+[ADR-0057](./adr/0057-bounded-mark-encoding-visualizations.md).
 
 ## Connector Architecture
 
@@ -348,7 +359,8 @@ flowchart TB
    search/read notes, ask the user questions, propose edits, and manage a bounded
    linear execution plan. Requested reports/dashboards and multi-stage analyses
    create a Canvas; simple answers remain in chat. New or changed Canvas sources
-   bind to same-run audited SQL and do not use a note-edit proposal. Plan state is
+   bind to same-run audited SQL and do not use a note-edit proposal. Flow cards
+   use controlled graph semantics and Agent updates preserve user layout. Plan state is
    persisted into pi session context so compaction cannot discard the active step
    or evidence. Read tools may run in parallel; plan tools, chart creation, Canvas
    writes, and `propose_edit` are sequential. Mutations and note writes wait for
@@ -513,7 +525,7 @@ window.stela.dialog.*       — pick vault / directory / file
 window.stela.settings.*       — load / patch AppSettings
 window.stela.connections.*    — CRUD connection map
 window.stela.storage.*        — SQLite run store
-window.stela.canvas.*         — read/create/refresh Analysis Canvas artifacts
+window.stela.canvas.*         — read/create/refresh Canvas artifacts + update Flow layout
 window.stela.connector.*      — execute + plugin management
 window.stela.search.*         — vault search + file list
 window.stela.git.*            — Git operations

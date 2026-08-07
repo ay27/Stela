@@ -24,14 +24,18 @@ async function loadECharts() {
     ]).then(([core, charts, components, renderers]) => {
       core.use([
         charts.BarChart,
+        charts.BoxplotChart,
+        charts.HeatmapChart,
         charts.LineChart,
         charts.PieChart,
         charts.FunnelChart,
+        charts.ScatterChart,
         components.TitleComponent,
         components.TooltipComponent,
         components.LegendComponent,
         components.GridComponent,
         components.DatasetComponent,
+        components.VisualMapComponent,
         renderers.SVGRenderer,
       ]);
       return core;

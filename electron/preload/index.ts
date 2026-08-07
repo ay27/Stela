@@ -14,6 +14,7 @@
 import { clipboard, contextBridge, ipcRenderer, webUtils } from "electron";
 
 import { IPC, type IpcChannel } from "@shared/ipc-channels";
+import type { AnalysisCanvasFlowLayoutPatch } from "@shared/analysis-canvas";
 import {
   IPC_EVENTS,
   type VaultExternalChangePayload,
@@ -252,6 +253,7 @@ const stela = {
     read: (path: string) => call<AnalysisCanvasFile>(IPC.CANVAS_READ, { path }),
     create: (directory: string, title: string) => call<AnalysisCanvasFile>(IPC.CANVAS_CREATE, { directory, title }),
     refreshSource: (path: string, etag: string, sourceId: string) => call<AnalysisCanvasRefreshResult>(IPC.CANVAS_REFRESH_SOURCE, { path, etag, sourceId }),
+    updateFlowLayout: (path: string, etag: string, cardId: string, patch: AnalysisCanvasFlowLayoutPatch) => call<AnalysisCanvasFile>(IPC.CANVAS_UPDATE_FLOW_LAYOUT, { path, etag, cardId, patch }),
   },
 
   connector: {

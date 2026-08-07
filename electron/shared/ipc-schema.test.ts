@@ -75,5 +75,22 @@ assert.throws(() => parseInput(IPC.CANVAS_REFRESH_SOURCE, {
   etag: "stale",
   sourceId: "../escape",
 }));
+assert.deepEqual(parseInput(IPC.CANVAS_UPDATE_FLOW_LAYOUT, {
+  path: "/vault/reports/revenue.stela.canvas",
+  etag: "b".repeat(64),
+  cardId: "pipeline",
+  patch: { direction: "LR", positions: [{ nodeId: "source", position: { x: 12, y: 34 } }] },
+}), {
+  path: "/vault/reports/revenue.stela.canvas",
+  etag: "b".repeat(64),
+  cardId: "pipeline",
+  patch: { direction: "LR", positions: [{ nodeId: "source", position: { x: 12, y: 34 } }] },
+});
+assert.throws(() => parseInput(IPC.CANVAS_UPDATE_FLOW_LAYOUT, {
+  path: "/vault/reports/revenue.stela.canvas",
+  etag: "b".repeat(64),
+  cardId: "pipeline",
+  patch: { positions: [{ nodeId: "source", position: { x: Number.POSITIVE_INFINITY, y: 0 } }] },
+}));
 
 console.log("ipc-schema tests passed.");

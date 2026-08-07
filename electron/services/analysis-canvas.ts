@@ -5,9 +5,11 @@ import path from "node:path";
 import {
   ANALYSIS_CANVAS_EXTENSION,
   analysisCanvasSchema,
+  analysisCanvasFlowLayoutPatchSchema,
   parseAnalysisCanvas,
   stringifyAnalysisCanvas,
   type AnalysisCanvas,
+  type AnalysisCanvasFlowLayoutPatch,
 } from "@shared/analysis-canvas";
 import { AppError } from "@shared/errors";
 import type { AnalysisCanvasFile, AnalysisCanvasRefreshResult, QueryResult, RunRecord } from "@shared/types";
@@ -96,6 +98,46 @@ export async function updateAnalysisCanvas(
   const content = stringifyAnalysisCanvas(next);
   await atomicWriteFile(current.path, content);
   return { path: current.path, content, etag: etag(content) };
+}
+
+export async function updateAnalysisCanvasFlowLayout(
+  vaultPath: string,
+  filePath: string,
+  expectedEtag: string,
+  cardId: string,
+  rawPatch: AnalysisCanvasFlowLayoutPatch,
+): Promise<AnalysisCanvasFile> {
+  const patch = analysisCanvasFlowLayoutPatchSchema.parse(rawPatch);
+  const duplicateIds = new Set<string>();
+  const seen = new Set<string>();
+  for (const item of patch.positions) {
+    if (seen.has(item.nodeId)) duplicateIds.add(item.nodeId);
+    seen.add(item.nodeId);
+  }
+  if (duplicateIds.size > 0) throw new AppError("invalid_canvas_layout", `Duplicate flow node positions: ${[...duplicateIds].join(", ")}`);
+  return updateAnalysisCanvas(vaultPath, filePath, expectedEtag, (canvas) => {
+    let found = false;
+    const sections = canvas.sections.map((section) => ({
+      ...section,
+      cards: section.cards.map((card) => {
+        if (card.id !== cardId) return card;
+        found = true;
+        if (card.type !== "flow") throw new AppError("canvas_card_not_flow", `Canvas card ${cardId} is not a Flow card.`);
+        const nodeIds = new Set(card.nodes.map((node) => node.id));
+        const positions = new Map(patch.positions.map((item) => [item.nodeId, item.position]));
+        for (const nodeId of positions.keys()) {
+          if (!nodeIds.has(nodeId)) throw new AppError("canvas_flow_node_not_found", `Unknown Flow node: ${nodeId}`);
+        }
+        return {
+          ...card,
+          direction: patch.direction ?? card.direction,
+          nodes: card.nodes.map((node) => positions.has(node.id) ? { ...node, position: positions.get(node.id)! } : node),
+        };
+      }),
+    }));
+    if (!found) throw new AppError("canvas_card_not_found", `Unknown Canvas card: ${cardId}`);
+    return { ...canvas, sections };
+  });
 }
 
 export interface CanvasRefreshDeps {

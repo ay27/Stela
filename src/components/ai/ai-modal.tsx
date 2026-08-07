@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Bot, Check, Clipboard, Loader2, RefreshCw, X } from "lucide-react";
 
@@ -9,7 +9,6 @@ import { cn } from "@/lib/utils";
 import { StelaChart } from "@/components/charts/stela-chart";
 import { parseStelaChartSpec } from "@shared/chart-spec";
 import { normalizeAgentMarkdownCodeLanguage } from "@/components/ai/markdown-code-language";
-import { renderMermaid } from "@/editor/mermaid/render";
 
 const SCHEMA_ACTIONS: { action: AiActionKind; labelKey: string }[] = [
   { action: "explain-table", labelKey: "ai.action.explain-table" },
@@ -158,7 +157,7 @@ export function AiModal() {
 
 export function renderMarkdown(
   markdown: string,
-  options: { charts?: boolean; mermaid?: boolean } = {},
+  options: { charts?: boolean } = {},
 ): ReactNode {
   const lines = markdown.split(/\r?\n/);
   const out: ReactNode[] = [];
@@ -180,8 +179,6 @@ export function renderMarkdown(
       out.push(
         lang === "stela-chart" && options.charts !== false
           ? <MarkdownChartBlock key={out.length} code={code} />
-          : lang === "mermaid" && options.mermaid === true
-            ? <MarkdownMermaidBlock key={out.length} code={code} />
           : <MarkdownCodeBlock key={out.length} lang={displayLang} code={code} />,
       );
       continue;
@@ -291,32 +288,6 @@ function MarkdownChartBlock({ code }: { code: string }) {
     });
   };
   return <div className="my-3"><StelaChart spec={spec} onExportSvg={exportSvg} /></div>;
-}
-
-function MarkdownMermaidBlock({ code }: { code: string }) {
-  const t = useT();
-  const renderId = useRef(`stela-canvas-mermaid-${crypto.randomUUID()}`);
-  const [svg, setSvg] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    const source = code.trim();
-    setSvg(null);
-    setError(null);
-    if (!source) {
-      setError(t("analysisCanvas.mermaidEmpty"));
-      return () => { active = false; };
-    }
-    void renderMermaid(renderId.current, source)
-      .then((nextSvg) => { if (active) setSvg(nextSvg); })
-      .catch((err) => { if (active) setError(err instanceof Error ? err.message : String(err)); });
-    return () => { active = false; };
-  }, [code, t]);
-
-  if (error) return <div className="my-3 rounded-md bg-destructive/10 p-3 text-xs text-destructive">{error}</div>;
-  if (!svg) return <div className="my-3 flex min-h-20 items-center justify-center rounded-md border bg-background text-xs text-muted-foreground"><Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />{t("analysisCanvas.mermaidLoading")}</div>;
-  return <div className="my-3 overflow-auto rounded-md border bg-background p-4 [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svg }} />;
 }
 
 function MarkdownCodeBlock({ lang, code }: { lang: string; code: string }) {

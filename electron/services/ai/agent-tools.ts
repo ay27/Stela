@@ -261,33 +261,41 @@ export function createAgentTools(options: {
       name: "create_chart",
       label: "Create chart",
       description:
-        "Validate and render a concise Stela chart from a successful run_sql result. Use only real result columns. Choose KPI for one scalar row, bar for categorical comparison, line for ordered/time trends, pie only for at most 5 categories, funnel for ordered stages, and histogram for a numeric distribution. Returns a stela-chart Markdown fence for the final answer.",
+        "Validate a Stela v2 chart against a successful run_sql result. Choose a preset, declare semantic fields, and map 1-2 controlled layers through encoding channels. Presets: trend, ranking, composition, distribution, correlation, funnel, retention, comparison, custom. Marks: bar, line, area, point, arc, rect, rule, histogram, boxplot, funnel. Use only real result columns and keep business aggregation in SQL.",
       parameters: Type.Object({
         runId: Type.String({ description: "Exact runId returned by run_sql in this Agent run." }),
-        type: Type.Union([
-          Type.Literal("kpi"),
-          Type.Literal("bar"),
-          Type.Literal("line"),
-          Type.Literal("pie"),
-          Type.Literal("funnel"),
-          Type.Literal("histogram"),
-        ]),
         title: Type.Optional(Type.String()),
         description: Type.Optional(Type.String()),
-        value: Type.String({ description: "Numeric result column." }),
-        label: Type.Optional(Type.String()),
-        prefix: Type.Optional(Type.String()),
-        suffix: Type.Optional(Type.String()),
-        category: Type.Optional(Type.String()),
-        series: Type.Optional(Type.String()),
-        orientation: Type.Optional(Type.Union([Type.Literal("horizontal"), Type.Literal("vertical")])),
-        stacked: Type.Optional(Type.Boolean()),
-        sort: Type.Optional(Type.Union([Type.Literal("none"), Type.Literal("asc"), Type.Literal("desc")])),
-        x: Type.Optional(Type.String()),
-        area: Type.Optional(Type.Boolean()),
-        donut: Type.Optional(Type.Boolean()),
-        stage: Type.Optional(Type.String()),
-        bins: Type.Optional(Type.Number()),
+        preset: Type.Union(["trend", "ranking", "composition", "distribution", "correlation", "funnel", "retention", "comparison", "custom"].map((value) => Type.Literal(value))),
+        fields: Type.Array(Type.Object({
+          id: Type.String({ description: "Stable short id referenced by layer encodings." }),
+          field: Type.String({ description: "Exact result column name." }),
+          type: Type.Union(["nominal", "ordinal", "quantitative", "temporal", "boolean"].map((value) => Type.Literal(value))),
+          title: Type.Optional(Type.String()),
+          temporalInput: Type.Optional(Type.Union([Type.Literal("iso"), Type.Literal("epoch-ms"), Type.Literal("epoch-seconds")])),
+          format: Type.Optional(Type.Object({
+            kind: Type.Union(["auto", "text", "number", "compact", "percent", "currency", "date", "datetime", "duration", "boolean"].map((value) => Type.Literal(value))),
+            input: Type.Optional(Type.String()),
+            currency: Type.Optional(Type.String()),
+            style: Type.Optional(Type.String()),
+            timeZone: Type.Optional(Type.String()),
+            minimumFractionDigits: Type.Optional(Type.Number()),
+            maximumFractionDigits: Type.Optional(Type.Number()),
+            trueLabel: Type.Optional(Type.String()),
+            falseLabel: Type.Optional(Type.String()),
+            nullLabel: Type.Optional(Type.String()),
+          })),
+        }), { minItems: 1, maxItems: 32 }),
+        layers: Type.Array(Type.Object({
+          mark: Type.Union(["bar", "line", "area", "point", "arc", "rect", "rule", "histogram", "boxplot", "funnel"].map((value) => Type.Literal(value))),
+          encoding: Type.Object({
+            x: Type.Optional(Type.String()), y: Type.Optional(Type.String()), color: Type.Optional(Type.String()),
+            size: Type.Optional(Type.String()), theta: Type.Optional(Type.String()),
+          }),
+          yAxis: Type.Optional(Type.Union([Type.Literal("left"), Type.Literal("right")])),
+          stack: Type.Optional(Type.Union([Type.Literal("none"), Type.Literal("normal"), Type.Literal("percent")])),
+          bins: Type.Optional(Type.Number()),
+        }), { minItems: 1, maxItems: 2 }),
       }),
       executionMode: "sequential",
       execute: (toolCallId, params) => runTool("create_chart", toolCallId, params, ctx, requestProposal),
@@ -296,7 +304,7 @@ export function createAgentTools(options: {
       name: "create_analysis_canvas",
       label: "Create analysis Canvas",
       description:
-        "Create a read-only .stela.canvas analysis artifact. Use early for a multi-stage analysis with several evidence views, or whenever the user asks for a Canvas, report, or dashboard. Updates do not require edit approval.",
+        "Create a structured .stela.canvas analysis artifact. Agent-authored analysis content is validated and users may adjust Flow layout without editing graph semantics. Use early for a multi-stage analysis with several evidence views, or whenever the user asks for a Canvas, report, or dashboard. Updates do not require edit approval.",
       parameters: Type.Object({
         title: Type.String(),
         directory: Type.Optional(Type.String({ description: "Vault-relative directory. Defaults to the current note directory or vault root." })),
@@ -312,7 +320,7 @@ export function createAgentTools(options: {
     },
     {
       name: "update_analysis_canvas", label: "Update analysis Canvas",
-      description: "Replace a Canvas with a validated structured version. Bind every new or changed SQL source to a successful run_sql runId; Stela copies the audited SQL and connection metadata. Canvas sources must be refreshable table-backed queries: never turn fetched values into SELECT literals, VALUES, or constant UNION rows. Preserve stable source, section, and card ids across updates.",
+      description: "Replace a Canvas with a validated structured version. Bind every new or changed SQL source to a successful run_sql runId; Stela copies the audited SQL and connection metadata. Canvas sources must be refreshable table-backed queries: never turn fetched values into SELECT literals, VALUES, or constant UNION rows. Preserve stable source, section, card, Flow node, and Flow edge ids across updates. Flow direction and existing node positions are user-owned and will be preserved; omit node positions.",
       parameters: Type.Object({
         path: Type.String(), etag: Type.String(), content: Type.String({ description: "Complete version 1 .stela.canvas JSON." }),
         sourceRuns: Type.Array(Type.Object({ sourceId: Type.String(), runId: Type.String() })),
@@ -733,11 +741,19 @@ function runCreateChart(args: Record<string, unknown>, ctx: AgentToolContext): T
   const runId = typeof args.runId === "string" ? args.runId : "";
   const run = ctx.chartRuns?.get(runId);
   if (!run) return fail("runId must refer to a successful run_sql query from this Agent run.");
-  const { runId: _discardRunId, ...chartArgs } = args;
+  const { runId: _discardRunId, fields: rawFields, ...chartArgs } = args;
   void _discardRunId;
+  const fieldEntries = (Array.isArray(rawFields) ? rawFields : []).flatMap((raw) => {
+    if (!raw || typeof raw !== "object") return [];
+    const { id, ...definition } = raw as Record<string, unknown>;
+    return typeof id === "string" ? [[id, definition]] : [];
+  });
+  if (new Set(fieldEntries.map(([id]) => id)).size !== fieldEntries.length) return fail("Chart semantic field ids must be unique.");
+  const fields = Object.fromEntries(fieldEntries);
   const candidate = {
     ...chartArgs,
-    version: 1,
+    fields,
+    version: 2,
     source: { kind: "run", runId },
   };
   const parsed = stelaChartSpecSchema.safeParse(candidate);
@@ -818,7 +834,20 @@ async function runUpdateAnalysisCanvas(args: Record<string, unknown>, ctx: Agent
     if (sqlIssue) return fail(`Canvas source ${source.id} is not refreshable: ${sqlIssue}`);
     sources.push({ ...source, sql: existing.sql, connectionName: existing.connectionName, lastRunId: existing.lastRunId, lastRunAt: existing.lastRunAt, lastError: existing.lastError });
   }
-  const nextDesired = { ...desired, sources };
+  const sections = desired.sections.map((section) => ({
+    ...section,
+    cards: section.cards.map((card) => {
+      if (card.type !== "flow") return card;
+      const existing = current.sections.flatMap((item) => item.cards).find((item) => item.id === card.id && item.type === "flow");
+      const prior = existing?.type === "flow" ? new Map(existing.nodes.map((node) => [node.id, node.position])) : new Map<string, undefined>();
+      return {
+        ...card,
+        direction: existing?.type === "flow" ? existing.direction : card.direction,
+        nodes: card.nodes.map((node) => ({ ...node, position: prior.get(node.id) })),
+      };
+    }),
+  }));
+  const nextDesired = { ...desired, sources, sections };
   const updated = await analysisCanvasService.updateAnalysisCanvas(ctx.vaultPath, target, args.etag, () => nextDesired);
   ctx.onCanvasUpdated?.({ path: vaultRelativePath(ctx.vaultPath, updated.path), title: desired.title, action: "updated" });
   return ok({ path: updated.path, etag: updated.etag, status: desired.status, sections: desired.sections.length, cards: desired.sections.reduce((sum, section) => sum + section.cards.length, 0) });

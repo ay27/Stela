@@ -12,3 +12,6 @@ assert.match(prompt, /conversation and final-answer text, SQL MUST use fenced ``
 assert.match(prompt, /never label it ```runsql```/);
 assert.match(prompt, /Only Markdown content being written into a vault note may use executable fenced ```runsql```/);
 assert.match(prompt, /Never preserve already fetched numbers or rows by turning them into SELECT literals/);
+assert.match(prompt, /Use preset trend/);
+assert.match(prompt, /use a flow card for processes/);
+assert.match(prompt, /Omit Flow node positions because layout is user-owned/);

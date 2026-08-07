@@ -4,8 +4,8 @@ import type { EChartsType } from "echarts/core";
 
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n/use-t";
+import { i18n } from "@/i18n";
 import type { StelaChartSpec } from "@shared/chart-spec";
-import { toFiniteChartNumber } from "@shared/chart-spec";
 
 import { loadStelaChartData, type StelaChartData } from "./chart-data";
 import { buildStelaChartOption } from "./chart-option";
@@ -15,17 +15,6 @@ export interface StelaChartProps {
   spec: StelaChartSpec;
   className?: string;
   onExportSvg?: (svg: string, title: string) => void | Promise<void>;
-}
-
-function kpiText(spec: Extract<StelaChartSpec, { type: "kpi" }>, data: StelaChartData) {
-  const indexes = new Map(data.columns.map((column, index) => [column.name, index]));
-  const row = data.rows[0] ?? [];
-  const value = row[indexes.get(spec.value)!];
-  const numeric = toFiniteChartNumber(value);
-  return {
-    label: spec.label ? String(row[indexes.get(spec.label)!] ?? spec.label) : spec.title ?? spec.value,
-    value: `${spec.prefix ?? ""}${numeric === null ? String(value ?? "NULL") : numeric.toLocaleString()}${spec.suffix ?? ""}`,
-  };
 }
 
 export function StelaChart({ spec, className, onExportSvg }: StelaChartProps) {
@@ -66,7 +55,7 @@ export function StelaChart({ spec, className, onExportSvg }: StelaChartProps) {
   }, [key]);
 
   const option = useMemo(
-    () => data && spec.type !== "kpi" ? buildStelaChartOption(spec, data.columns, data.rows, dark) : null,
+    () => data ? buildStelaChartOption(spec, data.columns, data.rows, dark, i18n.language) : null,
     [data, key, dark],
   );
 
@@ -122,7 +111,7 @@ export function StelaChart({ spec, className, onExportSvg }: StelaChartProps) {
       const comma = url.indexOf(",");
       const body = url.slice(comma + 1);
       const svg = url.slice(0, comma).includes(";base64") ? atob(body) : decodeURIComponent(body);
-      await onExportSvg(svg, spec.title ?? spec.type);
+      await onExportSvg(svg, spec.title ?? spec.preset);
     } finally {
       setExporting(false);
     }
@@ -134,15 +123,10 @@ export function StelaChart({ spec, className, onExportSvg }: StelaChartProps) {
   if (error || renderError || !data) {
     return <div className={cn("flex min-h-28 items-center justify-center rounded-md border border-destructive/30 bg-destructive/5 p-4 text-xs text-destructive", className)}><AlertCircle className="mr-2 h-4 w-4 flex-none" /><span>{error ?? renderError ?? t("chart.noData")}</span></div>;
   }
-  if (spec.type === "kpi") {
-    const kpi = kpiText(spec, data);
-    return <div className={cn("flex min-h-40 flex-col items-center justify-center rounded-lg border border-border bg-card p-6", className)}><div className="text-xs text-muted-foreground">{kpi.label}</div><div className="mt-2 text-4xl font-semibold tracking-tight">{kpi.value}</div></div>;
-  }
-
   return (
     <div className={cn("relative w-full rounded-lg border border-border bg-card p-2", className)}>
       {onExportSvg ? <button type="button" onClick={() => void exportSvg()} disabled={exporting} className="absolute right-2 top-2 z-10 rounded-md border border-border bg-background/90 p-1.5 text-muted-foreground hover:text-foreground" title={t("chart.exportSvg")}><Download className="h-3.5 w-3.5" /></button> : null}
-      <div ref={hostRef} className="h-80 w-full" role="img" aria-label={spec.description ?? spec.title ?? `${spec.type} chart`} />
+      <div ref={hostRef} className="h-80 w-full" role="img" aria-label={spec.description ?? spec.title ?? `${spec.preset} chart`} />
     </div>
   );
 }

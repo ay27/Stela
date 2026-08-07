@@ -114,6 +114,7 @@ import * as agentHistory from "../services/ai/agent-history";
 import * as agentSkills from "../services/ai/agent-skills";
 import * as agentMetrics from "../services/ai/agent-metrics";
 import * as analysisCanvas from "../services/analysis-canvas";
+import type { AnalysisCanvasFlowLayoutPatch } from "@shared/analysis-canvas";
 import { cancelSkillMaintenance } from "../services/ai/skill-maintenance-queue";
 import { runInlineCompletion } from "../services/ai/inline-completion";
 
@@ -445,6 +446,10 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
         },
       });
     },
+  );
+  registerHandler<{ path: string; etag: string; cardId: string; patch: AnalysisCanvasFlowLayoutPatch }, AnalysisCanvasFile>(
+    IPC.CANVAS_UPDATE_FLOW_LAYOUT,
+    ({ path: filePath, etag, cardId, patch }) => analysisCanvas.updateAnalysisCanvasFlowLayout(requireVault(), filePath, etag, cardId, patch),
   );
 
   // ---------- Connectors ----------

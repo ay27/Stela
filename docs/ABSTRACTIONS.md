@@ -72,7 +72,8 @@ Legacy `.mdstela` files from earlier versions are still readable if present, but
 
 An Analysis Canvas is a separate ordinary Vault file ending in
 `.stela.canvas`. It is structured JSON rather than Markdown and opens in the
-read-only Canvas workspace; see `AnalysisCanvas` below.
+Canvas workspace; analysis content is Agent-owned while the user may adjust
+Flow layout. See `AnalysisCanvas` below.
 
 ## DetailMeta
 
@@ -149,9 +150,13 @@ Renderer adapter: `src/services/storage/electron-storage.ts` → `window.stela.s
 
 Analytical charts are versioned JSON. The shared Zod schema in
 `electron/shared/chart-spec.ts` is the single parser for Agent output, Canvas
-rendering, and export. The initial discriminated chart set is
-`kpi | bar | line | pie | funnel | histogram`; each type names result columns
-instead of containing rows or executable expressions.
+rendering, and export. Version 2 uses a Stela-owned analytical `preset`, named
+semantic `fields`, and one or two controlled `layers`. Presets are `trend |
+ranking | composition | distribution | correlation | funnel | retention |
+comparison | custom`; marks are `bar | line | area | point | arc | rect | rule |
+histogram | boxplot | funnel`. Encodings reference field ids rather than
+containing rows or executable expressions. Two-layer comparison/custom charts
+share x and may use left/right y axes.
 
 `source.kind = "run"` pins a rendered chart to one audited execution. Agent
 timeline charts carry this source directly. A Canvas stores the source-free
@@ -159,9 +164,14 @@ chart configuration on its card, then supplies the current run from the card's
 referenced Canvas source. Missing cache data may be restored by exact run id
 from the JSONL journal.
 
-The validator rejects unknown properties, missing/non-numeric fields, empty
-results, more than 5,000 rows, and type-specific category limits. Aggregation and
-business calculations belong in SQL; charts do not silently sample results.
+The validator rejects unknown properties, invalid preset/mark/channel
+combinations, missing or wrongly typed fields, empty results, more than 5,000
+rows, duplicate analytical keys, and type-specific category/cell limits.
+Aggregation and business calculations belong in SQL; charts do not silently
+sample results. `ValueFormat` is shared by chart fields, KPI values, and table
+columns and covers auto/text, numeric/compact, percent, currency, date/time,
+duration, boolean, and custom null labels
+([ADR-0057](./adr/0057-bounded-mark-encoding-visualizations.md)).
 
 ### AnalysisCanvas
 
@@ -194,9 +204,33 @@ interface AnalysisCanvasSource {
 
 type AnalysisCanvasCard =
   | { type: "markdown"; id: string; markdown: string; width: CanvasCardWidth }
-  | { type: "kpi"; id: string; sourceId: string; value: string; width: CanvasCardWidth }
+  | { type: "kpi"; id: string; sourceId: string; value: FormattedField; width: CanvasCardWidth }
   | { type: "chart"; id: string; sourceId: string; chart: StelaChartConfig; width: CanvasCardWidth }
-  | { type: "table"; id: string; sourceId: string; columns?: string[]; maxRows: number; width: CanvasCardWidth };
+  | { type: "table"; id: string; sourceId: string; columns?: FormattedField[]; maxRows: number; width: CanvasCardWidth }
+  | { type: "flow"; id: string; direction: "TB" | "LR"; nodes: FlowNode[]; edges: FlowEdge[]; width: CanvasCardWidth };
+
+interface FormattedField {
+  field: string;
+  title?: string;
+  format?: ValueFormat;
+}
+
+interface FlowNode {
+  id: string;
+  kind: "step" | "decision" | "source" | "result" | "note";
+  label: string;
+  description?: string;
+  tone?: "neutral" | "info" | "success" | "warning" | "danger";
+  position?: { x: number; y: number };
+}
+
+interface FlowEdge {
+  id: string;
+  source: string;
+  target: string;
+  label?: string;
+  tone?: "neutral" | "success" | "warning" | "danger";
+}
 ```
 
 Source, section, and card ids are unique and stable; every data-backed card must
@@ -205,10 +239,13 @@ writes, and etag conflicts. A source must be a table-backed `SELECT`/`WITH`
 query; constant `SELECT`, `VALUES`, and literal `UNION` snapshots are rejected
 because refreshing them cannot observe source-data changes. Source refresh
 records the run in normal execution history and changes
-`lastRunId` only on success. The UI is read-only except for explicit refresh and
-static HTML export. Agent updates replace the complete validated artifact without
-an edit proposal, but new or changed SQL sources must be rebound to a successful
-query from the same Agent run ([ADR-0055](./adr/0055-vault-analysis-canvas-artifacts.md)).
+`lastRunId` only on success. Users may refresh, export, drag Flow nodes, switch
+TB/LR direction, and auto-layout, but cannot edit graph semantics. Layout writes
+are a narrow typed IPC mutation with etag conflict detection. Agent updates
+replace the complete validated artifact without an edit proposal, preserve
+existing Flow layout by stable ids, and require new or changed SQL sources to be
+rebound to a successful query from the same Agent run
+([ADR-0056](./adr/0056-user-adjustable-react-flow-cards.md)).
 
 ### JSONL execution history (authoritative)
 
@@ -750,7 +787,7 @@ interface NoteSearchResult {
 | RunSQL rewrite / ask | `codeblock-nodeview` + `ai-inline-panel` | `ai:complete` |
 | Schema actions | `SchemaBrowserPanel` + `ai-modal` | `ai:complete` |
 | Agent chat | `AgentSidebar` / `agent-panel` | `ai:agent-run` + events |
-| Analysis Canvas | `AnalysisCanvasView` | `canvas:read` / `canvas:refresh-source` |
+| Analysis Canvas | `AnalysisCanvasView` | `canvas:read` / `canvas:refresh-source` / `canvas:update-flow-layout` |
 | `@table` mentions | `table-mention-input` | `mentionedTables` on requests |
 | `[[note]]` references | `agent-panel` prompt chips | `referencedNotes` on `ai:agent-run` |
 | Add to Chat | editor context menu / `Mod+I` | `attachments` on `ai:agent-run` |

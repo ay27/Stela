@@ -107,4 +107,6 @@ proposed → active → superseded
 | [0052](0052-signal-focused-agent-observability.md) | Signal-focused Agent observability | active |
 | [0053](0053-declarative-result-bound-analytical-charts.md) | Declarative result-bound analytical charts | superseded → [0054](0054-runsql-owned-analytical-charts.md) |
 | [0054](0054-runsql-owned-analytical-charts.md) | RunSQL-owned analytical charts | superseded → [0055](0055-vault-analysis-canvas-artifacts.md) |
-| [0055](0055-vault-analysis-canvas-artifacts.md) | Vault analysis Canvas artifacts | active |
+| [0055](0055-vault-analysis-canvas-artifacts.md) | Vault analysis Canvas artifacts | superseded → [0056](0056-user-adjustable-react-flow-cards.md) |
+| [0056](0056-user-adjustable-react-flow-cards.md) | User-adjustable React Flow cards | active |
+| [0057](0057-bounded-mark-encoding-visualizations.md) | Bounded mark-encoding visualizations | active |

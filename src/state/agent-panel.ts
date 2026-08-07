@@ -34,10 +34,12 @@ export type AgentRunStatus = "idle" | "running" | "done" | "error" | "cancelled"
 
 export type AgentDraftAttachment =
   | { id: string; kind: "note"; path: string }
+  | { id: string; kind: "canvas"; path: string }
   | ({ id: string } & AgentAttachment);
 
 export type AgentDraftAttachmentInput =
   | { kind: "note"; path: string }
+  | { kind: "canvas"; path: string }
   | AgentAttachment;
 
 export interface AgentDraft {
@@ -57,6 +59,7 @@ export type AgentTimelineEntry =
       mentionedTables?: string[];
       referencedNotes?: string[];
       attachments?: AgentAttachment[];
+      canvasPath?: string;
     }
   | {
       kind: "tool";
@@ -322,6 +325,7 @@ export function replayAgentHistory(history: AgentHistorySession): AgentTimelineE
         ...(run.request.mentionedTables?.length ? { mentionedTables: run.request.mentionedTables } : {}),
         ...(run.request.referencedNotes?.length ? { referencedNotes: run.request.referencedNotes } : {}),
         ...(run.request.attachments?.length ? { attachments: run.request.attachments } : {}),
+        ...(run.request.canvasPath ? { canvasPath: run.request.canvasPath } : {}),
       },
     ];
     for (const event of run.events) timeline = applyEvent(timeline, event);
@@ -378,6 +382,19 @@ function draftWithAttachment(draft: AgentDraft, attachment: AgentDraftAttachment
       ...draft,
       attachments: [...draft.attachments, { id: newAttachmentId(), kind: "note", path: attachment.path }],
       dismissedNotePaths: draft.dismissedNotePaths.filter((path) => path !== attachment.path),
+    };
+  }
+  if (attachment.kind === "canvas") {
+    const existing = draft.attachments.find((item) => item.kind === "canvas" && item.path === attachment.path);
+    if (existing) return draft;
+    return {
+      ...draft,
+      // AgentRunRequest.canvasPath is singular: the latest explicit Canvas
+      // reference replaces the prior one instead of silently sending two.
+      attachments: [
+        ...draft.attachments.filter((item) => item.kind !== "canvas"),
+        { id: newAttachmentId(), kind: "canvas", path: attachment.path },
+      ],
     };
   }
   return {
@@ -533,6 +550,7 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
             ...(mentionedTables?.length ? { mentionedTables } : {}),
             ...(referencedNotes?.length ? { referencedNotes } : {}),
             ...(attachments?.length ? { attachments } : {}),
+            ...(canvasPath ? { canvasPath } : {}),
           },
         ],
         draft: emptyDraft(),

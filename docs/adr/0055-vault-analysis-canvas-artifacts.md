@@ -2,7 +2,8 @@
 type: ADR
 id: "0055"
 title: "Vault analysis Canvas artifacts"
-status: active
+status: superseded
+superseded_by: "0056"
 date: 2026-08-06
 ---
 

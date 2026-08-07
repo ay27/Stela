@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent } fr
 import {
   Bot,
   Brain,
+  ChartNoAxesCombined,
   CheckCircle2,
   ChevronDown,
   Circle,
@@ -26,6 +27,7 @@ import { ProposalLineDiff } from "./proposal-diff";
 import { i18n } from "@/i18n";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
+import { fuzzyFilter } from "@/lib/fuzzy";
 import { getRunContext } from "@/editor/runsql/run-context";
 import {
   ensureAutocompleteFor,
@@ -63,6 +65,10 @@ function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
 
+function isCanvasPath(path: string): boolean {
+  return path.toLowerCase().endsWith(".stela.canvas");
+}
+
 function relativeToVault(path: string | null | undefined, vaultPath: string | null): string | null {
   if (!path) return null;
   if (!vaultPath) return path;
@@ -78,6 +84,8 @@ function attachmentLabel(attachment: AgentDraftAttachment): string {
   switch (attachment.kind) {
     case "note":
       return attachment.path.split("/").pop() || attachment.path;
+    case "canvas":
+      return attachment.path.split("/").pop() || attachment.path;
     case "runsql":
       return attachment.label;
     case "selection":
@@ -89,6 +97,8 @@ function attachmentTitle(attachment: AgentDraftAttachment): string {
   switch (attachment.kind) {
     case "note":
       return attachment.path;
+    case "canvas":
+      return attachment.path;
     case "runsql":
       return attachment.sql;
     case "selection":
@@ -97,7 +107,9 @@ function attachmentTitle(attachment: AgentDraftAttachment): string {
 }
 
 function mergePromptValue(draft: AgentDraft, value: AiPromptInputDraft): AgentDraft {
-  const referencedNotes = uniqueStrings(value.referencedNotes);
+  const referencedPaths = uniqueStrings(value.referencedNotes);
+  const referencedNotes = referencedPaths.filter((path) => !isCanvasPath(path));
+  const referencedCanvas = referencedPaths.filter(isCanvasPath).at(-1);
   const existingNotePaths = new Set(
     draft.attachments
       .filter((item): item is Extract<AgentDraftAttachment, { kind: "note" }> => item.kind === "note")
@@ -110,11 +122,19 @@ function mergePromptValue(draft: AgentDraft, value: AiPromptInputDraft): AgentDr
       kind: "note",
       path,
     }));
+  const attachments = [...draft.attachments, ...addedNotes];
+  if (referencedCanvas && !attachments.some((item) => item.kind === "canvas" && item.path === referencedCanvas)) {
+    attachments.splice(0, attachments.length, ...attachments.filter((item) => item.kind !== "canvas"), {
+      id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      kind: "canvas",
+      path: referencedCanvas,
+    });
+  }
   return {
     ...draft,
     text: value.text,
     mentionedTables: value.mentionedTables,
-    attachments: [...draft.attachments, ...addedNotes],
+    attachments,
     dismissedNotePaths: draft.dismissedNotePaths.filter((path) => !referencedNotes.includes(path)),
     isEmpty: value.isEmpty,
   };
@@ -196,6 +216,9 @@ export function AgentPanel() {
   const historyLoaded = useAgentPanel((s) => s.historyLoaded);
   const vaultPath = useWorkspace((s) => s.vaultPath);
   const activeWorkspaceTab = useWorkspace((s) => s.tabs.find((tab) => tab.id === s.activeTabId));
+  const activeCanvasPath = activeWorkspaceTab?.kind === "analysis"
+    ? relativeToVault(activeWorkspaceTab.path, vaultPath)
+    : null;
   const focusToken = useLayout((s) => s.agentFocusToken);
   const aiSettings = useSettings((s) => s.settings.ai);
   const patchSettings = useSettings((s) => s.patch);
@@ -215,6 +238,7 @@ export function AgentPanel() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const historyMenuRef = useRef<HTMLDetailsElement>(null);
   const promptInputRef = useRef<AiPromptInputHandle>(null);
+  const canvasMentionPathsRef = useRef<string[]>([]);
   const busy = status === "running";
   // 连续的 tool entries 就地合成一条 ToolActivity：执行记录跟随产生它的那一轮，
   // 不再跨轮次汇总到最底部。pending 的 question 从 timeline 摘出，固定到输入框上方。
@@ -273,6 +297,41 @@ export function AgentPanel() {
     ensureDefaultNote(relativeToVault(getRunContext()?.path, vaultPath));
   }, [activeTabId, focusToken, vaultPath, ensureDefaultNote]);
 
+  useEffect(() => {
+    let active = true;
+    canvasMentionPathsRef.current = [];
+    const unsubscribe = window.stela.vault.onExternalChange((payload) => {
+      if (!active || payload.vaultPath !== vaultPath) return;
+      for (const event of payload.events) {
+        if (event.isDir || !isCanvasPath(event.path)) continue;
+        const relative = relativeToVault(event.path, vaultPath);
+        if (!relative) continue;
+        canvasMentionPathsRef.current = event.type === "removed"
+          ? canvasMentionPathsRef.current.filter((path) => path !== relative)
+          : uniqueStrings([...canvasMentionPathsRef.current, relative]);
+      }
+    });
+    if (vaultPath) {
+      void window.stela.search.listFiles(vaultPath, [".stela.canvas"])
+        .then((files) => {
+          if (!active) return;
+          canvasMentionPathsRef.current = files.flatMap((file) => {
+            const relative = relativeToVault(file, vaultPath);
+            return relative ? [relative] : [];
+          });
+        })
+        .catch(() => {});
+    }
+    return () => { active = false; unsubscribe(); };
+  }, [vaultPath]);
+
+  useEffect(() => {
+    const createdOrUpdated = timeline.flatMap((entry) => entry.kind === "canvas" ? [entry.path] : []);
+    if (createdOrUpdated.length > 0) {
+      canvasMentionPathsRef.current = uniqueStrings([...canvasMentionPathsRef.current, ...createdOrUpdated]);
+    }
+  }, [timeline]);
+
   const getTableNamesCached = useCallback(
     () => (connectionName ? peekAutocompleteFor(connectionName) : []),
     [connectionName],
@@ -284,13 +343,15 @@ export function AgentPanel() {
   );
   const getNoteCandidates = useCallback(async (query: string): Promise<MentionItem[]> => {
     const candidates = await window.stela.index.listCandidates(query, 24);
-    return candidates
+    const notes = candidates
       .filter((candidate) => candidate.kind === "file" && candidate.detail)
-      .slice(0, 12)
       .map((candidate) => ({
         id: candidate.detail,
         label: candidate.detail,
       }));
+    const canvases = canvasMentionPathsRef.current.map((path) => ({ id: path, label: `Canvas · ${path}` }));
+    const combined = [...canvases, ...notes];
+    return (query.trim() ? fuzzyFilter(query.trim(), combined, (item) => `${item.label} ${item.id}`, 12) : combined.slice(0, 12));
   }, []);
   const onWheelScroll = useCallback((ev: WheelEvent<HTMLDivElement>) => {
     if (ev.deltaX === 0 && ev.deltaY !== 0) {
@@ -308,10 +369,13 @@ export function AgentPanel() {
     const ctx = getRunContext();
     const notePaths = uniqueStrings([
       ...draft.attachments.filter((item): item is Extract<AgentDraftAttachment, { kind: "note" }> => item.kind === "note").map((item) => item.path),
-      ...referencedNotes,
+      ...referencedNotes.filter((path) => !isCanvasPath(path)),
     ]);
+    const explicitCanvasPath = draft.attachments.findLast((item): item is Extract<AgentDraftAttachment, { kind: "canvas" }> => item.kind === "canvas")?.path
+      ?? referencedNotes.filter(isCanvasPath).at(-1);
+    const canvasPath = explicitCanvasPath ?? activeCanvasPath;
     const contentAttachments = draft.attachments
-      .filter((item): item is Extract<AgentDraftAttachment, { kind: "selection" | "runsql" }> => item.kind !== "note")
+      .filter((item): item is Extract<AgentDraftAttachment, { kind: "selection" | "runsql" }> => item.kind === "selection" || item.kind === "runsql")
       .map((attachment): AgentAttachment =>
         attachment.kind === "runsql"
           ? {
@@ -334,7 +398,7 @@ export function AgentPanel() {
       attachments: contentAttachments.length > 0 ? contentAttachments : undefined,
       connectionName,
       notePath: ctx?.path ?? null,
-      canvasPath: activeWorkspaceTab?.kind === "analysis" ? activeWorkspaceTab.path ?? null : null,
+      canvasPath,
       locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
     });
   };
@@ -500,7 +564,7 @@ export function AgentPanel() {
       ) : null}
 
       <div className="border-t border-border bg-muted/20 px-2.5 py-2">
-      <AttachmentChips attachments={draft.attachments} onRemove={removeAttachment} />
+      <AttachmentChips attachments={draft.attachments} contextCanvasPath={activeCanvasPath} onRemove={removeAttachment} />
         <AiPromptInput
           key={activeTabId}
           ref={promptInputRef}
@@ -598,15 +662,26 @@ function groupTimeline(timeline: AgentTimelineEntry[]): TimelineRenderItem[] {
 
 function AttachmentChips({
   attachments,
+  contextCanvasPath,
   onRemove,
 }: {
   attachments: AgentDraftAttachment[];
+  contextCanvasPath: string | null;
   onRemove: (attachmentId: string) => void;
 }) {
   const t = useT();
-  if (attachments.length === 0) return null;
+  const showContextCanvas = contextCanvasPath && !attachments.some((attachment) => attachment.kind === "canvas");
+  if (attachments.length === 0 && !showContextCanvas) return null;
   return (
     <div className="mb-1.5 flex flex-wrap gap-1">
+      {showContextCanvas ? <span
+        title={contextCanvasPath}
+        className="inline-flex max-w-full items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-1.5 py-1 text-[11px] text-muted-foreground"
+      >
+        <ChartNoAxesCombined className="h-3 w-3 flex-none text-primary" />
+        <span className="max-w-[180px] truncate">{contextCanvasPath.split("/").pop() || contextCanvasPath}</span>
+        <span className="text-[9px] uppercase text-primary/80">{t("agent.panel.activeCanvas")}</span>
+      </span> : null}
       {attachments.map((attachment) => (
         <span
           key={attachment.id}
@@ -615,6 +690,8 @@ function AttachmentChips({
         >
           {attachment.kind === "note" ? (
             <FileText className="h-3 w-3 flex-none text-primary" />
+          ) : attachment.kind === "canvas" ? (
+            <ChartNoAxesCombined className="h-3 w-3 flex-none text-primary" />
           ) : (
             <MessageSquareQuote className="h-3 w-3 flex-none text-primary" />
           )}
@@ -646,7 +723,7 @@ function TimelineItem({
       return (
         <div className="flex justify-end">
           <div className="max-w-[80%] rounded-lg bg-muted px-3 py-2 text-sm text-foreground">
-            {entry.mentionedTables?.length || entry.referencedNotes?.length || entry.attachments?.length ? (
+            {entry.mentionedTables?.length || entry.referencedNotes?.length || entry.attachments?.length || entry.canvasPath ? (
               <div className="mb-1.5 flex flex-wrap gap-1">
                 {entry.mentionedTables?.map((table) => (
                   <span
@@ -667,6 +744,17 @@ function TimelineItem({
                     <span className="truncate">{path.split("/").pop() || path}</span>
                   </span>
                 ))}
+                {entry.canvasPath ? (
+                  <button
+                    type="button"
+                    title={entry.canvasPath}
+                    onClick={() => useWorkspace.getState().openFile(resolveCanvasArtifactPath(entry.canvasPath!))}
+                    className="inline-flex max-w-full items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-primary/10"
+                  >
+                    <ChartNoAxesCombined className="h-3 w-3 flex-none text-primary" />
+                    <span className="truncate">{entry.canvasPath.split("/").pop() || entry.canvasPath}</span>
+                  </button>
+                ) : null}
                 {entry.attachments?.map((attachment, index) => (
                   <span
                     key={`a-${attachment.kind}-${index}`}

@@ -7,6 +7,7 @@ import type { AiSettings } from "@shared/types";
 
 import { ExecutionPlanStore } from "./execution-plan";
 import { createAgentTools, dispatchTool } from "./agent-tools";
+import { updateAnalysisCanvasFlowLayout } from "../analysis-canvas";
 
 const AI_SETTINGS = {
   providerMode: "openai-compatible",
@@ -218,18 +219,24 @@ try {
     const runId = JSON.parse(query.text).runId as string;
     const chart = await dispatchTool("create_chart", JSON.stringify({
       runId,
-      type: "bar",
       title: "Demo",
-      category: "category",
-      value: "count",
+      preset: "ranking",
+      fields: [
+        { id: "category", field: "category", type: "nominal" },
+        { id: "count", field: "count", type: "quantitative", format: { kind: "compact" } },
+      ],
+      layers: [{ mark: "bar", encoding: { x: "count", y: "category" } }],
     }), ctx);
     assert.equal(chart.ok, true, chart.text);
     assert.match(chart.text, /```stela-chart/);
     const invalid = await dispatchTool("create_chart", JSON.stringify({
       runId,
-      type: "bar",
-      category: "missing",
-      value: "count",
+      preset: "ranking",
+      fields: [
+        { id: "category", field: "missing", type: "nominal" },
+        { id: "count", field: "count", type: "quantitative" },
+      ],
+      layers: [{ mark: "bar", encoding: { x: "count", y: "category" } }],
     }), ctx);
     assert.equal(invalid.ok, false);
     assert.match(invalid.text, /does not exist/);
@@ -553,6 +560,16 @@ Inspect the live schema first.`;
         sourceId: "overview",
         width: "full",
         maxRows: 20,
+      }, {
+        id: "pipeline",
+        type: "flow",
+        width: "full",
+        direction: "TB",
+        nodes: [
+          { id: "source", kind: "source", label: "Source", position: { x: 900, y: 900 } },
+          { id: "result", kind: "result", label: "Result", position: { x: 1_000, y: 900 } },
+        ],
+        edges: [{ id: "source_result", source: "source", target: "result" }],
       }],
     }];
     const updated = await dispatchTool(
@@ -568,6 +585,7 @@ Inspect the live schema first.`;
     assert.equal(updated.ok, true, updated.text);
     const saved = JSON.parse(await readFile(createdPayload.path, "utf8")) as {
       sources: Array<Record<string, unknown>>;
+      sections: Array<{ cards: Array<Record<string, unknown>> }>;
     };
     assert.deepEqual(saved.sources[0], {
       id: "overview",
@@ -578,8 +596,38 @@ Inspect the live schema first.`;
       lastRunAt: 123,
       lastError: null,
     });
+    const newFlow = saved.sections[0]!.cards[1] as { nodes: Array<{ position?: unknown }> };
+    assert.equal(newFlow.nodes[0]?.position, undefined, "Agent-supplied positions on new Flow cards must be stripped");
 
     const updatedPayload = JSON.parse(updated.text) as { etag: string };
+    const laidOut = await updateAnalysisCanvasFlowLayout(root, createdPayload.path, updatedPayload.etag, "pipeline", {
+      direction: "LR",
+      positions: [{ nodeId: "source", position: { x: 12, y: 34 } }],
+    });
+    const agentEdit = JSON.parse(laidOut.content) as {
+      sections: Array<{ cards: Array<Record<string, unknown>> }>;
+    };
+    const agentFlow = agentEdit.sections[0]!.cards[1] as {
+      direction: string;
+      nodes: Array<Record<string, unknown>>;
+    };
+    agentFlow.direction = "TB";
+    agentFlow.nodes[0] = { ...agentFlow.nodes[0], label: "Renamed source", position: { x: 999, y: 999 } };
+    const agentUpdated = await dispatchTool(
+      "update_analysis_canvas",
+      JSON.stringify({ path: createdPayload.path, etag: laidOut.etag, content: JSON.stringify(agentEdit), sourceRuns: [] }),
+      canvasCtx,
+    );
+    assert.equal(agentUpdated.ok, true, agentUpdated.text);
+    const agentUpdatedPayload = JSON.parse(agentUpdated.text) as { etag: string };
+    const preserved = JSON.parse(await readFile(createdPayload.path, "utf8")) as {
+      sections: Array<{ cards: Array<{ type: string; direction?: string; nodes?: Array<{ id: string; label: string; position?: unknown }> }> }>;
+    };
+    const preservedFlow = preserved.sections[0]!.cards.find((card) => card.type === "flow")!;
+    assert.equal(preservedFlow.direction, "LR");
+    assert.deepEqual(preservedFlow.nodes?.find((node) => node.id === "source")?.position, { x: 12, y: 34 });
+    assert.equal(preservedFlow.nodes?.find((node) => node.id === "source")?.label, "Renamed source");
+
     const constantContent = JSON.parse(await readFile(createdPayload.path, "utf8")) as {
       sources: Array<Record<string, unknown>>;
       sections: unknown[];
@@ -597,7 +645,7 @@ Inspect the live schema first.`;
       "update_analysis_canvas",
       JSON.stringify({
         path: createdPayload.path,
-        etag: updatedPayload.etag,
+        etag: agentUpdatedPayload.etag,
         content: JSON.stringify(constantContent),
         sourceRuns: [{ sourceId: "constant_snapshot", runId: "constant-canvas-run" }],
       }),
@@ -605,7 +653,7 @@ Inspect the live schema first.`;
     );
     assert.equal(rejectedConstant.ok, false);
     assert.match(rejectedConstant.text, /must read a real table/i);
-    assert.deepEqual(events.map((event) => event.action), ["created", "updated"]);
+    assert.deepEqual(events.map((event) => event.action), ["created", "updated", "updated"]);
   }
 
   {
