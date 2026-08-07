@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 
 import type { AgentHistoryRef, AgentHistorySession } from "@shared/types";
 
-import { isCurrentHistoryTab, replayAgentHistory } from "./agent-panel";
+import { useWorkspace, type Tab } from "./workspace";
+import { isCurrentHistoryTab, refreshCanvasTabIfOpen, replayAgentHistory } from "./agent-panel";
 
 const history: AgentHistorySession = {
   summary: {
@@ -63,5 +64,17 @@ assert.equal(
   isCurrentHistoryTab({ sessionId: "sess_1", historyRef: null }, localRef, false),
   false,
 );
+
+const note: Tab = { id: "file:/vault/current.md", kind: "file", title: "current.md", path: "/vault/current.md" };
+useWorkspace.setState({ vaultPath: "/vault", tabs: [note], activeTabId: note.id, mruTabIds: [note.id] });
+refreshCanvasTabIfOpen("reports/new.stela.canvas");
+assert.equal(useWorkspace.getState().tabs.length, 1);
+assert.equal(useWorkspace.getState().activeTabId, note.id);
+
+const canvas: Tab = { id: "file:/vault/reports/live.stela.canvas", kind: "analysis", title: "live.stela.canvas", path: "/vault/reports/live.stela.canvas" };
+useWorkspace.setState({ tabs: [note, canvas], activeTabId: note.id, mruTabIds: [note.id, canvas.id] });
+refreshCanvasTabIfOpen("reports/live.stela.canvas");
+assert.equal(useWorkspace.getState().activeTabId, note.id);
+assert.equal(useWorkspace.getState().tabs[1]?.reloadToken, 1);
 
 console.log("agent history replay tests passed.");

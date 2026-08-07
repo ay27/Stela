@@ -11,6 +11,8 @@ import type {
   AgentMetricsDashboard,
 } from "@shared/types";
 
+import { agentActivityLevel, buildAgentActivityGrid } from "@/components/agent-dashboard-activity";
+import { i18n } from "@/i18n";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -107,6 +109,75 @@ function BreakdownTable({ rows }: { rows: AgentMetricBreakdown[] }) {
   );
 }
 
+function activityCellClass(level: ReturnType<typeof agentActivityLevel>): string {
+  if (level === 4) return "bg-primary";
+  if (level === 3) return "bg-primary/75";
+  if (level === 2) return "bg-primary/50";
+  if (level === 1) return "bg-primary/25";
+  return "bg-muted/60";
+}
+
+function DailyActivityGrid({ data, range }: { data: AgentMetricsDashboard; range: AgentMetricRange }) {
+  const t = useT();
+  const grid = useMemo(
+    () => buildAgentActivityGrid(range, data.generatedAt, data.daily),
+    [data.daily, data.generatedAt, range],
+  );
+  const locale = i18n.resolvedLanguage ?? i18n.language;
+  const dayFormatter = useMemo(
+    () => new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }),
+    [locale],
+  );
+  const weekdayFormatter = useMemo(
+    () => new Intl.DateTimeFormat(locale, { weekday: "narrow" }),
+    [locale],
+  );
+  const weekdays = useMemo(
+    () => Array.from({ length: 7 }, (_, index) => weekdayFormatter.format(new Date(2026, 7, 2 + index))),
+    [weekdayFormatter],
+  );
+  const formatDay = (day: string) => dayFormatter.format(new Date(`${day}T00:00:00`));
+
+  return (
+    <div>
+      <div className="flex items-start gap-2">
+        <div className="grid grid-rows-7 gap-1 text-[8px] leading-3 text-muted-foreground" aria-hidden="true">
+          {weekdays.map((weekday, index) => <span key={`${weekday}-${index}`} className="h-3 w-3 text-center">{index % 2 === 1 ? weekday : ""}</span>)}
+        </div>
+        <div
+          className="grid gap-1"
+          style={{
+            gridAutoFlow: "column",
+            gridTemplateColumns: `repeat(${grid.weekCount}, 0.75rem)`,
+            gridTemplateRows: "repeat(7, 0.75rem)",
+          }}
+        >
+          {grid.cells.map((cell) => cell.inRange ? (
+            <div
+              key={cell.day}
+              className={cn(
+                "group relative h-3 w-3 rounded-[2px] ring-1 ring-inset ring-border/40 outline-none transition-transform hover:z-20 hover:scale-125 focus-visible:z-20 focus-visible:scale-125 focus-visible:ring-primary",
+                activityCellClass(agentActivityLevel(cell.total, grid.maxTotal)),
+              )}
+              tabIndex={0}
+              role="img"
+              aria-label={`${cell.day}: ${t("agentDashboard.activityCount", { count: cell.total })}`}
+            >
+              <span className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-1.5 w-max max-w-48 -translate-x-1/2 rounded bg-popover px-2 py-1 text-[10px] font-medium text-popover-foreground opacity-0 shadow-md ring-1 ring-border transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+                {formatDay(cell.day)} · {t("agentDashboard.activityCount", { count: cell.total })}
+              </span>
+            </div>
+          ) : <span key={cell.day} className="h-3 w-3" aria-hidden="true" />)}
+        </div>
+      </div>
+      <div className="mt-2 flex items-center justify-between text-[9px] text-muted-foreground">
+        <span>{formatDay(grid.startDay)} – {formatDay(grid.endDay)}</span>
+        <span>{t("agentDashboard.activityPeak", { count: grid.maxTotal })}</span>
+      </div>
+    </div>
+  );
+}
+
 export function AgentDashboardDialog({ open, onOpenChange }: AgentDashboardDialogProps) {
   const t = useT();
   const [range, setRange] = useState<AgentMetricRange>("7d");
@@ -142,10 +213,6 @@ export function AgentDashboardDialog({ open, onOpenChange }: AgentDashboardDialo
     else setTrace(null);
   }, [open, range]);
 
-  const maxDaily = useMemo(
-    () => Math.max(1, ...(data?.daily.map((point) => point.total) ?? [1])),
-    [data],
-  );
   const totalTokens = data
     ? data.usage.inputTokens + data.usage.outputTokens + data.usage.cacheReadTokens + data.usage.cacheWriteTokens
     : 0;
@@ -233,16 +300,7 @@ export function AgentDashboardDialog({ open, onOpenChange }: AgentDashboardDialo
 
                   <section className="rounded-lg border border-border p-4">
                     <div className="mb-3 flex items-center gap-2 text-xs font-semibold"><Clock3 className="h-3.5 w-3.5 text-muted-foreground" />{t("agentDashboard.daily")}</div>
-                    {data.daily.length === 0 ? <div className="py-8 text-center text-xs text-muted-foreground">{t("agentDashboard.empty")}</div> : (
-                      <div className="flex h-28 items-end gap-1.5">
-                        {data.daily.map((point) => (
-                          <div key={point.day} className="group flex min-w-0 flex-1 flex-col items-center justify-end gap-1" title={`${point.day}: ${point.total}`}>
-                            <div className="w-full rounded-t bg-primary/70 transition-colors group-hover:bg-primary" style={{ height: `${Math.max(4, (point.total / maxDaily) * 88)}px` }} />
-                            <span className="max-w-full truncate text-[8px] text-muted-foreground">{point.day.slice(5)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <DailyActivityGrid data={data} range={range} />
                   </section>
 
                   <div className="grid grid-cols-2 gap-4">

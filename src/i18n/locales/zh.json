@@ -188,6 +188,8 @@
   "agentDashboard.cancelSeparate": "取消单独统计，不计为错误",
   "agentDashboard.errors": "错误",
   "agentDashboard.daily": "每日活动",
+  "agentDashboard.activityCount": "{{count}} 次活动",
+  "agentDashboard.activityPeak": "单日峰值 {{count}} 次",
   "agentDashboard.skillUsage": "本地 Skill 使用情况",
   "agentDashboard.skillUsageHelp": "使用率表示每次 Agent 运行中，候选 Skill 被成功加载的比例。",
   "agentDashboard.skillMatched": "命中候选",

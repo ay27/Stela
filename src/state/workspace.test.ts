@@ -91,4 +91,23 @@ function resetWorkspace(tabs: Tab[]): void {
   assert.equal(useWorkspace.getState().tabs[0]?.reloadToken, 1);
 }
 
+{
+  const note: Tab = {
+    id: "file:/vault/current.md",
+    kind: "file",
+    title: "current.md",
+    path: "/vault/current.md",
+  };
+  const canvas: Tab = {
+    id: "file:/vault/background.stela.canvas",
+    kind: "analysis",
+    title: "background.stela.canvas",
+    path: "/vault/background.stela.canvas",
+  };
+  resetWorkspace([note, canvas]);
+  useWorkspace.getState().reloadTabFromBuffer(canvas.id);
+  assert.equal(useWorkspace.getState().activeTabId, note.id);
+  assert.equal(useWorkspace.getState().tabs[1]?.reloadToken, 1);
+}
+
 console.log("workspace tests passed.");

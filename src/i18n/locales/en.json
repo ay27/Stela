@@ -188,6 +188,8 @@
   "agentDashboard.cancelSeparate": "Cancellations are reported separately",
   "agentDashboard.errors": "Errors",
   "agentDashboard.daily": "Daily activity",
+  "agentDashboard.activityCount": "{{count}} activities",
+  "agentDashboard.activityPeak": "Peak {{count}} / day",
   "agentDashboard.skillUsage": "Local Skill usage",
   "agentDashboard.skillUsageHelp": "Usage rate is the share of per-run Skill candidates that the Agent successfully loaded.",
   "agentDashboard.skillMatched": "Matched",

@@ -196,6 +196,12 @@ export function resolveCanvasArtifactPath(canvasPath: string): string {
   return `${vaultPath.replace(/\/$/, "")}/${canvasPath.replace(/^\//, "")}`;
 }
 
+export function refreshCanvasTabIfOpen(canvasPath: string): void {
+  const workspace = useWorkspace.getState();
+  const tabId = workspace.getTabIdByPath(resolveCanvasArtifactPath(canvasPath));
+  if (tabId) workspace.reloadTabFromBuffer(tabId);
+}
+
 function toolCallEntry(call: AgentToolCallInfo): AgentTimelineEntry {
   return { kind: "tool", id: nextId(), callId: call.callId, name: call.name, args: call.arguments };
 }
@@ -686,7 +692,7 @@ if (typeof window !== "undefined") {
     }
     if (event.type === "canvas_updated") {
       scheduleAutoGit("canvas-agent-update");
-      if (event.action === "created") useWorkspace.getState().openFile(resolveCanvasArtifactPath(event.path));
+      refreshCanvasTabIfOpen(event.path);
     }
   });
 }
