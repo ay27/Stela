@@ -95,7 +95,7 @@ for (const relativePath of noteFiles) {
 }
 
 for (const relativePath of templateFiles) {
-  const template = await readDemo(relativePath);
+  const template = (await readDemo(relativePath)).replace(/\r\n?/g, "\n");
   assert.match(template, /type: stela-sql-template/);
   assert.match(template, /name: .+ \/ .+/);
   assert.match(template, /```runsql\n[\s\S]+\n```/);
