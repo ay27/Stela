@@ -8,16 +8,6 @@
         "user": "demo",
         "database": "stela_demo"
       }
-    },
-    "local-postgresql": {
-      "kind": "postgresql",
-      "config": {
-        "host": "127.0.0.1",
-        "port": 5432,
-        "user": "demo",
-        "database": "stela_demo",
-        "ssl": false
-      }
     }
   }
 }

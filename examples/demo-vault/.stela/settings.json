@@ -3,30 +3,20 @@
     "editorWidth": "narrow"
   },
   "ai": {
-    "providerMode": "openai-compatible",
-    "activeProfileId": "default",
-    "profiles": [
-      {
-        "id": "default",
-        "name": "DeepSeek V4 Flash",
-        "vendorId": "deepseek",
-        "model": "deepseek-v4-flash",
-        "baseUrl": "",
-        "contextWindow": 1000000,
-        "hasApiKey": true
-      }
-    ],
-    "inlineCompletionEnabled": true,
-    "completionProfileId": "default",
+    "providerMode": "disabled",
+    "activeProfileId": null,
+    "profiles": [],
+    "inlineCompletionEnabled": false,
+    "completionProfileId": null,
     "sendResultSamples": true,
     "maxSampleRows": 20,
     "agentMaxIterations": 200,
     "agentWallClockMs": 300000,
     "agentAllowMutations": true,
     "baseUrl": "",
-    "model": "deepseek-v4-flash",
-    "hasApiKey": true,
-    "contextWindow": 1000000
+    "model": "",
+    "hasApiKey": false,
+    "contextWindow": 128000
   },
   "appearance": {
     "theme": "light"

@@ -24,9 +24,17 @@
 
 Stop switching between note-taking apps, SQL clients, and AI chat windows. Stela combines them all in one place: write your analysis in Markdown, run SQL queries directly in your notes, and let the Data Agent handle the heavy lifting—all while keeping your data local and portable.
 
+The built-in **Try Demo Vault** follows one complete commerce review: Northstar Outfitters grows June orders by 25%, but contribution margin falls from 42.2% to 16.8%. Connect its MySQL fixture, follow the audited SQL evidence, present the decision in Canvas, ask the Agent to verify it, inspect that real run in Agent Dashboard, and reuse the analysis through SQL templates. The same Vault includes English and Chinese walkthroughs.
+
 ### What you can do with Stela
 
 - **AI-assisted data analysis** — The Data Agent understands your database schema, searches past queries and notes, and helps you write SQL, interpret results, and spot anomalies. Use `@table` to reference database objects and `[[note]]` to link your analysis notes—the Agent reads them as context.
+
+- **Analysis Canvas** — Turn audited query results into a structured, Git-trackable `*.stela.canvas` with KPI, chart, table, narrative, and flow cards. Refresh sources explicitly, adjust flow layout, or export the whole canvas as HTML.
+
+- **Reusable SQL templates** — Keep parameterized SQL as ordinary Markdown files inside the vault. Insert a template with `Mod+Shift+P`; repeated `{{variables}}` edit together and move with `Tab` / `Shift+Tab`.
+
+- **Agent Dashboard** — Inspect local completion rate, latency, token usage, tool calls, Skill usage, knowledge-maintenance outcomes, and redacted traces. Metrics remain in a Git-ignored, 90-day local store.
 
 - **SQL that lives in your notes** — Drop a `runsql` block anywhere in a Markdown note. The query, its results, and your commentary stay together in one file. No more scattered scratchpads.
 
@@ -42,9 +50,14 @@ Stop switching between note-taking apps, SQL clients, and AI chat windows. Stela
 
 ````markdown
 ```runsql
-SELECT status, COUNT(*) AS total
-FROM tasks
-GROUP BY status;
+SELECT oe.channel,
+       ROUND(SUM(oe.profit_before_marketing) - ms.spend, 2) AS contribution_profit
+FROM order_economics oe
+JOIN marketing_spend ms
+  ON ms.channel = oe.channel AND ms.month = oe.order_month
+WHERE oe.order_month = '2026-06'
+GROUP BY oe.channel, ms.spend
+ORDER BY contribution_profit;
 ```
 ````
 
@@ -59,7 +72,7 @@ Stela is built for the kind of data work that starts with a question in a notebo
 
 1. [Download Stela from GitHub Releases](https://github.com/ay27/Stela/releases/latest)
 
-2. Create or open a vault—a regular folder where Stela stores your notes and its `.stela` data.
+2. Choose **Try Demo Vault** for the complete bilingual Northstar commerce review, or open your own folder as a vault.
 
 3. Add a database connection in Settings: give it a name, pick the database type, enter the connection details, and test it.
 
@@ -70,6 +83,33 @@ For system design and contributor information, see [Architecture](./docs/ARCHITE
 ---
 
 ## Screenshots / 产品截图
+
+### One analysis, from evidence to action / 一场从证据到行动的完整分析
+
+<p align="center">
+  <img src="./docs/assets/canvas.png" alt="Northstar commerce review in Stela Analysis Canvas" />
+  <br />
+  <strong>Analysis Canvas / 分析画布</strong> — Revenue grew while contribution margin collapsed; channel, promotion, return evidence, and the July response stay in one audited view. / 收入增长但贡献利润率骤降，渠道、促销、退货证据和七月行动都在同一个可审计视图中。
+</p>
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="./docs/assets/sql-templates.png" alt="Bilingual SQL template library" />
+      <br />
+      <strong>SQL Templates / SQL 模板</strong><br />
+      Reuse the channel and high-return-SKU investigation with linked variables. / 用联动变量复用渠道和高退货商品诊断。
+    </td>
+    <td width="50%">
+      <img src="./docs/assets/agent-dashboard.png" alt="Local Agent Dashboard" />
+      <br />
+      <strong>Agent Dashboard</strong><br />
+      Starts empty by design, then records the real Agent run that verifies and updates the Canvas. / 初始保持空白，运行复核任务后记录更新 Canvas 的真实 Agent 行为。
+    </td>
+  </tr>
+</table>
+
+### More workflows / 更多工作流
 
 <table>
   <tr>
@@ -110,9 +150,17 @@ For system design and contributor information, see [Architecture](./docs/ARCHITE
 
 日常工作中，你可以在记录分析思路的同时直接执行 SQL 查询，让 Data Agent 帮你完成历史对比、异常检测和数据洞察——所有操作都在本地完成，数据始终掌握在你自己手中。
 
+内置的 **Try Demo Vault** 是一场完整的电商经营复盘：Northstar Outfitters 六月订单增长 25%，贡献利润率却从 42.2% 跌至 16.8%。你会连接 MySQL、沿着可审计 SQL 逐层定位问题、在 Canvas 汇总决策、让 Agent 复核、在 Agent Dashboard 检查这次真实运行，最后用 SQL 模板复用分析。中英文流程位于同一个 Vault。
+
 ### 核心能力
 
 - **原生 Markdown 兼容** — 所有笔记都是标准 `*.md` 文件，可用任意笔记软件或 IDE 打开，数据永不锁定。
+
+- **分析画布** — 把可审计的查询结果组织成 `*.stela.canvas`，在同一画布展示 KPI、图表、表格、说明文字和流程图；支持刷新数据源、调整流程布局和导出 HTML。
+
+- **SQL 模板** — 参数化 SQL 以普通 Markdown 文件保存在 Vault 中。按 `Mod+Shift+P` 插入模板；同名 `{{变量}}` 会联动编辑，并可用 `Tab` / `Shift+Tab` 依次跳转。
+
+- **Agent Dashboard** — 本地查看完成率、耗时、Token、工具调用、Skill 使用、知识维护结果与脱敏 Trace；指标保存在 Git 忽略的 90 天本地存储中。
 
 - **连接任何数据源** — 通过插件系统接入 MySQL、PostgreSQL 等主流数据库，一个工作台管理所有数据。
 
@@ -124,9 +172,14 @@ For system design and contributor information, see [Architecture](./docs/ARCHITE
 
 ````markdown
 ```runsql
-SELECT status, COUNT(*) AS total
-FROM tasks
-GROUP BY status;
+SELECT oe.channel,
+       ROUND(SUM(oe.profit_before_marketing) - ms.spend, 2) AS contribution_profit
+FROM order_economics oe
+JOIN marketing_spend ms
+  ON ms.channel = oe.channel AND ms.month = oe.order_month
+WHERE oe.order_month = '2026-06'
+GROUP BY oe.channel, ms.spend
+ORDER BY contribution_profit;
 ```
 ````
 
@@ -138,7 +191,7 @@ Stela 适合那些从“我想看看数据”这个念头开始做分析的人�
 ### 快速体验
 1. [从 GitHub Releases 下载 Stela](https://github.com/ay27/Stela/releases/latest)
 
-2. 新建或打开一个笔记库。笔记库就是一个普通文件夹，Stela 会把 Markdown 笔记和自身的 .stela 数据都放在里面。
+2. 选择 **Try Demo Vault** 体验完整的中英文 Northstar 电商复盘，或打开自己的文件夹作为笔记库。
 
 3. 在“设置”中添加数据库连接：填写连接名称、选择数据库类型、输入连接信息，然后测试连接。
 

@@ -358,6 +358,29 @@
         line-height: 1.4;
         border-top: 1px solid var(--border);
       }
+      .showcase-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+        margin: 16px 0 48px;
+      }
+      .showcase-card {
+        margin: 0;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--background);
+        box-shadow: var(--shadow);
+      }
+      .showcase-card:first-child { grid-column: 1 / -1; }
+      .showcase-card img { display: block; width: 100%; height: auto; }
+      .showcase-card figcaption {
+        padding: 14px 16px 16px;
+        border-top: 1px solid var(--border);
+        color: var(--muted-foreground);
+        font-size: 13px;
+        line-height: 1.5;
+      }
       .section-heading { max-width: 620px; margin: 0 0 30px; }
       .section-heading h2 { margin: 0; font-size: 28px; letter-spacing: -0.04em; }
       .section-heading p { margin: 10px 0 0; color: var(--muted-foreground); }
@@ -398,6 +421,8 @@
         .hero { grid-template-columns: 1fr; padding: 28px 0 40px; }
         .hero-text { max-width: none; gap: 14px; }
         .overview { padding-bottom: 24px; }
+        .showcase-grid { grid-template-columns: 1fr; margin-bottom: 40px; }
+        .showcase-card:first-child { grid-column: auto; }
         .shot-grid { grid-template-columns: 1fr; margin-bottom: 64px; }
         .features { grid-template-columns: 1fr; margin-bottom: 64px; }
         .feature:nth-child(odd), .feature:nth-child(n + 3) { border: 0; }
@@ -453,22 +478,23 @@
           </a>
         </div>
         <div class="editor-card" aria-label="Markdown note with an executable SQL block">
-          <div class="editor-titlebar"><span>weekly-analysis.md</span><span class="traffic-lights"><i></i><i></i><i></i></span></div>
+          <div class="editor-titlebar"><span>growth-quality-review.md</span><span class="traffic-lights"><i></i><i></i><i></i></span></div>
           <div class="markdown-preview">
-            <h3>Weekly task status</h3>
-            <p>Check the distribution before sharing the update.</p>
+            <h3>June growth quality</h3>
+            <p>Revenue grew. Which channel destroyed contribution?</p>
           </div>
           <div class="runsql-demo">
             <div class="runsql-header">
               <span class="db-dot"></span><span>analytics</span><span class="runsql-label">runsql</span>
               <span class="block-actions"><button class="block-action" type="button"><span>✦</span>Rewrite</button><button class="block-action" type="button"><span>✦</span>Ask</button></span>
             </div>
-            <pre class="sql-source"><code><span class="comment">-- Show the current task distribution</span>
-<span class="token">SELECT</span> status, <span class="token">COUNT</span>(*) <span class="token">AS</span> total
-<span class="token">FROM</span> tasks
-<span class="ghost">GROUP BY status ORDER BY total DESC;</span></code></pre>
-            <div class="result-summary"><span>2 rows · 18ms</span><span>Latest result</span></div>
-            <table class="result-table"><thead><tr><th>status</th><th>total</th></tr></thead><tbody><tr><td>open</td><td>42</td></tr><tr><td>done</td><td>18</td></tr></tbody></table>
+            <pre class="sql-source"><code><span class="comment">-- Compare June channel contribution</span>
+<span class="token">SELECT</span> oe.channel, <span class="token">SUM</span>(oe.profit_before_marketing) - ms.spend
+<span class="token">FROM</span> order_economics oe <span class="token">JOIN</span> marketing_spend ms
+<span class="ghost">ON ms.channel = oe.channel AND ms.month = oe.order_month
+WHERE oe.order_month = '2026-06' GROUP BY oe.channel, ms.spend;</span></code></pre>
+            <div class="result-summary"><span>5 rows · 18ms</span><span>Latest result</span></div>
+            <table class="result-table"><thead><tr><th>channel</th><th>contribution_profit</th></tr></thead><tbody><tr><td>paid_social</td><td>−4,972.75</td></tr><tr><td>organic_search</td><td>6,653.11</td></tr></tbody></table>
             <div class="run-history"><span>⇄ Compare</span><span class="history-active">Latest</span><span>15:42</span><span>Yesterday</span></div>
           </div>
         </div>
@@ -485,6 +511,27 @@
           data-i18n-alt="shot1Alt"
           alt=""
         />
+      </section>
+
+      <section aria-labelledby="latest-title">
+        <div class="section-heading">
+          <h2 id="latest-title" data-i18n="latestTitle"></h2>
+          <p data-i18n="latestBody"></p>
+        </div>
+        <div class="showcase-grid">
+          <figure class="showcase-card">
+            <img src="assets/canvas.png" data-i18n-alt="canvasAlt" alt="" />
+            <figcaption data-i18n="canvasCaption"></figcaption>
+          </figure>
+          <figure class="showcase-card">
+            <img src="assets/sql-templates.png" data-i18n-alt="templatesAlt" alt="" />
+            <figcaption data-i18n="templatesCaption"></figcaption>
+          </figure>
+          <figure class="showcase-card">
+            <img src="assets/agent-dashboard.png" data-i18n-alt="dashboardAlt" alt="" />
+            <figcaption data-i18n="dashboardCaption"></figcaption>
+          </figure>
+        </div>
       </section>
 
       <section class="shot-grid" aria-label="Product screenshots">
@@ -512,6 +559,8 @@
           <article class="feature"><span class="feature-index">02</span><h3 data-i18n="feature2Title"></h3><p data-i18n="feature2Body"></p></article>
           <article class="feature"><span class="feature-index">03</span><h3 data-i18n="feature3Title"></h3><p data-i18n="feature3Body"></p></article>
           <article class="feature"><span class="feature-index">04</span><h3 data-i18n="feature4Title"></h3><p data-i18n="feature4Body"></p></article>
+          <article class="feature"><span class="feature-index">05</span><h3 data-i18n="feature5Title"></h3><p data-i18n="feature5Body"></p></article>
+          <article class="feature"><span class="feature-index">06</span><h3 data-i18n="feature6Title"></h3><p data-i18n="feature6Body"></p></article>
         </div>
       </section>
 
@@ -533,6 +582,14 @@ const copy = {
     source: "查看源码",
     overviewTitle: "分析工作，无需切换工具。",
     overviewBody: "Markdown 编辑器、数据库结构、查询结果和 AI 助手并排协作，让数据问题从想法到答案始终连贯。",
+    latestTitle: "跟着一场真实经营复盘，走完整条分析链路。",
+    latestBody: "Northstar 六月订单增长 25%，贡献利润率却从 42.2% 跌至 16.8%。内置双语 Demo 从 MySQL 和 SQL 证据开始，经 Canvas 形成决策，再由 Agent 复核并在 Dashboard 留下真实运行记录。",
+    canvasAlt: "Northstar 六月电商经营复盘的 Stela 分析画布",
+    canvasCaption: "分析画布 — 在一个可审计视图中呈现收入与利润率趋势、渠道亏损、促销质量、高退货商品和七月行动。",
+    templatesAlt: "Northstar 渠道利润与高退货商品 SQL 模板",
+    templatesCaption: "SQL 模板 — 用联动变量复用本次渠道利润和高退货商品诊断，不必复制粘贴查询。",
+    dashboardAlt: "记录 Northstar 复盘任务的 Stela Agent Dashboard",
+    dashboardCaption: "Agent Dashboard — 初始保持空白；运行复核任务后显示完成状态、工具调用、Skill、Token 和脱敏 Trace，不注入虚构指标。",
     shot1Alt: "在 Markdown 中运行 SQL，用 Stela 做分析",
     shot2Alt: "AI 辅助数据分析",
     shot2Caption: "AI 辅助数据分析 — Data Agent 读懂表结构与历史笔记，帮你写 SQL。",
@@ -542,14 +599,18 @@ const copy = {
     shot4Caption: "连接数据源 — 开箱支持 MySQL / PostgreSQL，可用插件扩展。",
     featuresTitle: "为可复用的分析而设计。",
     featuresBody: "问题、查询、结果和上下文属于同一份笔记，也属于你自己的文件夹。",
-    feature1Title: "在 Markdown 中运行 SQL",
-    feature1Body: "在 `runsql` 代码块中直接执行查询，让说明、SQL 和结果完整地保留在一起。",
-    feature2Title: "AI 辅助数据分析",
-    feature2Body: "Data Agent 理解你的表结构和历史笔记，帮你编写 SQL、解读结果和发现异常，让分析更高效。",
-    feature3Title: "连接任意数据源",
-    feature3Body: "内置 MySQL 和 PostgreSQL 连接器，通过插件系统支持更多数据源，所有连接统一管理。",
-    feature4Title: "本地优先，随时迁移",
-    feature4Body: "笔记是标准 Markdown 文件，执行历史为 JSONL 格式，无供应商锁定，可用任意编辑器打开，数据随时可迁移。",
+    feature1Title: "分析画布",
+    feature1Body: "用 Git 可追踪的 `*.stela.canvas` 把查询快照变成 KPI、图表、表格、说明和流程图。",
+    feature2Title: "SQL 模板",
+    feature2Body: "把参数化 SQL 保存在 Vault；快捷插入后，同名 `{{变量}}` 会同步编辑并可依次跳转。",
+    feature3Title: "Agent Dashboard",
+    feature3Body: "在本地观察 Agent 的可靠性、耗时、用量、工具、Skill 与知识维护结果，并追踪脱敏 Trace。",
+    feature4Title: "在 Markdown 中运行 SQL",
+    feature4Body: "在 `runsql` 代码块中直接执行查询，让说明、SQL 和结果完整地保留在一起。",
+    feature5Title: "AI 辅助数据分析",
+    feature5Body: "Data Agent 理解表结构和历史笔记，帮你编写 SQL、解读结果和发现异常。",
+    feature6Title: "本地优先，随时迁移",
+    feature6Body: "笔记是 Markdown，执行历史是 JSONL；无供应商锁定，可用任意编辑器打开。",
     closingTitle: "从问题开始，留下完整分析。",
     closingBody: "下载 Stela，在自己的 Markdown 工作区中连接数据并开始探索。无需云端，无锁定。",
     footer: "本地优先 · 开源 · Markdown 数据笔记"
@@ -562,6 +623,14 @@ const copy = {
     source: "View source",
     overviewTitle: "Analysis without context switching.",
     overviewBody: "Your Markdown editor, database schemas, query results, and an AI agent work side by side. Start with a question, explore your data, and capture the full story without leaving your workspace.",
+    latestTitle: "Follow one business review through the complete workflow.",
+    latestBody: "Northstar grew June orders by 25%, but contribution margin fell from 42.2% to 16.8%. The built-in bilingual Demo starts with MySQL and audited SQL, turns the evidence into a Canvas decision, then uses a real Agent run and Dashboard trace to verify it.",
+    canvasAlt: "Northstar June commerce review in Stela Analysis Canvas",
+    canvasCaption: "Analysis Canvas — keep revenue and margin trends, channel loss, promotion quality, high-return products, and the July response in one audited view.",
+    templatesAlt: "Northstar channel contribution and high-return SKU SQL templates",
+    templatesCaption: "SQL Templates — reuse the channel and high-return-SKU investigation with linked variables instead of copying queries.",
+    dashboardAlt: "Stela Agent Dashboard showing the Northstar review task",
+    dashboardCaption: "Agent Dashboard — starts empty, then records the real verification task with completion, tools, Skill usage, tokens, and redacted traces—never seeded metrics.",
     shot1Alt: "Run SQL in Markdown. Analyze data in Stela.",
     shot2Alt: "AI-assisted data analysis",
     shot2Caption: "AI-assisted data analysis — the Data Agent understands your schema and past notes.",
@@ -571,14 +640,18 @@ const copy = {
     shot4Caption: "Connect to your data sources — MySQL and PostgreSQL out of the box, extend with plugins.",
     featuresTitle: "Built for reusable analysis.",
     featuresBody: "The question, query, result, and context belong in the same note—and in a folder you own.",
-    feature1Title: "SQL in Markdown",
-    feature1Body: "Run queries directly in `runsql` blocks and keep the narrative, SQL, and result together.",
-    feature2Title: "AI-powered data assistance",
-    feature2Body: "The Data Agent understands your schema and past notes to help write SQL, interpret results, and spot anomalies—spend less time typing queries, more time understanding data.",
-    feature3Title: "Connect to any data source",
-    feature3Body: "Bundled with MySQL and PostgreSQL connectors, plus a plugin system to add more. All connections managed from one workspace.",
-    feature4Title: "Local-first, always portable",
-    feature4Body: "Notes are plain Markdown files; execution history is JSONL. No vendor lock-in—open your notes in any editor, move your data anytime.",
+    feature1Title: "Analysis Canvas",
+    feature1Body: "Turn saved query snapshots into KPIs, charts, tables, narrative, and flows in a Git-trackable `*.stela.canvas`.",
+    feature2Title: "SQL Templates",
+    feature2Body: "Store parameterized SQL in the Vault; insert by shortcut, edit repeated `{{variables}}` together, and tab between them.",
+    feature3Title: "Agent Dashboard",
+    feature3Body: "Observe local reliability, latency, usage, tools, Skills, maintenance outcomes, and redacted traces.",
+    feature4Title: "SQL in Markdown",
+    feature4Body: "Run queries directly in `runsql` blocks and keep the narrative, SQL, and result together.",
+    feature5Title: "AI-powered data assistance",
+    feature5Body: "The Data Agent understands your schema and past notes to help write SQL, interpret results, and spot anomalies.",
+    feature6Title: "Local-first, always portable",
+    feature6Body: "Notes are Markdown and history is JSONL. No vendor lock-in—open your work in any editor.",
     closingTitle: "Start with a question, end with insight.",
     closingBody: "Download Stela and start exploring your data inside a Markdown workspace you own. No cloud required, no lock-in.",
     footer: "Local-first · Open source · Data notebooks in Markdown"

@@ -110,3 +110,4 @@ proposed → active → superseded
 | [0055](0055-vault-analysis-canvas-artifacts.md) | Vault analysis Canvas artifacts | superseded → [0056](0056-user-adjustable-react-flow-cards.md) |
 | [0056](0056-user-adjustable-react-flow-cards.md) | User-adjustable React Flow cards | active |
 | [0057](0057-bounded-mark-encoding-visualizations.md) | Bounded mark-encoding visualizations | active |
+| [0058](0058-offline-interactive-canvas-html-export.md) | Offline interactive Canvas HTML export | active |

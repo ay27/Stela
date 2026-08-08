@@ -16,8 +16,14 @@ import { useWorkspace } from "@/state/workspace";
 import { useDialogs } from "@/state/dialogs";
 import { useLayout } from "@/state/layout";
 import { useSettings } from "@/state/settings";
+import { useConnections } from "@/state/connections";
 import { createNewStelaNote } from "@/services/note-actions";
-import { seedDemoVault } from "@/services/demo-vault";
+import {
+  DEMO_WELCOME_PATH,
+  demoVaultPath,
+  ensureDemoConnectionSecret,
+  seedDemoVault,
+} from "@/services/demo-vault";
 import { pathExists } from "@/services/fs";
 import { useT } from "@/i18n/use-t";
 import { formatHotkey } from "@/lib/hotkeys";
@@ -113,6 +119,11 @@ export function WelcomeView() {
       if (!parent) return;
       const target = await seedDemoVault(parent);
       await openVaultByPath(target);
+      await ensureDemoConnectionSecret();
+      await useConnections.getState().reload();
+      openFile(demoVaultPath(target, DEMO_WELCOME_PATH), {
+        title: t("welcome.demo.noteTitle"),
+      });
     } catch (err) {
       console.error("[stela] seedDemoVault failed", err);
       window.alert(
@@ -121,7 +132,7 @@ export function WelcomeView() {
         }),
       );
     }
-  }, [openVaultByPath, t]);
+  }, [openFile, openVaultByPath, t]);
 
   return (
     // 不要把 stela-app-drag 放在 overflow-auto 容器上：Electron 在「可滚动

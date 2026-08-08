@@ -1,65 +1,94 @@
 /**
- * Demo vault 引导。
+ * Prepared first-run demo Vault.
  *
- * 用户从 Welcome 页点「试用 Demo Vault」时：
- *   1. 弹出目录选择，让用户选「父目录」
- *   2. 在该父目录下创建 `Stela Demo/`
- *   3. 写入一个简短的 welcome.md（含 markdown + runsql 示例 block）
- *   4. 由调用方触发 openVaultByPath 切换到这个新目录
- *
- * 设计选择：
- *   - 不直接读 sample.md，避免把仓库根的演示资源打进 renderer 包；demo 内容
- *     直接以常量内联，独立于打包结构。
- *   - 已存在 demo 目录 / welcome.md 时安静跳过创建（幂等），便于重复点击。
+ * The checked-in files under `examples/demo-vault/` are the single source of
+ * truth. Vite's `?raw` imports bundle the curated text files into the renderer,
+ * while this explicit allowlist prevents machine-local caches, secrets, and
+ * development history from leaking into a newly created demo.
  */
+
+import demoGitignore from "../../examples/demo-vault/.gitignore?raw";
+import demoConnections from "../../examples/demo-vault/.stela/connections.json?raw";
+import demoHistory from "../../examples/demo-vault/.stela/history/history_demo.jsonl?raw";
+import ecommerceSkill from "../../examples/demo-vault/.stela/skills/ecommerce-unit-economics/SKILL.md?raw";
+import templateChannelContribution from "../../examples/demo-vault/.stela/sql-templates/channel-contribution.md?raw";
+import templateHighReturnSkus from "../../examples/demo-vault/.stela/sql-templates/high-return-skus.md?raw";
+import dockerCompose from "../../examples/demo-vault/docker-compose.yml?raw";
+import businessContextEn from "../../examples/demo-vault/en/01-business-context-and-metrics.md?raw";
+import investigationEn from "../../examples/demo-vault/en/02-growth-quality-investigation.md?raw";
+import actionPlanEn from "../../examples/demo-vault/en/03-management-action-plan.md?raw";
+import businessCanvasEn from "../../examples/demo-vault/en/business-review.stela.canvas?raw";
+import mysqlSchema from "../../examples/demo-vault/seed/mysql/001_schema.sql?raw";
+import mysqlData from "../../examples/demo-vault/seed/mysql/002_data.sql?raw";
+import welcome from "../../examples/demo-vault/README.md?raw";
+import businessContextZh from "../../examples/demo-vault/zh/01-业务背景与指标.md?raw";
+import investigationZh from "../../examples/demo-vault/zh/02-增长质量诊断.md?raw";
+import actionPlanZh from "../../examples/demo-vault/zh/03-管理行动方案.md?raw";
+import businessCanvasZh from "../../examples/demo-vault/zh/经营复盘.stela.canvas?raw";
 
 import { createDir, createFile, pathExists } from "@/services/fs";
+import {
+  seedPreparedDemoVault,
+  type PreparedDemoFile,
+} from "@/services/demo-vault-seeder";
 
-const DEMO_FOLDER_NAME = "Stela Demo";
-const DEMO_NOTE_NAME = "welcome.md";
+export { demoVaultPath } from "@/services/demo-vault-seeder";
 
-const DEMO_NOTE_CONTENT = `---
-type: stela-data-note
-created_at: "${new Date().toISOString()}"
----
+const DEMO_FOLDER_NAME = "Stela Commerce Demo";
+export const DEMO_WELCOME_PATH = "README.md";
+const DEMO_CONNECTION_NAME = "local-mysql";
 
-# 欢迎使用 Stela
+export async function ensureDemoConnectionSecret(): Promise<void> {
+  const current = (await window.stela.connections.load())[DEMO_CONNECTION_NAME];
+  const currentConfig = current?.config && typeof current.config === "object"
+    ? current.config as Record<string, unknown>
+    : {};
+  if (typeof currentConfig.password === "string" && currentConfig.password.length > 0) return;
+  await window.stela.connections.upsert(DEMO_CONNECTION_NAME, {
+    kind: "mysql",
+    config: {
+      host: "127.0.0.1",
+      port: 3306,
+      user: "demo",
+      database: "stela_demo",
+      ...currentConfig,
+      password: "demo",
+    },
+  });
+}
 
-**Run SQL in Markdown. Track data in Stela.**
-
-这是一个 demo vault。你可以在普通 markdown 之间穿插 RunSQL 代码块来执行查询，并把结果就近留在文档里。
-
-## 你可以这样用
-
-1. 在「连接管理」里配置一个 MySQL / HTTP 连接
-2. 在文件 frontmatter 写入 \`connection_name: <你的连接名>\`
-3. 像下面这样写一个 runsql 块，按 ⌘↵ 运行
-
-\`\`\`runsql
-SELECT 1 AS hello;
-\`\`\`
-
-执行结果会渲染为表格，并写入本地 SQLite（位于 vault 内的 \`.stela.sqlite\`）。
-笔记本身只保留一个 detail 摘要，不会污染 markdown。
-
-> 提示：⌘K 打开命令面板，⌘N 新建笔记，⌘B 折叠侧栏。
-`;
+export const PREPARED_DEMO_FILES: readonly PreparedDemoFile[] = [
+  { relativePath: ".gitignore", contents: demoGitignore },
+  { relativePath: ".stela/connections.json", contents: demoConnections },
+  { relativePath: ".stela/history/history_demo.jsonl", contents: demoHistory },
+  { relativePath: ".stela/skills/ecommerce-unit-economics/SKILL.md", contents: ecommerceSkill },
+  { relativePath: ".stela/sql-templates/channel-contribution.md", contents: templateChannelContribution },
+  { relativePath: ".stela/sql-templates/high-return-skus.md", contents: templateHighReturnSkus },
+  { relativePath: "docker-compose.yml", contents: dockerCompose },
+  { relativePath: "seed/mysql/001_schema.sql", contents: mysqlSchema },
+  { relativePath: "seed/mysql/002_data.sql", contents: mysqlData },
+  { relativePath: DEMO_WELCOME_PATH, contents: welcome },
+  { relativePath: "en/01-business-context-and-metrics.md", contents: businessContextEn },
+  { relativePath: "en/02-growth-quality-investigation.md", contents: investigationEn },
+  { relativePath: "en/03-management-action-plan.md", contents: actionPlanEn },
+  { relativePath: "en/business-review.stela.canvas", contents: businessCanvasEn },
+  { relativePath: "zh/01-业务背景与指标.md", contents: businessContextZh },
+  { relativePath: "zh/02-增长质量诊断.md", contents: investigationZh },
+  { relativePath: "zh/03-管理行动方案.md", contents: actionPlanZh },
+  { relativePath: "zh/经营复盘.stela.canvas", contents: businessCanvasZh },
+];
 
 /**
- * 在 `parentDir` 下 seed 一个 demo vault。
+ * Seed one bilingual `Stela Commerce Demo` folder under `parentDir`.
  *
- * @returns 新创建（或已存在）的 demo vault 绝对路径
+ * Missing prepared files are added on repeat runs, while existing files are
+ * never overwritten so users keep any edits they made inside the demo.
  */
 export async function seedDemoVault(parentDir: string): Promise<string> {
-  const target = `${parentDir}/${DEMO_FOLDER_NAME}`;
-  const dirExists = await pathExists(target).catch(() => false);
-  if (!dirExists) {
-    await createDir(parentDir, target);
-  }
-  const welcomePath = `${target}/${DEMO_NOTE_NAME}`;
-  const noteExists = await pathExists(welcomePath).catch(() => false);
-  if (!noteExists) {
-    await createFile(target, welcomePath, DEMO_NOTE_CONTENT);
-  }
-  return target;
+  return seedPreparedDemoVault({
+    parentDir,
+    folderName: DEMO_FOLDER_NAME,
+    files: PREPARED_DEMO_FILES,
+    dependencies: { pathExists, createDir, createFile },
+  });
 }

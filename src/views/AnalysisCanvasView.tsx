@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import { Check, Clipboard, Database, Download, Loader2, RefreshCw } from "lucide-react";
+import { Check, CheckCircle2, Clipboard, Database, Download, Loader2, RefreshCw } from "lucide-react";
 
 import {
   parseAnalysisCanvas,
@@ -35,6 +35,13 @@ export function AnalysisCanvasView({ tabId, path }: { tabId: string; path: strin
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [exportedFile, setExportedFile] = useState<{ path: string; revealToken: string } | null>(null);
+
+  useEffect(() => {
+    if (!exportedFile) return;
+    const timer = window.setTimeout(() => setExportedFile(null), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [exportedFile]);
 
   const load = async () => {
     try {
@@ -93,8 +100,15 @@ export function AnalysisCanvasView({ tabId, path }: { tabId: string; path: strin
 
   const exportHtml = async () => {
     if (!canvas) return;
-    const html = await renderAnalysisCanvasHtml(canvas);
-    await window.stela.export.saveFile(safeHtmlFileName(canvas.title), html, { title: t("analysisCanvas.exportTitle"), filters: [{ name: "HTML", extensions: ["html"] }] });
+    try {
+      const html = await renderAnalysisCanvasHtml(canvas);
+      const saved = await window.stela.export.saveFile(safeHtmlFileName(canvas.title), html, { title: t("analysisCanvas.exportTitle"), filters: [{ name: "HTML", extensions: ["html"] }] });
+      if (!saved.canceled && saved.path && saved.revealToken) {
+        setExportedFile({ path: saved.path, revealToken: saved.revealToken });
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
   };
 
   if (error && !canvas) return <div className="p-8 text-sm text-destructive">{error}</div>;
@@ -109,6 +123,30 @@ export function AnalysisCanvasView({ tabId, path }: { tabId: string; path: strin
       {sourcesOpen ? <div className="mb-4 space-y-2 rounded-md border bg-background p-3"><h2 className="text-sm font-medium">{t("analysisCanvas.dataSources")}</h2>{canvas.sources.map((source) => <SourceRow key={source.id} source={source} busy={busy === source.id} onRefresh={() => void refresh(source.id)} />)}</div> : null}
       <div className="space-y-6">{canvas.sections.map((section) => <section key={section.id}><h2 className="mb-0.5 text-base font-semibold">{section.title}</h2>{section.description ? <p className="mb-2 text-xs text-muted-foreground">{section.description}</p> : null}<div className="grid grid-cols-6 gap-2.5">{section.cards.map((card) => <CanvasCard key={card.id} card={card} sources={canvas.sources} onSaveFlowLayout={(patch) => saveFlowLayout(card.id, patch)} />)}</div></section>)}</div>
     </div>
+    {exportedFile ? (
+      <div className="fixed bottom-5 right-5 z-[150] max-w-[min(40rem,calc(100vw-2.5rem))] rounded-lg border border-border bg-popover px-3 py-2 shadow-lg">
+        <div className="flex items-center gap-2">
+          <CheckCircle2 className="h-4 w-4 flex-none text-emerald-500" aria-hidden="true" />
+          <span className="flex-none text-sm font-medium">{t("common.saved")}</span>
+          <button
+            type="button"
+            onClick={() => void window.stela.export.revealSavedFile(exportedFile.revealToken)}
+            className="min-w-0 truncate text-left text-sm text-foreground underline decoration-primary underline-offset-2 transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            title={exportedFile.path}
+          >
+            {exportedFile.path}
+          </button>
+          <button
+            type="button"
+            onClick={() => setExportedFile(null)}
+            className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            aria-label={t("settings.close")}
+          >
+            ×
+          </button>
+        </div>
+      </div>
+    ) : null}
   </div>;
 }
 

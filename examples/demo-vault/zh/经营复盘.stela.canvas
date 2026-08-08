@@ -1,0 +1,450 @@
+{
+  "kind": "stela-analysis-canvas",
+  "version": 1,
+  "id": "demo_ecommerce_canvas_zh",
+  "title": "Northstar 六月经营复盘",
+  "status": "complete",
+  "createdAt": 1783476000000,
+  "updatedAt": 1783476000000,
+  "createdBySessionId": null,
+  "sources": [
+    {
+      "id": "kpi",
+      "title": "六月增长质量",
+      "connectionName": "local-mysql",
+      "sql": "WITH monthly AS (\n  SELECT oe.order_month AS month,\n         COUNT(*) AS orders,\n         SUM(oe.net_revenue) AS net_revenue,\n         SUM(oe.profit_before_marketing) - mm.marketing_spend AS contribution_profit\n  FROM order_economics oe\n  JOIN (\n    SELECT month, SUM(spend) AS marketing_spend\n    FROM marketing_spend\n    GROUP BY month\n  ) mm ON mm.month = oe.order_month\n  WHERE oe.order_month IN ('2026-05', '2026-06')\n  GROUP BY oe.order_month, mm.marketing_spend\n), paired AS (\n  SELECT MAX(CASE WHEN month = '2026-05' THEN orders END) AS may_orders,\n         MAX(CASE WHEN month = '2026-06' THEN orders END) AS june_orders,\n         MAX(CASE WHEN month = '2026-05' THEN net_revenue END) AS may_revenue,\n         MAX(CASE WHEN month = '2026-06' THEN net_revenue END) AS june_revenue,\n         MAX(CASE WHEN month = '2026-05' THEN contribution_profit END) AS may_profit,\n         MAX(CASE WHEN month = '2026-06' THEN contribution_profit END) AS june_profit,\n         MAX(CASE WHEN month = '2026-05' THEN contribution_profit / NULLIF(net_revenue, 0) END) AS may_margin,\n         MAX(CASE WHEN month = '2026-06' THEN contribution_profit / NULLIF(net_revenue, 0) END) AS june_margin\n  FROM monthly\n), paid_social AS (\n  SELECT COUNT(*) AS paid_social_orders,\n         SUM(oe.profit_before_marketing) - ms.spend AS contribution_profit\n  FROM order_economics oe\n  JOIN marketing_spend ms ON ms.month = oe.order_month AND ms.channel = oe.channel\n  WHERE oe.order_month = '2026-06' AND oe.channel = 'paid_social'\n  GROUP BY ms.spend\n), trailflex AS (\n  SELECT SUM(oi.quantity) AS sold_units,\n         COALESCE(SUM(r.quantity), 0) AS returned_units,\n         COALESCE(SUM(r.refund_amount + r.processing_cost), 0) AS return_loss\n  FROM order_items oi\n  JOIN orders o ON o.id = oi.order_id\n  JOIN products p ON p.id = oi.product_id\n  LEFT JOIN returns r ON r.order_item_id = oi.id\n  WHERE o.order_date >= '2026-06-01' AND o.order_date < '2026-07-01'\n    AND p.sku = 'NS-FW-004'\n)\nSELECT ROUND((june_orders - may_orders) / may_orders, 4) AS order_growth,\n       ROUND((june_revenue - may_revenue) / may_revenue, 4) AS revenue_growth,\n       ROUND(may_margin, 4) AS may_contribution_margin,\n       ROUND(june_margin, 4) AS june_contribution_margin,\n       ROUND(june_margin - may_margin, 4) AS margin_change,\n       ROUND((june_profit - may_profit) / may_profit, 4) AS contribution_profit_change,\n       ROUND(paid_social.contribution_profit, 2) AS paid_social_contribution_profit,\n       ROUND(paid_social.paid_social_orders / june_orders, 4) AS paid_social_order_share,\n       ROUND(trailflex.returned_units / NULLIF(trailflex.sold_units, 0), 4) AS trailflex_return_rate,\n       ROUND(trailflex.return_loss, 2) AS trailflex_return_loss\nFROM paired\nCROSS JOIN paid_social\nCROSS JOIN trailflex;",
+      "lastRunId": "run_demo_ecommerce_kpi_zh",
+      "lastRunAt": 1783476000000,
+      "lastError": null
+    },
+    {
+      "id": "monthly",
+      "title": "月度经营趋势",
+      "connectionName": "local-mysql",
+      "sql": "WITH monthly_marketing AS (\n  SELECT month, SUM(spend) AS marketing_spend\n  FROM marketing_spend\n  GROUP BY month\n)\nSELECT oe.order_month AS month,\n       COUNT(*) AS orders,\n       ROUND(SUM(oe.net_revenue), 2) AS net_revenue,\n       ROUND(SUM(oe.profit_before_marketing) - mm.marketing_spend, 2) AS contribution_profit,\n       ROUND((SUM(oe.profit_before_marketing) - mm.marketing_spend) / NULLIF(SUM(oe.net_revenue), 0), 4) AS contribution_margin\nFROM order_economics oe\nJOIN monthly_marketing mm ON mm.month = oe.order_month\nGROUP BY oe.order_month, mm.marketing_spend\nORDER BY oe.order_month;",
+      "lastRunId": "run_demo_ecommerce_monthly_zh",
+      "lastRunAt": 1783476000000,
+      "lastError": null
+    },
+    {
+      "id": "channel",
+      "title": "六月渠道贡献",
+      "connectionName": "local-mysql",
+      "sql": "SELECT oe.channel,\n       COUNT(*) AS orders,\n       ROUND(SUM(oe.net_revenue), 2) AS net_revenue,\n       ROUND(ms.spend, 2) AS marketing_spend,\n       ROUND(SUM(oe.profit_before_marketing) - ms.spend, 2) AS contribution_profit,\n       ROUND((SUM(oe.profit_before_marketing) - ms.spend) / NULLIF(SUM(oe.net_revenue), 0), 4) AS contribution_margin\nFROM order_economics oe\nJOIN marketing_spend ms ON ms.month = oe.order_month AND ms.channel = oe.channel\nWHERE oe.order_month = '2026-06'\nGROUP BY oe.channel, ms.spend\nORDER BY contribution_margin ASC;",
+      "lastRunId": "run_demo_ecommerce_channel_zh",
+      "lastRunAt": 1783476000000,
+      "lastError": null
+    },
+    {
+      "id": "promotion",
+      "title": "六月促销质量",
+      "connectionName": "local-mysql",
+      "sql": "SELECT COALESCE(oe.promotion_code, 'No promotion') AS promotion,\n       COUNT(*) AS orders,\n       ROUND(SUM(oe.discounts), 2) AS discounts,\n       ROUND(SUM(oe.net_revenue), 2) AS net_revenue,\n       ROUND(SUM(oe.profit_before_marketing) / NULLIF(SUM(oe.net_revenue), 0), 4) AS margin_before_marketing\nFROM order_economics oe\nWHERE oe.order_month = '2026-06'\nGROUP BY COALESCE(oe.promotion_code, 'No promotion')\nORDER BY orders DESC;",
+      "lastRunId": "run_demo_ecommerce_promotion_zh",
+      "lastRunAt": 1783476000000,
+      "lastError": null
+    },
+    {
+      "id": "sku",
+      "title": "六月高退货商品",
+      "connectionName": "local-mysql",
+      "sql": "SELECT p.sku,\n       p.name,\n       p.category,\n       SUM(oi.quantity) AS sold_units,\n       COALESCE(SUM(r.quantity), 0) AS returned_units,\n       ROUND(COALESCE(SUM(r.quantity), 0) / NULLIF(SUM(oi.quantity), 0), 4) AS return_rate,\n       ROUND(SUM(oi.quantity * oi.unit_price - oi.discount_amount) - COALESCE(SUM(r.refund_amount), 0), 2) AS net_revenue,\n       ROUND(COALESCE(SUM(r.refund_amount + r.processing_cost), 0), 2) AS return_loss\nFROM order_items oi\nJOIN orders o ON o.id = oi.order_id\nJOIN products p ON p.id = oi.product_id\nLEFT JOIN returns r ON r.order_item_id = oi.id\nWHERE o.order_date >= '2026-06-01' AND o.order_date < '2026-07-01'\nGROUP BY p.id, p.sku, p.name, p.category\nHAVING sold_units >= 8\nORDER BY return_rate DESC, return_loss DESC\nLIMIT 8;",
+      "lastRunId": "run_demo_ecommerce_sku_zh",
+      "lastRunAt": 1783476000000,
+      "lastError": null
+    }
+  ],
+  "sections": [
+    {
+      "id": "executive_summary",
+      "title": "经营摘要",
+      "description": "订单和收入增长，但利润质量发生断裂。",
+      "cards": [
+        {
+          "id": "order_growth",
+          "type": "kpi",
+          "sourceId": "kpi",
+          "title": "订单环比",
+          "value": {
+            "field": "order_growth",
+            "format": {
+              "kind": "percent",
+              "input": "ratio",
+              "maximumFractionDigits": 1
+            }
+          },
+          "label": "五月至六月",
+          "width": "third"
+        },
+        {
+          "id": "revenue_growth",
+          "type": "kpi",
+          "sourceId": "kpi",
+          "title": "净收入环比",
+          "value": {
+            "field": "revenue_growth",
+            "format": {
+              "kind": "percent",
+              "input": "ratio",
+              "maximumFractionDigits": 1
+            }
+          },
+          "label": "五月至六月",
+          "width": "third"
+        },
+        {
+          "id": "june_margin",
+          "type": "kpi",
+          "sourceId": "kpi",
+          "title": "六月贡献利润率",
+          "value": {
+            "field": "june_contribution_margin",
+            "format": {
+              "kind": "percent",
+              "input": "ratio",
+              "maximumFractionDigits": 1
+            }
+          },
+          "label": "五月为 42.2%",
+          "width": "third"
+        },
+        {
+          "id": "management_readout",
+          "type": "markdown",
+          "markdown": "### 增长是买来的，而且买得太贵\n付费社交、全场八折和 TrailFlex Runner 的高退货被叠加在同一批订单上，使六月贡献利润率下降 **25 个百分点**。",
+          "width": "full"
+        }
+      ]
+    },
+    {
+      "id": "statistical_evidence",
+      "title": "统计证据",
+      "description": "三个相互独立的切面，定位六月利润质量下滑发生在哪里。",
+      "cards": [
+        {
+          "id": "profit_change",
+          "type": "kpi",
+          "sourceId": "kpi",
+          "title": "贡献利润环比",
+          "value": {
+            "field": "contribution_profit_change",
+            "format": {
+              "kind": "percent",
+              "input": "ratio",
+              "maximumFractionDigits": 1
+            }
+          },
+          "label": "$19,184 → $9,091",
+          "width": "third"
+        },
+        {
+          "id": "paid_social_loss",
+          "type": "kpi",
+          "sourceId": "kpi",
+          "title": "付费社交贡献利润",
+          "value": {
+            "field": "paid_social_contribution_profit",
+            "format": {
+              "kind": "currency",
+              "currency": "USD",
+              "maximumFractionDigits": 0
+            }
+          },
+          "label": "152 单，占六月订单 40.5%",
+          "width": "third"
+        },
+        {
+          "id": "trailflex_returns",
+          "type": "kpi",
+          "sourceId": "kpi",
+          "title": "TrailFlex 退货率",
+          "value": {
+            "field": "trailflex_return_rate",
+            "format": {
+              "kind": "percent",
+              "input": "ratio",
+              "maximumFractionDigits": 1
+            }
+          },
+          "label": "退货损失 $2,942",
+          "width": "third"
+        }
+      ]
+    },
+    {
+      "id": "evidence",
+      "title": "证据链",
+      "description": "从总体趋势逐层下钻到渠道、活动和商品。",
+      "cards": [
+        {
+          "id": "monthly_trend",
+          "type": "chart",
+          "sourceId": "monthly",
+          "title": "收入增长，利润率下滑",
+          "chart": {
+            "title": "月度净收入与贡献利润率",
+            "preset": "comparison",
+            "fields": {
+              "month": {
+                "field": "month",
+                "type": "ordinal",
+                "title": "月份"
+              },
+              "revenue": {
+                "field": "net_revenue",
+                "type": "quantitative",
+                "title": "净收入",
+                "format": {
+                  "kind": "currency",
+                  "currency": "USD",
+                  "maximumFractionDigits": 0
+                }
+              },
+              "margin": {
+                "field": "contribution_margin",
+                "type": "quantitative",
+                "title": "贡献利润率",
+                "format": {
+                  "kind": "percent",
+                  "input": "ratio",
+                  "maximumFractionDigits": 1
+                }
+              }
+            },
+            "layers": [
+              {
+                "mark": "line",
+                "encoding": {
+                  "x": "month",
+                  "y": "revenue"
+                },
+                "yAxis": "left",
+                "stack": "none"
+              },
+              {
+                "mark": "line",
+                "encoding": {
+                  "x": "month",
+                  "y": "margin"
+                },
+                "yAxis": "right",
+                "stack": "none"
+              }
+            ]
+          },
+          "width": "full"
+        },
+        {
+          "id": "channel_rank",
+          "type": "chart",
+          "sourceId": "channel",
+          "title": "渠道贡献利润",
+          "chart": {
+            "title": "付费社交是唯一亏损渠道",
+            "preset": "ranking",
+            "fields": {
+              "channel": {
+                "field": "channel",
+                "type": "nominal",
+                "title": "渠道"
+              },
+              "profit": {
+                "field": "contribution_profit",
+                "type": "quantitative",
+                "title": "贡献利润",
+                "format": {
+                  "kind": "currency",
+                  "currency": "USD",
+                  "maximumFractionDigits": 0
+                }
+              }
+            },
+            "layers": [
+              {
+                "mark": "bar",
+                "encoding": {
+                  "x": "profit",
+                  "y": "channel"
+                },
+                "yAxis": "left",
+                "stack": "none"
+              }
+            ]
+          },
+          "width": "half"
+        },
+        {
+          "id": "promotion_table",
+          "type": "table",
+          "sourceId": "promotion",
+          "title": "促销质量",
+          "columns": [
+            {
+              "field": "promotion",
+              "title": "促销"
+            },
+            {
+              "field": "orders",
+              "title": "订单",
+              "format": {
+                "kind": "number",
+                "maximumFractionDigits": 0
+              }
+            },
+            {
+              "field": "discounts",
+              "title": "折扣",
+              "format": {
+                "kind": "currency",
+                "currency": "USD",
+                "maximumFractionDigits": 0
+              }
+            },
+            {
+              "field": "margin_before_marketing",
+              "title": "营销前利润率",
+              "format": {
+                "kind": "percent",
+                "input": "ratio",
+                "maximumFractionDigits": 1
+              }
+            }
+          ],
+          "maxRows": 5,
+          "width": "half"
+        },
+        {
+          "id": "sku_table",
+          "type": "table",
+          "sourceId": "sku",
+          "title": "高退货商品",
+          "columns": [
+            {
+              "field": "sku",
+              "title": "SKU"
+            },
+            {
+              "field": "name",
+              "title": "商品"
+            },
+            {
+              "field": "sold_units",
+              "title": "销量",
+              "format": {
+                "kind": "number",
+                "maximumFractionDigits": 0
+              }
+            },
+            {
+              "field": "return_rate",
+              "title": "退货率",
+              "format": {
+                "kind": "percent",
+                "input": "ratio",
+                "maximumFractionDigits": 1
+              }
+            },
+            {
+              "field": "return_loss",
+              "title": "退货损失",
+              "format": {
+                "kind": "currency",
+                "currency": "USD",
+                "maximumFractionDigits": 0
+              }
+            }
+          ],
+          "maxRows": 8,
+          "width": "full"
+        }
+      ]
+    },
+    {
+      "id": "action",
+      "title": "从证据到行动",
+      "description": "保留需求，修复增长机制。",
+      "cards": [
+        {
+          "id": "action_flow",
+          "type": "flow",
+          "title": "七月调整路径",
+          "direction": "LR",
+          "width": "full",
+          "nodes": [
+            {
+              "id": "signal",
+              "kind": "source",
+              "label": "利润率断裂",
+              "description": "42.2% → 16.8%",
+              "tone": "danger"
+            },
+            {
+              "id": "channel",
+              "kind": "step",
+              "label": "收缩低效投放",
+              "description": "付费社交贡献为负",
+              "tone": "warning"
+            },
+            {
+              "id": "offer",
+              "kind": "step",
+              "label": "替换全场折扣",
+              "description": "改为按品类优惠",
+              "tone": "warning"
+            },
+            {
+              "id": "product",
+              "kind": "step",
+              "label": "修复尺码与退货",
+              "description": "TrailFlex Runner",
+              "tone": "info"
+            },
+            {
+              "id": "gate",
+              "kind": "decision",
+              "label": "渠道恢复正贡献？",
+              "description": "按周复核",
+              "tone": "neutral"
+            },
+            {
+              "id": "scale",
+              "kind": "result",
+              "label": "再扩大增长",
+              "description": "利润质量先于规模",
+              "tone": "success"
+            }
+          ],
+          "edges": [
+            {
+              "id": "signal_channel",
+              "source": "signal",
+              "target": "channel"
+            },
+            {
+              "id": "channel_offer",
+              "source": "channel",
+              "target": "offer"
+            },
+            {
+              "id": "offer_product",
+              "source": "offer",
+              "target": "product"
+            },
+            {
+              "id": "product_gate",
+              "source": "product",
+              "target": "gate"
+            },
+            {
+              "id": "gate_scale",
+              "source": "gate",
+              "target": "scale",
+              "label": "是",
+              "tone": "success"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,6 +1,11 @@
 .env
 .stela/secrets/
-.stela/history/
+.stela/history/*
+!.stela/history/history_demo.jsonl
+.stela/sql-templates/template-*.md
 .stela/recent-files.local.json
 .stela.sqlite
 .stela.sqlite-*
+
+# Stela machine-local (auto-added)
+.stela/agent-metrics.local.sqlite*

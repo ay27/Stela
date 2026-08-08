@@ -2,63 +2,31 @@
 connection_name: local-mysql
 ---
 
-# Stela Demo Vault
+# Northstar Outfitters — Commerce Review Demo
 
-This vault is safe to publish. It contains only fictional release-operations
-data and local demo connection templates.
+Northstar’s June orders grew **25%** and net revenue grew **19%**, yet contribution margin fell from **42.2% to 16.8%**. This Vault is a complete investigation: connect the database, follow the SQL evidence, present the decision in Canvas, ask the Agent to verify it, inspect the real run in Agent Dashboard, and reuse the analysis through SQL templates.
 
-## Start Demo Databases
+Northstar 六月订单增长 **25%**、净收入增长 **19%**，但贡献利润率却从 **42.2% 跌至 16.8%**。这个 Vault 会带你走完整条分析链路：连接数据库、用 SQL 逐层定位问题、在 Canvas 汇总决策、让 Agent 复核并更新看板、在 Agent Dashboard 检查真实运行，再通过 SQL 模板复用分析。
+
+## Choose a language / 选择语言
+
+- [[en/01-business-context-and-metrics|Start in English →]]
+- [[zh/01-业务背景与指标|从中文开始 →]]
+
+## Live data in two minutes / 两分钟启动实时数据
+
+The saved query results and Canvas work immediately. To rerun SQL, open a terminal in this Vault and run:
+
+已保存的 SQL 结果和 Canvas 可以直接浏览。要重新执行查询，请在当前 Vault 目录运行：
 
 ```bash
-cd examples/demo-vault
 docker compose up -d
 ```
 
-The containers expose:
+Then open **Settings → Connections**, select `local-mysql`, and test it. The fixture uses the public local credentials `demo / demo`. **Try Demo Vault** saves that password into this device’s protected secret shard; when opening this source folder directly, enter `demo` once if prompted.
 
-- MySQL: `127.0.0.1:3306`, database `stela_demo`, user `demo`, password `demo`
-- PostgreSQL: `127.0.0.1:5432`, database `stela_demo`, user `demo`, password `demo`
+然后打开 **设置 → 数据库连接**，选择 `local-mysql` 并测试连接。示例数据库使用公开的本地凭据 `demo / demo`。通过 **Try Demo Vault** 创建时，密码会写入当前设备受保护的 secret shard；如果直接打开源码目录，首次使用时手动输入一次 `demo` 即可。
 
-## Use in Stela
-
-1. Open this folder as a vault.
-2. Open Settings -> Connector Plugins and confirm MySQL/PostgreSQL are installed.
-3. Open `notes/weekly-release-health.md` and run its SQL blocks. It explains
-   the v0.10 mobile-onboarding task spike using the seeded release data.
-4. Open `notes/mobile-rollout-context.md` for the business context that an
-   Agent can search while investigating the spike.
-5. Open `notes/mysql-demo.md` or `notes/postgres-demo.md` for shorter
-   connection-specific examples.
-6. Open `notes/markdown-syntax-showcase.md` to review common Markdown syntax rendering.
-
-## Product Hunt screenshots
-
-This vault is the source for real Stela screenshots:
-
-1. Show `weekly-release-health.md` with executed RunSQL results, an unfinished
-   follow-up query, and the Agent sidebar.
-2. Ask the Agent: `Why did open tasks rise after the rollout? Cite SQL evidence.`
-3. Open **Experience Knowledge** from the bottom dock to show the
-   `open-task-triage` runbook in `.stela/skills/`.
-4. Open Settings -> Connections and Settings -> Connector Plugins to show the
-   two local fixtures and installed connectors.
-
-The included AI settings are deliberately disabled and contain no key. Configure
-your own provider locally before taking Agent screenshots; do not commit the
-resulting credential files.
-
-This vault includes `.stela/connections.json` with local-only demo credentials
-(`demo` / `demo`). They are public Docker fixture credentials, not production
-secrets. When Stela loads the vault, it may migrate password fields into the
-local `.stela/secrets/` shard.
-
-## Docker Troubleshooting
-
-If `docker compose up -d` fails with:
-
-```text
-failed to connect to the docker API at unix:///var/run/docker.sock
-```
-
-Docker is installed but the Docker daemon is not running. Start Docker Desktop,
-wait until it says Docker is running, then run the command again.
+> Docker is optional for the guided story. AI configuration is only required for the final live Agent and Dashboard step.
+>
+> Docker 不是浏览完整故事的前提；只有最后的真实 Agent 与 Dashboard 步骤需要配置 AI。

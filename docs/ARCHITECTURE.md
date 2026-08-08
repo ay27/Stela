@@ -242,9 +242,11 @@ Long or multi-stage analyses use a normal Vault file named `*.stela.canvas`.
 sections, and `markdown | kpi | chart | table | flow` cards. Data-backed cards
 bind to a source id; the source points to its latest audited run, while result
 rows stay in the same SQLite/JSONL stores used by RunSQL. KPI, table, and chart
-fields share one strict display-format contract. The renderer loads snapshots,
-lazily mounts ECharts with its SVG renderer, and renders source-free controlled
-Flow cards with React Flow. Canvas Markdown does not execute Mermaid.
+fields share one strict display-format contract. The renderer loads snapshots
+and lazily mounts ECharts with its SVG renderer. Source-free controlled Flow
+cards use the same natural-size, scrollable scene geometry as HTML export for
+their inline read view; the expanded layout editor mounts React Flow for
+zooming, panning, and optional node adjustment. Canvas Markdown does not execute Mermaid.
 
 Canvas creation, reads, source refresh, and Flow layout updates cross dedicated
 typed IPC methods.
@@ -252,9 +254,12 @@ Writes are path-confined, atomic, and etag-protected. The Agent may update a
 Canvas without an edit proposal, but Stela replaces every new or changed SQL
 source with SQL and connection metadata from a successful query in that Agent
 run. Users explicitly refresh one source or all sources; a failed refresh keeps
-the previous run reference and records the latest error. Static HTML export
-freezes current SVGs and tables and includes collapsed source SQL without any
-runtime execution bridge. A user may drag Flow nodes or request deterministic
+the previous run reference and records the latest error. Standalone HTML export
+embeds the current result data, Stela-compiled chart options, and an offline
+ECharts runtime so charts retain tooltip, legend, hover, and responsive resize
+behavior. Tables and Flow diagrams are frozen snapshots, and collapsed source
+SQL remains inspectable without any runtime execution bridge or network
+dependency. A user may drag Flow nodes or request deterministic
 Dagre TB/LR auto-layout; the etag-protected layout write changes only direction
 and existing node coordinates. Agent updates preserve that user-owned layout by
 stable ids. See [ADR-0056](./adr/0056-user-adjustable-react-flow-cards.md) and
