@@ -32,13 +32,31 @@ const GROUPS: ShortcutGroup[] = [
       { keys: "Mod+K", actionKey: "shortcuts.global.commandPalette" },
       { keys: "Mod+N", actionKey: "shortcuts.global.newNote" },
       { keys: "Mod+W", actionKey: "shortcuts.global.closeTab" },
-      { keys: "Mod+F / Mod+Shift+F", actionKey: "shortcuts.global.search" },
-      { keys: "Mod+,", actionKey: "shortcuts.global.settings" },
-      { keys: "Mod+I", actionKey: "shortcuts.global.addToChat" },
-      { keys: "Mod+Enter", actionKey: "shortcuts.global.runBlock" },
+      { keys: "Mod+Shift+T", actionKey: "shortcuts.global.reopenTab" },
+      { keys: "Ctrl+Tab / Ctrl+Shift+Tab", actionKey: "shortcuts.global.mruTabs" },
+      { keys: "Escape", actionKey: "shortcuts.global.cancelMruTabs" },
       { keys: "Mod+1 … Mod+9", actionKey: "shortcuts.global.switchTab" },
       { keys: "Mod+[", actionKey: "shortcuts.global.navBack" },
       { keys: "Mod+]", actionKey: "shortcuts.global.navForward" },
+      { keys: "Mod+,", actionKey: "shortcuts.global.settings" },
+      { keys: "Mod+Shift+E", actionKey: "shortcuts.global.revealFile" },
+      { keys: "Mod+Shift+A", actionKey: "shortcuts.global.focusAgent" },
+      { keys: "Mod+Shift+S", actionKey: "shortcuts.global.insertRunsql" },
+      { keys: "Mod+I", actionKey: "shortcuts.global.addToChat" },
+      { keys: "Mod+Enter", actionKey: "shortcuts.global.runBlock" },
+    ],
+  },
+  {
+    titleKey: "shortcuts.search.title",
+    descriptionKey: "shortcuts.search.description",
+    items: [
+      { keys: "Mod+F", actionKey: "shortcuts.search.find" },
+      { keys: "Mod+Alt+F", actionKey: "shortcuts.search.replace" },
+      { keys: "Mod+Shift+F", actionKey: "shortcuts.search.vault" },
+      { keys: "Enter / Shift+Enter", actionKey: "shortcuts.search.navigate" },
+      { keys: "Enter", actionKey: "shortcuts.search.replaceCurrent" },
+      { keys: "Shift+Enter / Mod+Enter", actionKey: "shortcuts.search.replaceAll" },
+      { keys: "Escape", actionKey: "shortcuts.search.close" },
     ],
   },
   {
@@ -48,17 +66,27 @@ const GROUPS: ShortcutGroup[] = [
       { keys: "Mod+Enter", actionKey: "shortcuts.editor.run" },
       { keys: "Mod+R", actionKey: "shortcuts.editor.refresh" },
       { keys: "Mod+Alt+L", actionKey: "shortcuts.editor.format" },
+      { keys: "Mod+Alt+T", actionKey: "shortcuts.editor.template" },
+      { keys: "Tab", actionKey: "shortcuts.editor.acceptCompletion" },
+      { keys: "Escape", actionKey: "shortcuts.editor.dismissCompletion" },
     ],
   },
   {
-    titleKey: "shortcuts.context.title",
-    descriptionKey: "shortcuts.context.description",
+    titleKey: "shortcuts.template.title",
+    descriptionKey: "shortcuts.template.description",
     items: [
-      { actionKey: "shortcuts.context.run" },
-      { actionKey: "shortcuts.context.refresh" },
-      { keys: "Mod+I", actionKey: "shortcuts.context.addToChat" },
-      { actionKey: "shortcuts.context.copy" },
-      { actionKey: "shortcuts.context.delete" },
+      { keys: "Tab / Shift+Tab", actionKey: "shortcuts.template.navigate" },
+      { keys: "Escape", actionKey: "shortcuts.template.finish" },
+    ],
+  },
+  {
+    titleKey: "shortcuts.image.title",
+    descriptionKey: "shortcuts.image.description",
+    items: [
+      { keys: "+ / =", actionKey: "shortcuts.image.zoomIn" },
+      { keys: "- / _", actionKey: "shortcuts.image.zoomOut" },
+      { keys: "0 / R", actionKey: "shortcuts.image.reset" },
+      { keys: "Escape", actionKey: "shortcuts.image.close" },
     ],
   },
 ];
@@ -126,6 +154,7 @@ function KbdExpression({ expression }: { expression: string }) {
   return (
     <div className="flex flex-wrap items-center gap-1">
       {tokens.map((tok, i) => {
+        if (tok === "+") return <Kbd key={i}>+</Kbd>;
         if (/^[+]/.test(tok)) return null;
         if (/^(\s+|…|\/)$/.test(tok)) {
           return (

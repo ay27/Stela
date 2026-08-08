@@ -32,6 +32,15 @@ fence is the insertion payload. `{{variable}}` placeholders remain visible,
 repeated names edit together, `Tab` / `Shift+Tab` move between variables, and
 `Escape` ends variable editing.
 
+New templates begin as recoverable, locally timestamped
+`template-YYYYMMDD-HHmmss[-N].md` drafts with blank `name` and `description`;
+both fields are edited above the normal note editor. Closing a draft with
+incomplete metadata asks for confirmation. If the user closes it anyway, a
+missing name is persisted as the stable `Untitled [N]` fallback while
+description may remain blank. The library also derives that fallback from the
+filename so an incomplete draft remains discoverable after an unexpected app
+exit.
+
 ### RunSQL block shape
 
 Each executable SQL block in a note follows this on-disk pattern:

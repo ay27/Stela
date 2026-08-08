@@ -51,7 +51,10 @@ export function parseFrontmatterField(
   key: string,
 ): string | null {
   if (!frontmatter) return null;
-  const re = new RegExp(`(?:^|\\n)\\s*${escapeFrontmatterKey(key)}\\s*:\\s*([^\\n]*)`);
+  // 只允许水平空白；`\\s*` 会吞换行，让空的 `name:` 误读成下一行的值。
+  const re = new RegExp(
+    `(?:^|\\n)[ \\t]*${escapeFrontmatterKey(key)}[ \\t]*:[ \\t]*([^\\n]*)`,
+  );
   const m = frontmatter.match(re);
   if (!m) return null;
   let v = m[1]!.trim();

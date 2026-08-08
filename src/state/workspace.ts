@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { pathExists, pickVault } from "@/services/fs";
+import { pathExists, pickVault, readFile } from "@/services/fs";
+import { writeFile } from "@/services/fs-write";
 import { electronStorage } from "@/services/storage/electron-storage";
 import { loadUserCache, patchUserCache } from "@/services/user-cache";
 import { useSettings } from "@/state/settings";
@@ -7,7 +8,16 @@ import { useConnections } from "@/state/connections";
 import { usePluginsStore } from "@/services/plugins";
 import { resetAutoGit, scheduleAutoGit, startAutoPull } from "@/services/auto-git";
 import { refreshGitStatus } from "@/state/git";
-import { clearTabBuffer } from "@/state/tab-buffer";
+import {
+  clearTabBuffer,
+  getTabBuffer,
+  setTabBuffer,
+} from "@/state/tab-buffer";
+import {
+  finalizeSqlTemplateForClose,
+  getSqlTemplateMetadataStatus,
+} from "@/services/sql-templates";
+import { i18n } from "@/i18n";
 import type { VaultFsEvent } from "@shared/ipc-events";
 
 /**
@@ -54,6 +64,91 @@ export interface Tab {
   reloadToken?: number;
   /** 当前 tab 内正在执行的 RunSQL 数量；>0 时 TabBar 显示执行中。 */
   sqlRunningCount?: number;
+}
+
+interface IncompleteTemplateTab {
+  tab: Tab;
+  raw: string;
+  missingField: "name" | "description";
+}
+
+interface TemplateClosePreparation {
+  allowed: boolean;
+  focus?: { tabId: string; field: "name" | "description" };
+}
+
+async function prepareTemplateTabsForClose(
+  tabs: Tab[],
+  vaultPath: string | null,
+): Promise<TemplateClosePreparation> {
+  if (!vaultPath) return { allowed: true };
+  const incomplete: IncompleteTemplateTab[] = [];
+
+  for (const tab of tabs) {
+    if (!tab.path || tab.kind !== "file" || tab.externalChange === "removed") continue;
+    const raw =
+      getTabBuffer(tab.id) ??
+      (await readFile(tab.path).catch((): null => null));
+    if (raw === null) continue;
+    const status = getSqlTemplateMetadataStatus(raw, tab.path, vaultPath);
+    if (!status || (!status.missingName && !status.missingDescription)) continue;
+    incomplete.push({
+      tab,
+      raw,
+      missingField: status.missingName ? "name" : "description",
+    });
+  }
+
+  if (incomplete.length === 0) return { allowed: true };
+  const confirmed = window.confirm(
+    i18n.t("templates.closeIncomplete", { count: incomplete.length }),
+  );
+  if (!confirmed) {
+    const first = incomplete[0]!;
+    return {
+      allowed: false,
+      focus: { tabId: first.tab.id, field: first.missingField },
+    };
+  }
+
+  try {
+    for (const item of incomplete) {
+      const next = finalizeSqlTemplateForClose(
+        item.raw,
+        item.tab.path!,
+        vaultPath,
+      );
+      if (next === item.raw) continue;
+      await writeFile(item.tab.path!, next);
+      setTabBuffer(item.tab.id, next);
+    }
+  } catch (error) {
+    console.error("[stela] finalize SQL template before close failed", error);
+    window.alert(i18n.t("templates.closeSaveFailed"));
+    const first = incomplete[0]!;
+    return {
+      allowed: false,
+      focus: { tabId: first.tab.id, field: first.missingField },
+    };
+  }
+
+  return { allowed: true };
+}
+
+function focusIncompleteTemplate(
+  setActive: (id: string | null) => void,
+  focus: TemplateClosePreparation["focus"],
+): void {
+  if (!focus) return;
+  setActive(focus.tabId);
+  // Native confirm 会在返回后再恢复一次原焦点；稍后聚焦，避免被它覆盖。
+  window.setTimeout(() => {
+    document
+      .querySelector<HTMLInputElement>(
+        `[data-template-field="${focus.field}"]`,
+      )
+      ?.focus();
+  }, 100);
 }
 
 /** 最近关闭历史栈上限。超过会从栈底丢弃。 */
@@ -704,102 +799,155 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   closeTab: (id) => {
     if (!id) return;
-    const { tabs, activeTabId, closedTabsStack, mruTabIds } = get();
-    const idx = tabs.findIndex((t) => t.id === id);
-    if (idx < 0) return;
-    const target = tabs[idx]!;
-    const next = tabs.filter((t) => t.id !== id);
-    let nextActive: string | null = activeTabId;
-    if (activeTabId === id) {
-      const fallback = next[idx] ?? next[idx - 1] ?? next[0];
-      nextActive = fallback?.id ?? null;
-    }
-    const snap = snapshotFor(target);
-    const droppedMru = dropMru(mruTabIds, [id]);
-    clearTabBuffer(id);
-    set({
-      tabs: next,
-      activeTabId: nextActive,
-      mruTabIds: pushMru(droppedMru, nextActive),
-      closedTabsStack: snap
-        ? pushClosedSnapshot(closedTabsStack, snap)
-        : closedTabsStack,
-    });
+    void (async () => {
+      const initial = get();
+      const target = initial.tabs.find((tab) => tab.id === id);
+      if (!target) return;
+      const preparation = await prepareTemplateTabsForClose(
+        [target],
+        initial.vaultPath,
+      );
+      if (!preparation.allowed) {
+        focusIncompleteTemplate(get().setActive, preparation.focus);
+        return;
+      }
+
+      const { tabs, activeTabId, closedTabsStack, mruTabIds } = get();
+      const idx = tabs.findIndex((t) => t.id === id);
+      if (idx < 0) return;
+      const currentTarget = tabs[idx]!;
+      const next = tabs.filter((t) => t.id !== id);
+      let nextActive: string | null = activeTabId;
+      if (activeTabId === id) {
+        const fallback = next[idx] ?? next[idx - 1] ?? next[0];
+        nextActive = fallback?.id ?? null;
+      }
+      const snap = snapshotFor(currentTarget);
+      const droppedMru = dropMru(mruTabIds, [id]);
+      clearTabBuffer(id);
+      set({
+        tabs: next,
+        activeTabId: nextActive,
+        mruTabIds: pushMru(droppedMru, nextActive),
+        closedTabsStack: snap
+          ? pushClosedSnapshot(closedTabsStack, snap)
+          : closedTabsStack,
+      });
+    })();
   },
 
   closeOtherTabs: (id) => {
-    const { tabs, closedTabsStack, mruTabIds } = get();
-    if (!tabs.some((t) => t.id === id)) return;
-    let stack = closedTabsStack;
-    const next = tabs.filter((t) => {
-      if (t.id === id) return true;
-      // pinned tab 在「关闭其他」时保留——pin 的语义是显式想留下
-      if (t.pinned) return true;
-      const snap = snapshotFor(t);
-      if (snap) stack = pushClosedSnapshot(stack, snap);
-      clearTabBuffer(t.id);
-      return false;
-    });
-    if (next.length === tabs.length) return;
-    set({
-      tabs: next,
-      activeTabId: id,
-      mruTabIds: reconcileMru(mruTabIds, next, id),
-      closedTabsStack: stack,
-    });
+    void (async () => {
+      const initial = get();
+      if (!initial.tabs.some((t) => t.id === id)) return;
+      const targets = initial.tabs.filter(
+        (tab) => tab.id !== id && !tab.pinned,
+      );
+      const preparation = await prepareTemplateTabsForClose(
+        targets,
+        initial.vaultPath,
+      );
+      if (!preparation.allowed) {
+        focusIncompleteTemplate(get().setActive, preparation.focus);
+        return;
+      }
+      const targetIds = new Set(targets.map((tab) => tab.id));
+      const { tabs, closedTabsStack, mruTabIds } = get();
+      let stack = closedTabsStack;
+      const next = tabs.filter((tab) => {
+        if (!targetIds.has(tab.id)) return true;
+        const snap = snapshotFor(tab);
+        if (snap) stack = pushClosedSnapshot(stack, snap);
+        clearTabBuffer(tab.id);
+        return false;
+      });
+      if (next.length === tabs.length) return;
+      set({
+        tabs: next,
+        activeTabId: id,
+        mruTabIds: reconcileMru(mruTabIds, next, id),
+        closedTabsStack: stack,
+      });
+    })();
   },
 
   closeTabsToRight: (id) => {
-    const { tabs, activeTabId, closedTabsStack, mruTabIds } = get();
-    const idx = tabs.findIndex((t) => t.id === id);
-    if (idx < 0 || idx === tabs.length - 1) return;
-    let stack = closedTabsStack;
-    const removed: Tab[] = [];
-    const next = tabs.filter((t, i) => {
-      if (i <= idx) return true;
-      if (t.pinned) return true;
-      const snap = snapshotFor(t);
-      if (snap) stack = pushClosedSnapshot(stack, snap);
-      removed.push(t);
-      clearTabBuffer(t.id);
-      return false;
-    });
-    if (removed.length === 0) return;
-    const nextActive = removed.some((t) => t.id === activeTabId)
-      ? id
-      : activeTabId;
-    set({
-      tabs: next,
-      activeTabId: nextActive,
-      mruTabIds: reconcileMru(mruTabIds, next, nextActive),
-      closedTabsStack: stack,
-    });
+    void (async () => {
+      const initial = get();
+      const initialIdx = initial.tabs.findIndex((tab) => tab.id === id);
+      if (initialIdx < 0 || initialIdx === initial.tabs.length - 1) return;
+      const targets = initial.tabs.filter(
+        (tab, index) => index > initialIdx && !tab.pinned,
+      );
+      const preparation = await prepareTemplateTabsForClose(
+        targets,
+        initial.vaultPath,
+      );
+      if (!preparation.allowed) {
+        focusIncompleteTemplate(get().setActive, preparation.focus);
+        return;
+      }
+      const targetIds = new Set(targets.map((tab) => tab.id));
+      const { tabs, activeTabId, closedTabsStack, mruTabIds } = get();
+      let stack = closedTabsStack;
+      const removed: Tab[] = [];
+      const next = tabs.filter((tab) => {
+        if (!targetIds.has(tab.id)) return true;
+        const snap = snapshotFor(tab);
+        if (snap) stack = pushClosedSnapshot(stack, snap);
+        removed.push(tab);
+        clearTabBuffer(tab.id);
+        return false;
+      });
+      if (removed.length === 0) return;
+      const nextActive = removed.some((tab) => tab.id === activeTabId)
+        ? id
+        : activeTabId;
+      set({
+        tabs: next,
+        activeTabId: nextActive,
+        mruTabIds: reconcileMru(mruTabIds, next, nextActive),
+        closedTabsStack: stack,
+      });
+    })();
   },
 
   closeSavedTabs: () => {
-    const { tabs, activeTabId, closedTabsStack, mruTabIds } = get();
-    let stack = closedTabsStack;
-    const next = tabs.filter((t) => {
-      if (!t.path) return true;
-      if (t.dirty) return true;
-      // pinned tab 视为「明确想留下来」，即便 saved 也不关
-      if (t.pinned) return true;
-      const snap = snapshotFor(t);
-      if (snap) stack = pushClosedSnapshot(stack, snap);
-      clearTabBuffer(t.id);
-      return false;
-    });
-    if (next.length === tabs.length) return;
-    const stillActive = next.some((t) => t.id === activeTabId);
-    const nextActive: string | null = stillActive
-      ? activeTabId
-      : next[next.length - 1]?.id ?? null;
-    set({
-      tabs: next,
-      activeTabId: nextActive,
-      mruTabIds: reconcileMru(mruTabIds, next, nextActive),
-      closedTabsStack: stack,
-    });
+    void (async () => {
+      const initial = get();
+      const targets = initial.tabs.filter(
+        (tab) => !!tab.path && !tab.dirty && !tab.pinned,
+      );
+      const preparation = await prepareTemplateTabsForClose(
+        targets,
+        initial.vaultPath,
+      );
+      if (!preparation.allowed) {
+        focusIncompleteTemplate(get().setActive, preparation.focus);
+        return;
+      }
+      const targetIds = new Set(targets.map((tab) => tab.id));
+      const { tabs, activeTabId, closedTabsStack, mruTabIds } = get();
+      let stack = closedTabsStack;
+      const next = tabs.filter((tab) => {
+        if (!targetIds.has(tab.id)) return true;
+        const snap = snapshotFor(tab);
+        if (snap) stack = pushClosedSnapshot(stack, snap);
+        clearTabBuffer(tab.id);
+        return false;
+      });
+      if (next.length === tabs.length) return;
+      const stillActive = next.some((tab) => tab.id === activeTabId);
+      const nextActive: string | null = stillActive
+        ? activeTabId
+        : next[next.length - 1]?.id ?? null;
+      set({
+        tabs: next,
+        activeTabId: nextActive,
+        mruTabIds: reconcileMru(mruTabIds, next, nextActive),
+        closedTabsStack: stack,
+      });
+    })();
   },
 
   reopenLastClosed: () => {

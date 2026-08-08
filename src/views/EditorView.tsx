@@ -177,6 +177,9 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
 
   const onEditorUnmountFlush = useCallback(
     (next: string) => {
+      // 关 tab 时 workspace 已先清掉该 tab/buffer；不要让随后发生的 React unmount
+      // 又把旧快照塞回 buffer，尤其会覆盖模板关闭守卫刚写入的 Untitled 兜底名。
+      if (!useWorkspace.getState().tabs.some((tab) => tab.id === tabId)) return;
       setTabBuffer(tabId, next);
       if (next === rawRef.current) return;
       setDirty(tabId, true);
@@ -311,6 +314,7 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
           <label className="grid gap-1 text-[11px] font-medium text-muted-foreground">
             {t("templates.library.name")}
             <input
+              data-template-field="name"
               value={templateName}
               onChange={(event) =>
                 onUpdateTemplateMetadata("name", event.target.value)
@@ -321,6 +325,7 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
           <label className="grid gap-1 text-[11px] font-medium text-muted-foreground">
             {t("templates.library.descriptionLabel")}
             <input
+              data-template-field="description"
               value={templateDescription}
               onChange={(event) =>
                 onUpdateTemplateMetadata("description", event.target.value)

@@ -7,7 +7,11 @@ import {
   readFile,
   type FileNode,
 } from "@/services/fs";
-import { parseFrontmatterField, splitFrontmatter } from "@/core/markdown";
+import {
+  parseFrontmatterField,
+  splitFrontmatter,
+  updateFrontmatterField,
+} from "@/core/markdown";
 
 export const SQL_TEMPLATE_DIRECTORY = ".stela/sql-templates";
 export const SQL_TEMPLATE_TYPE = "stela-sql-template";
@@ -70,10 +74,71 @@ export function isSqlTemplatePath(path: string, vaultPath?: string): boolean {
   );
 }
 
-export function createSqlTemplateDocument(metadata: SqlTemplateMetadata): string {
-  const error = validateTemplateMetadata(metadata.name, metadata.description);
-  if (error) throw new Error(error);
-  return `---\ntype: ${SQL_TEMPLATE_TYPE}\nname: ${metadata.name.trim()}\ndescription: ${metadata.description.trim()}\nconnection_name: ""\n---\n\n\`\`\`runsql\nSELECT *\nFROM {{table}}\nLIMIT {{limit}}\n\`\`\`\n`;
+export function createSqlTemplateDocument(): string {
+  return `---\ntype: ${SQL_TEMPLATE_TYPE}\nname:\ndescription:\nconnection_name: ""\n---\n\n\`\`\`runsql\nSELECT *\nFROM {{table}}\nLIMIT {{limit}}\n\`\`\`\n`;
+}
+
+function padDatePart(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+/** 使用本地时间生成可读、可排序的模板草稿文件名。 */
+export function sqlTemplateDraftBaseName(now = new Date()): string {
+  const date = [
+    now.getFullYear(),
+    padDatePart(now.getMonth() + 1),
+    padDatePart(now.getDate()),
+  ].join("");
+  const time = [
+    padDatePart(now.getHours()),
+    padDatePart(now.getMinutes()),
+    padDatePart(now.getSeconds()),
+  ].join("");
+  return `template-${date}-${time}`;
+}
+
+/**
+ * 草稿模板在用户第一次关闭 tab 前可以没有 name。展示名从自动生成的文件名
+ * 稳定派生，既能在异常退出后从模板库找回，也不会把 UI 文案写进文件内容。
+ */
+export function sqlTemplateFallbackName(path: string): string {
+  const fileName = path.replace(/\\/g, "/").split("/").pop() ?? "untitled.md";
+  const stem = fileName.replace(/\.md$/i, "");
+  const match = /^(?:untitled|template-\d{8}-\d{6})(?:-(\d+))?$/i.exec(stem);
+  if (!match) return stem || "Untitled";
+  const suffix = match[1] ? Number(match[1]) + 1 : null;
+  return suffix ? `Untitled ${suffix}` : "Untitled";
+}
+
+export interface SqlTemplateMetadataStatus {
+  missingName: boolean;
+  missingDescription: boolean;
+  fallbackName: string;
+}
+
+export function getSqlTemplateMetadataStatus(
+  raw: string,
+  path: string,
+  vaultPath?: string,
+): SqlTemplateMetadataStatus | null {
+  if (!isSqlTemplatePath(path, vaultPath)) return null;
+  const { frontmatter } = splitFrontmatter(raw);
+  if (parseFrontmatterField(frontmatter, "type") !== SQL_TEMPLATE_TYPE) return null;
+  return {
+    missingName: !parseFrontmatterField(frontmatter, "name")?.trim(),
+    missingDescription: !parseFrontmatterField(frontmatter, "description")?.trim(),
+    fallbackName: sqlTemplateFallbackName(path),
+  };
+}
+
+export function finalizeSqlTemplateForClose(
+  raw: string,
+  path: string,
+  vaultPath?: string,
+): string {
+  const status = getSqlTemplateMetadataStatus(raw, path, vaultPath);
+  if (!status?.missingName) return raw;
+  return updateFrontmatterField(raw, "name", status.fallbackName);
 }
 
 export function parseSqlTemplate(
@@ -88,9 +153,9 @@ export function parseSqlTemplate(
   const name = parseFrontmatterField(frontmatter, "name");
   const description = parseFrontmatterField(frontmatter, "description") ?? "";
   const sql = firstRunsqlBlock(body);
-  if (!name || !sql || validateTemplateMetadata(name, description)) return null;
+  if (!sql || (name && validateTemplateMetadata(name, description))) return null;
   return {
-    name,
+    name: name ?? sqlTemplateFallbackName(relativePath),
     description,
     relativePath,
     absolutePath,
@@ -141,14 +206,16 @@ export async function listSqlTemplates(vaultPath: string): Promise<SqlTemplate[]
 
 export async function createSqlTemplate(
   vaultPath: string,
-  metadata: SqlTemplateMetadata,
 ): Promise<SqlTemplate> {
-  const contents = createSqlTemplateDocument(metadata);
+  const contents = createSqlTemplateDocument();
   const directory = getSqlTemplateDirectory(vaultPath);
   if (!(await pathExists(directory))) {
     await createDir(vaultPath, directory);
   }
-  const { relativePath, absolutePath } = await nextTemplatePath(vaultPath, metadata.name);
+  const { relativePath, absolutePath } = await nextTemplatePath(
+    vaultPath,
+    sqlTemplateDraftBaseName(),
+  );
   await createFile(vaultPath, absolutePath, contents);
   const template = parseSqlTemplate(contents, relativePath, absolutePath);
   if (!template) throw new Error("无法创建模板");

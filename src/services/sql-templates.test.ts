@@ -7,7 +7,11 @@ import {
   SQL_TEMPLATE_DIRECTORY,
   SQL_TEMPLATE_TYPE,
   createSqlTemplateDocument,
+  finalizeSqlTemplateForClose,
+  getSqlTemplateMetadataStatus,
   parseSqlTemplate,
+  sqlTemplateDraftBaseName,
+  sqlTemplateFallbackName,
   templateSlug,
   validateTemplateMetadata,
 } from "./sql-templates";
@@ -89,16 +93,48 @@ WHERE dt = {{date}} OR snapshot_dt = {{date}}
 }
 
 {
-  const document = createSqlTemplateDocument({
-    name: "Daily active users",
-    description: "Count active users for a day",
-  });
+  const document = createSqlTemplateDocument();
   check(
-    "creates editable template Markdown skeleton",
+    "creates an editable template draft with blank metadata",
     document.includes(`type: ${SQL_TEMPLATE_TYPE}`) &&
-      document.includes("name: Daily active users") &&
+      document.includes("name:\n") &&
+      document.includes("description:\n") &&
       document.includes("```runsql"),
     document,
+  );
+}
+
+{
+  const draftPath = `${SQL_TEMPLATE_DIRECTORY}/template-20260808-145230-1.md`;
+  const draft = createSqlTemplateDocument();
+  const parsed = parseSqlTemplate(draft, draftPath);
+  const status = getSqlTemplateMetadataStatus(
+    draft,
+    `/vault/${draftPath}`,
+    "/vault",
+  );
+  const finalized = finalizeSqlTemplateForClose(
+    draft,
+    `/vault/${draftPath}`,
+    "/vault",
+  );
+  check(
+    "recovers incomplete drafts and assigns a stable fallback name on close",
+    parsed?.name === "Untitled 2" &&
+      status?.missingName === true &&
+      status.missingDescription === true &&
+      finalized.includes("name: Untitled 2") &&
+      finalized.includes("description:\n"),
+    finalized,
+  );
+  check(
+    "derives numbered draft display names from generated paths",
+    sqlTemplateFallbackName(draftPath) === "Untitled 2",
+  );
+  check(
+    "uses a sortable local timestamp for draft filenames",
+    sqlTemplateDraftBaseName(new Date(2026, 7, 8, 14, 52, 30)) ===
+      "template-20260808-145230",
   );
 }
 

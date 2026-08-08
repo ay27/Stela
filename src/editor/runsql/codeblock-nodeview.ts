@@ -1210,7 +1210,6 @@ export class CodeBlockNodeView implements NodeView {
         ${attrs.blockId ? `<span class="stela-cb__id">${escapeHtml(attrs.blockId)}</span>` : ""}
         <button type="button" class="stela-cb__ai stela-cb__ai-rewrite" title="${escapeHtml(i18n.t("ai.runsql.rewriteSql"))}">${AI_ICON_HTML}${escapeHtml(i18n.t("ai.runsql.rewriteShort"))}</button>
         <button type="button" class="stela-cb__ai stela-cb__ai-ask" title="${escapeHtml(i18n.t("ai.runsql.askSql"))}">${AI_ICON_HTML}${escapeHtml(i18n.t("ai.runsql.askShort"))}</button>
-        <button type="button" class="stela-cb__template" title="${escapeHtml(i18n.t("templates.picker.title"))} (${escapeHtml(formatHotkey("Mod+Alt+T"))})">${escapeHtml(i18n.t("templates.library.title"))}</button>
         <button type="button" class="stela-cb__format" title="格式化 SQL (${escapeHtml(formatHint)})" aria-label="格式化 SQL">${FORMAT_ICON_HTML}<span class="stela-cb__format-kbd" aria-hidden="true">${escapeHtml(formatHint)}</span></button>
         <button type="button" class="stela-cb__run" data-state="${runState}" ${running ? "disabled" : ""} title="执行 SQL (${formatHotkey("Mod+Enter")})">${PLAY_ICON_HTML}${escapeHtml(label)}<span class="stela-cb__run-kbd" aria-hidden="true">${escapeHtml(formatHotkey("Mod+Enter"))}</span></button>
       `;
@@ -1231,17 +1230,6 @@ export class CodeBlockNodeView implements NodeView {
         });
         aiBtn.addEventListener("click", (ev) => this.onAiButtonClick(ev, mode));
       }
-      const templateButton =
-        this.headerEl.querySelector<HTMLButtonElement>(
-          "button.stela-cb__template",
-        );
-      templateButton?.addEventListener("pointerdown", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-      });
-      templateButton?.addEventListener("click", () =>
-        this.openTemplatePicker(),
-      );
       const btn = this.headerEl.querySelector<HTMLButtonElement>(
         "button.stela-cb__run",
       );

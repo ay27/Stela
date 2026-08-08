@@ -6,7 +6,6 @@ import {
   createSqlTemplate,
   listSqlTemplates,
   removeSqlTemplate,
-  validateTemplateMetadata,
   type SqlTemplate,
 } from "@/services/sql-templates";
 import { useT } from "@/i18n/use-t";
@@ -27,10 +26,8 @@ export function SqlTemplateDialog({
   const [templates, setTemplates] = useState<SqlTemplate[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [query, setQuery] = useState("");
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
   const [creating, setCreating] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const refresh = async () => {
     if (!vaultPath) return;
@@ -65,20 +62,20 @@ export function SqlTemplateDialog({
 
   const createTemplate = async () => {
     if (!vaultPath || creating) return;
-    const error = validateTemplateMetadata(name, description);
-    if (error) {
-      setFormError(error);
-      return;
-    }
     setCreating(true);
-    setFormError(null);
+    setCreateError(null);
     try {
-      const template = await createSqlTemplate(vaultPath, { name, description });
-      setName("");
-      setDescription("");
+      const template = await createSqlTemplate(vaultPath);
       openTemplate(template);
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          document
+            .querySelector<HTMLInputElement>('[data-template-field="name"]')
+            ?.focus();
+        });
+      });
     } catch {
-      setFormError(t("templates.library.createFailed"));
+      setCreateError(t("templates.library.createFailed"));
     } finally {
       setCreating(false);
     }
@@ -116,6 +113,19 @@ export function SqlTemplateDialog({
             </div>
             <button
               type="button"
+              onClick={() => void createTemplate()}
+              disabled={creating}
+              className="inline-flex h-8 items-center justify-center gap-1 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            >
+              {creating ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Plus className="h-3.5 w-3.5" />
+              )}
+              {t("templates.library.create")}
+            </button>
+            <button
+              type="button"
               onClick={() => void refresh()}
               className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
               title={t("common.refresh")}
@@ -134,40 +144,6 @@ export function SqlTemplateDialog({
             </Dialog.Close>
           </div>
 
-          <form
-            className="grid gap-2 border-b border-border bg-muted/20 p-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto]"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void createTemplate();
-            }}
-          >
-            <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder={t("templates.library.namePlaceholder")}
-              className="h-8 rounded-md border border-input bg-background px-2 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label={t("templates.library.name")}
-            />
-            <input
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              placeholder={t("templates.library.descriptionPlaceholder")}
-              className="h-8 rounded-md border border-input bg-background px-2 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label={t("templates.library.descriptionLabel")}
-            />
-            <button
-              type="submit"
-              disabled={creating}
-              className="inline-flex h-8 items-center justify-center gap-1 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-            >
-              {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-              {t("templates.library.create")}
-            </button>
-            {formError ? (
-              <p className="md:col-span-3 text-xs text-destructive">{formError}</p>
-            ) : null}
-          </form>
-
           <div className="border-b border-border px-4 py-2">
             <input
               value={query}
@@ -176,6 +152,9 @@ export function SqlTemplateDialog({
               className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
               aria-label={t("templates.library.search")}
             />
+            {createError ? (
+              <p className="mt-1 text-xs text-destructive">{createError}</p>
+            ) : null}
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
