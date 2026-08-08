@@ -32,7 +32,7 @@ The built-in **Try Demo Vault** follows one complete commerce review: Northstar 
 
 - **Analysis Canvas** — Turn audited query results into a structured, Git-trackable `*.stela.canvas` with KPI, chart, table, narrative, and flow cards. Refresh sources explicitly, adjust flow layout, or export the whole canvas as HTML.
 
-- **Reusable SQL templates** — Keep parameterized SQL as ordinary Markdown files inside the vault. Insert a template with `Mod+Shift+P`; repeated `{{variables}}` edit together and move with `Tab` / `Shift+Tab`.
+- **Reusable SQL templates** — Keep parameterized SQL as ordinary Markdown files inside the vault. Insert a template with `Mod+Alt+T`; repeated `{{variables}}` edit together and move with `Tab` / `Shift+Tab`.
 
 - **Agent Dashboard** — Inspect local completion rate, latency, token usage, tool calls, Skill usage, knowledge-maintenance outcomes, and redacted traces. Metrics remain in a Git-ignored, 90-day local store.
 
@@ -158,7 +158,7 @@ For system design and contributor information, see [Architecture](./docs/ARCHITE
 
 - **分析画布** — 把可审计的查询结果组织成 `*.stela.canvas`，在同一画布展示 KPI、图表、表格、说明文字和流程图；支持刷新数据源、调整流程布局和导出 HTML。
 
-- **SQL 模板** — 参数化 SQL 以普通 Markdown 文件保存在 Vault 中。按 `Mod+Shift+P` 插入模板；同名 `{{变量}}` 会联动编辑，并可用 `Tab` / `Shift+Tab` 依次跳转。
+- **SQL 模板** — 参数化 SQL 以普通 Markdown 文件保存在 Vault 中。按 `Mod+Alt+T` 插入模板；同名 `{{变量}}` 会联动编辑，并可用 `Tab` / `Shift+Tab` 依次跳转。
 
 - **Agent Dashboard** — 本地查看完成率、耗时、Token、工具调用、Skill 使用、知识维护结果与脱敏 Trace；指标保存在 Git 忽略的 90 天本地存储中。
 

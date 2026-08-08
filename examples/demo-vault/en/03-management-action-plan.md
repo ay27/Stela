@@ -42,7 +42,7 @@ The Dashboard is intentionally empty before you run an Agent. It never ships fic
 
 ## Reuse the analysis next week
 
-Create a note with `local-mysql`, add a RunSQL block, and press **Mod+Shift+P** inside it. Insert either:
+Create a note with `local-mysql`, add a RunSQL block, and press **Mod+Alt+T** inside it. Insert either:
 
 - **Channel contribution / 渠道贡献利润** to repeat the channel review for another period;
 - **High-return SKU / 高退货商品** to investigate a category or stricter volume threshold.
