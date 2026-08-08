@@ -367,15 +367,6 @@ export async function stop(): Promise<void> {
   log.info("vault watcher stopped", { vaultPath: rt.vaultPath });
 }
 
-/**
- * Electron 已进入最终退出阶段时调用。此时不等待 native unsubscribe：
- * vault 切换和手动关闭 vault 仍必须使用 stop() 释放订阅。
- */
-export function releaseForAppQuit(): void {
-  const rt = detachRuntime();
-  if (rt) log.info("vault watcher released for app quit", { vaultPath: rt.vaultPath });
-}
-
 function detachRuntime(): WatcherRuntime | null {
   if (!runtime) return null;
   const rt = runtime;

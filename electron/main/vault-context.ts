@@ -129,11 +129,13 @@ export async function setCurrentVault(
 }
 
 /** 主进程最终退出前调用。Connector 由 main 的独立 shutdown 步骤处理。 */
-export function shutdownVaultContext(): void {
+export async function shutdownVaultContext(): Promise<void> {
   cancelSkillMaintenance();
   agentMetrics.close();
-  vaultWatcher.releaseForAppQuit();
-  void vaultIndex.stop().catch(() => {});
-  void sqlIndex.stop().catch(() => {});
+  await Promise.all([
+    vaultIndex.stop().catch(() => {}),
+    sqlIndex.stop().catch(() => {}),
+  ]);
+  await vaultWatcher.stop();
   currentVaultPath = null;
 }

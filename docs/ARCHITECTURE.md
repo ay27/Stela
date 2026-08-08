@@ -297,7 +297,7 @@ Stela replaces the earlier COS object-storage sync model with **Git-native vault
 - `.stela.sqlite*` and `recent-files.local.json` are gitignored
 - `electron/services/sync-orchestrator.ts` coordinates pull → JSONL import → index refresh
 - `electron/services/git/` provides status, commit, push, pull, conflict handling
-- AutoGit (`src/services/auto-git.ts`) checkpoints on idle/inactive; main also runs a commit-only flush on quit (`sync-orchestrator.flushAutoCommitOnQuit`) so a long debounce window does not drop the last checkpoint. Before awaiting this local commit, main sends a typed quit-checkpoint event so the renderer can show a blocking progress state; it never pushes on quit.
+- AutoGit (`src/services/auto-git.ts`) checkpoints on idle/inactive; main also runs a commit-only flush on quit (`sync-orchestrator.flushAutoCommitOnQuit`) so a long debounce window does not drop the last checkpoint. Before awaiting this local commit, main sends a typed quit-checkpoint event so the renderer can show a blocking progress state; it never pushes on quit. Final teardown then waits for vault/SQL indexes to detach and for the native `@parcel/watcher` subscription to unsubscribe before connector/result-store shutdown and process exit, so no FSEvents thread survives into Node teardown.
 
 See [ADR-0007](./adr/0007-git-sync-over-cloud-storage.md).
 
