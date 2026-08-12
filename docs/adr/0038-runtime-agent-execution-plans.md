@@ -2,7 +2,8 @@
 type: ADR
 id: "0038"
 title: "Runtime linear agent execution plans"
-status: active
+status: superseded
+superseded_by: "0060"
 date: 2026-07-28
 ---
 

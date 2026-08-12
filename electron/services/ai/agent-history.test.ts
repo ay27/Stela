@@ -21,9 +21,33 @@ const request: AgentRunRequest = {
   runId: "run_1",
   sessionId: "session_1",
   prompt: "Show daily revenue",
+  workspaceContext: { kind: "note", path: "reports/revenue.md" },
+  message: {
+    version: 1,
+    segments: [
+      { kind: "text", text: "Show daily revenue from " },
+      { kind: "resource", resourceId: "resource_runsql_revenue" },
+    ],
+    resources: [{
+      id: "resource_runsql_revenue",
+      kind: "runsql",
+      label: "Revenue SQL",
+      sql: "SELECT sum(revenue) FROM orders",
+      sourcePath: "reports/revenue.md",
+      locator: { blockId: "block_revenue", blockIndex: 0 },
+      rewriteTargetId: "target_1",
+    }],
+  },
   canvasPath: "reports/revenue.stela.canvas",
   attachments: [
-    { kind: "runsql", label: "Revenue SQL", sql: "SELECT sum(revenue) FROM orders", sourcePath: "reports/revenue.md" },
+    {
+      kind: "runsql",
+      label: "Revenue SQL",
+      sql: "SELECT sum(revenue) FROM orders",
+      sourcePath: "reports/revenue.md",
+      rewriteTargetId: "target_1",
+      errorMessage: "Unknown column 'revenue'",
+    },
   ],
 };
 
@@ -75,6 +99,8 @@ try {
   assert.equal(history.runs[0]?.finishedAt !== null, true);
   assert.deepEqual(history.runs[0]?.request.attachments, request.attachments);
   assert.equal(history.runs[0]?.request.canvasPath, request.canvasPath);
+  assert.deepEqual(history.runs[0]?.request.message, request.message);
+  assert.deepEqual(history.runs[0]?.request.workspaceContext, request.workspaceContext);
   assert.deepEqual(history.runs[0]?.events, [
     {
       type: "canvas_updated",
@@ -107,6 +133,7 @@ try {
     runId: "run_remote",
     sessionId: "remote_1",
     prompt: "Inspect orders",
+    message: undefined,
   });
   await mkdir(path.join(vaultPath, ".stela", "agent-history", "broken"), { recursive: true });
   await writeFile(

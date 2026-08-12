@@ -84,6 +84,9 @@ try {
   const dashboard = getDashboard("7d");
   assert.equal(dashboard.overview.total, 1);
   assert.equal(dashboard.usage.cacheReadTokens, 7);
+  assert.equal(dashboard.usage.promptTokens, 19);
+  assert.equal(dashboard.usage.cacheHitRate, 7 / 19);
+  assert.equal(dashboard.surfaces.find((item) => item.key === "agent")?.cacheHitRate, 7 / 19);
   assert.equal(dashboard.tools[0]?.key, "run_sql");
   assert.equal(dashboard.tools[0]?.completed, 1);
   assert.deepEqual(dashboard.skillUsage, {

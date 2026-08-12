@@ -51,18 +51,36 @@
   border-radius: 999px;
   background: hsl(var(--primary) / 0.14);
   color: hsl(var(--primary));
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: inherit;
+  font-weight: 500;
   font-size: 11px;
   padding: 1px 4px;
+  cursor: pointer;
 }
 
-.stela-table-mention__editor mark[data-mention="[["] {
-  --mention-color: hsl(32 70% 28%);
-  color: hsl(32 70% 28%);
+.stela-table-mention__editor mark[data-mention]::before {
+  margin-right: 3px;
+  font-size: 9px;
 }
 
-.stela-table-mention__editor mark[data-mention="[["]::after {
-  content: "]]";
+.stela-table-mention__editor mark[data-id^="resource_table_"]::before {
+  content: "▦";
+}
+
+.stela-table-mention__editor mark[data-id^="resource_note_"]::before {
+  content: "▤";
+}
+
+.stela-table-mention__editor mark[data-id^="resource_canvas_"]::before {
+  content: "◇";
+}
+
+.stela-table-mention__editor mark[data-id^="resource_runsql_"]::before {
+  content: "▶";
+}
+
+.stela-table-mention__editor mark[data-id^="resource_selection_"]::before {
+  content: "❝";
 }
 
 .stela-table-mention__list {
@@ -73,6 +91,17 @@
   color: hsl(var(--foreground));
   font-family: var(--font-mono, ui-monospace, monospace);
   line-height: 1.4;
+}
+
+.stela-resource-kind {
+  flex: none;
+  border-radius: 999px;
+  background: hsl(var(--primary) / 0.12);
+  padding: 1px 5px;
+  color: hsl(var(--primary));
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 9px;
+  text-transform: uppercase;
 }
 
 .stela-table-mention__item[aria-selected="true"] {

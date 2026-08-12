@@ -13,7 +13,7 @@ interface Check {
 const UI_FILES_WITHOUT_HARDCODED_CHINESE = [
   "src/layout/AppDockBar.tsx",
   "src/components/block-run-tabs.tsx",
-  "src/components/ai/ai-modal.tsx",
+  "src/components/ai/markdown-renderer.tsx",
   "src/components/command-palette.tsx",
   "src/components/connection-picker.tsx",
   "src/layout/SchemaBrowserPanel.tsx",

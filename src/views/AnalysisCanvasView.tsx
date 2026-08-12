@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Check, CheckCircle2, Clipboard, Database, Download, Loader2, RefreshCw } from "lucide-react";
 
 import {
@@ -12,7 +12,7 @@ import {
 import type { StelaChartSpec } from "@shared/chart-spec";
 import { formatValue } from "@shared/value-format";
 import { StelaChart } from "@/components/charts/stela-chart";
-import { renderMarkdown } from "@/components/ai/ai-modal";
+import { renderMarkdown } from "@/components/ai/markdown-renderer";
 import { i18n } from "@/i18n";
 import { electronStorage } from "@/services/storage/electron-storage";
 import { renderAnalysisCanvasHtml } from "@/services/export-analysis-canvas";
@@ -36,6 +36,7 @@ export function AnalysisCanvasView({ tabId, path }: { tabId: string; path: strin
   const [busy, setBusy] = useState<string | null>(null);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [exportedFile, setExportedFile] = useState<{ path: string; revealToken: string } | null>(null);
+  const loadGeneration = useRef(0);
 
   useEffect(() => {
     if (!exportedFile) return;
@@ -44,17 +45,24 @@ export function AnalysisCanvasView({ tabId, path }: { tabId: string; path: strin
   }, [exportedFile]);
 
   const load = async () => {
+    const generation = ++loadGeneration.current;
     try {
       const file = await window.stela.canvas.read(path);
-      setCanvas(parseAnalysisCanvas(file.content));
+      const nextCanvas = parseAnalysisCanvas(file.content);
+      if (generation !== loadGeneration.current) return;
+      setCanvas(nextCanvas);
       setEtag(file.etag);
       setError(null);
     } catch (reason) {
+      if (generation !== loadGeneration.current) return;
       setError(reason instanceof Error ? reason.message : String(reason));
       throw reason;
     }
   };
-  useEffect(() => { void load().catch(() => {}); }, [path, reloadToken]);
+  useEffect(() => {
+    void load().catch(() => {});
+    return () => { loadGeneration.current += 1; };
+  }, [path, reloadToken]);
 
   const refresh = async (sourceId: string) => {
     setBusy(sourceId);
@@ -175,6 +183,8 @@ function CanvasKpi({ runId, value, label, prefix, suffix }: { runId: string; val
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
+    setData(null);
+    setError(null);
     void Promise.all([electronStorage.getSchema(runId), electronStorage.queryPage(runId, 0, 2)]).then(([schema, page]) => {
       if (!alive) return;
       const index = schema.findIndex((column) => column.name === value.field);

@@ -337,7 +337,8 @@ async function runOne(
     models,
     model,
     thinkingLevel: "off",
-    systemPrompt: buildSystemPrompt(request, entry, entry ? resolveDialect({ kind: entry.kind, displayName: entry.kind }) : null),
+    systemPrompt: buildSystemPrompt(),
+    streamOptions: { cacheRetention: "short" },
     tools: createAgentTools({
       ctx: buildToolContext(world, request.runId, settings),
       requestProposal,
@@ -357,7 +358,10 @@ async function runOne(
 
   const started = Date.now();
   try {
-    const result = await harness.prompt(buildUserContent(request));
+    const result = await harness.prompt(buildUserContent(request, {
+      connection: entry,
+      dialect: entry ? resolveDialect({ kind: entry.kind, displayName: entry.kind }) : null,
+    }));
     outcome.finalText = assistantText(result);
     if (result.stopReason === "error") outcome.error ||= result.errorMessage ?? "agent error";
   } catch (err) {

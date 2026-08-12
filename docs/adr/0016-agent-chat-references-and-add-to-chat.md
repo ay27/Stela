@@ -2,7 +2,8 @@
 type: ADR
 id: "0016"
 title: "Agent chat references and Add to Chat"
-status: active
+status: superseded
+superseded_by: "0061"
 date: 2026-07-10
 ---
 

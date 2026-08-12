@@ -333,8 +333,16 @@ function percentile(values: number[], fraction: number): number | null {
   return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * fraction) - 1))] ?? null;
 }
 
+function promptCacheHitRate(inputTokens: number, cacheReadTokens: number, cacheWriteTokens: number): number | null {
+  const promptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
+  return promptTokens > 0 ? cacheReadTokens / promptTokens : null;
+}
+
 function breakdown(key: string, rows: RunRow[]): AgentMetricBreakdown {
   const durations = rows.flatMap((row) => row.duration_ms === null ? [] : [row.duration_ms]);
+  const inputTokens = rows.reduce((sum, row) => sum + row.input_tokens, 0);
+  const cacheReadTokens = rows.reduce((sum, row) => sum + row.cache_read_tokens, 0);
+  const cacheWriteTokens = rows.reduce((sum, row) => sum + row.cache_write_tokens, 0);
   return {
     key,
     total: rows.length,
@@ -343,10 +351,11 @@ function breakdown(key: string, rows: RunRow[]): AgentMetricBreakdown {
     cancelled: rows.filter((row) => row.status === "cancelled" || row.status === "dropped").length,
     p50DurationMs: percentile(durations, 0.5),
     p95DurationMs: percentile(durations, 0.95),
-    inputTokens: rows.reduce((sum, row) => sum + row.input_tokens, 0),
+    inputTokens,
     outputTokens: rows.reduce((sum, row) => sum + row.output_tokens, 0),
-    cacheReadTokens: rows.reduce((sum, row) => sum + row.cache_read_tokens, 0),
-    cacheWriteTokens: rows.reduce((sum, row) => sum + row.cache_write_tokens, 0),
+    cacheReadTokens,
+    cacheWriteTokens,
+    cacheHitRate: promptCacheHitRate(inputTokens, cacheReadTokens, cacheWriteTokens),
   };
 }
 
@@ -452,15 +461,22 @@ export function getDashboard(range: AgentMetricRange): AgentMetricsDashboard {
     const day = localDay(row.started_at);
     dailyGroups.set(day, [...(dailyGroups.get(day) ?? []), row]);
   }
+  const inputTokens = nonToolRuns.reduce((sum, row) => sum + row.input_tokens, 0);
+  const outputTokens = nonToolRuns.reduce((sum, row) => sum + row.output_tokens, 0);
+  const cacheReadTokens = nonToolRuns.reduce((sum, row) => sum + row.cache_read_tokens, 0);
+  const cacheWriteTokens = nonToolRuns.reduce((sum, row) => sum + row.cache_write_tokens, 0);
+  const promptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
   return {
     range,
     generatedAt: Date.now(),
     overview: breakdown("all", rootRuns),
     usage: {
-      inputTokens: nonToolRuns.reduce((sum, row) => sum + row.input_tokens, 0),
-      outputTokens: nonToolRuns.reduce((sum, row) => sum + row.output_tokens, 0),
-      cacheReadTokens: nonToolRuns.reduce((sum, row) => sum + row.cache_read_tokens, 0),
-      cacheWriteTokens: nonToolRuns.reduce((sum, row) => sum + row.cache_write_tokens, 0),
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      promptTokens,
+      cacheHitRate: promptCacheHitRate(inputTokens, cacheReadTokens, cacheWriteTokens),
     },
     surfaces: groups(nonToolRuns, (row) => row.surface),
     tools: groups(rows.filter((row) => row.surface === "tool"), (row) => row.operation),

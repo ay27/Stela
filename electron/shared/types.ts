@@ -299,10 +299,6 @@ export interface AiSettings {
   model: string;
   hasApiKey: boolean;
   contextWindow: AiContextWindow;
-  /** Allow sampled result rows to be sent to the provider. Full result sets are never sent. */
-  sendResultSamples: boolean;
-  /** Per-request row sample cap. */
-  maxSampleRows: number;
   /** Agent harness: max tool-call iterations before forcing a final answer. */
   agentMaxIterations: number;
   /** Agent harness: wall-clock budget in ms before forcing a final answer. */
@@ -380,6 +376,8 @@ export interface AgentMetricBreakdown {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /** Provider-reported cache reads divided by all prompt tokens. */
+  cacheHitRate: number | null;
 }
 
 export interface AgentMetricUsage {
@@ -387,6 +385,10 @@ export interface AgentMetricUsage {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /** input + cache read + cache write; output is excluded. */
+  promptTokens: number;
+  /** Provider-reported cache reads divided by promptTokens. */
+  cacheHitRate: number | null;
 }
 
 export interface AgentMetricKnowledgeCategory {
@@ -562,26 +564,6 @@ export interface CredentialStorageStatus {
 
 // ---------- Search-first AI ----------
 
-export type AiActionKind =
-  | "rewrite-sql"
-  | "ask-sql"
-  | "generate-sql"
-  | "explain-sql"
-  | "optimize-sql"
-  | "debug-query"
-  | "explain-result"
-  | "summarize-diff"
-  | "find-anomalies"
-  | "write-analysis"
-  | "rewrite-selection"
-  | "add-limitations"
-  | "explain-table"
-  | "suggest-joins"
-  | "generate-data-dictionary"
-  | "find-related-queries";
-
-export type AiContextSource = "runsql" | "result" | "editor" | "schema";
-
 export interface AiSchemaColumnContext {
   name: string;
   typeName: string;
@@ -604,59 +586,6 @@ export interface AiSchemaTargetContext {
 }
 
 export type AiPromptLocale = "zh" | "en";
-
-export interface AiConnectorContext {
-  kind: string;
-  displayName: string;
-  dialect: string;
-}
-
-export interface AiResultContext {
-  runId?: string | null;
-  blockId?: string | null;
-  rowCount?: number | null;
-  columns?: AiSchemaColumnContext[];
-  rows?: unknown[][];
-  diffSummary?: {
-    addedRows: number;
-    removedRows: number;
-    changedRows: number;
-    schemaChanged: boolean;
-  } | null;
-}
-
-export interface AiRequestContext {
-  source: AiContextSource;
-  notePath?: string | null;
-  noteTitle?: string | null;
-  noteMarkdown?: string | null;
-  headingPath?: string[];
-  connectionName?: string | null;
-  connector?: AiConnectorContext | null;
-  sql?: string | null;
-  selectedText?: string | null;
-  errorMessage?: string | null;
-  result?: AiResultContext | null;
-  schema?: AiSchemaTargetContext | null;
-  schemas?: AiSchemaTargetContext[];
-  /** 用户在 AI 输入框里通过 @ 显式引用的表名（`db.table` 或 `table`）。 */
-  mentionedTables?: string[];
-  userInstruction?: string | null;
-}
-
-export interface AiCompleteRequest {
-  action: AiActionKind;
-  locale?: AiPromptLocale;
-  context: AiRequestContext;
-}
-
-export interface AiCompleteResponse {
-  action: AiActionKind;
-  text: string;
-  sql: string | null;
-  warnings: string[];
-  contextSummary: string[];
-}
 
 export interface AiInlineCompletionRequest {
   requestId: string;
@@ -766,19 +695,91 @@ export interface AgentSkillListItem {
   status: "active" | "archived";
 }
 
-export type AgentAttachment =
-  | {
+export interface AgentResourceLocator {
+  /** Stable RunSQL block identity when the source block has been executed. */
+  blockId?: string | null;
+  /** 0-based RunSQL block index, used when no stable block id exists. */
+  blockIndex?: number;
+  /** Exact-text locator used by selections and as a RunSQL fallback. */
+  keyword?: string;
+  /** 0-based occurrence of keyword in the source document. */
+  nthInFile?: number;
+  /** 1-based source fallback. */
+  line?: number;
+  column?: number;
+}
+
+interface AgentResourceBase {
+  id: string;
+  label: string;
+}
+
+export type AgentMessageResource =
+  | (AgentResourceBase & {
+      kind: "table";
+      table: string;
+      connectionName?: string | null;
+    })
+  | (AgentResourceBase & {
+      kind: "note";
+      path: string;
+    })
+  | (AgentResourceBase & {
+      kind: "canvas";
+      path: string;
+    })
+  | (AgentResourceBase & {
       kind: "selection";
-      label: string;
       text: string;
       sourcePath?: string;
-    }
-  | {
+      locator?: AgentResourceLocator;
+    })
+  | (AgentResourceBase & {
       kind: "runsql";
-      label: string;
       sql: string;
       sourcePath?: string;
-    };
+      locator?: AgentResourceLocator;
+      /** Renderer-owned ephemeral target for an inline rewrite proposal. */
+      rewriteTargetId?: string;
+    });
+
+export type AgentMessageResourceInput = AgentMessageResource extends infer Resource
+  ? Resource extends AgentMessageResource
+    ? Omit<Resource, "id">
+    : never
+  : never;
+
+export type AgentMessageSegment =
+  | { kind: "text"; text: string }
+  | { kind: "resource"; resourceId: string };
+
+/** Ordered user-authored Agent content. Resource bodies are deduplicated in resources. */
+export interface AgentMessageContent {
+  version: 1;
+  segments: AgentMessageSegment[];
+  resources: AgentMessageResource[];
+}
+
+/** Current Workspace tab supplied implicitly; it is not user-authored message content. */
+export interface AgentWorkspaceContext {
+  kind: "note" | "canvas";
+  path: string;
+}
+
+/** @deprecated Legacy on-disk request shape; new UI code uses AgentMessageResource. */
+export type AgentAttachment =
+  | Omit<Extract<AgentMessageResource, { kind: "selection" }>, "id">
+  | (Omit<Extract<AgentMessageResource, { kind: "runsql" }>, "id"> & {
+      /** Legacy fix actions stored the error beside the SQL attachment. */
+      errorMessage?: string;
+    });
+
+export type AgentEntryPoint =
+  | "chat"
+  | "runsql-fix"
+  | "runsql-rewrite"
+  | "runsql-ask"
+  | "schema-explain";
 
 export interface AgentRunRequest {
   /** 用于关联流式事件；renderer 生成一个即可（uuid 或时间戳皆可）。 */
@@ -789,7 +790,14 @@ export interface AgentRunRequest {
    * 单轮对话（向后兼容）。
    */
   sessionId?: string;
+  /** Product entry point for history titles and local observability. */
+  entryPoint?: AgentEntryPoint;
+  /** Ordered message is authoritative for new requests. */
+  message?: AgentMessageContent;
+  /** Derived plain-text fallback retained for old sessions and evaluation scripts. */
   prompt: string;
+  /** Current open tab, provided to the model without rendering a composer/timeline pill. */
+  workspaceContext?: AgentWorkspaceContext;
   /** 数据连接名（frontmatter.connection_name），未配置连接时相关工具会报错让模型自行调整。 */
   connectionName?: string | null;
   /** 用户在输入框里通过 @ 显式引用的表名（`db.table` 或 `table`）。 */
@@ -818,6 +826,8 @@ export interface AgentProposalPayload {
   description: string;
   oldContent?: string;
   newContent?: string;
+  /** `runsql_rewrite` kind: renderer-owned ephemeral RunSQL target. */
+  targetId?: string;
   /** `question` kind：要问用户的具体问题。 */
   question?: string;
   /** `question` kind：可点选的候选答案；用户也可以自由输入。 */
@@ -884,7 +894,7 @@ export type AgentEvent =
  * 前两种是「同意 / 拒绝」的安全闸门，`question` 复用同一条阻塞通道来获取信息——
  * 与其让 agent 在字段含义上猜，不如让它停下来问（见 ADR-0027）。
  */
-export type AgentProposalKind = "edit_note" | "mutation_sql" | "question";
+export type AgentProposalKind = "edit_note" | "mutation_sql" | "runsql_rewrite" | "question";
 
 export interface AgentProposalResponse {
   runId: string;

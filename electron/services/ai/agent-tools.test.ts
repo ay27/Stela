@@ -14,8 +14,6 @@ const AI_SETTINGS = {
   baseUrl: "https://api.openai.com/v1",
   model: "gpt-4o-mini",
   hasApiKey: true,
-  sendResultSamples: true,
-  maxSampleRows: 20,
   contextWindow: 128_000,
   agentMaxIterations: 12,
   agentWallClockMs: 90_000,
@@ -654,6 +652,47 @@ Inspect the live schema first.`;
     assert.equal(rejectedConstant.ok, false);
     assert.match(rejectedConstant.text, /must read a real table/i);
     assert.deepEqual(events.map((event) => event.action), ["created", "updated", "updated"]);
+  }
+
+  {
+    let proposedKind = "";
+    const rewrite = await dispatchTool(
+      "propose_edit",
+      JSON.stringify({ targetId: "target-1", sql: "SELECT fixed FROM orders", description: "Fix column" }),
+      {
+        ...baseCtx,
+        rewriteTargets: new Map([["target-1", { sql: "SELECT broken FROM orders", sourcePath: "note.md" }]]),
+        requestProposal: async (proposal) => {
+          proposedKind = proposal.kind;
+          assert.equal(proposal.payload.targetId, "target-1");
+          assert.equal(proposal.payload.oldContent, "SELECT broken FROM orders");
+          return true;
+        },
+      },
+    );
+    assert.equal(rewrite.ok, true, rewrite.text);
+    assert.equal(proposedKind, "runsql_rewrite");
+
+    const unbound = await dispatchTool(
+      "propose_edit",
+      JSON.stringify({ targetId: "missing", sql: "SELECT fixed", description: "Fix" }),
+      baseCtx,
+    );
+    assert.equal(unbound.ok, false);
+    assert.match(unbound.text, /not explicitly attached/i);
+
+    const ambiguous = await dispatchTool(
+      "propose_edit",
+      JSON.stringify({
+        targetId: "target-1",
+        sql: "SELECT fixed FROM orders",
+        path: "note.md",
+        newContent: "mixed target",
+      }),
+      baseCtx,
+    );
+    assert.equal(ambiguous.ok, false);
+    assert.match(ambiguous.text, /one edit target/i);
   }
 
   {

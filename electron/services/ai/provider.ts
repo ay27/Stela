@@ -225,8 +225,6 @@ export async function configureProvider(
   const patch: PartialAppSettings = {
     ai: {
       providerMode: settingsPatch.providerMode ?? current.ai.providerMode,
-      sendResultSamples: settingsPatch.sendResultSamples ?? current.ai.sendResultSamples,
-      maxSampleRows: settingsPatch.maxSampleRows ?? current.ai.maxSampleRows,
       agentMaxIterations: settingsPatch.agentMaxIterations ?? current.ai.agentMaxIterations,
       agentWallClockMs: settingsPatch.agentWallClockMs ?? current.ai.agentWallClockMs,
       agentAllowMutations: settingsPatch.agentAllowMutations ?? current.ai.agentAllowMutations,
@@ -467,6 +465,7 @@ export async function callChatCompletions({
   system,
   user,
   profileId,
+  sessionId,
   onMessage,
 }: {
   settings: AiSettings;
@@ -474,19 +473,24 @@ export async function callChatCompletions({
   system: string;
   user: string;
   profileId?: string | null;
+  sessionId?: string;
   onMessage?: (message: AssistantMessage) => void;
 }): Promise<string> {
   const { models, model } = createTransportForProfile(settings, apiKey, profileId);
-  const message = await models.completeSimple(model, {
-    systemPrompt: system,
-    messages: [
-      {
-        role: "user",
-        content: user,
-        timestamp: Date.now(),
-      },
-    ],
-  });
+  const message = await models.completeSimple(
+    model,
+    {
+      systemPrompt: system,
+      messages: [
+        {
+          role: "user",
+          content: user,
+          timestamp: Date.now(),
+        },
+      ],
+    },
+    { cacheRetention: "short", ...(sessionId ? { sessionId } : {}) },
+  );
   onMessage?.(message);
 
   if (message.stopReason === "aborted") {
@@ -511,6 +515,7 @@ export async function streamChatCompletions({
   system,
   user,
   profileId,
+  sessionId,
   signal,
   onDelta,
   onMessage,
@@ -520,6 +525,7 @@ export async function streamChatCompletions({
   system: string;
   user: string;
   profileId: string;
+  sessionId?: string;
   signal: AbortSignal;
   onDelta: (text: string) => void;
   onMessage?: (message: AssistantMessage) => void;
@@ -535,7 +541,13 @@ export async function streamChatCompletions({
         systemPrompt: system,
         messages: [{ role: "user", content: user, timestamp: Date.now() }],
       },
-      { signal, temperature: 0.2, maxTokens: 48 },
+      {
+        signal,
+        temperature: 0.2,
+        maxTokens: 48,
+        cacheRetention: "short",
+        ...(sessionId ? { sessionId } : {}),
+      },
     );
     for await (const event of stream) {
       if (event.type === "text_delta" && event.delta) onDelta(event.delta);

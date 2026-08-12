@@ -35,8 +35,6 @@ import type {
   AgentMetricsDashboard,
   AnalysisCanvasFile,
   AnalysisCanvasRefreshResult,
-  AiCompleteRequest,
-  AiCompleteResponse,
   AiInlineCompletionEvent,
   AiInlineCompletionRequest,
   AiProviderStatus,
@@ -316,8 +314,6 @@ const stela = {
     ) => call<AiProviderStatus>(IPC.AI_CONFIGURE, { settings, apiKey, profileId }),
     clearApiKey: (profileId?: string | null) =>
       call<AiProviderStatus>(IPC.AI_CLEAR_API_KEY, { profileId }),
-    complete: (request: AiCompleteRequest) =>
-      call<AiCompleteResponse>(IPC.AI_COMPLETE, { request }),
     parseSqlQuery: (request: AiParseSqlQueryRequest) =>
       call<AiParseSqlQueryResponse>(IPC.AI_PARSE_SQL_QUERY, { request }),
     startInlineCompletion: (request: AiInlineCompletionRequest) =>

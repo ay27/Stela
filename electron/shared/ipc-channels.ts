@@ -95,7 +95,6 @@ export const IPC = {
   AI_GET_STATUS: "ai:get-status",
   AI_CONFIGURE: "ai:configure",
   AI_CLEAR_API_KEY: "ai:clear-api-key",
-  AI_COMPLETE: "ai:complete",
   AI_PARSE_SQL_QUERY: "ai:parse-sql-query",
   AI_INLINE_COMPLETION_START: "ai:inline-completion-start",
   AI_INLINE_COMPLETION_CANCEL: "ai:inline-completion-cancel",

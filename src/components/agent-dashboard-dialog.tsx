@@ -38,6 +38,15 @@ function rate(numerator: number, denominator: number): string {
   return denominator > 0 ? `${Math.round((numerator / denominator) * 100)}%` : "—";
 }
 
+function formatRate(value: number | null): string {
+  return value === null ? "—" : `${Math.round(value * 100)}%`;
+}
+
+function runCacheHitRate(run: AgentMetricRunSummary): number | null {
+  const promptTokens = run.inputTokens + run.cacheReadTokens + run.cacheWriteTokens;
+  return promptTokens > 0 ? run.cacheReadTokens / promptTokens : null;
+}
+
 function knowledgeOutcomeLabel(key: string, t: ReturnType<typeof useT>): string {
   const labels: Record<string, string> = {
     saved: t("agentDashboard.outcome.saved"),
@@ -90,6 +99,7 @@ function BreakdownTable({ rows }: { rows: AgentMetricBreakdown[] }) {
             <th className="px-3 py-2 text-right font-medium">{t("agentDashboard.errors")}</th>
             <th className="px-3 py-2 text-right font-medium">P50</th>
             <th className="px-3 py-2 text-right font-medium">P95</th>
+            <th className="px-3 py-2 text-right font-medium">{t("agentDashboard.cacheHitRate")}</th>
           </tr>
         </thead>
         <tbody>
@@ -101,6 +111,7 @@ function BreakdownTable({ rows }: { rows: AgentMetricBreakdown[] }) {
               <td className="px-3 py-2 text-right tabular-nums">{row.errors}</td>
               <td className="px-3 py-2 text-right tabular-nums">{formatDuration(row.p50DurationMs)}</td>
               <td className="px-3 py-2 text-right tabular-nums">{formatDuration(row.p95DurationMs)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{formatRate(row.cacheHitRate)}</td>
             </tr>
           ))}
         </tbody>
@@ -214,7 +225,7 @@ export function AgentDashboardDialog({ open, onOpenChange }: AgentDashboardDialo
   }, [open, range]);
 
   const totalTokens = data
-    ? data.usage.inputTokens + data.usage.outputTokens + data.usage.cacheReadTokens + data.usage.cacheWriteTokens
+    ? data.usage.promptTokens + data.usage.outputTokens
     : 0;
 
   const showTrace = async (runId: string) => {
@@ -290,13 +301,23 @@ export function AgentDashboardDialog({ open, onOpenChange }: AgentDashboardDialo
               {!data && loading ? <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{t("agentDashboard.loading")}</div> : null}
               {data ? (
                 <div className="space-y-5">
-                  <section className="grid grid-cols-5 gap-3">
+                  <section className="grid grid-cols-3 gap-3">
                     <MetricCard label={t("agentDashboard.requests")} value={formatNumber(data.overview.total)} hint={t("agentDashboard.topLevelOnly")} />
                     <MetricCard label={t("agentDashboard.completionRate")} value={rate(data.overview.completed, data.overview.completed + data.overview.errors)} hint={t("agentDashboard.cancelSeparate")} />
                     <MetricCard label={t("agentDashboard.errors")} value={formatNumber(data.overview.errors)} />
                     <MetricCard label={t("agentDashboard.p95Latency")} value={formatDuration(data.overview.p95DurationMs)} />
+                    <MetricCard
+                      label={t("agentDashboard.cacheHitRate")}
+                      value={formatRate(data.usage.cacheHitRate)}
+                      hint={t("agentDashboard.cacheHitSummary", {
+                        read: formatNumber(data.usage.cacheReadTokens),
+                        prompt: formatNumber(data.usage.promptTokens),
+                      })}
+                    />
                     <MetricCard label={t("agentDashboard.tokens")} value={formatNumber(totalTokens)} hint={`${formatNumber(data.usage.inputTokens)} ${t("agentDashboard.tokensIn")} · ${formatNumber(data.usage.outputTokens)} ${t("agentDashboard.tokensOut")} · ${formatNumber(data.usage.cacheReadTokens)} ${t("agentDashboard.tokensCached")} · ${formatNumber(data.usage.cacheWriteTokens)} ${t("agentDashboard.tokensCacheWrite")}`} />
                   </section>
+
+                  <p className="-mt-3 text-[10px] text-muted-foreground">{t("agentDashboard.cacheHitRateHelp")}</p>
 
                   <section className="rounded-lg border border-border p-4">
                     <div className="mb-3 flex items-center gap-2 text-xs font-semibold"><Clock3 className="h-3.5 w-3.5 text-muted-foreground" />{t("agentDashboard.daily")}</div>
@@ -378,7 +399,7 @@ export function AgentDashboardDialog({ open, onOpenChange }: AgentDashboardDialo
             {trace ? (
               <aside className="w-[390px] flex-none overflow-auto border-l border-border bg-muted/15 p-4">
                 <div className="mb-3 flex items-center justify-between"><h3 className="text-xs font-semibold">{t("agentDashboard.trace")}</h3><button type="button" onClick={() => setTrace(null)} className="rounded p-1 text-muted-foreground hover:bg-accent"><X className="h-3.5 w-3.5" /></button></div>
-                <div className="mb-3 space-y-1 rounded-md border border-border bg-background p-3 text-[10px]"><div className="font-mono break-all">{trace.run.runId}</div><div>{trace.run.surface} · {trace.run.operation} · {formatDuration(trace.run.durationMs)}</div><StatusPill run={trace.run} /></div>
+                <div className="mb-3 space-y-1 rounded-md border border-border bg-background p-3 text-[10px]"><div className="font-mono break-all">{trace.run.runId}</div><div>{trace.run.surface} · {trace.run.operation} · {formatDuration(trace.run.durationMs)}</div><div className="text-muted-foreground">{t("agentDashboard.cacheHitRate")} · {formatRate(runCacheHitRate(trace.run))} ({formatNumber(trace.run.cacheReadTokens)} / {formatNumber(trace.run.inputTokens + trace.run.cacheReadTokens + trace.run.cacheWriteTokens)})</div><StatusPill run={trace.run} /></div>
                 {[{ title: t("agentDashboard.request"), value: trace.request }, { title: t("agentDashboard.response"), value: trace.response }].map((item) => <details key={item.title} open className="mb-3 rounded-md border border-border bg-background"><summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold">{item.title}</summary><pre className="max-h-64 overflow-auto border-t border-border p-3 text-[9px] whitespace-pre-wrap break-all">{JSON.stringify(item.value, null, 2)}</pre></details>)}
                 <div className="space-y-2">{trace.events.map((event) => <details key={event.id} className="rounded-md border border-border bg-background"><summary className="cursor-pointer px-3 py-2 text-[10px]"><span className="font-mono">{event.type}</span>{event.name ? ` · ${event.name}` : ""}{event.durationMs !== null ? ` · ${formatDuration(event.durationMs)}` : ""}</summary><pre className="max-h-56 overflow-auto border-t border-border p-3 text-[9px] whitespace-pre-wrap break-all">{JSON.stringify(event.payload, null, 2)}</pre></details>)}</div>
               </aside>

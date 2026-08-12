@@ -32,8 +32,6 @@ import type {
   AgentMetricsDashboard,
   AnalysisCanvasFile,
   AnalysisCanvasRefreshResult,
-  AiCompleteRequest,
-  AiCompleteResponse,
   AiInlineCompletionEvent,
   AiInlineCompletionRequest,
   AiParseSqlQueryRequest,
@@ -577,15 +575,6 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
         requireVault(),
         (await deviceProfile.loadDeviceProfile()).slug,
         profileId,
-      ),
-  );
-  registerHandler<{ request: AiCompleteRequest }, AiCompleteResponse>(
-    IPC.AI_COMPLETE,
-    async ({ request }) =>
-      ai.complete(
-        requireVault(),
-        (await deviceProfile.loadDeviceProfile()).slug,
-        request,
       ),
   );
   registerHandler<{ request: AiParseSqlQueryRequest }, AiParseSqlQueryResponse>(

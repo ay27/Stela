@@ -66,9 +66,9 @@ proposed → active → superseded
 | [0011](0011-openai-compatible-provider-and-fim.md) | OpenAI-compatible chat provider with separate FIM endpoint | superseded → [0015](0015-openai-compatible-provider-without-fim.md) |
 | [0012](0012-dual-ai-surfaces-actions-and-agent.md) | Dual AI surfaces — action complete and harness agent | superseded → [0018](0018-pi-ai-agent-harness.md) |
 | [0013](0013-agent-tools-sql-guard-and-proposals.md) | Agent tools with SQL guard and user proposal confirmation | active |
-| [0014](0014-ai-context-redaction-and-schema-enrichment.md) | AI context assembly with redaction and schema enrichment | active |
+| [0014](0014-ai-context-redaction-and-schema-enrichment.md) | AI context assembly with redaction and schema enrichment | superseded → [0059](0059-agent-panel-quick-actions.md) |
 | [0015](0015-openai-compatible-provider-without-fim.md) | OpenAI-compatible chat provider without FIM inline completion | superseded → [0018](0018-pi-ai-agent-harness.md) |
-| [0016](0016-agent-chat-references-and-add-to-chat.md) | Agent chat references and Add to Chat | active |
+| [0016](0016-agent-chat-references-and-add-to-chat.md) | Agent chat references and Add to Chat | superseded → [0061](0061-ordered-inline-agent-message-resources.md) |
 | [0017](0017-user-cancelled-agent-runs.md) | User-cancelled agent runs instead of iteration limits | active |
 | [0018](0018-pi-ai-agent-harness.md) | pi-ai transport and AgentHarness for AI provider and agent loop | superseded → [0023](0023-streamed-chat-sql-inline-completion.md) |
 | [0019](0019-private-release-gate-patterns-via-secret.md) | Private release-gate patterns via env secret, not source | active |
@@ -90,7 +90,7 @@ proposed → active → superseded
 | [0035](0035-experience-knowledge-dialog.md) | Experience Knowledge dialog | superseded → [0036](0036-user-deletion-of-experience-knowledge.md) |
 | [0036](0036-user-deletion-of-experience-knowledge.md) | User deletion of Experience Knowledge | active |
 | [0037](0037-concise-verified-skill-maintenance.md) | Concise verified Skill maintenance | superseded → [0043](0043-evidence-gated-skill-maintenance.md) |
-| [0038](0038-runtime-agent-execution-plans.md) | Runtime linear agent execution plans | active |
+| [0038](0038-runtime-agent-execution-plans.md) | Runtime linear agent execution plans | superseded → [0060](0060-cache-stable-agent-prompts.md) |
 | [0039](0039-concise-agent-final-answers.md) | Concise agent final answers | active |
 | [0040](0040-native-vault-watcher-backend.md) | Native vault watcher backend | active |
 | [0041](0041-agent-live-schema-authority.md) | Agent live schema authority | active |
@@ -111,3 +111,7 @@ proposed → active → superseded
 | [0056](0056-user-adjustable-react-flow-cards.md) | User-adjustable React Flow cards | active |
 | [0057](0057-bounded-mark-encoding-visualizations.md) | Bounded mark-encoding visualizations | active |
 | [0058](0058-offline-interactive-canvas-html-export.md) | Offline interactive Canvas HTML export | active |
+| [0059](0059-agent-panel-quick-actions.md) | Agent Panel quick actions instead of one-shot AI actions | active |
+| [0060](0060-cache-stable-agent-prompts.md) | Cache-stable Agent prompts and immutable plan snapshots | active |
+| [0061](0061-ordered-inline-agent-message-resources.md) | Ordered inline Agent message resources | superseded → [0062](0062-implicit-workspace-context-explicit-inline-resources.md) |
+| [0062](0062-implicit-workspace-context-explicit-inline-resources.md) | Implicit Workspace context and explicit inline resources | active |

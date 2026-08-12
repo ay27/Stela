@@ -210,9 +210,20 @@ function pendingRevealToLoc(
     slug?: string;
     line?: number;
     column?: number;
+    runsqlBlockId?: string | null;
+    runsqlBlockIndex?: number;
+    runsqlSql?: string;
   },
   frontmatterLineCount: number,
 ): RevealLoc | null {
+  if (pending.runsqlBlockId !== undefined || pending.runsqlBlockIndex !== undefined) {
+    return {
+      kind: "runsql",
+      blockId: pending.runsqlBlockId,
+      blockIndex: pending.runsqlBlockIndex,
+      sql: pending.runsqlSql,
+    };
+  }
   if (
     pending.keyword &&
     pending.keyword.length > 0 &&

@@ -239,6 +239,7 @@ export async function runInlineCompletion(
       system,
       user,
       profileId: profile.id,
+      sessionId: `stela-inline:${profile.id}`,
       signal,
       onDelta: (text) => {
         onEvent({ type: "delta", requestId: request.requestId, text });

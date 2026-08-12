@@ -315,7 +315,7 @@ Editor reveal from search hits uses `src/editor/search/` (source-map + locator +
 
 ## AI
 
-Stela AI is **search-first and provider-backed**, not on-device RAG. Retrieval uses vault search, sql-index, connector schema introspection, and optional redacted result samples. Embeddings / MCP / `.stela-knowledge.sqlite` are out of the open-source tree ([ADR-0008](./adr/0008-search-first-ai-instead-of-rag.md)).
+Stela AI is **search-first and provider-backed**, not on-device RAG. Retrieval uses vault search, sql-index, and connector schema introspection. Embeddings / MCP / `.stela-knowledge.sqlite` are out of the open-source tree ([ADR-0008](./adr/0008-search-first-ai-instead-of-rag.md)).
 
 ### Provider & secrets
 
@@ -328,37 +328,32 @@ Stela AI is **search-first and provider-backed**, not on-device RAG. Retrieval u
 
 Agent Panel and Settings share `activeProfileId`. SQL inline completion independently selects `completionProfileId` from the same profiles and simulates FIM over pi-ai `streamSimple`; changing the active chat profile does not change completion. Inline schema context reads the connection's local `schemaDir` plus columns the renderer already cached, and never issues connector calls from the completion path itself ([ADR-0028](./adr/0028-inline-completion-schema-and-note-context.md)). Vendor dropdown lists every pi built-in provider (no Stela allowlist) plus Custom.
 
-### Three surfaces (+ one translator)
+### Agent, inline completion, and one translator
 
 ```mermaid
 flowchart TB
-  UI["Renderer UI\nRunSQL panel / AI modal / AgentSidebar"]
+  UI["Renderer UI\nRunSQL / Schema quick actions / AgentSidebar"]
   PRE["window.stela.ai.* / agent.*"]
-  ACT["ai:complete\naction + AiRequestContext"]
   INLINE["dedicated inline start/cancel/event\nprefix + suffix + local schemaDir"]
   PARSE["ai:parse-sql-query\nNL → SqlIndexFilter only"]
   AGENT["ai:agent-run\nAgentHarness loop"]
-  CTX["context-builder + schema-context\n+ redaction"]
   PROV["provider.ts → pi-ai Models"]
-  HARNESS["agent.ts → AgentHarness\n+ compact / overflow recovery"]
-  TOOLS["agent-tools → parallel except\npropose_edit sequential\n→ connectors / search / vault-fs"]
+  HARNESS["agent.ts → stable prompt + turn envelope\n+ compact / overflow recovery"]
+  TOOLS["agent-tools → parallel reads\nsequential state changes\n→ connectors / search / vault-fs"]
   GUARD["sql-guard + proposal IPC"]
 
   UI --> PRE
-  PRE --> ACT
   PRE --> INLINE --> PROV
   PRE --> PARSE
   PRE --> AGENT
-  ACT --> CTX --> PROV
   PARSE --> PROV
   AGENT --> HARNESS --> PROV
   HARNESS --> TOOLS
   TOOLS --> GUARD
 ```
 
-1. **Action complete** — one-shot `AiActionKind` (rewrite-sql, ask-sql, explain-result, explain-table, …). Prompt assembled in main; returns text + optional extracted SQL. UI: RunSQL inline panel, AI modal, schema browser actions. ([ADR-0014](./adr/0014-ai-context-redaction-and-schema-enrichment.md))
-2. **SQL inline completion** — `AI_INLINE_COMPLETION_START` / `AI_INLINE_COMPLETION_CANCEL` invoke channels and the `ai:inline-completion-event` push channel stream insertion text correlated by `requestId`; preload exposes `window.stela.ai.startInlineCompletion`, `cancelInlineCompletion`, and `onInlineCompletionEvent`. The selected completion profile's model receives bounded prefix/suffix sections, up to 8K characters of nearest-first sibling RunSQL blocks, the nearest heading plus a 500-character prose excerpt, and table schemas from two sources: columns the renderer already has in `column-cache` (sent in the request, preferred per table) and DDL for referenced tables found in the connection's local `schemaDir`. Requests never trigger a column probe; the probe is warmed on block focus instead. This path uses pi-ai `streamSimple`, not AgentHarness, and never falls back to connector list/execute calls. RunSQL triggers only after an edit, waits 120 ms at a line tail, and shows at most one ghost-text line; focus, click, or selection movement never starts a model request. A native completion popup takes priority, then a pending edited context is re-scheduled after it closes. Stale requests are cancelled, Tab accepts, Escape dismisses, and IME composition, blur, or editor destruction suppress or cancel completion. ([ADR-0028](./adr/0028-inline-completion-schema-and-note-context.md))
-3. **Harness agent** — `AgentHarness` tool loop with streaming `ai:agent-event`.
+1. **SQL inline completion** — `AI_INLINE_COMPLETION_START` / `AI_INLINE_COMPLETION_CANCEL` invoke channels and the `ai:inline-completion-event` push channel stream insertion text correlated by `requestId`; preload exposes `window.stela.ai.startInlineCompletion`, `cancelInlineCompletion`, and `onInlineCompletionEvent`. The selected completion profile's model receives bounded prefix/suffix sections, up to 8K characters of nearest-first sibling RunSQL blocks, the nearest heading plus a 500-character prose excerpt, and table schemas from two sources: columns the renderer already has in `column-cache` (sent in the request, preferred per table) and DDL for referenced tables found in the connection's local `schemaDir`. Requests never trigger a column probe; the probe is warmed on block focus instead. This path uses pi-ai `streamSimple`, not AgentHarness, and never falls back to connector list/execute calls. RunSQL triggers only after an edit, waits 120 ms at a line tail, and shows at most one ghost-text line; focus, click, or selection movement never starts a model request. A native completion popup takes priority, then a pending edited context is re-scheduled after it closes. Stale requests are cancelled, Tab accepts, Escape dismisses, and IME composition, blur, or editor destruction suppress or cancel completion. ([ADR-0028](./adr/0028-inline-completion-schema-and-note-context.md))
+2. **Harness agent** — `AgentHarness` tool loop with streaming `ai:agent-event`.
    Tools browse live connector schema, run SQL, validate timeline charts against
    the current run's real rows, create/read/update Analysis Canvas artifacts,
    search/read notes, ask the user questions, propose edits, and manage a bounded
@@ -367,21 +362,31 @@ flowchart TB
    bind to same-run audited SQL and do not use a note-edit proposal. Flow cards
    use controlled graph semantics and Agent updates preserve user layout. Plan state is
    persisted into pi session context so compaction cannot discard the active step
-   or evidence. Read tools may run in parallel; plan tools, chart creation, Canvas
-   writes, and `propose_edit` are sequential. Mutations and note writes wait for
-   user approval. Agent chat accepts table/note references, Add to Chat content,
-   and the active Canvas path. Device-sharded session history restores timelines,
+   or evidence. The system prompt and tool list stay invariant; locale, connection,
+   matched Skill metadata, the implicit current Workspace tab, and a versioned ordered
+   message are appended in a bounded, redacted user-turn envelope. The current note or
+   Canvas is execution context and is not rendered as user-authored content. Text segments retain their position around typed table,
+   note, Canvas, RunSQL, and selection references, while resource bodies are deduplicated.
+   Plan versions are immutable appended session
+   entries, and pi-ai requests use short cache retention. Read tools may run in parallel;
+   plan tools, chart creation, Canvas writes, and `propose_edit` are sequential.
+   Mutations, note writes, and RunSQL rewrites
+   wait for user approval. Fix/schema quick actions auto-submit in a new Agent tab;
+   rewrite/question actions open editable drafts. The unified `@` picker and Add to Chat
+   insert resource pills at the current composer caret; the user timeline reuses that
+   exact ordered message while assistant bubbles remain Markdown-only. Device-sharded session history restores timelines,
    including Canvas artifact links. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md),
-   [ADR-0016](./adr/0016-agent-chat-references-and-add-to-chat.md),
+   [ADR-0062](./adr/0062-implicit-workspace-context-explicit-inline-resources.md),
    [ADR-0017](./adr/0017-user-cancelled-agent-runs.md),
    [ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md),
    [ADR-0026](./adr/0026-ranked-lexical-retrieval-for-agent.md),
    [ADR-0027](./adr/0027-agent-ask-user-clarification.md),
-   [ADR-0038](./adr/0038-runtime-agent-execution-plans.md),
+   [ADR-0059](./adr/0059-agent-panel-quick-actions.md),
+   [ADR-0060](./adr/0060-cache-stable-agent-prompts.md),
    [ADR-0041](./adr/0041-agent-live-schema-authority.md),
    [ADR-0046](./adr/0046-device-sharded-agent-session-history.md),
    [ADR-0055](./adr/0055-vault-analysis-canvas-artifacts.md))
-4. **SQL query parse** — model only emits a `SqlIndexFilter`; hits always come from deterministic `sql-index`.
+3. **SQL query parse** — model only emits a `SqlIndexFilter`; hits always come from deterministic `sql-index`.
 
 ### Agent Skills
 
@@ -437,13 +442,15 @@ query parsing, Harness Agent turns, tool calls, and Skill maintenance use
 correlated run/event records. Inline completion deliberately emits no metrics
 or traces because its high-frequency requests obscure Agent diagnostics. The
 Dashboard reports surface-specific completion/error/cancellation funnels,
-p50/p95 latency, token usage, tool rankings, maintenance outcomes, daily
+p50/p95 latency, token usage, provider-reported prompt-cache hit rate, tool rankings, maintenance outcomes, daily
 activity, local Skill candidate-to-load usage, and a redacted trace drill-down.
 It does not compute a single cross-surface success score. Overview run
 reliability and the daily chart include only root user-facing runs; child tool
 and maintenance runs remain in their dedicated breakdowns and traces. Token
 usage includes input, output, cache-read, and cache-write usage from all
-model-backed runs. Skill candidates come from prompt ranking or `search_skills`;
+model-backed runs. Cache hit rate is `cache-read / (uncached input + cache-read + cache-write)`;
+it is available overall, by model-backed surface, and on individual traces.
+Skill candidates come from prompt ranking or `search_skills`;
 successful `load_skill` calls count as usage, with repeated candidates deduped
 per Agent run. Knowledge maintenance records saved Skill categories and reports
 their count/share. A `no_source` outcome stores an explicit skip reason and
@@ -469,24 +476,24 @@ All retrieval is lexical and in-process — no embeddings, no FTS5 index ([ADR-0
 - Retrieval quality is measured by `npm run eval:retrieval` against mechanically labelled slices; labels never share a signal with the ranker. That eval calls the ranking functions directly, so it says nothing about whether the model picks the right tool or writes a usable query.
 - Ask discipline (`ask_user`) is measured by `npm run eval:agent-ask`, which drives the real `AgentHarness` with the real system prompt and tools. Tasks are generated in pairs from same-family table names in the vault: one version names the table, one leaves ≥3 used candidates open. Asking on the open version and not asking on the named one are both counted, so an agent that always asks cannot score well. Only `connector.execute`, `recordRun`, and `sqlIndex.query` are stubbed — answer correctness needs a live connection and is out of scope. `--self-check` verifies the whole rig without a model call.
 
-### Context pipeline
+### Prompt cache boundary
 
-Before any action prompt leaves the machine ([ADR-0014](./adr/0014-ai-context-redaction-and-schema-enrichment.md)):
-
-1. Enrich connector dialect + schema targets from SQL symbols and `@table` mentions
-2. Cap note / SQL / DDL / sample sizes
-3. Attach result samples only if `sendResultSamples` (capped by `maxSampleRows`)
-4. `redactForPrompt` strips secret-shaped keys/values
-5. Action-specific instructions from `prompt-builder.ts`
+The Agent system prompt and tool declarations are request-invariant. Per-turn
+locale, connection/dialect, table and note references, Canvas path, matched Skill
+metadata, and attachments are bounded and passed through `redactForPrompt` in a
+`<stela_turn_context>` user-message envelope; the user's actual request is the
+last segment. Plan versions are appended as immutable run/version snapshots.
+Agent, inline completion, and SQL query parsing use pi-ai short cache retention;
+the Agent session id supplies session affinity ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md)).
 
 ### Agent safety
 
 - Read-only SQL runs immediately; core execution caps saved/displayed result rows without rewriting SQL
 - Multi-statement SQL blocked
 - Mutations require `agentAllowMutations` **and** `ai:agent-respond-proposal`
-- `propose_edit` never writes until approved
-- `ask_user` reuses the same blocking proposal handshake as a third kind (`question`), resolving to the answer string; at most 3 questions per run, and skipping never counts as approval ([ADR-0027](./adr/0027-agent-ask-user-clarification.md))
-- Same-turn tool batches may run in parallel; only `propose_edit` is sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md))
+- `propose_edit` handles both note and explicitly targeted RunSQL edits; it never writes until approved, and a RunSQL edit never changes the editor until the renderer target is still valid
+- `ask_user` reuses the same blocking proposal handshake with kind `question`, resolving to the answer string; at most 3 questions per run, and skipping never counts as approval ([ADR-0027](./adr/0027-agent-ask-user-clarification.md))
+- Same-turn tool batches may run in parallel; stateful plan, Canvas, chart, note-edit, and RunSQL-rewrite tools are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0059](./adr/0059-agent-panel-quick-actions.md))
 - Agent runs are stopped by model completion, errors, or explicit user cancellation; legacy iteration/time settings are ignored
 - Sessions use native pi `JsonlSessionStorage` by `sessionId` at `.stela/agent-history/<deviceSlug>/`. Main caches open local sessions; other-device sessions are read-only and fork to a new local session before a new prompt.
 - Compaction: proactive `shouldCompact` against `ai.contextWindow`, plus one overflow recovery compact + continue; the current plan is re-injected from the Session custom-entry projector, and `plan_updated` joins `context_usage` / `compaction` on `ai:agent-event`
@@ -506,7 +513,7 @@ Before any action prompt leaves the machine ([ADR-0014](./adr/0014-ai-context-re
 | `electron/services/ai/agent-tools.ts` | AgentTool wrappers (parallel except sequential `propose_edit`) + dispatch |
 | `electron/services/ai/agent-prompt.ts` | agent system / user message assembly; kept free of `electron.app` imports so evals reuse the real prompt |
 | `electron/services/ai/sql-guard.ts` | read-only vs mutation classification |
-| `src/components/ai/` | modal, inline panel, agent panel, `@table` / `[[note]]` input, Add to Chat |
+| `src/components/ai/` | Agent panel, unified inline resource composer, quick actions, Add to Chat |
 
 ## IPC Contract
 

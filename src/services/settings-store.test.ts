@@ -9,8 +9,6 @@ const legacy = normalizeSettings({
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4o-mini",
     hasApiKey: true,
-    sendResultSamples: true,
-    maxSampleRows: 20,
   },
 } as AppSettings);
 
@@ -28,8 +26,6 @@ const patched = normalizeSettings({
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4o-mini",
     hasApiKey: true,
-    sendResultSamples: true,
-    maxSampleRows: 20,
     agentAllowMutations: true,
   },
 } as AppSettings);

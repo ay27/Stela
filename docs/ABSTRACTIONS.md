@@ -479,8 +479,6 @@ interface AiSettings {
   model: string;
   hasApiKey: boolean;
   contextWindow: 64_000 | 128_000 | 200_000 | 256_000 | 1_000_000;
-  sendResultSamples: boolean;
-  maxSampleRows: number;
   agentMaxIterations: number;      // legacy; ignored by harness agent
   agentWallClockMs: number;        // legacy; ignored by harness agent
   agentAllowMutations: boolean;    // still requires per-call user approve
@@ -488,43 +486,6 @@ interface AiSettings {
 ```
 
 API key shard: `{vault}/.stela/secrets/ai_{deviceSlug}_{profileId}.json` (safeStorage-wrapped). Transport: pi-ai built-in provider for `vendorId`, or `createProvider` for `custom` ([ADR-0022](./adr/0022-ai-multi-provider-profiles.md)); agent loop: `AgentHarness` ([ADR-0018](./adr/0018-pi-ai-agent-harness.md)). Inline completion is enabled only when `completionProfileId` names an existing profile.
-
-### Action complete
-
-```typescript
-type AiActionKind =
-  | "rewrite-sql" | "ask-sql" | "generate-sql" | "explain-sql"
-  | "optimize-sql" | "debug-query"
-  | "explain-result" | "summarize-diff" | "find-anomalies"
-  | "write-analysis" | "rewrite-selection" | "add-limitations"
-  | "explain-table" | "suggest-joins" | "generate-data-dictionary"
-  | "find-related-queries";
-
-type AiContextSource = "runsql" | "result" | "editor" | "schema";
-
-interface AiRequestContext {
-  source: AiContextSource;
-  notePath?: string | null;
-  noteMarkdown?: string | null;
-  connectionName?: string | null;
-  connector?: AiConnectorContext | null;
-  sql?: string | null;
-  selectedText?: string | null;
-  errorMessage?: string | null;
-  result?: AiResultContext | null;       // sampled rows only
-  schemas?: AiSchemaTargetContext[];
-  mentionedTables?: string[];            // from @table mentions in the prompt UI
-  userInstruction?: string | null;
-}
-
-interface AiCompleteRequest {
-  action: AiActionKind;
-  locale?: "zh" | "en";
-  context: AiRequestContext;
-}
-```
-
-Pipeline: enrich schema → cap sizes → optional samples → `redactForPrompt` → action prompt → pi-ai `completeSimple`. See [ADR-0014](./adr/0014-ai-context-redaction-and-schema-enrichment.md).
 
 ### SQL inline completion
 
@@ -589,12 +550,14 @@ type AgentToolName =
   | "create_analysis_canvas" | "read_analysis_canvas" | "update_analysis_canvas"
   | "search_vault" | "list_vault_files" | "read_note"
   | "create_plan" | "update_plan" | "get_plan"
-  | "search_skills" | "load_skill" | "save_skill" | "propose_edit" | "ask_user";
+  | "search_skills" | "load_skill" | "save_skill"
+  | "propose_edit" | "ask_user";
 
-type AgentProposalKind = "edit_note" | "mutation_sql" | "question";
+type AgentProposalKind = "edit_note" | "runsql_rewrite" | "mutation_sql" | "question";
 
 interface AgentProposalPayload {
   description: string;
+  targetId?: string;   // renderer-owned RunSQL target
   // edit_note / mutation_sql
   notePath?: string;
   oldContent?: string;
@@ -615,18 +578,32 @@ interface AgentProposalResponse {
 interface AgentRunRequest {
   runId: string;
   sessionId?: string;          // persisted multi-turn history
-  prompt: string;
+  message?: AgentMessageContent; // authoritative for new runs; ordered inline resources
+  prompt: string;                // derived plain-text compatibility/title/search form
+  workspaceContext?: {           // implicit current tab; not rendered as a pill
+    kind: "note" | "canvas";
+    path: string;
+  };
+  entryPoint?: "chat" | "runsql-fix" | "runsql-rewrite" | "runsql-ask" | "schema-explain";
   connectionName?: string | null;
-  mentionedTables?: string[];
-  referencedNotes?: string[];  // vault-relative note paths from [[...]] / current note chips
-  attachments?: Array<
-    | { kind: "selection"; label: string; text: string; sourcePath?: string }
-    | { kind: "runsql"; label: string; sql: string; sourcePath?: string }
-  >;
   notePath?: string | null;
-  canvasPath?: string | null;      // active Canvas, if its workspace tab is selected
   locale?: "zh" | "en";
 }
+
+interface AgentMessageContent {
+  version: 1;
+  segments: Array<
+    | { kind: "text"; text: string }
+    | { kind: "resource"; resourceId: string }
+  >;
+  resources: AgentMessageResource[]; // deduplicated bodies; a resource may occur repeatedly
+}
+
+type AgentMessageResource =
+  | { id: string; kind: "table"; label: string; table: string; connectionName?: string | null }
+  | { id: string; kind: "note" | "canvas"; label: string; path: string }
+  | { id: string; kind: "selection"; label: string; text: string; sourcePath?: string; locator?: AgentResourceLocator }
+  | { id: string; kind: "runsql"; label: string; sql: string; sourcePath?: string; locator?: AgentResourceLocator; rewriteTargetId?: string };
 
 type AgentPlanStepStatus = "pending" | "running" | "completed" | "blocked" | "skipped";
 
@@ -681,7 +658,9 @@ Safety ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md)):
 - Runs continue until model completion, error, or explicit user cancellation ([ADR-0017](./adr/0017-user-cancelled-agent-runs.md))
 - Read tools and `run_sql` may execute in parallel. Plan mutations, chart creation, Canvas creation/update, and `propose_edit` are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md)). NodeExecutionEnv is harness cwd only (not exposed as model tools)
 - Compaction uses `ai.contextWindow` + one overflow recovery ([ADR-0018](./adr/0018-pi-ai-agent-harness.md))
-- Execution plans are bounded and linear. Their active store is main-process runtime state, while the latest `AgentPlanSnapshot` is appended to the persisted pi session so its context projector can recover after restart ([ADR-0038](./adr/0038-runtime-agent-execution-plans.md), [ADR-0046](./adr/0046-device-sharded-agent-session-history.md))
+- Execution plans are bounded and linear. Their active store is main-process runtime state; every versioned `AgentPlanSnapshot` is appended immutably to the pi session, and only the highest version for the current run is active ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md), [ADR-0046](./adr/0046-device-sharded-agent-session-history.md))
+- The Agent system prompt and tool list are request-invariant. Dynamic context is bounded, redacted, and appended in the user turn immediately before the request; pi-ai uses short cache retention and session affinity ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md))
+- RunSQL fix/schema quick actions auto-submit in a new Agent tab; rewrite/question actions open editable drafts. `runsql_rewrite` proposals are bound to the original SQL snapshot and renderer target, then reuse the inline diff accept/discard UI ([ADR-0059](./adr/0059-agent-panel-quick-actions.md))
 - Note references are paths only; the agent should call `read_note` before relying on note contents
 - Selection / RunSQL attachments are bounded and included only on the user turn that added them
 - `ask_user` blocks on the same handshake with `kind: "question"`, resolving to the answer string; ≤3 questions per run, enforced in the tool ([ADR-0027](./adr/0027-agent-ask-user-clarification.md))
@@ -695,7 +674,7 @@ non-empty `description`, a `category` from `sql-dialect`, `metric-definition`,
 `business-glossary`, `data-lineage`, or `analysis-runbook`, and a non-empty inline
 `tags` list; `name` defaults to the parent directory name. Loading applies the
 same validation as writes and local lexical ranking selects at most eight
-positive-match metadata records for the main system prompt.
+positive-match metadata records for the current turn's bounded context envelope.
 
 Its body is a bounded reusable knowledge unit governed by a category template:
 dialect uses Scope/Rule/Valid Pattern/Verify, metrics use
@@ -746,6 +725,12 @@ token usage, error metadata, and optional parent run. Ordered metric events
 carry the redacted trace. Tool and maintenance runs use their Agent run as
 `parentRunId`.
 
+Dashboard token usage exposes `promptTokens = inputTokens + cacheReadTokens +
+cacheWriteTokens` and `cacheHitRate = cacheReadTokens / promptTokens`. The rate
+uses provider-reported counters, excludes output tokens, and is `null` when no
+prompt usage was reported. Surface breakdowns expose the same derived rate, and
+individual traces retain their raw token counters.
+
 The renderer can only call `agentMetrics.getDashboard`, `listRuns`, `getTrace`,
 and `clear`. Date ranges are exactly `7d`, `30d`, or `90d`; trace queries are
 cursor-paginated, bounded to 100 records by IPC, and displayed ten at a time.
@@ -793,13 +778,13 @@ interface NoteSearchResult {
 
 | Surface | Location | Backend |
 |---------|----------|---------|
-| RunSQL rewrite / ask | `codeblock-nodeview` + `ai-inline-panel` | `ai:complete` |
-| Schema actions | `SchemaBrowserPanel` + `ai-modal` | `ai:complete` |
+| RunSQL fix / rewrite / ask | `codeblock-nodeview` → new Agent tab; rewrite returns to the block diff | `ai:agent-run` + `runsql_rewrite` proposal |
+| Schema explanation | `SchemaBrowserPanel` → new Agent tab | `ai:agent-run` + events |
 | Agent chat | `AgentSidebar` / `agent-panel` | `ai:agent-run` + events |
 | Analysis Canvas | `AnalysisCanvasView` | `canvas:read` / `canvas:refresh-source` / `canvas:update-flow-layout` |
-| `@table` mentions | `table-mention-input` | `mentionedTables` on requests |
-| `[[note]]` references | `agent-panel` prompt chips | `referencedNotes` on `ai:agent-run` |
-| Add to Chat | editor context menu / `Mod+I` | `attachments` on `ai:agent-run` |
+| Inline resources | Agent composer `@` picker / add-resource button | ordered `message.segments` + deduplicated `message.resources` |
+| Current Workspace tab | active note / Canvas at send time | implicit `workspaceContext` on `ai:agent-run`; no composer/timeline pill |
+| Add to Chat | editor context menu / `Mod+I` | inserts a RunSQL/selection resource at the saved composer caret |
 | Settings | `settings/ai-tab` | `ai:configure` / `clearApiKey` |
 
 ## IPC Error Model

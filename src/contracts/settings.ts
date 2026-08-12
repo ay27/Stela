@@ -96,8 +96,6 @@ export interface AiSettings {
   baseUrl: string;
   model: string;
   hasApiKey: boolean;
-  sendResultSamples: boolean;
-  maxSampleRows: number;
   contextWindow: AiContextWindow;
   agentMaxIterations: number;
   agentWallClockMs: number;
@@ -160,8 +158,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4o-mini",
     hasApiKey: false,
-    sendResultSamples: true,
-    maxSampleRows: 20,
     contextWindow: 128_000,
     agentMaxIterations: 200,
     agentWallClockMs: 300_000,

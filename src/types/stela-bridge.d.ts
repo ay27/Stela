@@ -22,8 +22,6 @@ import type {
   AgentMetricsDashboard,
   AnalysisCanvasFile,
   AnalysisCanvasRefreshResult,
-  AiCompleteRequest,
-  AiCompleteResponse,
   AiInlineCompletionEvent,
   AiInlineCompletionRequest,
   AiParseSqlQueryRequest,
@@ -226,7 +224,6 @@ interface StelaBridge {
       profileId?: string | null,
     ) => Promise<AiProviderStatus>;
     clearApiKey: (profileId?: string | null) => Promise<AiProviderStatus>;
-    complete: (request: AiCompleteRequest) => Promise<AiCompleteResponse>;
     parseSqlQuery: (
       request: AiParseSqlQueryRequest,
     ) => Promise<AiParseSqlQueryResponse>;

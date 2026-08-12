@@ -24,7 +24,8 @@ import { useWorkspace } from "@/state/workspace";
 import { getRunContext } from "@/editor/runsql/run-context";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
-import { openAiModal } from "@/state/ai-modal";
+import { openSchemaExplainTask } from "@/components/ai/agent-quick-actions";
+import { useLayout } from "@/state/layout";
 
 interface SchemaState {
   loading: boolean;
@@ -44,12 +45,14 @@ export function SchemaBrowserPanel() {
   const loaded = useConnections((s) => s.loaded);
   const reload = useConnections((s) => s.reload);
   const activeTabId = useWorkspace((s) => s.activeTabId);
+  const schemaReveal = useLayout((s) => s.schemaReveal);
 
   const connectionNames = useMemo(() => Object.keys(entries).sort(), [entries]);
 
   const [selected, setSelected] = useState<string | null>(null);
   const [state, setState] = useState<SchemaState>(INITIAL_STATE);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [highlightedTable, setHighlightedTable] = useState<string | null>(null);
 
   // connections store 还没加载过时，主动拉一次。其它组件一般已经触发过 reload，
   // 这里 idempotent。
@@ -69,6 +72,33 @@ export function SchemaBrowserPanel() {
     }
     setSelected(connectionNames[0] ?? null);
   }, [activeTabId, connectionNames, entries, selected]);
+
+  useEffect(() => {
+    if (!schemaReveal) return;
+    if (schemaReveal.connectionName && entries[schemaReveal.connectionName]) {
+      setSelected(schemaReveal.connectionName);
+    }
+    const dot = schemaReveal.table.lastIndexOf(".");
+    const db = dot > 0 ? schemaReveal.table.slice(0, dot) : "__no_db__";
+    setCollapsed((previous) => {
+      if (!previous.has(db)) return previous;
+      const next = new Set(previous);
+      next.delete(db);
+      return next;
+    });
+    setHighlightedTable(schemaReveal.table);
+  }, [entries, schemaReveal]);
+
+  useEffect(() => {
+    if (!schemaReveal || state.loading) return;
+    const selector = `[data-schema-table="${CSS.escape(schemaReveal.table)}"]`;
+    const row = document.querySelector<HTMLElement>(selector);
+    if (!row) return;
+    row.scrollIntoView({ block: "center" });
+    const timer = window.setTimeout(() => setHighlightedTable((current) =>
+      current === schemaReveal.table ? null : current), 1800);
+    return () => window.clearTimeout(timer);
+  }, [schemaReveal, state.groups, state.loading]);
 
   const refresh = useCallback(async (name: string) => {
     setState((s) => ({ ...s, loading: true, error: null }));
@@ -106,21 +136,7 @@ export function SchemaBrowserPanel() {
     db ? `${db}.${table}` : table;
 
   const onAi = (qualified: string) => {
-    const title = t("ai.action.explain-table");
-    const [database, table] = qualified.includes(".")
-      ? qualified.split(/\.(.+)/).slice(0, 2)
-      : [null, qualified];
-    openAiModal({
-      title,
-      request: {
-        action: "explain-table",
-        context: {
-          source: "schema",
-          connectionName: selected,
-          schema: { connectionName: selected, database, table, columns: [] },
-        },
-      },
-    });
+    openSchemaExplainTask(qualified, selected);
   };
 
   const totalTables = state.groups.reduce((n, g) => n + g.tables.length, 0);
@@ -219,6 +235,7 @@ export function SchemaBrowserPanel() {
                         key={qualified}
                         tableName={table}
                         qualified={qualified}
+                        highlighted={highlightedTable === qualified}
                         onAi={onAi}
                         t={t}
                       />
@@ -236,17 +253,23 @@ export function SchemaBrowserPanel() {
 function TableRow({
   tableName,
   qualified,
+  highlighted,
   onAi,
   t,
 }: {
   tableName: string;
   qualified: string;
+  highlighted: boolean;
   onAi: (qualified: string) => void;
   t: ReturnType<typeof useT>;
 }) {
   return (
     <div
-      className="flex w-full items-center gap-1.5 px-3 py-0.5 pl-7 text-left text-[11px] hover:bg-sidebar-hover"
+      data-schema-table={qualified}
+      className={cn(
+        "flex w-full items-center gap-1.5 px-3 py-0.5 pl-7 text-left text-[11px] hover:bg-sidebar-hover",
+        highlighted && "bg-primary/15 ring-1 ring-inset ring-primary/30",
+      )}
       title={qualified}
     >
       <TableIcon className="h-3 w-3 flex-none text-muted-foreground" />

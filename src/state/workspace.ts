@@ -201,6 +201,10 @@ export interface PendingReveal {
    * 主路径——不依赖 LineMap，编辑后仍准。SearchPanel 在 groupByFile 后逐条标号。
    */
   nthInFile?: number;
+  /** Exact RunSQL block locator used by Agent resource pills. */
+  runsqlBlockId?: string | null;
+  runsqlBlockIndex?: number;
+  runsqlSql?: string;
 }
 
 export interface OpenFileOptions {
@@ -216,6 +220,9 @@ export interface OpenFileOptions {
   caseSensitive?: boolean;
   /** 0-based: 该 keyword 命中在该文件命中数组中的索引 */
   nthInFile?: number;
+  runsqlBlockId?: string | null;
+  runsqlBlockIndex?: number;
+  runsqlSql?: string;
   /**
    * true 时按 ephemeral 预览语义打开（文件树单击专用）：
    *   - 命中已开 tab：复用，**保留**该 tab 当前 ephemeral 状态
@@ -686,6 +693,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const hasReveal =
       opts.scrollToLine !== undefined ||
       opts.scrollToSlug !== undefined ||
+      opts.runsqlBlockId !== undefined ||
+      opts.runsqlBlockIndex !== undefined ||
       (opts.keyword !== undefined && opts.nthInFile !== undefined);
     const nextReveal: PendingReveal | null = hasReveal
       ? {
@@ -697,6 +706,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
           keyword: opts.keyword,
           caseSensitive: opts.caseSensitive,
           nthInFile: opts.nthInFile,
+          runsqlBlockId: opts.runsqlBlockId,
+          runsqlBlockIndex: opts.runsqlBlockIndex,
+          runsqlSql: opts.runsqlSql,
         }
       : // goBack/goForward 无定位时清掉残留 reveal，避免误重放上一次搜索/锚点
         recordHistory

@@ -91,8 +91,6 @@ const partialSettingsSchema = z
         baseUrl: z.string().max(2048),
         model: z.string().max(256),
         hasApiKey: z.boolean(),
-        sendResultSamples: z.boolean(),
-        maxSampleRows: z.number().int().min(0).max(100),
         contextWindow: z.union([
           z.literal(64_000),
           z.literal(128_000),
@@ -312,8 +310,6 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
           providerMode: z.enum(["disabled", "openai-compatible", "cloud"]).optional(),
           baseUrl: z.string().max(2048).optional(),
           model: z.string().max(256).optional(),
-          sendResultSamples: z.boolean().optional(),
-          maxSampleRows: z.number().int().min(0).max(100).optional(),
           contextWindow: z
             .union([
               z.literal(64_000),
@@ -361,103 +357,6 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
   [IPC.AI_CLEAR_API_KEY]: z
     .object({
       profileId: z.string().min(1).max(128).nullable().optional(),
-    })
-    .strict(),
-  [IPC.AI_COMPLETE]: z
-    .object({
-      request: z.object({
-        action: z.enum([
-          "rewrite-sql",
-          "ask-sql",
-          "generate-sql",
-          "explain-sql",
-          "optimize-sql",
-          "debug-query",
-          "explain-result",
-          "summarize-diff",
-          "find-anomalies",
-          "write-analysis",
-          "rewrite-selection",
-          "add-limitations",
-          "explain-table",
-          "suggest-joins",
-          "generate-data-dictionary",
-          "find-related-queries",
-        ]),
-        locale: z.enum(["zh", "en"]).optional(),
-        context: z.object({
-          source: z.enum(["runsql", "result", "editor", "schema"]),
-          notePath: z.string().max(8192).nullable().optional(),
-          noteTitle: z.string().max(512).nullable().optional(),
-          noteMarkdown: z.string().max(80_000).nullable().optional(),
-          headingPath: z.array(z.string().max(256)).max(16).optional(),
-          connectionName: z.string().max(256).nullable().optional(),
-          connector: z
-            .object({
-              kind: z.string().max(128),
-              displayName: z.string().max(256),
-              dialect: z.string().max(128),
-            })
-            .nullable()
-            .optional(),
-          sql: z.string().max(80_000).nullable().optional(),
-          selectedText: z.string().max(80_000).nullable().optional(),
-          errorMessage: z.string().max(20_000).nullable().optional(),
-          result: z
-            .object({
-              runId: z.string().max(256).nullable().optional(),
-              blockId: z.string().max(256).nullable().optional(),
-              rowCount: z.number().int().nonnegative().nullable().optional(),
-              columns: z.array(columnDefSchema).max(500).optional(),
-              rows: z.array(z.array(z.unknown())).max(100).optional(),
-              diffSummary: z
-                .object({
-                  addedRows: z.number().int().nonnegative(),
-                  removedRows: z.number().int().nonnegative(),
-                  changedRows: z.number().int().nonnegative(),
-                  schemaChanged: z.boolean(),
-                })
-                .nullable()
-                .optional(),
-            })
-            .nullable()
-            .optional(),
-          schema: z
-            .object({
-              connectionName: z.string().max(256).nullable().optional(),
-              database: z.string().max(512).nullable().optional(),
-              table: z.string().max(512).nullable().optional(),
-              columns: z.array(columnDefSchema).max(500).optional(),
-              ddlSnippet: z.string().max(20_000).nullable().optional(),
-              source: z
-                .enum(["explicit-sql", "schema-dir", "connector", "manual"])
-                .optional(),
-              matchReason: z.string().max(512).nullable().optional(),
-              score: z.number().optional(),
-            })
-            .nullable()
-            .optional(),
-          schemas: z
-            .array(
-              z.object({
-                connectionName: z.string().max(256).nullable().optional(),
-                database: z.string().max(512).nullable().optional(),
-                table: z.string().max(512).nullable().optional(),
-                columns: z.array(columnDefSchema).max(500).optional(),
-                ddlSnippet: z.string().max(20_000).nullable().optional(),
-                source: z
-                  .enum(["explicit-sql", "schema-dir", "connector", "manual"])
-                  .optional(),
-                matchReason: z.string().max(512).nullable().optional(),
-                score: z.number().optional(),
-              }),
-            )
-            .max(8)
-            .optional(),
-          mentionedTables: z.array(z.string().max(512)).max(8).optional(),
-          userInstruction: z.string().max(20_000).nullable().optional(),
-        }),
-      }),
     })
     .strict(),
   [IPC.AI_PARSE_SQL_QUERY]: z
@@ -536,7 +435,84 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
         .object({
           runId: stringMin1.max(128),
           sessionId: agentHistorySegment.optional(),
+          entryPoint: z.enum([
+            "chat",
+            "runsql-fix",
+            "runsql-rewrite",
+            "runsql-ask",
+            "schema-explain",
+          ]).optional(),
+          message: z.object({
+            version: z.literal(1),
+            segments: z.array(z.discriminatedUnion("kind", [
+              z.object({ kind: z.literal("text"), text: z.string().max(20_000) }).strict(),
+              z.object({ kind: z.literal("resource"), resourceId: z.string().min(1).max(128) }).strict(),
+            ])).max(128),
+            resources: z.array(z.discriminatedUnion("kind", [
+              z.object({
+                id: z.string().min(1).max(128),
+                kind: z.literal("table"),
+                label: z.string().min(1).max(256),
+                table: z.string().min(1).max(512),
+                connectionName: z.string().max(256).nullable().optional(),
+              }).strict(),
+              z.object({
+                id: z.string().min(1).max(128),
+                kind: z.enum(["note", "canvas"]),
+                label: z.string().min(1).max(256),
+                path: z.string().min(1).max(8192),
+              }).strict(),
+              z.object({
+                id: z.string().min(1).max(128),
+                kind: z.literal("selection"),
+                label: z.string().min(1).max(256),
+                text: z.string().min(1).max(30_000),
+                sourcePath: z.string().max(8192).optional(),
+                locator: z.object({
+                  blockId: z.string().max(256).nullable().optional(),
+                  blockIndex: z.number().int().min(0).optional(),
+                  keyword: z.string().max(30_000).optional(),
+                  nthInFile: z.number().int().min(0).optional(),
+                  line: z.number().int().min(1).optional(),
+                  column: z.number().int().min(1).optional(),
+                }).strict().optional(),
+              }).strict(),
+              z.object({
+                id: z.string().min(1).max(128),
+                kind: z.literal("runsql"),
+                label: z.string().min(1).max(256),
+                sql: z.string().min(1).max(30_000),
+                sourcePath: z.string().max(8192).optional(),
+                locator: z.object({
+                  blockId: z.string().max(256).nullable().optional(),
+                  blockIndex: z.number().int().min(0).optional(),
+                  keyword: z.string().max(30_000).optional(),
+                  nthInFile: z.number().int().min(0).optional(),
+                  line: z.number().int().min(1).optional(),
+                  column: z.number().int().min(1).optional(),
+                }).strict().optional(),
+                rewriteTargetId: z.string().min(1).max(256).optional(),
+              }).strict(),
+            ])).max(32),
+          }).strict().superRefine((message, context) => {
+            const ids = new Set(message.resources.map((resource) => resource.id));
+            if (ids.size !== message.resources.length) {
+              context.addIssue({ code: z.ZodIssueCode.custom, message: "Agent resource ids must be unique." });
+            }
+            if (message.segments.some((segment) => segment.kind === "resource" && !ids.has(segment.resourceId))) {
+              context.addIssue({ code: z.ZodIssueCode.custom, message: "Agent message references an unknown resource." });
+            }
+            const textLength = message.segments.reduce((length, segment) =>
+              length + (segment.kind === "text" ? segment.text.length : 0), 0);
+            if (textLength > 20_000) {
+              context.addIssue({ code: z.ZodIssueCode.custom, message: "Agent message text is too long." });
+            }
+          }).optional(),
           prompt: z.string().min(1).max(20_000),
+          workspaceContext: z.object({
+            kind: z.enum(["note", "canvas"]),
+            path: z.string().min(1).max(8192),
+          }).strict().optional(),
           connectionName: z.string().max(256).nullable().optional(),
           mentionedTables: z.array(z.string().max(512)).max(8).optional(),
           referencedNotes: z.array(z.string().min(1).max(8192)).max(16).optional(),
@@ -557,6 +533,8 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
                     label: z.string().min(1).max(256),
                     sql: z.string().min(1).max(30_000),
                     sourcePath: z.string().max(8192).optional(),
+                    rewriteTargetId: z.string().min(1).max(256).optional(),
+                    errorMessage: z.string().max(20_000).optional(),
                   })
                   .strict(),
               ]),

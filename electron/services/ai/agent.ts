@@ -280,24 +280,16 @@ function conversationForMaintenance(messages: unknown[]): string {
 
 function createSession(storage: InMemorySessionStorage | JsonlSessionStorage = new InMemorySessionStorage()): Session {
   return new Session(storage, {
-    entryTransforms: [
-      (entries) => {
-        let latestPlan = -1;
-        entries.forEach((entry, index) => {
-          if (entry.type === "custom" && entry.customType === EXECUTION_PLAN_ENTRY) latestPlan = index;
-        });
-        return entries.filter(
-          (entry, index) =>
-            entry.type !== "custom" || entry.customType !== EXECUTION_PLAN_ENTRY || index === latestPlan,
-        );
-      },
-    ],
     entryProjectors: {
       [EXECUTION_PLAN_ENTRY]: (entry) => {
-        const data = entry.data as { plan?: ExecutionPlanStore | AgentPlanSnapshot } | undefined;
+        const data = entry.data as { runId?: string; plan?: AgentPlanSnapshot } | undefined;
+        const snapshot = data?.plan;
         return [{
           role: "user",
-          content: `Current execution plan:\n${formatExecutionPlanEntry(data ?? {})}`,
+          content:
+            `Execution plan snapshot for run ${data?.runId ?? snapshot?.runId ?? "unknown"} ` +
+            `version ${snapshot?.version ?? 0}. Use only the highest version matching the current run.\n` +
+            formatExecutionPlanEntry(data ?? {}),
           timestamp: Date.now(),
         }];
       },
@@ -305,16 +297,11 @@ function createSession(storage: InMemorySessionStorage | JsonlSessionStorage = n
   });
 }
 
-function appendPlanEntry(session: Session, runId: string, plan: ExecutionPlanStore): Promise<string> {
-  return session.appendCustomEntry(EXECUTION_PLAN_ENTRY, { runId, plan });
-}
-
-function appendPersistedPlanEntry(
-  session: Session,
-  runId: string,
-  snapshot: AgentPlanSnapshot | null,
-): Promise<string> {
-  return session.appendCustomEntry(EXECUTION_PLAN_ENTRY, { runId, plan: snapshot });
+function appendPlanEntry(session: Session, snapshot: AgentPlanSnapshot): Promise<string> {
+  return session.appendCustomEntry(EXECUTION_PLAN_ENTRY, {
+    runId: snapshot.runId,
+    plan: structuredClone(snapshot),
+  });
 }
 
 async function getOrCreateSession(
@@ -440,6 +427,7 @@ async function runSkillMaintenance(options: {
     models,
     model,
     thinkingLevel: "off",
+    streamOptions: { cacheRetention: "short" },
     systemPrompt: refreshSkill
       ? `${SKILL_REFRESH_PROMPT}\nRequired headings: ${refreshTemplate(refreshSkill.metadata.category)}`
       : SKILL_MAINTENANCE_PROMPT,
@@ -632,7 +620,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       agentMetrics.startRun({
         runId: metricRunId,
         surface: "agent",
-        operation: "chat",
+        operation: request.entryPoint ?? "chat",
         startedAt: metricStartedAt,
         profileId: profile.id,
         vendorId: profile.vendorId,
@@ -648,10 +636,8 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
     const promptSkills = rankAgentSkills(skills.loaded, request.prompt, SKILL_PROMPT_LIMIT);
     const { models, model } = createTransportForProfile(settings.ai, apiKey, profile.id);
     const contextWindow = model.contextWindow;
-    const systemPrompt =
-      `${buildSystemPrompt(request, connection, dialect, AGENT_SKILL_LIMITS_PROMPT)}\n` +
-      "Use search_skills before relying on domain knowledge that may exist in the internal Skill library.\n" +
-      formatSkillsForSystemPrompt(promptSkills.map((item) => item.skill));
+    const systemPrompt = buildSystemPrompt(AGENT_SKILL_LIMITS_PROMPT);
+    const skillMetadata = formatSkillsForSystemPrompt(promptSkills.map((item) => item.skill));
     if (agentMetrics.isOpen()) {
       agentMetrics.addEvent(metricRunId, { type: "system_prompt", payload: systemPrompt });
       for (const skill of promptSkills) {
@@ -665,7 +651,6 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
     plan = new ExecutionPlanStore(runId, (snapshot) => {
       emit({ type: "plan_updated", runId, plan: snapshot });
     });
-    await appendPlanEntry(session, runId, plan);
 
     const emitUsage = async (estimated: boolean) => {
       const context = await session.buildContext();
@@ -696,6 +681,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       model,
       thinkingLevel: "off",
       systemPrompt,
+      streamOptions: { cacheRetention: "short" },
       resources: { skills: promptSkills.map((item) => item.skill) },
       tools: createAgentTools({
         ctx: {
@@ -755,6 +741,14 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           },
           onCanvasUpdated: (event) => emit({ type: "canvas_updated", runId, ...event }),
           plan,
+          persistPlan: (snapshot) => appendPlanEntry(session!, snapshot).then(() => undefined),
+          rewriteTargets: new Map(
+            (request.attachments ?? []).flatMap((attachment) =>
+              attachment.kind === "runsql" && attachment.rewriteTargetId
+                ? [[attachment.rewriteTargetId, { sql: attachment.sql, sourcePath: attachment.sourcePath }]]
+                : [],
+            ),
+          ),
           recordRun: recordAgentRun(vaultPath),
           onSkillMaintenance: (record) => normalSkillActions.push(record),
           onSkillUsage: (record) => {
@@ -853,7 +847,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         await compactOnce();
       }
 
-      const userContent = buildUserContent(request);
+      const userContent = buildUserContent(request, { connection, dialect, skillMetadata });
       let result = await harness.prompt(userContent);
       await emitUsage(false);
 
@@ -1008,9 +1002,6 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         }
         for (const response of historyResponses.get(runId) ?? []) {
           await appendAgentHistoryProposalResponse(historyStorage, response);
-        }
-        if (session && plan) {
-          await appendPersistedPlanEntry(session, runId, plan.get());
         }
         await appendAgentHistoryFinished(historyStorage, runId);
         emit({ type: "history_updated", runId });

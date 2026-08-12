@@ -68,8 +68,6 @@ export function buildEvalSettings(model: string, baseUrl: string): AiSettings {
     model,
     hasApiKey: true,
     contextWindow: profile.contextWindow,
-    sendResultSamples: false,
-    maxSampleRows: 0,
     agentMaxIterations: 1,
     agentWallClockMs: 60_000,
     // 评测永不写库：mutation 一律在 proposal 环节拒掉。

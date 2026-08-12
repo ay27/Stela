@@ -145,8 +145,6 @@ const AI_DEFAULT: AiSettings = syncActiveMirrors({
   ],
   inlineCompletionEnabled: false,
   completionProfileId: null,
-  sendResultSamples: true,
-  maxSampleRows: 20,
   agentMaxIterations: 200,
   agentWallClockMs: 300_000,
   agentAllowMutations: false,
@@ -183,10 +181,6 @@ function sanitizeAi(input: unknown): AiSettings {
     r.providerMode === "openai-compatible" || r.providerMode === "cloud"
       ? r.providerMode
       : "disabled";
-  const maxSampleRows =
-    typeof r.maxSampleRows === "number" && Number.isFinite(r.maxSampleRows)
-      ? Math.min(100, Math.max(0, Math.floor(r.maxSampleRows)))
-      : AI_DEFAULT.maxSampleRows;
   const agentMaxIterations =
     typeof r.agentMaxIterations === "number" && Number.isFinite(r.agentMaxIterations)
       ? Math.min(10_000, Math.max(1, Math.floor(r.agentMaxIterations)))
@@ -246,11 +240,6 @@ function sanitizeAi(input: unknown): AiSettings {
     inlineCompletionEnabled:
       r.inlineCompletionEnabled === true && completionProfileId !== null,
     completionProfileId,
-    sendResultSamples:
-      r.sendResultSamples === undefined
-        ? AI_DEFAULT.sendResultSamples
-        : r.sendResultSamples === true,
-    maxSampleRows,
     agentMaxIterations,
     agentWallClockMs,
     agentAllowMutations: r.agentAllowMutations === true,

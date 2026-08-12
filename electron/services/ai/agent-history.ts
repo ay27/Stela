@@ -17,8 +17,11 @@ import type {
   AgentHistoryRun,
   AgentHistorySession,
   AgentHistorySummary,
+  AgentMessageContent,
+  AgentMessageResource,
   AgentProposalResponse,
   AgentRunRequest,
+  AgentWorkspaceContext,
 } from "@shared/types";
 
 import { ensureWithinVault } from "../vault-fs";
@@ -100,7 +103,7 @@ function isProposalPayload(value: unknown): boolean {
   const payload = asRecord(value);
   return !!payload &&
     typeof payload.description === "string" &&
-    ["notePath", "sql", "oldContent", "newContent", "question"].every(
+    ["targetId", "notePath", "sql", "oldContent", "newContent", "question"].every(
       (key) => payload[key] === undefined || typeof payload[key] === "string",
     ) &&
     (payload.options === undefined ||
@@ -160,7 +163,7 @@ function asAgentEvent(value: unknown): AgentEvent | null {
     case "proposal": {
       const payload = asRecord(event.payload);
       return typeof event.callId === "string" &&
-        (event.kind === "edit_note" || event.kind === "mutation_sql" || event.kind === "question") &&
+        (event.kind === "edit_note" || event.kind === "runsql_rewrite" || event.kind === "mutation_sql" || event.kind === "question") &&
         isProposalPayload(payload)
         ? event as AgentEvent
         : null;
@@ -198,6 +201,45 @@ function asProposalResponse(value: unknown): AgentProposalResponse | null {
     : null;
 }
 
+function asAgentMessage(value: unknown): AgentMessageContent | undefined {
+  const message = asRecord(value);
+  if (!message || message.version !== 1 || !Array.isArray(message.segments) || !Array.isArray(message.resources)) {
+    return undefined;
+  }
+  const segments = message.segments.flatMap((item) => {
+    const segment = asRecord(item);
+    if (segment?.kind === "text" && typeof segment.text === "string") {
+      return [{ kind: "text" as const, text: segment.text }];
+    }
+    if (segment?.kind === "resource" && typeof segment.resourceId === "string") {
+      return [{ kind: "resource" as const, resourceId: segment.resourceId }];
+    }
+    return [];
+  });
+  const resources = message.resources.filter((item): item is AgentMessageResource => {
+    const resource = asRecord(item);
+    if (!resource || typeof resource.id !== "string" || typeof resource.label !== "string") return false;
+    if (resource.kind === "table") return typeof resource.table === "string";
+    if (resource.kind === "note" || resource.kind === "canvas") return typeof resource.path === "string";
+    if (resource.kind === "selection") return typeof resource.text === "string";
+    if (resource.kind === "runsql") return typeof resource.sql === "string";
+    return false;
+  });
+  return { version: 1, segments, resources };
+}
+
+function asWorkspaceContext(value: unknown): AgentWorkspaceContext | undefined {
+  const context = asRecord(value);
+  if (
+    !context ||
+    (context.kind !== "note" && context.kind !== "canvas") ||
+    typeof context.path !== "string"
+  ) {
+    return undefined;
+  }
+  return { kind: context.kind, path: context.path };
+}
+
 function asRunRequest(value: unknown): AgentRunRequest | null {
   const request = asRecord(value);
   if (!request || typeof request.runId !== "string" || typeof request.prompt !== "string") return null;
@@ -223,6 +265,8 @@ function asRunRequest(value: unknown): AgentRunRequest | null {
           label: attachment.label,
           sql: attachment.sql,
           ...(typeof attachment.sourcePath === "string" ? { sourcePath: attachment.sourcePath } : {}),
+          ...(typeof attachment.rewriteTargetId === "string" ? { rewriteTargetId: attachment.rewriteTargetId } : {}),
+          ...(typeof attachment.errorMessage === "string" ? { errorMessage: attachment.errorMessage } : {}),
         });
       } else if (attachment.kind === "selection" && typeof attachment.text === "string") {
         parsed.push({
@@ -236,10 +280,17 @@ function asRunRequest(value: unknown): AgentRunRequest | null {
     return parsed.length > 0 ? parsed : undefined;
   };
   const parsedAttachments = attachments(request.attachments);
+  const message = asAgentMessage(request.message);
+  const workspaceContext = asWorkspaceContext(request.workspaceContext);
   return {
     runId: request.runId,
     prompt: request.prompt,
+    ...(["chat", "runsql-fix", "runsql-rewrite", "runsql-ask", "schema-explain"].includes(String(request.entryPoint))
+      ? { entryPoint: request.entryPoint as AgentRunRequest["entryPoint"] }
+      : {}),
     ...(typeof request.sessionId === "string" ? { sessionId: request.sessionId } : {}),
+    ...(message ? { message } : {}),
+    ...(workspaceContext ? { workspaceContext } : {}),
     ...(strings(request.mentionedTables) ? { mentionedTables: strings(request.mentionedTables) } : {}),
     ...(strings(request.referencedNotes) ? { referencedNotes: strings(request.referencedNotes) } : {}),
     ...(parsedAttachments ? { attachments: parsedAttachments } : {}),

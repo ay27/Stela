@@ -19,7 +19,6 @@ import { SqlTemplateDialog } from "@/components/sql-template-dialog";
 import { SqlTemplatePicker } from "@/components/sql-template-picker";
 import { ExportNoteDialog } from "@/components/export-note-dialog";
 import { SettingsDialog } from "@/components/settings-dialog";
-import { AiModal } from "@/components/ai/ai-modal";
 import { addFocusedContextToChat } from "@/components/ai/add-to-chat";
 import { TabSwitcher } from "@/components/tab-switcher";
 import {
@@ -369,7 +368,6 @@ export function AppShell() {
         onSaved={(fileName, revealToken) => setExportToast({ fileName, revealToken })}
       />
       <TabSwitcher />
-      <AiModal />
       {quitting ? (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-background/70 backdrop-blur-sm">
           <div className="flex items-center gap-3 rounded-lg border border-border bg-popover px-5 py-4 text-sm shadow-xl">

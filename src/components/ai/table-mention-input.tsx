@@ -1,414 +1,275 @@
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
+  useState,
 } from "react";
-import {
-  Mentions,
-  extractMentions,
-  parseMarkup,
-  type MentionItem,
-  type MentionsHandle,
-  type TriggerConfig,
-} from "@skyastrall/mentions-react";
+import { getCursorOffset, restoreCursor, type MentionItem, type TriggerConfig } from "@skyastrall/mentions-core";
+import { Mentions, type MentionsHandle } from "@skyastrall/mentions-react";
 
+import type { AgentMessageContent, AgentMessageResource } from "@shared/types";
 import { cn } from "@/lib/utils";
-import { fuzzyFilter } from "@/lib/fuzzy";
+import {
+  AGENT_RESOURCE_MARKUP,
+  AGENT_RESOURCE_TRIGGER,
+  agentResourceMentionItem,
+  emptyAgentMessage,
+  isAgentMessageEmpty,
+  markupToMessage,
+  messageToMarkup,
+} from "@/lib/agent-message";
 
 import { shouldSubmitPrompt } from "./prompt-input-keyboard";
 import "./table-mention-input.css";
 
-const TABLE_TRIGGER = "@";
-const TABLE_MARKUP = "@[__display__](__id__)";
-const NOTE_TRIGGER = "[[";
-const NOTE_MARKUP = "[[__display__]](__id__)";
-const NOTE_MENTION_COLOR = "hsl(48 96% 89%)";
-const PORTAL_GAP_PX = 4;
-const PORTAL_MARGIN_PX = 8;
-
 export interface TableMentionInputValue {
-  text: string;
-  mentionedTables: string[];
-  referencedNotes: string[];
+  message: AgentMessageContent;
+  cursorOffset: number;
   isEmpty: boolean;
-}
-
-export interface TableMentionInputSubmitPayload {
-  text: string;
-  mentionedTables: string[];
-  referencedNotes: string[];
 }
 
 export interface TableMentionInputHandle {
   focus: () => void;
   clear: () => void;
-  getValue: () => TableMentionInputValue;
-  setDisabled?: (disabled: boolean) => void;
+  openResourcePicker: () => void;
 }
 
 export interface TableMentionInputProps {
   placeholder?: string;
-  initialValue?: string;
+  value: AgentMessageContent;
+  cursorOffset: number;
   disabled?: boolean;
+  submitEnabled?: boolean;
   className?: string;
   minHeightPx?: number;
-  getTableNamesCached?: () => string[];
-  getTableNames: () => Promise<string[]>;
-  getNoteCandidates?: (query: string) => Promise<MentionItem[]>;
+  getResourceCandidates: (query: string) => Promise<AgentMessageResource[]>;
   onChange?: (value: TableMentionInputValue) => void;
-  onSubmit?: (payload: TableMentionInputSubmitPayload) => void;
+  onSubmit?: (message: AgentMessageContent) => void;
   onCancel?: () => void;
   onOpenChange?: (open: boolean) => void;
+  onOpenResource?: (resource: AgentMessageResource) => void;
 }
 
-function unique(values: string[]): string[] {
-  return Array.from(new Set(values.filter(Boolean)));
+function editorIn(container: HTMLElement | null): HTMLElement | null {
+  return container?.querySelector<HTMLElement>(".stela-table-mention__editor") ?? null;
 }
 
-function tableItems(names: string[]): MentionItem[] {
-  return unique(names).map((name) => ({ id: name, label: name }));
+function selectionBelongsTo(editor: HTMLElement): boolean {
+  const selection = window.getSelection();
+  if (!selection?.anchorNode) return false;
+  return selection.anchorNode === editor || editor.contains(selection.anchorNode);
 }
 
-function hasVisibleMentionList(): boolean {
-  if (typeof document === "undefined") return false;
-  return Array.from(
-    document.querySelectorAll<HTMLElement>("[data-mentions-portal] .stela-table-mention__list"),
-  ).some((el) => el.getClientRects().length > 0);
-}
-
-/** Clamp/flip mentions portal so the list stays inside the app window. */
-function clampMentionsPortal(
-  portal: HTMLElement,
-  caretBottomAnchor: { current: number | null },
-  resetAnchor: boolean,
-): void {
-  const rect = portal.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0) return;
-
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  let top = Number.parseFloat(portal.style.top);
-  let left = Number.parseFloat(portal.style.left);
-  if (!Number.isFinite(top)) top = rect.top;
-  if (!Number.isFinite(left)) left = rect.left;
-
-  // Library places portal at caret.bottom + GAP. Remember that anchor so resize
-  // after a flip does not treat the flipped top as a new caret position.
-  if (resetAnchor || caretBottomAnchor.current == null) {
-    caretBottomAnchor.current = top - PORTAL_GAP_PX;
-  }
-  const caretBottom = caretBottomAnchor.current;
-  const spaceBelow = vh - caretBottom - PORTAL_MARGIN_PX;
-  if (rect.height > spaceBelow && caretBottom - PORTAL_GAP_PX - rect.height >= PORTAL_MARGIN_PX) {
-    top = caretBottom - PORTAL_GAP_PX - rect.height;
-  } else {
-    top = Math.min(caretBottom + PORTAL_GAP_PX, vh - rect.height - PORTAL_MARGIN_PX);
-    top = Math.max(PORTAL_MARGIN_PX, top);
-  }
-
-  left = Math.min(left, vw - rect.width - PORTAL_MARGIN_PX);
-  left = Math.max(PORTAL_MARGIN_PX, left);
-
-  if (portal.style.top !== `${top}px`) portal.style.top = `${top}px`;
-  if (portal.style.left !== `${left}px`) portal.style.left = `${left}px`;
-}
-
-function attachMentionsPortalClamp(): () => void {
-  let cancelled = false;
-  let portal: HTMLElement | null = null;
-  let resizeObserver: ResizeObserver | null = null;
-  let styleObserver: MutationObserver | null = null;
-  let clampRaf = 0;
-  let findRaf = 0;
-  let attempts = 0;
-  const caretBottomAnchor: { current: number | null } = { current: null };
-  let pendingResetAnchor = true;
-
-  const runClamp = () => {
-    if (!portal || cancelled) return;
-    const reset = pendingResetAnchor;
-    pendingResetAnchor = false;
-    // Avoid MutationObserver feedback while we rewrite top/left.
-    styleObserver?.disconnect();
-    try {
-      clampMentionsPortal(portal, caretBottomAnchor, reset);
-    } finally {
-      if (portal && !cancelled) {
-        styleObserver?.observe(portal, { attributes: true, attributeFilter: ["style"] });
-      }
-    }
-  };
-
-  const scheduleClamp = (resetAnchor = false) => {
-    if (!portal || cancelled) return;
-    if (resetAnchor) pendingResetAnchor = true;
-    if (clampRaf) cancelAnimationFrame(clampRaf);
-    clampRaf = requestAnimationFrame(() => {
-      clampRaf = 0;
-      runClamp();
-    });
-  };
-
-  const bindPortal = (el: HTMLElement) => {
-    portal = el;
-    resizeObserver = new ResizeObserver(() => scheduleClamp(false));
-    resizeObserver.observe(el);
-    styleObserver = new MutationObserver(() => scheduleClamp(true));
-    styleObserver.observe(el, { attributes: true, attributeFilter: ["style"] });
-    scheduleClamp(true);
-  };
-
-  const findAndBind = () => {
-    if (cancelled || portal) return;
-    const el = document.querySelector<HTMLElement>("[data-mentions-portal]");
-    if (el) {
-      bindPortal(el);
-      return;
-    }
-    if (++attempts < 30) {
-      findRaf = requestAnimationFrame(findAndBind);
-    }
-  };
-
-  findAndBind();
-
-  return () => {
-    cancelled = true;
-    if (clampRaf) cancelAnimationFrame(clampRaf);
-    if (findRaf) cancelAnimationFrame(findRaf);
-    resizeObserver?.disconnect();
-    styleObserver?.disconnect();
-  };
-}
-
-function serializeMarkup(markup: string, triggers: TriggerConfig[]): TableMentionInputValue {
-  const segments = parseMarkup(markup, triggers);
-  // 表 → `@id`；笔记 → `[[id]]`（id 即 vault 路径）。必须上屏，否则用户以为没发出去。
-  // 正文仍不嵌文件内容——路径走 referencedNotes，由模型 read_note（ADR-0016）。
-  const text = segments
-    .map((segment) => {
-      if (segment.type !== "mention") return segment.text;
-      if (segment.trigger === TABLE_TRIGGER) return `${segment.trigger}${segment.id}`;
-      if (segment.trigger === NOTE_TRIGGER) return `[[${segment.id}]]`;
-      return "";
-    })
-    .join("")
-    .trim();
-  const mentions = extractMentions(markup, triggers);
-  const mentionedTables = unique(
-    mentions
-      .filter((item) => item.trigger === TABLE_TRIGGER)
-      .map((item) => item.id),
-  );
-  const referencedNotes = unique(
-    mentions
-      .filter((item) => item.trigger === NOTE_TRIGGER)
-      .map((item) => item.id),
-  );
-  return {
-    text,
-    mentionedTables,
-    referencedNotes,
-    isEmpty: text.length === 0 && referencedNotes.length === 0,
-  };
+/** Core offsets count pill labels; snap any restored range out of non-editable pill DOM. */
+function restoreEditableCursor(editor: HTMLElement, offset: number): void {
+  editor.focus();
+  restoreCursor(editor, offset);
+  const selection = window.getSelection();
+  const anchor = selection?.anchorNode;
+  if (!selection || !anchor) return;
+  const anchorElement = anchor.nodeType === Node.ELEMENT_NODE
+    ? anchor as Element
+    : anchor.parentElement;
+  const pill = anchorElement?.closest<HTMLElement>("mark[data-mention][contenteditable=false]");
+  if (!pill || !editor.contains(pill)) return;
+  const range = document.createRange();
+  range.setStartAfter(pill);
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
 }
 
 export const TableMentionInput = forwardRef<TableMentionInputHandle, TableMentionInputProps>(
   function TableMentionInput(
     {
       placeholder,
-      initialValue = "",
+      value,
+      cursorOffset,
       disabled = false,
+      submitEnabled = true,
       className,
       minHeightPx = 28,
-      getTableNamesCached,
-      getTableNames,
-      getNoteCandidates,
+      getResourceCandidates,
       onChange,
       onSubmit,
       onCancel,
       onOpenChange,
+      onOpenResource,
     },
     ref,
   ) {
     const mentionsRef = useRef<MentionsHandle>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
     const composingRef = useRef(false);
     const openRef = useRef(false);
-    const clampCleanupRef = useRef<(() => void) | null>(null);
-    const tableNamesRef = useRef<string[]>(getTableNamesCached?.() ?? []);
-    const valueRef = useRef<TableMentionInputValue>({
-      text: initialValue.trim(),
-      mentionedTables: [],
-      referencedNotes: [],
-      isEmpty: initialValue.trim().length === 0,
-    });
+    const resourcesRef = useRef(new Map(value.resources.map((resource) => [resource.id, resource])));
+    const emittedMarkupRef = useRef(messageToMarkup(value));
+    const currentMessageRef = useRef(value);
+    const savedCursorOffsetRef = useRef(cursorOffset);
+    const restoreOffsetRef = useRef<number | null>(null);
+    const [markup, setMarkup] = useState(emittedMarkupRef.current);
     const portalContainer = typeof document !== "undefined" ? document.body : undefined;
 
-    useEffect(() => {
-      let cancelled = false;
-      tableNamesRef.current = getTableNamesCached?.() ?? [];
-      void getTableNames()
-        .then((names) => {
-          if (!cancelled) tableNamesRef.current = names;
-        })
-        .catch(() => {});
-      return () => {
-        cancelled = true;
-      };
-    }, [getTableNamesCached, getTableNames]);
+    const focusAtSavedCursor = useCallback(() => {
+      const editor = editorIn(containerRef.current);
+      if (!editor) return;
+      if (!selectionBelongsTo(editor)) restoreEditableCursor(editor, savedCursorOffsetRef.current);
+      else editor.focus();
+    }, []);
 
-    useEffect(
-      () => () => {
-        clampCleanupRef.current?.();
-        clampCleanupRef.current = null;
+    const syncCursor = useCallback(() => {
+      const editor = editorIn(containerRef.current);
+      const nextOffset = editor && selectionBelongsTo(editor)
+        ? getCursorOffset(editor)
+        : savedCursorOffsetRef.current;
+      savedCursorOffsetRef.current = nextOffset;
+      const message = currentMessageRef.current;
+      onChange?.({ message, cursorOffset: nextOffset, isEmpty: isAgentMessageEmpty(message) });
+    }, [onChange]);
+
+    const trigger = useMemo<TriggerConfig>(() => ({
+      char: AGENT_RESOURCE_TRIGGER,
+      markup: AGENT_RESOURCE_MARKUP,
+      minChars: 0,
+      debounce: 40,
+      maxSuggestions: 24,
+      allowSpaceInQuery: true,
+      color: "hsl(var(--primary) / 0.14)",
+      data: async (query: string) => {
+        const resources = await getResourceCandidates(query);
+        for (const resource of resources) resourcesRef.current.set(resource.id, resource);
+        return resources.map(agentResourceMentionItem);
       },
-      [],
-    );
+    }), [getResourceCandidates]);
+    const triggers = useMemo(() => [trigger], [trigger]);
 
-    const triggers = useMemo<TriggerConfig[]>(
-      () => [
-        {
-          char: TABLE_TRIGGER,
-          markup: TABLE_MARKUP,
-          minChars: 0,
-          debounce: 0,
-          maxSuggestions: 12,
-          color: "hsl(var(--primary) / 0.14)",
-          data: (query) => {
-            const cached = getTableNamesCached?.() ?? [];
-            if (cached.length > 0) tableNamesRef.current = cached;
-            const names = tableNamesRef.current;
-            const needle = query.trim();
-            const matched = needle ? fuzzyFilter(needle, names, (name) => name, 12) : names.slice(0, 12);
-            return Promise.resolve(tableItems(matched));
-          },
-        },
-        ...(getNoteCandidates
-          ? [
-              {
-                char: NOTE_TRIGGER,
-                markup: NOTE_MARKUP,
-                minChars: 0,
-                debounce: 80,
-                maxSuggestions: 12,
-                color: NOTE_MENTION_COLOR,
-                data: (query: string) => getNoteCandidates(query),
-              },
-            ]
-          : []),
-      ],
-      [getTableNamesCached, getNoteCandidates],
-    );
+    useEffect(() => {
+      for (const resource of value.resources) resourcesRef.current.set(resource.id, resource);
+      const nextMarkup = messageToMarkup(value);
+      currentMessageRef.current = value;
+      savedCursorOffsetRef.current = cursorOffset;
+      if (nextMarkup === emittedMarkupRef.current || nextMarkup === markup) return;
+      emittedMarkupRef.current = nextMarkup;
+      restoreOffsetRef.current = cursorOffset;
+      setMarkup(nextMarkup);
+    }, [cursorOffset, markup, value]);
 
-    const syncValue = (markup: string): TableMentionInputValue => {
-      const next = serializeMarkup(markup, triggers);
-      valueRef.current = next;
-      onChange?.(next);
-      return next;
-    };
+    useEffect(() => {
+      if (restoreOffsetRef.current === null) return;
+      const offset = restoreOffsetRef.current;
+      restoreOffsetRef.current = null;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const editor = editorIn(containerRef.current);
+          if (editor) restoreEditableCursor(editor, offset);
+        });
+      });
+    }, [markup]);
+
+    const clear = useCallback(() => {
+      resourcesRef.current.clear();
+      emittedMarkupRef.current = "";
+      currentMessageRef.current = emptyAgentMessage();
+      savedCursorOffsetRef.current = 0;
+      setMarkup("");
+      onChange?.({ message: currentMessageRef.current, cursorOffset: 0, isEmpty: true });
+    }, [onChange]);
 
     useImperativeHandle(ref, () => ({
-      focus: () => mentionsRef.current?.focus(),
-      clear: () => {
-        mentionsRef.current?.clear();
-        syncValue("");
+      focus: focusAtSavedCursor,
+      clear,
+      openResourcePicker: () => {
+        focusAtSavedCursor();
+        mentionsRef.current?.insertTrigger(AGENT_RESOURCE_TRIGGER);
       },
-      getValue: () => valueRef.current,
-    }));
-
-    useEffect(() => {
-      const next = serializeMarkup(initialValue, triggers);
-      valueRef.current = next;
-    }, [initialValue, triggers]);
+    }), [clear, focusAtSavedCursor]);
 
     const submit = () => {
-      if (disabled) return;
-      const current = valueRef.current;
-      if (current.isEmpty) return;
-      onSubmit?.({
-        text: current.text,
-        mentionedTables: current.mentionedTables,
-        referencedNotes: current.referencedNotes,
-      });
+      if (disabled || !submitEnabled) return;
+      const message = markupToMessage(markup, resourcesRef.current.values());
+      if (!isAgentMessageEmpty(message)) onSubmit?.(message);
     };
 
     return (
       <div
+        ref={containerRef}
         className={cn("stela-table-mention", disabled && "is-disabled", className)}
         style={{ minHeight: minHeightPx }}
-        onCompositionStartCapture={() => {
-          composingRef.current = true;
+        onCompositionStartCapture={() => { composingRef.current = true; }}
+        onCompositionEndCapture={() => { composingRef.current = false; }}
+        onMouseUpCapture={() => requestAnimationFrame(() => syncCursor())}
+        onClickCapture={(event) => {
+          const mark = (event.target as HTMLElement | null)?.closest<HTMLElement>("mark[data-id]");
+          const resource = mark ? resourcesRef.current.get(mark.dataset.id ?? "") : undefined;
+          if (!resource || !onOpenResource) return;
+          event.preventDefault();
+          event.stopPropagation();
+          onOpenResource(resource);
         }}
-        onCompositionEndCapture={() => {
-          composingRef.current = false;
+        onKeyUpCapture={() => requestAnimationFrame(() => syncCursor())}
+        onMouseDown={(event) => {
+          if (disabled || (event.target as HTMLElement | null)?.closest(".stela-table-mention__editor")) return;
+          event.preventDefault();
+          focusAtSavedCursor();
         }}
-        onMouseDown={(ev) => {
-          if (disabled) return;
-          const target = ev.target as HTMLElement | null;
-          if (target?.closest(".stela-table-mention__editor")) return;
-          ev.preventDefault();
-          mentionsRef.current?.focus();
-        }}
-        onKeyDownCapture={(ev) => {
-          if (shouldSubmitPrompt(ev, composingRef.current)) {
-            if (openRef.current && hasVisibleMentionList()) return;
-            openRef.current = false;
-            ev.preventDefault();
-            ev.stopPropagation();
+        onKeyDownCapture={(event) => {
+          if (shouldSubmitPrompt(event, composingRef.current)) {
+            if (openRef.current) return;
+            event.preventDefault();
+            event.stopPropagation();
             submit();
-            return;
-          }
-          if (ev.key === "Escape") {
-            if (openRef.current && hasVisibleMentionList()) {
-              openRef.current = false;
-              return;
-            }
-            openRef.current = false;
-          }
-          if (ev.key === "Escape" && onCancel) {
-            ev.preventDefault();
-            ev.stopPropagation();
+          } else if (event.key === "Escape" && !openRef.current && onCancel) {
+            event.preventDefault();
+            event.stopPropagation();
             onCancel();
           }
         }}
-        onKeyDown={(ev) => {
-          ev.stopPropagation();
-        }}
+        onKeyDown={(event) => event.stopPropagation()}
       >
         <Mentions
           ref={mentionsRef}
           triggers={triggers}
-          defaultValue={initialValue}
+          value={markup}
           disabled={disabled}
-          onChange={(markup) => {
-            syncValue(markup);
+          onChange={(nextMarkup) => {
+            emittedMarkupRef.current = nextMarkup;
+            setMarkup(nextMarkup);
+            const message = markupToMessage(nextMarkup, resourcesRef.current.values());
+            currentMessageRef.current = message;
+            const editor = editorIn(containerRef.current);
+            const nextOffset = editor && selectionBelongsTo(editor)
+              ? getCursorOffset(editor)
+              : savedCursorOffsetRef.current;
+            savedCursorOffsetRef.current = nextOffset;
+            onChange?.({ message, cursorOffset: nextOffset, isEmpty: isAgentMessageEmpty(message) });
           }}
           onOpen={() => {
             openRef.current = true;
             onOpenChange?.(true);
-            clampCleanupRef.current?.();
-            clampCleanupRef.current = attachMentionsPortalClamp();
           }}
           onClose={() => {
             openRef.current = false;
             onOpenChange?.(false);
-            clampCleanupRef.current?.();
-            clampCleanupRef.current = null;
           }}
         >
-          <Mentions.Editor
-            className="stela-table-mention__editor"
-            placeholder={placeholder}
-            disabled={disabled}
-          />
+          <Mentions.Editor className="stela-table-mention__editor" placeholder={placeholder} disabled={disabled} />
           <Mentions.Portal container={portalContainer}>
             <Mentions.List className="stela-table-mention__list">
               <Mentions.Empty className="stela-table-mention__empty">—</Mentions.Empty>
               <Mentions.Item
                 className="stela-table-mention__item"
-                render={({ item }) => <span>{item.label}</span>}
+                render={({ item }: { item: MentionItem }) => {
+                  const resource = resourcesRef.current.get(item.id);
+                  return resource ? (
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className={`stela-resource-kind stela-resource-kind--${resource.kind}`}>{resource.kind}</span>
+                      <span className="truncate">{resource.label}</span>
+                    </span>
+                  ) : <span>{item.label}</span>;
+                }}
               />
             </Mentions.List>
           </Mentions.Portal>

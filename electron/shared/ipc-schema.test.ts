@@ -6,21 +6,18 @@ import { parseInput } from "./ipc-schema";
 const parsed = parseInput<{
   patch: {
     ai?: {
-      sendResultSamples?: boolean;
-      maxSampleRows?: number;
+      agentAllowMutations?: boolean;
     };
   };
 }>(IPC.SETTINGS_PATCH, {
   patch: {
     ai: {
-      sendResultSamples: true,
-      maxSampleRows: 20,
+      agentAllowMutations: true,
     },
   },
 });
 
-assert.equal(parsed.patch.ai?.sendResultSamples, true);
-assert.equal(parsed.patch.ai?.maxSampleRows, 20);
+assert.equal(parsed.patch.ai?.agentAllowMutations, true);
 
 assert.deepEqual(parseInput(IPC.AI_AGENT_HISTORY_LIST, {}), {});
 assert.deepEqual(
@@ -47,6 +44,31 @@ assert.deepEqual(
     },
   },
 );
+
+const orderedAgentRequest = {
+  request: {
+    runId: "run_ordered",
+    prompt: "Compare [table: analytics.orders] twice",
+    workspaceContext: { kind: "note" as const, path: "reports/orders.md" },
+    message: {
+      version: 1 as const,
+      segments: [
+        { kind: "text" as const, text: "Compare " },
+        { kind: "resource" as const, resourceId: "resource_table_orders" },
+        { kind: "text" as const, text: " with " },
+        { kind: "resource" as const, resourceId: "resource_table_orders" },
+      ],
+      resources: [{
+        id: "resource_table_orders",
+        kind: "table" as const,
+        label: "analytics.orders",
+        table: "analytics.orders",
+        connectionName: "warehouse",
+      }],
+    },
+  },
+};
+assert.deepEqual(parseInput(IPC.AI_AGENT_RUN, orderedAgentRequest), orderedAgentRequest);
 
 assert.deepEqual(
   parseInput(IPC.CANVAS_CREATE, {

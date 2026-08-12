@@ -2,7 +2,8 @@
 type: ADR
 id: "0014"
 title: "AI context assembly with redaction and schema enrichment"
-status: active
+status: superseded
+superseded_by: "0059"
 date: 2026-06-25
 ---
 

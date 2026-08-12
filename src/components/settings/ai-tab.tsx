@@ -214,8 +214,6 @@ export function AiTab() {
       const next = await window.stela.ai.configure(
         {
           providerMode: settings.providerMode,
-          sendResultSamples: settings.sendResultSamples,
-          maxSampleRows: settings.maxSampleRows,
           agentAllowMutations: settings.agentAllowMutations,
           activeProfileId: draft.id,
           profiles: nextProfiles,
@@ -719,27 +717,6 @@ export function AiTab() {
         title={t("ai.policy.title")}
         description={t("ai.policy.description")}
       >
-        <Row
-          label={t("ai.samples.label")}
-          description={t("ai.samples.description")}
-        >
-          <Toggle
-            checked={settings.sendResultSamples}
-            onChange={(v) => void patch({ ai: { sendResultSamples: v } })}
-          />
-        </Row>
-        <Row label={t("ai.maxRows.label")} description={t("ai.maxRows.description")}>
-          <input
-            type="number"
-            min={0}
-            max={100}
-            value={settings.maxSampleRows}
-            onChange={(e) =>
-              void patch({ ai: { maxSampleRows: Number(e.target.value) } })
-            }
-            className="w-20 rounded-md border border-border bg-background px-2 py-1.5 text-[12px]"
-          />
-        </Row>
         <Row
           label={t("ai.agent.allowMutations.label")}
           description={t("ai.agent.allowMutations.description")}

@@ -22,6 +22,7 @@ import {
 } from "@shared/chart-spec";
 import type {
   AgentToolName,
+  AgentPlanSnapshot,
   AgentProposalKind,
   AgentProposalPayload,
   AiSettings,
@@ -183,6 +184,9 @@ export interface AgentToolContext {
    */
   run: { runId: string; sessionId?: string; notePath: string | null; questionsAsked: number };
   plan?: ExecutionPlanStore;
+  persistPlan?: (snapshot: AgentPlanSnapshot) => Promise<void>;
+  /** Renderer-owned rewrite targets explicitly attached to this run. */
+  rewriteTargets?: Map<string, { sql: string; sourcePath?: string }>;
   recordRun: AgentRunRecorder;
   requestProposal: (proposal: ProposalRequest) => Promise<boolean | string>;
 }
@@ -190,11 +194,11 @@ export interface AgentToolContext {
 /**
  * Build pi AgentTool wrappers around {@link dispatchTool}.
  *
- * Tools use `executionMode: "parallel"` so one assistant turn can fan out
- * schema/vault/SQL lookups. `propose_edit` stays sequential (ordered note
- * proposal UX). `run_sql` is parallel: sql-guard blocks writes by default and
- * mutations still wait on proposal. Pi rule: if any call in a batch is
- * sequential, the whole batch runs sequentially.
+ * Read-oriented tools use `executionMode: "parallel"` so one assistant turn can
+ * fan out schema/vault/SQL lookups. Stateful plan, Canvas, chart, and edit
+ * proposals stay sequential. `run_sql` is parallel: sql-guard blocks
+ * writes by default and mutations still wait on proposal. Pi rule: if any call
+ * in a batch is sequential, the whole batch runs sequentially.
  */
 export function createAgentTools(options: {
   ctx: Omit<AgentToolContext, "requestProposal">;
@@ -482,9 +486,15 @@ export function createAgentTools(options: {
       name: "propose_edit",
       label: "Propose edit",
       description:
-        "Propose editing a note. Use newContent to replace the whole file, or oldText/newText for one exact local replacement in long files. This never writes to disk directly — it shows the user a diff and waits for approval. Executable SQL in notes must use ```runsql``` fences (not ```sql```). Do not invent, delete, or rewrite trailing <detail> blocks unless the user explicitly asks.",
+        "Propose one user-reviewed edit. To replace the attached RunSQL block, pass its exact targetId plus the complete replacement sql. To edit a note, pass path plus either newContent, or oldText/newText for one exact local replacement. Choose the target explicitly; never mix RunSQL and note parameters. This never applies a change directly — it shows the appropriate diff and waits for approval. Executable SQL in notes must use ```runsql``` fences (not ```sql```). Do not invent, delete, or rewrite trailing <detail> blocks unless the user explicitly asks.",
       parameters: Type.Object({
-        path: Type.String(),
+        targetId: Type.Optional(
+          Type.String({ description: "Exact rewrite target id from the attached RunSQL block." }),
+        ),
+        sql: Type.Optional(
+          Type.String({ description: "Complete replacement SQL for targetId, without Markdown fences." }),
+        ),
+        path: Type.Optional(Type.String({ description: "Vault note path for a note edit." })),
         newContent: Type.Optional(
           Type.String({ description: "Full replacement content. Prefer oldText/newText for long notes." }),
         ),
@@ -677,11 +687,8 @@ async function runGetTableSchema(args: { tables?: unknown }, ctx: AgentToolConte
     matchReason: "agent get_table_schema",
     preferLocalSchemaDir: false,
     request: {
-      action: "explain-table",
       context: {
-        source: "schema",
-        connectionName: ctx.connectionName,
-        connector: { kind: connection.kind, displayName: connection.kind, dialect: resolveDialect(connection.kind, ctx) },
+        connector: { dialect: resolveDialect(connection.kind, ctx) },
       },
     },
     deps: {
@@ -1163,11 +1170,28 @@ async function runSaveSkill(
 }
 
 async function runProposeEdit(
-  args: { path?: unknown; newContent?: unknown; oldText?: unknown; newText?: unknown; description?: unknown },
+  args: {
+    targetId?: unknown;
+    sql?: unknown;
+    path?: unknown;
+    newContent?: unknown;
+    oldText?: unknown;
+    newText?: unknown;
+    description?: unknown;
+  },
   ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
+  const hasRunsqlParams = args.targetId !== undefined || args.sql !== undefined;
+  const hasNoteParams = args.path !== undefined || args.newContent !== undefined ||
+    args.oldText !== undefined || args.newText !== undefined;
+  if (hasRunsqlParams) {
+    if (hasNoteParams) {
+      return fail("Choose one edit target: pass targetId/sql for RunSQL, or note edit parameters, not both.");
+    }
+    return runProposeRunsqlEdit(args, ctx);
+  }
   if (typeof args.path !== "string" || !args.path.trim()) {
-    return fail("path must be a non-empty string.");
+    return fail("For a note edit, path must be a non-empty string. For RunSQL, pass targetId and sql.");
   }
   if (args.newContent !== undefined && typeof args.newContent !== "string") {
     return fail("newContent must be a string when provided.");
@@ -1216,6 +1240,37 @@ async function runProposeEdit(
   });
 }
 
+async function runProposeRunsqlEdit(
+  args: { targetId?: unknown; sql?: unknown; description?: unknown },
+  ctx: AgentToolContext,
+): Promise<ToolOutcome> {
+  const targetId = typeof args.targetId === "string" ? args.targetId.trim() : "";
+  const sql = typeof args.sql === "string" ? args.sql.trim() : "";
+  if (!targetId) return fail("targetId must be a non-empty string.");
+  if (!sql) return fail("sql must be a non-empty string.");
+  const target = ctx.rewriteTargets?.get(targetId);
+  if (!target) {
+    return fail("This RunSQL target was not explicitly attached to the current request.");
+  }
+  if (sql === target.sql.trim()) return fail("The proposed SQL is unchanged.");
+  const description = typeof args.description === "string" && args.description.trim()
+    ? args.description.trim()
+    : "Review the proposed RunSQL rewrite.";
+  const approved = await ctx.requestProposal({
+    kind: "runsql_rewrite",
+    payload: {
+      targetId,
+      ...(target.sourcePath ? { notePath: target.sourcePath } : {}),
+      description,
+      oldContent: truncate(target.sql, 12_000),
+      newContent: truncate(sql, 12_000),
+      sql,
+    },
+  });
+  if (!approved) return fail("The user rejected this RunSQL rewrite. Do not retry it as-is.");
+  return ok({ targetId, approved: true, message: "The renderer applied the approved RunSQL rewrite." });
+}
+
 async function runAskUser(
   args: { question?: unknown; options?: unknown; context?: unknown },
   ctx: AgentToolContext,
@@ -1248,29 +1303,31 @@ async function runAskUser(
   );
 }
 
-function runCreatePlan(args: { steps?: unknown }, ctx: AgentToolContext): ToolOutcome {
+async function runCreatePlan(args: { steps?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
   if (!ctx.plan) return fail("Execution plans are unavailable for this run.");
   if (!Array.isArray(args.steps)) return fail("steps must be an array.");
-  return ok(ctx.plan.create(args.steps as CreatePlanStep[]));
+  const snapshot = ctx.plan.create(args.steps as CreatePlanStep[]);
+  await ctx.persistPlan?.(snapshot);
+  return ok(snapshot);
 }
 
-function runUpdatePlan(
+async function runUpdatePlan(
   args: { stepId?: unknown; status?: unknown; evidence?: unknown; runId?: unknown },
   ctx: AgentToolContext,
-): ToolOutcome {
+): Promise<ToolOutcome> {
   if (!ctx.plan) return fail("Execution plans are unavailable for this run.");
   if (typeof args.stepId !== "string") return fail("stepId must be a string.");
   if (args.status !== "completed" && args.status !== "blocked" && args.status !== "skipped") {
     return fail("status must be completed, blocked, or skipped.");
   }
-  return ok(
-    ctx.plan.update({
+  const snapshot = ctx.plan.update({
       stepId: args.stepId,
       status: args.status,
       ...(typeof args.evidence === "string" ? { evidence: args.evidence } : {}),
       ...(typeof args.runId === "string" ? { runId: args.runId } : {}),
-    }),
-  );
+    });
+  await ctx.persistPlan?.(snapshot);
+  return ok(snapshot);
 }
 
 function runGetPlan(ctx: AgentToolContext): ToolOutcome {
@@ -1325,9 +1382,9 @@ export async function dispatchTool(
       case "read_note":
         return await runReadNote(args, ctx);
       case "create_plan":
-        return runCreatePlan(args, ctx);
+        return await runCreatePlan(args, ctx);
       case "update_plan":
-        return runUpdatePlan(args, ctx);
+        return await runUpdatePlan(args, ctx);
       case "get_plan":
         return runGetPlan(ctx);
       case "load_skill":

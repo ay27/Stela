@@ -8,16 +8,25 @@
 import { create } from "zustand";
 
 import type {
-  AgentAttachment,
+  AgentEntryPoint,
   AgentEvent,
   AgentHistoryRef,
   AgentHistorySession,
   AgentHistorySummary,
+  AgentMessageResourceInput,
   AgentPlanSnapshot,
   AgentProposalKind,
   AgentProposalPayload,
   AgentToolCallInfo,
+  AgentMessageContent,
+  AgentWorkspaceContext,
 } from "@shared/types";
+import { agentMessagePlainText, requestAgentMessage } from "@shared/agent-message";
+import {
+  presentRunsqlRewriteProposal,
+  hasRunsqlRewriteProposal,
+  resolveRunsqlRewriteProposal,
+} from "@/editor/runsql/agent-rewrite-targets";
 import {
   cancelAgent,
   listAgentHistory,
@@ -29,24 +38,20 @@ import {
 import { useLayout } from "@/state/layout";
 import { useWorkspace } from "@/state/workspace";
 import { scheduleAutoGit } from "@/services/auto-git";
+import {
+  agentMessageVisibleLength,
+  emptyAgentMessage,
+  insertAgentResource,
+  isAgentMessageEmpty,
+} from "@/lib/agent-message";
 
 export type AgentRunStatus = "idle" | "running" | "done" | "error" | "cancelled";
 
-export type AgentDraftAttachment =
-  | { id: string; kind: "note"; path: string }
-  | { id: string; kind: "canvas"; path: string }
-  | ({ id: string } & AgentAttachment);
-
-export type AgentDraftAttachmentInput =
-  | { kind: "note"; path: string }
-  | { kind: "canvas"; path: string }
-  | AgentAttachment;
+export type AgentDraftAttachmentInput = AgentMessageResourceInput;
 
 export interface AgentDraft {
-  text: string;
-  mentionedTables: string[];
-  attachments: AgentDraftAttachment[];
-  dismissedNotePaths: string[];
+  message: AgentMessageContent;
+  cursorOffset: number;
   isEmpty: boolean;
 }
 
@@ -54,12 +59,7 @@ export type AgentTimelineEntry =
   | {
       kind: "user";
       id: string;
-      content: string;
-      /** 发送时输入框里的 @表 与 [[笔记]] 引用，用于在气泡里回显 pill。 */
-      mentionedTables?: string[];
-      referencedNotes?: string[];
-      attachments?: AgentAttachment[];
-      canvasPath?: string;
+      message: AgentMessageContent;
     }
   | {
       kind: "tool";
@@ -104,6 +104,7 @@ export interface AgentTab {
   historyRef: AgentHistoryRef | null;
   /** 同一 tab 下的多次 start() 在 main 进程里共享对话历史，实现多轮对话。 */
   sessionId: string;
+  entryPoint: AgentEntryPoint;
   status: AgentRunStatus;
   timeline: AgentTimelineEntry[];
   draft: AgentDraft;
@@ -128,21 +129,24 @@ interface AgentPanelState {
   openHistory: (ref: AgentHistoryRef) => Promise<void>;
   switchTab: (tabId: string) => void;
   newConversation: () => void;
+  openQuickTask: (input: {
+    entryPoint: AgentEntryPoint;
+    title: string;
+    message: AgentMessageContent;
+    connectionName?: string | null;
+    locale?: "zh" | "en";
+    autoSend: boolean;
+  }) => void;
   closeTab: (tabId: string) => void;
   setConnectionName: (connectionName: string | null) => void;
   updateDraft: (draft: AgentDraft) => void;
   addToChat: (attachment: AgentDraftAttachmentInput) => void;
-  removeAttachment: (attachmentId: string) => void;
-  ensureDefaultNote: (path: string | null | undefined) => void;
   start: (input: {
-    prompt: string;
-    mentionedTables?: string[];
-    referencedNotes?: string[];
-    attachments?: AgentAttachment[];
+    message: AgentMessageContent;
     connectionName?: string | null;
     notePath?: string | null;
-    canvasPath?: string | null;
     locale?: "zh" | "en";
+    entryPoint?: AgentEntryPoint;
   }) => Promise<void>;
   cancel: () => Promise<void>;
   respondProposal: (
@@ -163,12 +167,12 @@ function newSessionId(): string {
   return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function newAttachmentId(): string {
-  return `att_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
 function emptyDraft(): AgentDraft {
-  return { text: "", mentionedTables: [], attachments: [], dismissedNotePaths: [], isEmpty: true };
+  return {
+    message: emptyAgentMessage(),
+    cursorOffset: 0,
+    isEmpty: true,
+  };
 }
 
 function newTab(): AgentTab {
@@ -178,6 +182,7 @@ function newTab(): AgentTab {
     runId: null,
     historyRef: null,
     sessionId: newSessionId(),
+    entryPoint: "chat",
     status: "idle",
     timeline: [],
     draft: emptyDraft(),
@@ -190,15 +195,48 @@ function newTab(): AgentTab {
 
 const initialTab = newTab();
 
+function normalizedCanvasPath(value: string): string {
+  const slashPath = value.replace(/\\/g, "/").normalize("NFC");
+  const root = slashPath.startsWith("/") ? "/" : slashPath.match(/^[A-Za-z]:\//)?.[0] ?? "";
+  const segments: string[] = [];
+  for (const segment of slashPath.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (root && segment === root.replace(/\/$/, "")) continue;
+    if (segment === "..") segments.pop();
+    else segments.push(segment);
+  }
+  return `${root}${segments.join("/")}`;
+}
+
 export function resolveCanvasArtifactPath(canvasPath: string): string {
+  const normalizedPath = normalizedCanvasPath(canvasPath);
+  if (normalizedPath.startsWith("/") || /^[A-Za-z]:\//.test(normalizedPath)) return normalizedPath;
   const vaultPath = useWorkspace.getState().vaultPath;
-  if (!vaultPath || canvasPath === vaultPath || canvasPath.startsWith(`${vaultPath}/`)) return canvasPath;
-  return `${vaultPath.replace(/\/$/, "")}/${canvasPath.replace(/^\//, "")}`;
+  if (!vaultPath) return normalizedPath;
+  return `${normalizedCanvasPath(vaultPath).replace(/\/$/, "")}/${normalizedPath.replace(/^\//, "")}`;
+}
+
+export function currentWorkspaceContext(): AgentWorkspaceContext | undefined {
+  const workspace = useWorkspace.getState();
+  const tab = workspace.tabs.find((candidate) => candidate.id === workspace.activeTabId);
+  if (!tab?.path) return undefined;
+  const normalizedPath = normalizedCanvasPath(tab.path);
+  const normalizedVault = workspace.vaultPath ? normalizedCanvasPath(workspace.vaultPath).replace(/\/$/, "") : "";
+  const path = normalizedVault && normalizedPath.startsWith(`${normalizedVault}/`)
+    ? normalizedPath.slice(normalizedVault.length + 1)
+    : normalizedPath;
+  return { kind: tab.kind === "analysis" ? "canvas" : "note", path };
 }
 
 export function refreshCanvasTabIfOpen(canvasPath: string): void {
   const workspace = useWorkspace.getState();
-  const tabId = workspace.getTabIdByPath(resolveCanvasArtifactPath(canvasPath));
+  const absolutePath = normalizedCanvasPath(resolveCanvasArtifactPath(canvasPath));
+  const relativePath = normalizedCanvasPath(canvasPath).replace(/^\//, "");
+  const tabId = workspace.getTabIdByPath(absolutePath) ?? workspace.tabs.find((tab) => {
+    if (tab.kind !== "analysis" || !tab.path) return false;
+    const tabPath = normalizedCanvasPath(tab.path);
+    return tabPath === absolutePath || (relativePath.length > 0 && tabPath.endsWith(`/${relativePath}`));
+  })?.id ?? null;
   if (tabId) workspace.reloadTabFromBuffer(tabId);
 }
 
@@ -327,11 +365,7 @@ export function replayAgentHistory(history: AgentHistorySession): AgentTimelineE
       {
         kind: "user",
         id: `history_${run.request.runId}_user`,
-        content: run.request.prompt,
-        ...(run.request.mentionedTables?.length ? { mentionedTables: run.request.mentionedTables } : {}),
-        ...(run.request.referencedNotes?.length ? { referencedNotes: run.request.referencedNotes } : {}),
-        ...(run.request.attachments?.length ? { attachments: run.request.attachments } : {}),
-        ...(run.request.canvasPath ? { canvasPath: run.request.canvasPath } : {}),
+        message: requestAgentMessage(run.request),
       },
     ];
     for (const event of run.events) timeline = applyEvent(timeline, event);
@@ -377,36 +411,6 @@ export function isCurrentHistoryTab(
     (tab.historyRef?.sessionId === ref.sessionId && tab.historyRef.deviceSlug === ref.deviceSlug) ||
     (isLocal && tab.sessionId === ref.sessionId)
   );
-}
-
-function draftWithAttachment(draft: AgentDraft, attachment: AgentDraftAttachmentInput): AgentDraft {
-  if (attachment.kind === "note") {
-    if (draft.attachments.some((item) => item.kind === "note" && item.path === attachment.path)) {
-      return draft;
-    }
-    return {
-      ...draft,
-      attachments: [...draft.attachments, { id: newAttachmentId(), kind: "note", path: attachment.path }],
-      dismissedNotePaths: draft.dismissedNotePaths.filter((path) => path !== attachment.path),
-    };
-  }
-  if (attachment.kind === "canvas") {
-    const existing = draft.attachments.find((item) => item.kind === "canvas" && item.path === attachment.path);
-    if (existing) return draft;
-    return {
-      ...draft,
-      // AgentRunRequest.canvasPath is singular: the latest explicit Canvas
-      // reference replaces the prior one instead of silently sending two.
-      attachments: [
-        ...draft.attachments.filter((item) => item.kind !== "canvas"),
-        { id: newAttachmentId(), kind: "canvas", path: attachment.path },
-      ],
-    };
-  }
-  return {
-    ...draft,
-    attachments: [...draft.attachments, { id: newAttachmentId(), ...attachment }],
-  };
 }
 
 export const useAgentPanel = create<AgentPanelState>((set, get) => ({
@@ -485,6 +489,35 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
     set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id }));
     useLayout.getState().focusAgentPanel();
   },
+  openQuickTask(input) {
+    // Agent Panel 未打开过时，它的 React effect 还没有机会 bindVault。
+    // 如果先写快捷任务、再由首次挂载触发 bindVault，后者会把 tabs 重置掉，
+    // 表现为「只展开面板，草稿/自动发送都消失」。bindVault 在第一个 await
+    // 之前同步完成 vault 切换和 tab 初始化，因此这里先触发绑定，再创建任务。
+    const workspaceVaultPath = useWorkspace.getState().vaultPath;
+    if (workspaceVaultPath && get().vaultPath !== workspaceVaultPath) {
+      void get().bindVault(workspaceVaultPath);
+    }
+    const tab = newTab();
+    tab.title = input.title;
+    tab.entryPoint = input.entryPoint;
+    tab.connectionName = input.connectionName ?? null;
+    tab.draft = {
+      message: input.message,
+      cursorOffset: agentMessageVisibleLength(input.message),
+      isEmpty: isAgentMessageEmpty(input.message),
+    };
+    set((state) => ({ tabs: [...state.tabs, tab], activeTabId: tab.id }));
+    useLayout.getState().focusAgentPanel();
+    if (input.autoSend) {
+      void get().start({
+        message: input.message,
+        connectionName: input.connectionName,
+        locale: input.locale,
+        entryPoint: input.entryPoint,
+      });
+    }
+  },
   closeTab(tabId) {
     const state = get();
     const tab = state.tabs.find((item) => item.id === tabId);
@@ -503,42 +536,32 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
     set((s) => updateActiveTab(s, (tab) => ({ ...tab, draft })));
   },
   addToChat(attachment) {
-    set((s) => updateActiveTab(s, (tab) => ({ ...tab, draft: draftWithAttachment(tab.draft, attachment) })));
+    // Add to Chat can be invoked before the collapsed Agent Panel has ever
+    // mounted. Bind synchronously before inserting, otherwise the mount-time
+    // bindVault call replaces the temporary tab and silently drops the pill.
+    const workspaceVaultPath = useWorkspace.getState().vaultPath;
+    if (workspaceVaultPath && get().vaultPath !== workspaceVaultPath) {
+      void get().bindVault(workspaceVaultPath);
+    }
+    set((s) => updateActiveTab(s, (tab) => {
+      const inserted = insertAgentResource(tab.draft.message, attachment, tab.draft.cursorOffset);
+      return {
+        ...tab,
+        draft: {
+          message: inserted.message,
+          cursorOffset: inserted.cursorOffset,
+          isEmpty: false,
+        },
+      };
+    }));
     useLayout.getState().focusAgentPanel();
   },
-  removeAttachment(attachmentId) {
-    set((s) =>
-      updateActiveTab(s, (tab) => {
-        const removed = tab.draft.attachments.find((item) => item.id === attachmentId);
-        return {
-          ...tab,
-          draft: {
-            ...tab.draft,
-            attachments: tab.draft.attachments.filter((item) => item.id !== attachmentId),
-            dismissedNotePaths:
-              removed?.kind === "note"
-                ? Array.from(new Set([...tab.draft.dismissedNotePaths, removed.path]))
-                : tab.draft.dismissedNotePaths,
-          },
-        };
-      }),
-    );
-  },
-  ensureDefaultNote(path) {
-    const notePath = path?.trim();
-    if (!notePath) return;
-    set((s) =>
-      updateActiveTab(s, (tab) => {
-        const hasNote = tab.draft.attachments.some((item) => item.kind === "note" && item.path === notePath);
-        if (hasNote || tab.draft.dismissedNotePaths.includes(notePath)) return tab;
-        return { ...tab, draft: draftWithAttachment(tab.draft, { kind: "note", path: notePath }) };
-      }),
-    );
-  },
-  async start({ prompt, mentionedTables, referencedNotes, attachments, connectionName, notePath, canvasPath, locale }) {
+  async start({ message, connectionName, notePath, locale, entryPoint }) {
     const state = get();
     const tab = state.tabs.find((item) => item.id === state.activeTabId);
     if (!tab || tab.status === "running") return;
+    const prompt = agentMessagePlainText(message).trim().slice(0, 20_000);
+    if (!prompt) return;
     const runId = `agent_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     useLayout.getState().focusAgentPanel();
     set((s) =>
@@ -552,11 +575,7 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
           {
             kind: "user",
             id: nextId(),
-            content: prompt,
-            ...(mentionedTables?.length ? { mentionedTables } : {}),
-            ...(referencedNotes?.length ? { referencedNotes } : {}),
-            ...(attachments?.length ? { attachments } : {}),
-            ...(canvasPath ? { canvasPath } : {}),
+            message,
           },
         ],
         draft: emptyDraft(),
@@ -568,13 +587,12 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
         runId,
         sessionId: tab.sessionId,
         prompt,
-        mentionedTables,
-        referencedNotes,
-        attachments,
+        message,
+        workspaceContext: currentWorkspaceContext(),
+        entryPoint: entryPoint ?? tab.entryPoint,
         connectionName,
-      notePath,
-      canvasPath,
-      locale,
+        notePath,
+        locale,
       });
       if (response.sessionId !== tab.sessionId) {
         set((s) => ({
@@ -612,6 +630,20 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
     await cancelAgent(tab.runId).catch(() => {});
   },
   async respondProposal(runId, callId, approve, answer) {
+    const proposal = get().tabs
+      .flatMap((tab) => tab.timeline)
+      .find((entry) => entry.kind === "proposal" && entry.runId === runId && entry.callId === callId);
+    if (proposal?.kind === "proposal" && proposal.proposalKind === "runsql_rewrite") {
+      const targetId = proposal.payload.targetId;
+      if (!targetId || (approve && !hasRunsqlRewriteProposal(targetId, runId, callId))) {
+        set((state) => ({
+          tabs: state.tabs.map((tab) => tab.runId === runId
+            ? { ...tab, timeline: [...tab.timeline, { kind: "error", id: nextId(), message: "The RunSQL block changed or is no longer available." }] }
+            : tab),
+        }));
+        return;
+      }
+    }
     const resolution: "approved" | "rejected" = approve ? "approved" : "rejected";
     set((s) => ({
       tabs: s.tabs.map((tab) =>
@@ -633,7 +665,17 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
       approve,
       ...(answer !== undefined ? { answer } : {}),
     }).catch(() => ({ ok: false }));
-    if (response.ok) return;
+    if (response.ok) {
+      if (proposal?.kind === "proposal" && proposal.proposalKind === "runsql_rewrite" && proposal.payload.targetId) {
+        resolveRunsqlRewriteProposal({
+          targetId: proposal.payload.targetId,
+          runId,
+          callId,
+          approve,
+        });
+      }
+      return;
+    }
     set((s) => ({
       tabs: s.tabs.map((tab) =>
         tab.runId === runId
@@ -693,6 +735,26 @@ if (typeof window !== "undefined") {
     if (event.type === "canvas_updated") {
       scheduleAutoGit("canvas-agent-update");
       refreshCanvasTabIfOpen(event.path);
+    }
+    if (event.type === "proposal" && event.kind === "runsql_rewrite") {
+      const { targetId, oldContent, newContent } = event.payload;
+      const showProposal = () => Boolean(targetId && oldContent !== undefined && newContent !== undefined) &&
+        presentRunsqlRewriteProposal({
+          targetId: targetId!,
+          runId: event.runId,
+          callId: event.callId,
+          originalSql: oldContent!,
+          proposedSql: newContent!,
+          onApprove: () => void useAgentPanel.getState().respondProposal(event.runId, event.callId, true),
+          onReject: () => void useAgentPanel.getState().respondProposal(event.runId, event.callId, false),
+        });
+      if (!showProposal()) {
+        window.setTimeout(() => {
+          if (!showProposal()) {
+            void useAgentPanel.getState().respondProposal(event.runId, event.callId, false);
+          }
+        }, 100);
+      }
     }
   });
 }

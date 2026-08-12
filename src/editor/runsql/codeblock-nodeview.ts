@@ -54,7 +54,7 @@ import { resolveEditorDialect } from "@/services/connectors/registry";
 import { currentCmTheme, subscribeCmTheme } from "./cm-theme";
 import { cmSearchHighlightExtension } from "./cm-search-highlight";
 import { runBlock } from "./execution";
-import { getRunContext, getRunNoteContext } from "./run-context";
+import { getRunContext } from "./run-context";
 import { showContextMenu, type MenuEntry } from "./context-menu";
 import {
   BlockResult,
@@ -63,12 +63,17 @@ import {
 } from "@/components/block-result";
 import type { ColumnDef } from "@/contracts";
 import { ensureAutocompleteFor, peekAutocompleteFor } from "./fetch-schema";
-import {
-  mountTableMentionInput,
-  type MountedTableMentionInputHandle,
-} from "@/components/ai/mount-table-mention-input";
 import { addRunsqlToChat, addSelectionToChat } from "@/components/ai/add-to-chat";
-import { renderMarkdownIntoDom } from "./render-markdown-dom";
+import {
+  openRunsqlAskTask,
+  openRunsqlFixTask,
+  openRunsqlRewriteTask,
+} from "@/components/ai/agent-quick-actions";
+import {
+  registerRunsqlRewriteTarget,
+  type RunsqlRewriteTarget,
+  unregisterRunsqlRewriteTarget,
+} from "./agent-rewrite-targets";
 import { useColumnCache } from "./column-cache";
 import { formatSqlCommand } from "./sql-format";
 import { formatHotkey } from "@/lib/hotkeys";
@@ -164,11 +169,10 @@ export class CodeBlockNodeView implements NodeView {
   private headerEl!: HTMLElement;
   private resultHostEl: HTMLElement | null = null;
   private resultRoot: Root | null = null;
-  private aiComposerEl: HTMLElement | null = null;
-  private aiMentionHandle: MountedTableMentionInputHandle | null = null;
   private aiReviewEl: HTMLElement | null = null;
   private pendingAiRewrite: PendingAiRewrite | null = null;
-  private aiComposerGlobalCleanup: (() => void) | null = null;
+  private rewriteTargetId: string | null = null;
+  private rewriteTarget: RunsqlRewriteTarget | null = null;
   private resultExpanded = true;
   private lastErrorMessage: string | null = null;
   /** 仅 NodeView 内部递增；给 BlockResult 做强制重拉触发，不参与 markdown 序列化 */
@@ -251,6 +255,27 @@ export class CodeBlockNodeView implements NodeView {
 
     if (isRunsql) {
       activeRunsqlViews.add(this);
+      this.rewriteTarget = {
+        getSql: () => this.cm.state.doc.toString(),
+        preview: (originalSql, proposedSql, onApprove, onReject) => {
+          this.previewAiRewrite(originalSql, proposedSql);
+          this.showAiReview({
+            state: "ready",
+            message: i18n.t("ai.runsql.rewriteReady"),
+            onApprove,
+            onReject,
+          });
+        },
+        accept: () => this.acceptAiRewrite(),
+        discard: () => this.discardAiRewrite(),
+      };
+      const sourcePath = getRunContext()?.path;
+      const blockId = (node.attrs as RunSqlAttrs).blockId?.trim();
+      const position = getPos();
+      const stableKey = sourcePath && (blockId || position !== undefined)
+        ? `${sourcePath}\n${blockId ? `block:${blockId}` : `position:${position}`}`
+        : undefined;
+      this.rewriteTargetId = registerRunsqlRewriteTarget(this.rewriteTarget, stableKey);
       this.resultHostEl = document.createElement("div");
       this.resultHostEl.className = "stela-cb__result-host";
       this.resultHostEl.setAttribute("contenteditable", "false");
@@ -406,19 +431,7 @@ export class CodeBlockNodeView implements NodeView {
    * 可以抢"，结果还是把视口拽回去。时间戳判断把"用户意图"固化下来，
    * PM 同步 selectionchange 时能正确地忍住 focus。
    */
-  private isAiComposerFocused(): boolean {
-    if (!this.aiComposerEl) return false;
-    const active = document.activeElement;
-    if (!active) return false;
-    if (this.aiComposerEl.contains(active)) return true;
-    if (active instanceof Element && active.closest("[data-mentions-portal]")) {
-      return true;
-    }
-    return false;
-  }
-
   private shouldStealFocus(): boolean {
-    if (this.isAiComposerFocused()) return false;
     if (Date.now() - this.lastNonCmInteractionAt < 300) return false;
     return true;
   }
@@ -474,7 +487,6 @@ export class CodeBlockNodeView implements NodeView {
     if (!target) return false;
     if (this.cm.dom.contains(target)) return true;
     if (this.headerEl.contains(target)) return true;
-    if (this.aiComposerEl && this.aiComposerEl.contains(target)) return true;
     if (this.aiReviewEl && this.aiReviewEl.contains(target)) return true;
     if (this.resultHostEl && this.resultHostEl.contains(target)) return true;
     if (this.previewHostEl && this.previewHostEl.contains(target)) return true;
@@ -488,8 +500,8 @@ export class CodeBlockNodeView implements NodeView {
   destroy() {
     this.destroyed = true;
     activeRunsqlViews.delete(this);
+    if (this.rewriteTargetId) unregisterRunsqlRewriteTarget(this.rewriteTargetId, this.rewriteTarget ?? undefined);
     this.dom.removeEventListener("contextmenu", this.onContextMenu);
-    this.closeAiComposer();
     this.clearAiRewritePreview();
     if (this.themeUnsub) {
       this.themeUnsub();
@@ -1061,63 +1073,6 @@ export class CodeBlockNodeView implements NodeView {
     el.style.top = `${top}px`;
   }
 
-  private insertAiFloatingComposer(el: HTMLElement, anchor: HTMLElement): void {
-    document.body.appendChild(el);
-    this.installShield(el);
-    this.positionAiFloatingComposer(el, anchor);
-    this.installAiComposerGlobalHandlers();
-  }
-
-  private positionAiFloatingComposer(el: HTMLElement, anchor: HTMLElement): void {
-    const rect = anchor.getBoundingClientRect();
-    const width = Math.min(420, Math.max(320, window.innerWidth - 24));
-    const gap = 8;
-    const horizontalOffset = 8;
-    const left = Math.min(
-      Math.max(12, rect.left + horizontalOffset),
-      window.innerWidth - width - 12,
-    );
-    const top = Math.min(rect.bottom + gap, window.innerHeight - 160);
-    el.style.width = `${width}px`;
-    el.style.left = `${left}px`;
-    el.style.top = `${Math.max(12, top)}px`;
-  }
-
-  private closeAiComposer(): void {
-    this.aiComposerGlobalCleanup?.();
-    this.aiComposerGlobalCleanup = null;
-    this.aiMentionHandle?.destroy();
-    this.aiMentionHandle = null;
-    this.aiComposerEl?.remove();
-    this.aiComposerEl = null;
-  }
-
-  private installAiComposerGlobalHandlers(): void {
-    this.aiComposerGlobalCleanup?.();
-    const onPointerDown = (ev: PointerEvent) => {
-      const target = ev.target as Node | null;
-      if (!target) return;
-      if (this.aiComposerEl?.contains(target)) return;
-      if (target instanceof Element && target.closest("[data-mentions-portal]")) return;
-      if (this.headerEl.contains(target)) return;
-      if (this.aiReviewEl?.contains(target)) return;
-      if (this.resultHostEl?.contains(target)) return;
-      this.closeAiComposer();
-    };
-    const onKeyDown = (ev: KeyboardEvent) => {
-      if (ev.key !== "Escape") return;
-      if (this.aiMentionHandle?.isOpen()) return;
-      ev.preventDefault();
-      this.closeAiComposer();
-    };
-    document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("keydown", onKeyDown, true);
-    this.aiComposerGlobalCleanup = () => {
-      document.removeEventListener("pointerdown", onPointerDown, true);
-      document.removeEventListener("keydown", onKeyDown, true);
-    };
-  }
-
   private closeAiReview(): void {
     this.aiReviewEl?.remove();
     this.aiReviewEl = null;
@@ -1299,217 +1254,49 @@ export class CodeBlockNodeView implements NodeView {
   private onAiButtonClick = (ev: MouseEvent, mode: AiQuickEditMode) => {
     ev.preventDefault();
     ev.stopPropagation();
-    this.showAiComposer(mode, ev.currentTarget as HTMLElement);
+    this.openAiComposer(mode);
   };
 
   private openAiComposer(mode: AiQuickEditMode): void {
-    const selector =
-      mode === "rewrite" ? ".stela-cb__ai-rewrite" : ".stela-cb__ai-ask";
-    const anchor = this.headerEl.querySelector<HTMLElement>(selector) ?? this.headerEl;
-    this.showAiComposer(mode, anchor);
+    this.flushCmToPm();
+    const sql = this.cm.state.doc.toString();
+    if (!sql.trim()) return;
+    const blockId = (this.node.attrs.blockId as string | undefined) ?? null;
+    const blockIndex = this.currentRunsqlBlockIndex();
+    if (mode === "rewrite" && this.rewriteTargetId) {
+      openRunsqlRewriteTask(sql, this.rewriteTargetId, blockId, blockIndex);
+    } else {
+      openRunsqlAskTask(sql, blockId, blockIndex);
+    }
   }
 
   /** 执行失败后从 result-bar 一键发起 AI 改写（错误信息已在 lastErrorMessage 中）。 */
   private triggerAiFixRewrite(): void {
-    this.closeAiComposer();
     this.discardAiRewrite();
     this.closeAiReview();
-    this.showAiReview({
-      state: "loading",
-      message: i18n.t("ai.runsql.rewriting"),
-    });
-    const selectedText = this.selectedSqlText();
-    void this.runSqlRewrite("", selectedText, []);
-  }
-
-  private showAiComposer(mode: AiQuickEditMode, anchor: HTMLElement): void {
-    this.closeAiComposer();
-    this.discardAiRewrite();
-    this.closeAiReview();
-    const selectedText = this.selectedSqlText();
-    const el = document.createElement("div");
-    el.className = "stela-cb__ai-quickedit";
-    el.setAttribute("contenteditable", "false");
-    const title =
-      mode === "rewrite"
-        ? i18n.t("ai.runsql.rewriteSql")
-        : i18n.t("ai.runsql.askSql");
-    const placeholder =
-      mode === "rewrite"
-        ? i18n.t("ai.runsql.rewritePlaceholder")
-        : i18n.t("ai.runsql.askPlaceholder");
-    const primary = i18n.t("common.send");
-    const defaultHint =
-      mode === "rewrite"
-        ? i18n.t("ai.runsql.rewriteHint")
-        : i18n.t("ai.runsql.askHint");
-    el.innerHTML = `
-      <div class="stela-cb__ai-quickedit-compose">
-        <div class="stela-cb__ai-quickedit-row">
-          <span class="stela-cb__ai-quickedit-title">${escapeHtml(title)}</span>
-          <div class="stela-cb__ai-input-host"></div>
-        </div>
-        <div class="stela-cb__ai-quickedit-actions">
-          <span class="stela-cb__ai-hint">${escapeHtml(defaultHint)}</span>
-          <button type="button" class="stela-cb__ai-secondary">${escapeHtml(i18n.t("common.cancel"))}</button>
-          <button type="button" class="stela-cb__ai-primary">${escapeHtml(primary)}</button>
-        </div>
-      </div>
-      <div class="stela-cb__ai-result" hidden></div>
-    `;
-    const inputHost = el.querySelector<HTMLElement>(".stela-cb__ai-input-host");
-    const primaryBtn = el.querySelector<HTMLButtonElement>(".stela-cb__ai-primary");
-    const cancelBtn = el.querySelector<HTMLButtonElement>(".stela-cb__ai-secondary");
-    const hintEl = el.querySelector<HTMLElement>(".stela-cb__ai-hint");
-    const resultEl = el.querySelector<HTMLElement>(".stela-cb__ai-result");
-    const ctx = getRunContext();
-    const connectionName = ctx?.connectionName;
-    let mentionInput: MountedTableMentionInputHandle | null = null;
-    const syncDisabled = () => {
-      if (primaryBtn && mode === "ask") {
-        primaryBtn.disabled = mentionInput?.isEmpty() ?? true;
-      }
-    };
-    const setLoading = (loading: boolean, message: string) => {
-      el.classList.toggle("stela-cb__ai-quickedit--loading", loading);
-      mentionInput?.setDisabled(loading);
-      if (cancelBtn) cancelBtn.disabled = loading;
-      if (primaryBtn) {
-        primaryBtn.disabled = loading ? true : (mode === "ask" ? (mentionInput?.isEmpty() ?? true) : false);
-      }
-      if (hintEl) {
-        hintEl.textContent = message || defaultHint;
-        hintEl.setAttribute("aria-live", loading ? "polite" : "off");
-      }
-    };
-    const submit = async () => {
-      const userInstruction = mentionInput?.getValue() ?? "";
-      const mentionedTables = mentionInput?.getMentionedTables() ?? [];
-      if (mode === "ask" && userInstruction.length === 0) return;
-      if (mode === "ask" && resultEl) {
-        resultEl.hidden = true;
-        resultEl.replaceChildren();
-      }
-      if (mode === "rewrite") {
-        setLoading(true, i18n.t("ai.runsql.rewriting"));
-        await this.runSqlRewrite(userInstruction, selectedText, mentionedTables);
-        return;
-      }
-      setLoading(true, i18n.t("ai.runsql.asking"));
-      await this.runSqlAsk(userInstruction, selectedText, resultEl, setLoading, mentionedTables);
-    };
-    if (inputHost) {
-      mentionInput = mountTableMentionInput(inputHost, {
-        placeholder,
-        initialValue: mode === "ask" ? selectedText : undefined,
-        getTableNamesCached: () =>
-          connectionName ? peekAutocompleteFor(connectionName) : [],
-        getTableNames: () =>
-          connectionName ? ensureAutocompleteFor(connectionName) : Promise.resolve([]),
-        onChange: syncDisabled,
-        onSubmit: () => void submit(),
-        onCancel: () => this.closeAiComposer(),
-      });
-      this.aiMentionHandle = mentionInput;
-    }
-    syncDisabled();
-    cancelBtn?.addEventListener("click", () => this.closeAiComposer());
-    primaryBtn?.addEventListener("click", () => void submit());
-    this.aiComposerEl = el;
-    this.insertAiFloatingComposer(el, anchor);
-    queueMicrotask(() => {
-      mentionInput?.focus();
-    });
-  }
-
-  private async runSqlRewrite(
-    userInstruction: string,
-    selectedText: string,
-    mentionedTables: string[],
-  ): Promise<void> {
     this.flushCmToPm();
-    const ctx = getRunContext();
-    const noteContext = getRunNoteContext();
     const sql = this.cm.state.doc.toString();
-    try {
-      const response = await window.stela.ai.complete({
-        action: "rewrite-sql",
-        locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
-        context: {
-          source: "runsql",
-          connectionName: ctx?.connectionName ?? null,
-          sql,
-          selectedText: selectedText || null,
-          ...(noteContext ?? {}),
-          errorMessage: this.lastErrorMessage,
-          userInstruction: userInstruction || null,
-          mentionedTables: mentionedTables.length > 0 ? mentionedTables : undefined,
-        },
+    if (sql.trim() && this.rewriteTargetId && this.lastErrorMessage) {
+      openRunsqlFixTask({
+        sql,
+        rewriteTargetId: this.rewriteTargetId,
+        errorMessage: this.lastErrorMessage,
+        blockId: (this.node.attrs.blockId as string | undefined) ?? null,
+        blockIndex: this.currentRunsqlBlockIndex(),
       });
-      if (!response.sql) {
-        this.closeAiComposer();
-        this.showAiReview({
-          state: "error",
-          message: response.text || i18n.t("ai.runsql.noSqlReturned"),
-        });
-        return;
-      }
-      this.previewAiRewrite(sql, response.sql);
-      this.closeAiComposer();
-      this.showAiReview({
-        state: "ready",
-        message: i18n.t("ai.runsql.rewriteReady"),
-      });
-    } catch (err) {
-      this.closeAiComposer();
-      this.showAiReview({
-        state: "error",
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  private async runSqlAsk(
-    userInstruction: string,
-    selectedText: string,
-    resultEl: HTMLElement | null,
-    setLoading: (loading: boolean, message: string) => void,
-    mentionedTables: string[],
-  ): Promise<void> {
-    this.flushCmToPm();
-    const ctx = getRunContext();
-    const noteContext = getRunNoteContext();
-    const sql = this.cm.state.doc.toString();
-    try {
-      const response = await window.stela.ai.complete({
-        action: "ask-sql",
-        locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
-        context: {
-          source: "runsql",
-          connectionName: ctx?.connectionName ?? null,
-          sql,
-          selectedText: selectedText || null,
-          ...(noteContext ?? {}),
-          userInstruction,
-          mentionedTables: mentionedTables.length > 0 ? mentionedTables : undefined,
-        },
-      });
-      setLoading(false, i18n.t("ai.runsql.askReady"));
-      if (resultEl) {
-        renderMarkdownIntoDom(resultEl, response.text);
-        resultEl.hidden = false;
-      }
-    } catch (err) {
-      setLoading(false, err instanceof Error ? err.message : String(err));
     }
   }
 
   private showAiReview({
     state,
     message,
+    onApprove,
+    onReject,
   }: {
     state: "loading" | "ready" | "error";
     message: string;
+    onApprove?: () => void;
+    onReject?: () => void;
   }): void {
     this.closeAiReview();
     const el = document.createElement("div");
@@ -1538,14 +1325,16 @@ export class CodeBlockNodeView implements NodeView {
     const secondary = el.querySelector<HTMLButtonElement>(".stela-cb__ai-secondary");
     primary?.addEventListener("click", () => {
       if (state === "ready") {
-        this.acceptAiRewrite();
+        if (onApprove) onApprove();
+        else this.acceptAiRewrite();
         return;
       }
       this.closeAiReview();
     });
     secondary?.addEventListener("click", () => {
       if (state === "ready") {
-        this.discardAiRewrite();
+        if (onReject) onReject();
+        else this.discardAiRewrite();
         return;
       }
       this.closeAiReview();

@@ -40,7 +40,7 @@ export interface RevealRange {
    *   - line：精确到 block 级，active 装饰整块描边
    *   - slug：同 line
    */
-  kind: "keyword" | "slug" | "line";
+  kind: "keyword" | "slug" | "line" | "runsql";
 }
 
 export type RevealLoc =
@@ -51,7 +51,39 @@ export type RevealLoc =
       keyword: string;
       nthInFile: number;
       caseSensitive?: boolean;
+    }
+  | {
+      kind: "runsql";
+      blockId?: string | null;
+      blockIndex?: number;
+      sql?: string;
     };
+
+function findRunsqlBlock(view: EditorView, loc: Extract<RevealLoc, { kind: "runsql" }>): RevealRange | null {
+  let runsqlIndex = 0;
+  let byIndex: RevealRange | null = null;
+  let bySql: RevealRange | null = null;
+  let exact: RevealRange | null = null;
+  view.state.doc.descendants((node: ProseNode, pos: number) => {
+    if (node.type.name !== "code_block" || node.attrs.language !== "runsql") return true;
+    const range: RevealRange = {
+      from: pos + 1,
+      to: pos + 1 + node.content.size,
+      blockPos: pos,
+      kind: "runsql",
+    };
+    const blockId = typeof node.attrs.blockId === "string" ? node.attrs.blockId : "";
+    if (loc.blockId && blockId === loc.blockId) exact = range;
+    if (loc.blockIndex === runsqlIndex) byIndex = range;
+    if (!bySql && loc.sql && node.textContent.trim() === loc.sql.trim()) bySql = range;
+    runsqlIndex += 1;
+    return !exact;
+  });
+  const indexed = byIndex as RevealRange | null;
+  return exact ?? (indexed && (!loc.sql || view.state.doc.nodeAt(indexed.blockPos)?.textContent.trim() === loc.sql.trim())
+    ? indexed
+    : bySql);
+}
 
 /**
  * 在 PM doc 内顺序找到所有 `keyword` 命中（按 doc pos 升序）。
@@ -191,6 +223,8 @@ export function resolveReveal(
       if (!entry) return null;
       return lineEntryToRange(view, entry);
     }
+    case "runsql":
+      return findRunsqlBlock(view, loc);
     default: {
       const _exhaustive: never = loc;
       return _exhaustive;

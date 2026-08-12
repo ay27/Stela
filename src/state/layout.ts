@@ -15,6 +15,12 @@ import { create } from "zustand";
 
 export type SidebarMode = "files" | "search" | "schema" | "runs";
 
+export interface SchemaRevealRequest {
+  connectionName: string | null;
+  table: string;
+  token: number;
+}
+
 /** 侧栏宽度限制（px）。min 受限于 FileTree 文件名最短可读宽度，max 防止吞掉主区。 */
 export const SIDEBAR_MIN_WIDTH = 180;
 export const SIDEBAR_MAX_WIDTH = 480;
@@ -60,6 +66,7 @@ interface LayoutState {
   sidebarMode: SidebarMode;
   /** 每次递增都会触发 SearchPanel 重新聚焦输入框 */
   searchFocusToken: number;
+  schemaReveal: SchemaRevealRequest | null;
   /** 侧栏像素宽度。通过拖拽手柄调整，localStorage 持久化。 */
   sidebarWidth: number;
 
@@ -77,6 +84,8 @@ interface LayoutState {
   focusSearch: () => void;
   /** 把 sidebar 切到 files 模式并展开（如果折叠了的话）。供"定位当前文件"用。 */
   focusFiles: () => void;
+  /** Open Schema sidebar and reveal one exact table without a main-process round trip. */
+  revealSchemaTable: (connectionName: string | null, table: string) => void;
   /** 更新侧栏宽度（自动 clamp 到 [MIN, MAX]）。 */
   setSidebarWidth: (width: number) => void;
 
@@ -90,6 +99,7 @@ export const useLayout = create<LayoutState>((set, get) => ({
   sidebarCollapsed: false,
   sidebarMode: "files",
   searchFocusToken: 0,
+  schemaReveal: null,
   sidebarWidth: loadStoredWidth(
     STORAGE_KEY_WIDTH,
     SIDEBAR_MIN_WIDTH,
@@ -119,6 +129,17 @@ export const useLayout = create<LayoutState>((set, get) => ({
   },
   focusFiles: () => {
     set({ sidebarCollapsed: false, sidebarMode: "files" });
+  },
+  revealSchemaTable: (connectionName, table) => {
+    set((state) => ({
+      sidebarCollapsed: false,
+      sidebarMode: "schema",
+      schemaReveal: {
+        connectionName,
+        table,
+        token: (state.schemaReveal?.token ?? 0) + 1,
+      },
+    }));
   },
   setSidebarWidth: (width) => {
     const next = clamp(width, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_DEFAULT_WIDTH);

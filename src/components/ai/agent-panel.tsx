@@ -20,8 +20,8 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import type { AgentAttachment, AgentPlanSnapshot } from "@shared/types";
-import type { MentionItem } from "@skyastrall/mentions-react";
+import type { AgentMessageContent, AgentMessageResource, AgentPlanSnapshot } from "@shared/types";
+import { withAgentResourceId } from "@shared/agent-message";
 
 import { ProposalLineDiff } from "./proposal-diff";
 import { i18n } from "@/i18n";
@@ -36,8 +36,6 @@ import {
 import {
   resolveCanvasArtifactPath,
   useAgentPanel,
-  type AgentDraft,
-  type AgentDraftAttachment,
   type AgentTimelineEntry,
 } from "@/state/agent-panel";
 import { useLayout } from "@/state/layout";
@@ -52,14 +50,8 @@ import {
   type AiPromptInputHandle,
   type AiPromptSubmitPayload,
 } from "./ai-prompt-input";
-import { renderMarkdown } from "./ai-modal";
-
-type AiPromptInputDraft = {
-  text: string;
-  mentionedTables: string[];
-  referencedNotes: string[];
-  isEmpty: boolean;
-};
+import { renderMarkdown } from "./markdown-renderer";
+import { isAgentMessageEmpty } from "@/lib/agent-message";
 
 function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
@@ -78,66 +70,6 @@ function relativeToVault(path: string | null | undefined, vaultPath: string | nu
     return normalizedPath.slice(normalizedVault.length + 1);
   }
   return normalizedPath;
-}
-
-function attachmentLabel(attachment: AgentDraftAttachment): string {
-  switch (attachment.kind) {
-    case "note":
-      return attachment.path.split("/").pop() || attachment.path;
-    case "canvas":
-      return attachment.path.split("/").pop() || attachment.path;
-    case "runsql":
-      return attachment.label;
-    case "selection":
-      return attachment.label;
-  }
-}
-
-function attachmentTitle(attachment: AgentDraftAttachment): string {
-  switch (attachment.kind) {
-    case "note":
-      return attachment.path;
-    case "canvas":
-      return attachment.path;
-    case "runsql":
-      return attachment.sql;
-    case "selection":
-      return attachment.text;
-  }
-}
-
-function mergePromptValue(draft: AgentDraft, value: AiPromptInputDraft): AgentDraft {
-  const referencedPaths = uniqueStrings(value.referencedNotes);
-  const referencedNotes = referencedPaths.filter((path) => !isCanvasPath(path));
-  const referencedCanvas = referencedPaths.filter(isCanvasPath).at(-1);
-  const existingNotePaths = new Set(
-    draft.attachments
-      .filter((item): item is Extract<AgentDraftAttachment, { kind: "note" }> => item.kind === "note")
-      .map((item) => item.path),
-  );
-  const addedNotes: AgentDraftAttachment[] = referencedNotes
-    .filter((path) => !existingNotePaths.has(path))
-    .map((path) => ({
-      id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      kind: "note",
-      path,
-    }));
-  const attachments = [...draft.attachments, ...addedNotes];
-  if (referencedCanvas && !attachments.some((item) => item.kind === "canvas" && item.path === referencedCanvas)) {
-    attachments.splice(0, attachments.length, ...attachments.filter((item) => item.kind !== "canvas"), {
-      id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      kind: "canvas",
-      path: referencedCanvas,
-    });
-  }
-  return {
-    ...draft,
-    text: value.text,
-    mentionedTables: value.mentionedTables,
-    attachments,
-    dismissedNotePaths: draft.dismissedNotePaths.filter((path) => !referencedNotes.includes(path)),
-    isEmpty: value.isEmpty,
-  };
 }
 
 /** Compact SVG ring for approximate context-window usage. */
@@ -215,10 +147,6 @@ export function AgentPanel() {
   const history = useAgentPanel((s) => s.history);
   const historyLoaded = useAgentPanel((s) => s.historyLoaded);
   const vaultPath = useWorkspace((s) => s.vaultPath);
-  const activeWorkspaceTab = useWorkspace((s) => s.tabs.find((tab) => tab.id === s.activeTabId));
-  const activeCanvasPath = activeWorkspaceTab?.kind === "analysis"
-    ? relativeToVault(activeWorkspaceTab.path, vaultPath)
-    : null;
   const focusToken = useLayout((s) => s.agentFocusToken);
   const aiSettings = useSettings((s) => s.settings.ai);
   const patchSettings = useSettings((s) => s.patch);
@@ -233,8 +161,6 @@ export function AgentPanel() {
   const closeTab = useAgentPanel((s) => s.closeTab);
   const setConnectionName = useAgentPanel((s) => s.setConnectionName);
   const updateDraft = useAgentPanel((s) => s.updateDraft);
-  const removeAttachment = useAgentPanel((s) => s.removeAttachment);
-  const ensureDefaultNote = useAgentPanel((s) => s.ensureDefaultNote);
   const scrollRef = useRef<HTMLDivElement>(null);
   const historyMenuRef = useRef<HTMLDetailsElement>(null);
   const promptInputRef = useRef<AiPromptInputHandle>(null);
@@ -294,10 +220,6 @@ export function AgentPanel() {
   }, []);
 
   useEffect(() => {
-    ensureDefaultNote(relativeToVault(getRunContext()?.path, vaultPath));
-  }, [activeTabId, focusToken, vaultPath, ensureDefaultNote]);
-
-  useEffect(() => {
     let active = true;
     canvasMentionPathsRef.current = [];
     const unsubscribe = window.stela.vault.onExternalChange((payload) => {
@@ -332,27 +254,50 @@ export function AgentPanel() {
     }
   }, [timeline]);
 
-  const getTableNamesCached = useCallback(
-    () => (connectionName ? peekAutocompleteFor(connectionName) : []),
-    [connectionName],
-  );
-  const getTableNames = useCallback(
-    () =>
-      connectionName ? ensureAutocompleteFor(connectionName) : Promise.resolve([]),
-    [connectionName],
-  );
-  const getNoteCandidates = useCallback(async (query: string): Promise<MentionItem[]> => {
-    const candidates = await window.stela.index.listCandidates(query, 24);
-    const notes = candidates
-      .filter((candidate) => candidate.kind === "file" && candidate.detail)
-      .map((candidate) => ({
-        id: candidate.detail,
-        label: candidate.detail,
+  const getResourceCandidates = useCallback(async (query: string): Promise<AgentMessageResource[]> => {
+    const tableNames = connectionName
+      ? (peekAutocompleteFor(connectionName).length > 0
+          ? peekAutocompleteFor(connectionName)
+          : await ensureAutocompleteFor(connectionName).catch(() => []))
+      : [];
+    const indexCandidates = await window.stela.index.listCandidates(query, 24).catch(() => []);
+    const notes = indexCandidates
+      .filter((candidate) => candidate.kind === "file" && candidate.detail && !isCanvasPath(candidate.detail))
+      .map((candidate) => withAgentResourceId({
+        kind: "note" as const,
+        path: candidate.detail!,
+        label: candidate.detail!.split("/").pop() || candidate.detail!,
       }));
-    const canvases = canvasMentionPathsRef.current.map((path) => ({ id: path, label: `Canvas · ${path}` }));
-    const combined = [...canvases, ...notes];
-    return (query.trim() ? fuzzyFilter(query.trim(), combined, (item) => `${item.label} ${item.id}`, 12) : combined.slice(0, 12));
-  }, []);
+    const canvases = canvasMentionPathsRef.current.map((path) => withAgentResourceId({
+      kind: "canvas" as const,
+      path,
+      label: path.split("/").pop() || path,
+    }));
+    const tables = tableNames.map((table) => withAgentResourceId({
+      kind: "table" as const,
+      table,
+      label: table,
+      connectionName,
+    }));
+    const sourcePath = relativeToVault(getRunContext()?.path, vaultPath);
+    const runsql = Array.from(document.querySelectorAll<HTMLElement>(".stela-cb--runsql"))
+      .flatMap((block, blockIndex) => {
+        const sql = block.querySelector<HTMLElement>(".cm-content")?.textContent?.trim();
+        if (!sql) return [];
+        return [withAgentResourceId({
+          kind: "runsql" as const,
+          label: sql.split(/\r?\n/, 1)[0]?.slice(0, 48) || `RunSQL ${blockIndex + 1}`,
+          sql,
+          sourcePath: sourcePath ?? undefined,
+          locator: { blockIndex, keyword: sql, nthInFile: 0 },
+        })];
+      });
+    const combined = [...tables, ...notes, ...canvases, ...runsql];
+    const needle = query.trim();
+    return needle
+      ? fuzzyFilter(needle, combined, (resource) => `${resource.kind} ${resource.label}`, 24)
+      : combined.slice(0, 24);
+  }, [connectionName, vaultPath]);
   const onWheelScroll = useCallback((ev: WheelEvent<HTMLDivElement>) => {
     if (ev.deltaX === 0 && ev.deltaY !== 0) {
       ev.currentTarget.scrollLeft += ev.deltaY;
@@ -363,49 +308,24 @@ export function AgentPanel() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [activeTabId, timeline]);
 
-  const send = ({ text, mentionedTables, referencedNotes }: AiPromptSubmitPayload) => {
-    const trimmed = text.trim();
-    if (!trimmed || busy) return;
+  const send = ({ message }: AiPromptSubmitPayload) => {
+    if (isAgentMessageEmpty(message) || busy) return;
     const ctx = getRunContext();
-    const notePaths = uniqueStrings([
-      ...draft.attachments.filter((item): item is Extract<AgentDraftAttachment, { kind: "note" }> => item.kind === "note").map((item) => item.path),
-      ...referencedNotes.filter((path) => !isCanvasPath(path)),
-    ]);
-    const explicitCanvasPath = draft.attachments.findLast((item): item is Extract<AgentDraftAttachment, { kind: "canvas" }> => item.kind === "canvas")?.path
-      ?? referencedNotes.filter(isCanvasPath).at(-1);
-    const canvasPath = explicitCanvasPath ?? activeCanvasPath;
-    const contentAttachments = draft.attachments
-      .filter((item): item is Extract<AgentDraftAttachment, { kind: "selection" | "runsql" }> => item.kind === "selection" || item.kind === "runsql")
-      .map((attachment): AgentAttachment =>
-        attachment.kind === "runsql"
-          ? {
-              kind: "runsql",
-              label: attachment.label,
-              sql: attachment.sql,
-              sourcePath: attachment.sourcePath,
-            }
-          : {
-              kind: "selection",
-              label: attachment.label,
-              text: attachment.text,
-              sourcePath: attachment.sourcePath,
-            },
-      );
     void start({
-      prompt: trimmed,
-      mentionedTables: mentionedTables.length > 0 ? mentionedTables : undefined,
-      referencedNotes: notePaths.length > 0 ? notePaths : undefined,
-      attachments: contentAttachments.length > 0 ? contentAttachments : undefined,
+      message,
       connectionName,
       notePath: ctx?.path ?? null,
-      canvasPath,
       locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
     });
   };
 
   const updatePromptDraft = useCallback(
-    (value: AiPromptInputDraft) => {
-      updateDraft(mergePromptValue(draft, value));
+    (value: { message: AgentMessageContent; cursorOffset: number; isEmpty: boolean }) => {
+      updateDraft({
+        message: value.message,
+        cursorOffset: value.cursorOffset,
+        isEmpty: isAgentMessageEmpty(value.message),
+      });
     },
     [draft, updateDraft],
   );
@@ -564,23 +484,34 @@ export function AgentPanel() {
       ) : null}
 
       <div className="border-t border-border bg-muted/20 px-2.5 py-2">
-      <AttachmentChips attachments={draft.attachments} contextCanvasPath={activeCanvasPath} onRemove={removeAttachment} />
         <AiPromptInput
           key={activeTabId}
           ref={promptInputRef}
           resetToken={resetToken}
-          initialValue={draft.text}
+          value={draft.message}
+          cursorOffset={draft.cursorOffset}
           placeholder={t("agent.panel.placeholder")}
           disabled={busy}
+          submitEnabled={!draft.isEmpty}
           minHeightPx={132}
-          getTableNamesCached={getTableNamesCached}
-          getTableNames={getTableNames}
-          getNoteCandidates={getNoteCandidates}
+          getResourceCandidates={getResourceCandidates}
           onChange={updatePromptDraft}
           onSubmit={send}
+          onOpenResource={openAgentResource}
         />
         {/* 独立一行放操作按钮——左侧切 AI 配置档，Send/Stop 占最右。 */}
         <div className="mt-1.5 flex items-center justify-between gap-1.5">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <button
+              type="button"
+              disabled={busy}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => promptInputRef.current?.openResourcePicker()}
+              title={t("agent.panel.addResource")}
+              className="inline-flex h-7 w-7 flex-none items-center justify-center rounded-md border border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
           {aiSettings.profiles.length > 0 ? (
             <select
               value={aiSettings.activeProfileId}
@@ -600,9 +531,8 @@ export function AgentPanel() {
                 </option>
               ))}
             </select>
-          ) : (
-            <span />
-          )}
+          ) : null}
+          </div>
           {busy ? (
             <button
               type="button"
@@ -615,9 +545,7 @@ export function AgentPanel() {
           ) : (
             <button
               type="button"
-              onClick={() =>
-                send({ text: draft.text, mentionedTables: draft.mentionedTables, referencedNotes: [] })
-              }
+              onClick={() => send({ message: draft.message })}
               disabled={draft.isEmpty}
               title={t("agent.panel.send")}
               className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1.5 text-[11px] font-medium text-primary-foreground disabled:opacity-40"
@@ -660,56 +588,6 @@ function groupTimeline(timeline: AgentTimelineEntry[]): TimelineRenderItem[] {
   return items;
 }
 
-function AttachmentChips({
-  attachments,
-  contextCanvasPath,
-  onRemove,
-}: {
-  attachments: AgentDraftAttachment[];
-  contextCanvasPath: string | null;
-  onRemove: (attachmentId: string) => void;
-}) {
-  const t = useT();
-  const showContextCanvas = contextCanvasPath && !attachments.some((attachment) => attachment.kind === "canvas");
-  if (attachments.length === 0 && !showContextCanvas) return null;
-  return (
-    <div className="mb-1.5 flex flex-wrap gap-1">
-      {showContextCanvas ? <span
-        title={contextCanvasPath}
-        className="inline-flex max-w-full items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-1.5 py-1 text-[11px] text-muted-foreground"
-      >
-        <ChartNoAxesCombined className="h-3 w-3 flex-none text-primary" />
-        <span className="max-w-[180px] truncate">{contextCanvasPath.split("/").pop() || contextCanvasPath}</span>
-        <span className="text-[9px] uppercase text-primary/80">{t("agent.panel.activeCanvas")}</span>
-      </span> : null}
-      {attachments.map((attachment) => (
-        <span
-          key={attachment.id}
-          title={attachmentTitle(attachment)}
-          className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-background px-1.5 py-1 text-[11px] text-muted-foreground"
-        >
-          {attachment.kind === "note" ? (
-            <FileText className="h-3 w-3 flex-none text-primary" />
-          ) : attachment.kind === "canvas" ? (
-            <ChartNoAxesCombined className="h-3 w-3 flex-none text-primary" />
-          ) : (
-            <MessageSquareQuote className="h-3 w-3 flex-none text-primary" />
-          )}
-          <span className="max-w-[180px] truncate">{attachmentLabel(attachment)}</span>
-          <button
-            type="button"
-            onClick={() => onRemove(attachment.id)}
-            className="ml-0.5 rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-            aria-label={t("agent.panel.removeAttachment")}
-          >
-            <X className="h-3 w-3" />
-          </button>
-        </span>
-      ))}
-    </div>
-  );
-}
-
 function TimelineItem({
   entry,
   onRespond,
@@ -723,58 +601,7 @@ function TimelineItem({
       return (
         <div className="flex justify-end">
           <div className="max-w-[80%] rounded-lg bg-muted px-3 py-2 text-sm text-foreground">
-            {entry.mentionedTables?.length || entry.referencedNotes?.length || entry.attachments?.length || entry.canvasPath ? (
-              <div className="mb-1.5 flex flex-wrap gap-1">
-                {entry.mentionedTables?.map((table) => (
-                  <span
-                    key={`t-${table}`}
-                    className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground"
-                  >
-                    <Database className="h-3 w-3 flex-none text-primary" />
-                    <span className="truncate">{table}</span>
-                  </span>
-                ))}
-                {entry.referencedNotes?.map((path) => (
-                  <span
-                    key={`n-${path}`}
-                    title={path}
-                    className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground"
-                  >
-                    <FileText className="h-3 w-3 flex-none text-primary" />
-                    <span className="truncate">{path.split("/").pop() || path}</span>
-                  </span>
-                ))}
-                {entry.canvasPath ? (
-                  <button
-                    type="button"
-                    title={entry.canvasPath}
-                    onClick={() => useWorkspace.getState().openFile(resolveCanvasArtifactPath(entry.canvasPath!))}
-                    className="inline-flex max-w-full items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-primary/10"
-                  >
-                    <ChartNoAxesCombined className="h-3 w-3 flex-none text-primary" />
-                    <span className="truncate">{entry.canvasPath.split("/").pop() || entry.canvasPath}</span>
-                  </button>
-                ) : null}
-                {entry.attachments?.map((attachment, index) => (
-                  <span
-                    key={`a-${attachment.kind}-${index}`}
-                    title={attachment.kind === "runsql" ? attachment.sql : attachment.text}
-                    className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground"
-                  >
-                    {attachment.kind === "runsql" ? (
-                      <Database className="h-3 w-3 flex-none text-primary" />
-                    ) : (
-                      <MessageSquareQuote className="h-3 w-3 flex-none text-primary" />
-                    )}
-                    <span className="max-w-[220px] truncate">
-                      {attachment.label}
-                      {attachment.sourcePath ? ` · ${attachment.sourcePath.split("/").pop() || attachment.sourcePath}` : ""}
-                    </span>
-                  </span>
-                ))}
-              </div>
-            ) : null}
-            {entry.content}
+            <AgentUserMessage message={entry.message} />
           </div>
         </div>
       );
@@ -809,6 +636,66 @@ function TimelineItem({
     case "proposal":
       return <ProposalCard entry={entry} onRespond={onRespond} />;
   }
+}
+
+function openAgentResource(resource: AgentMessageResource): void {
+  if (resource.kind === "table") {
+    useLayout.getState().revealSchemaTable(resource.connectionName ?? null, resource.table);
+    return;
+  }
+  if (resource.kind === "note" || resource.kind === "canvas") {
+    useWorkspace.getState().openFile(resolveCanvasArtifactPath(resource.path));
+    return;
+  }
+  if (!resource.sourcePath) return;
+  const keyword = resource.locator?.keyword ?? (resource.kind === "runsql" ? resource.sql : resource.text);
+  useWorkspace.getState().openFile(resolveCanvasArtifactPath(resource.sourcePath), {
+    ...(resource.kind === "runsql" ? {
+      runsqlBlockId: resource.locator?.blockId,
+      runsqlBlockIndex: resource.locator?.blockIndex,
+      runsqlSql: resource.sql,
+    } : {}),
+    ...(keyword ? { keyword, nthInFile: resource.locator?.nthInFile ?? 0 } : {}),
+    ...(resource.locator?.line ? {
+      scrollToLine: resource.locator.line,
+      scrollToColumn: resource.locator.column,
+    } : {}),
+  });
+}
+
+function ResourceIcon({ kind }: { kind: AgentMessageResource["kind"] }) {
+  if (kind === "table" || kind === "runsql") return <Database className="h-3 w-3 flex-none text-primary" />;
+  if (kind === "canvas") return <ChartNoAxesCombined className="h-3 w-3 flex-none text-primary" />;
+  if (kind === "selection") return <MessageSquareQuote className="h-3 w-3 flex-none text-primary" />;
+  return <FileText className="h-3 w-3 flex-none text-primary" />;
+}
+
+function AgentResourcePill({ resource }: { resource: AgentMessageResource }) {
+  return (
+    <button
+      type="button"
+      onClick={() => openAgentResource(resource)}
+      title={resource.label}
+      className="mx-0.5 inline-flex max-w-full translate-y-[1px] items-center gap-1 rounded-md border border-primary/25 bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-primary/10 hover:text-foreground"
+    >
+      <ResourceIcon kind={resource.kind} />
+      <span className="text-[9px] font-medium uppercase text-primary/80">{resource.kind}</span>
+      <span className="max-w-[180px] truncate">{resource.label}</span>
+    </button>
+  );
+}
+
+function AgentUserMessage({ message }: { message: AgentMessageContent }) {
+  const resources = new Map(message.resources.map((resource) => [resource.id, resource]));
+  return (
+    <div className="whitespace-pre-wrap break-words">
+      {message.segments.map((segment, index) => {
+        if (segment.kind === "text") return <span key={`text-${index}`}>{segment.text}</span>;
+        const resource = resources.get(segment.resourceId);
+        return resource ? <AgentResourcePill key={`resource-${index}`} resource={resource} /> : null;
+      })}
+    </div>
+  );
 }
 
 function SkillMaintenanceIndicator({

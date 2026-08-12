@@ -47,7 +47,7 @@ const schema = new Schema({
       content: "text*",
       group: "block",
       code: true,
-      attrs: { language: { default: "" } },
+      attrs: { language: { default: "" }, blockId: { default: "" } },
       toDOM: () => ["pre", ["code", 0]] as const,
     },
     text: { group: "inline" },
@@ -255,6 +255,28 @@ Paragraph C.`;
         r !== null && r.kind === "keyword",
       ),
     );
+  }
+
+  // 5) Agent RunSQL pill 优先按稳定 blockId 命中，重复 SQL 不会跳错 block。
+  {
+    const view = mockView({
+      type: "doc",
+      content: [
+        {
+          type: "code_block",
+          attrs: { language: "runsql", blockId: "block_a" },
+          content: [{ type: "text", text: "SELECT 1" }],
+        },
+        {
+          type: "code_block",
+          attrs: { language: "runsql", blockId: "block_b" },
+          content: [{ type: "text", text: "SELECT 1" }],
+        },
+      ],
+    });
+    const first = resolveReveal(view, null, { kind: "runsql", blockId: "block_a", blockIndex: 1, sql: "SELECT 1" });
+    const second = resolveReveal(view, null, { kind: "runsql", blockId: "block_b", blockIndex: 0, sql: "SELECT 1" });
+    out.push(expect("runsql: stable blockId wins over stale blockIndex", !!first && !!second && first.blockPos < second.blockPos));
   }
 
   return out;

@@ -2,7 +2,6 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import type {
-  AiCompleteRequest,
   AiSchemaColumnContext,
   AiSchemaTargetContext,
   ConnectionEntry,
@@ -88,8 +87,17 @@ export interface SchemaResolverDeps {
   >;
 }
 
+export interface SchemaProbeRequest {
+  context: {
+    sql?: string | null;
+    userInstruction?: string | null;
+    selectedText?: string | null;
+    connector?: { dialect?: string | null } | null;
+  };
+}
+
 export interface ResolveSchemaContextOptions {
-  request: AiCompleteRequest;
+  request: SchemaProbeRequest;
   symbols: SqlSymbols;
   connectionName: string;
   connection: ConnectionEntry;
@@ -417,7 +425,7 @@ function scoreEntryTerms(
 
 function rankCatalog(
   catalog: SchemaCatalogEntry[],
-  request: AiCompleteRequest,
+  request: SchemaProbeRequest,
   symbols: SqlSymbols,
 ): RankedSchemaEntry[] {
   const explicit = explicitTableSet(symbols);
@@ -485,7 +493,7 @@ export interface SearchTablesOptions {
  * 需求 5 的核心：agent 拿一组模糊关键词（表名片段 / 业务词），在 schema-dir
  * 文档或 connector 的 database/table 目录里模糊打分找候选表。复用
  * [rankCatalog](#rankCatalog) 同款打分逻辑（表名/列名/DDL 命中），只是输入
- * 从 `AiCompleteRequest` 换成一组裸关键词，方便 agent 工具直接调用。
+ * 使用一组裸关键词，方便 agent 工具直接调用。
  */
 export async function searchTables(
   options: SearchTablesOptions,
@@ -613,7 +621,7 @@ function columnsFromDescribe(result: QueryResult): AiSchemaColumnContext[] {
 async function probeColumns(
   ranked: RankedSchemaEntry[],
   connection: ConnectionEntry,
-  request: AiCompleteRequest,
+  request: SchemaProbeRequest,
   deps: SchemaResolverDeps,
 ): Promise<RankedSchemaEntry[]> {
   if (!deps.execute) return ranked;
@@ -765,7 +773,7 @@ export interface ResolveNamedTableSchemasOptions {
   tableNames: string[];
   connectionName: string;
   connection: ConnectionEntry;
-  request: AiCompleteRequest;
+  request: SchemaProbeRequest;
   matchReason: string;
   score?: number;
   /** false 时即使存在 schemaDir，也向当前 connector 拉取结构。 */
@@ -875,7 +883,7 @@ export interface ResolveMentionedSchemaContextOptions {
   mentionedTables: string[];
   connectionName: string;
   connection: ConnectionEntry;
-  request: AiCompleteRequest;
+  request: SchemaProbeRequest;
   deps?: SchemaResolverDeps;
 }
 
