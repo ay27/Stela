@@ -115,3 +115,4 @@ proposed → active → superseded
 | [0060](0060-cache-stable-agent-prompts.md) | Cache-stable Agent prompts and immutable plan snapshots | active |
 | [0061](0061-ordered-inline-agent-message-resources.md) | Ordered inline Agent message resources | superseded → [0062](0062-implicit-workspace-context-explicit-inline-resources.md) |
 | [0062](0062-implicit-workspace-context-explicit-inline-resources.md) | Implicit Workspace context and explicit inline resources | active |
+| [0063](0063-prosemirror-agent-composer.md) | ProseMirror-backed Agent composer | active |

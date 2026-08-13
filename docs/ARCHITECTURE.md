@@ -373,10 +373,14 @@ flowchart TB
    Mutations, note writes, and RunSQL rewrites
    wait for user approval. Fix/schema quick actions auto-submit in a new Agent tab;
    rewrite/question actions open editable drafts. The unified `@` picker and Add to Chat
-   insert resource pills at the current composer caret; the user timeline reuses that
-   exact ordered message while assistant bubbles remain Markdown-only. Device-sharded session history restores timelines,
+   insert resource pills at the current composer caret. The composer uses a small
+   ProseMirror schema whose per-tab EditorState owns selection, undo history, IME,
+   plain text, hard breaks, and atomic resource nodes; it serializes only at the
+   existing ordered-message boundary. The user timeline reuses that exact ordered
+   message while assistant bubbles remain Markdown-only. Device-sharded session history restores timelines,
    including Canvas artifact links. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md),
    [ADR-0062](./adr/0062-implicit-workspace-context-explicit-inline-resources.md),
+   [ADR-0063](./adr/0063-prosemirror-agent-composer.md),
    [ADR-0017](./adr/0017-user-cancelled-agent-runs.md),
    [ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md),
    [ADR-0026](./adr/0026-ranked-lexical-retrieval-for-agent.md),

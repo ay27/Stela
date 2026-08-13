@@ -6,6 +6,7 @@
  */
 
 import { create } from "zustand";
+import type { EditorState } from "@milkdown/prose/state";
 
 import type {
   AgentEntryPoint,
@@ -39,19 +40,18 @@ import { useLayout } from "@/state/layout";
 import { useWorkspace } from "@/state/workspace";
 import { scheduleAutoGit } from "@/services/auto-git";
 import {
-  agentMessageVisibleLength,
-  emptyAgentMessage,
-  insertAgentResource,
-  isAgentMessageEmpty,
-} from "@/lib/agent-message";
+  createAgentComposerState,
+  emptyAgentComposerState,
+  insertAgentComposerResource,
+  isAgentComposerEmpty,
+} from "@/lib/agent-composer";
 
 export type AgentRunStatus = "idle" | "running" | "done" | "error" | "cancelled";
 
 export type AgentDraftAttachmentInput = AgentMessageResourceInput;
 
 export interface AgentDraft {
-  message: AgentMessageContent;
-  cursorOffset: number;
+  editorState: EditorState;
   isEmpty: boolean;
 }
 
@@ -109,7 +109,6 @@ export interface AgentTab {
   timeline: AgentTimelineEntry[];
   draft: AgentDraft;
   connectionName: string | null;
-  resetToken: number;
   contextUsage: {
     usedTokens: number;
     contextWindow: number;
@@ -169,8 +168,7 @@ function newSessionId(): string {
 
 function emptyDraft(): AgentDraft {
   return {
-    message: emptyAgentMessage(),
-    cursorOffset: 0,
+    editorState: emptyAgentComposerState(),
     isEmpty: true,
   };
 }
@@ -187,7 +185,6 @@ function newTab(): AgentTab {
     timeline: [],
     draft: emptyDraft(),
     connectionName: null,
-    resetToken: 0,
     contextUsage: null,
     compacting: false,
   };
@@ -502,10 +499,10 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
     tab.title = input.title;
     tab.entryPoint = input.entryPoint;
     tab.connectionName = input.connectionName ?? null;
+    const editorState = createAgentComposerState(input.message);
     tab.draft = {
-      message: input.message,
-      cursorOffset: agentMessageVisibleLength(input.message),
-      isEmpty: isAgentMessageEmpty(input.message),
+      editorState,
+      isEmpty: isAgentComposerEmpty(editorState),
     };
     set((state) => ({ tabs: [...state.tabs, tab], activeTabId: tab.id }));
     useLayout.getState().focusAgentPanel();
@@ -544,13 +541,14 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
       void get().bindVault(workspaceVaultPath);
     }
     set((s) => updateActiveTab(s, (tab) => {
-      const inserted = insertAgentResource(tab.draft.message, attachment, tab.draft.cursorOffset);
+      const editorState = insertAgentComposerResource(tab.draft.editorState, attachment, {
+        collapseSelectionToHead: true,
+      });
       return {
         ...tab,
         draft: {
-          message: inserted.message,
-          cursorOffset: inserted.cursorOffset,
-          isEmpty: false,
+          editorState,
+          isEmpty: isAgentComposerEmpty(editorState),
         },
       };
     }));
@@ -579,7 +577,6 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
           },
         ],
         draft: emptyDraft(),
-        resetToken: current.resetToken + 1,
       })),
     );
     try {

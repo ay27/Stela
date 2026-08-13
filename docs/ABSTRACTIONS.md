@@ -638,6 +638,19 @@ type AgentEvent =
   | { type: "cancelled"; runId: string };
 ```
 
+The Agent composer is a renderer-only ProseMirror document with one paragraph,
+plain text, hard breaks, and atomic resource nodes. Each Agent tab retains its
+own disposable EditorState so selection and undo history survive panel
+unmounting and tab switches. A resource-catalog plugin holds the full typed
+resource bodies; atom nodes contain only id, kind, and label. Sending or adding
+a timeline entry serializes that state back to AgentMessageContent, so no
+ProseMirror JSON or selection coordinate crosses IPC or enters Agent history.
+
+External Add to Chat inserts at the saved selection head without deleting a
+previous Composer range. Clipboard paste is intentionally plain text: copied
+pills paste as their visible `@Kind · Label`, never as SQL/path-bearing live
+resources ([ADR-0063](./adr/0063-prosemirror-agent-composer.md)).
+
 Agent session files are native pi JSONL under
 `{vault}/.stela/agent-history/<deviceSlug>/<sessionId>.jsonl`. Besides pi
 session entries, Stela appends custom run entries that reconstruct the Agent

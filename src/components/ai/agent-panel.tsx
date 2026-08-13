@@ -1,17 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
+import type { EditorState } from "@milkdown/prose/state";
 import {
   Bot,
   Brain,
-  ChartNoAxesCombined,
   CheckCircle2,
   ChevronDown,
   Circle,
-  Database,
-  FileText,
   HelpCircle,
   History,
   Loader2,
-  MessageSquareQuote,
   MinusCircle,
   Plus,
   Send,
@@ -52,6 +49,7 @@ import {
 } from "./ai-prompt-input";
 import { renderMarkdown } from "./markdown-renderer";
 import { isAgentMessageEmpty } from "@/lib/agent-message";
+import { agentComposerStateToMessage, agentResourceDisplay } from "@/lib/agent-composer";
 
 function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
@@ -140,7 +138,6 @@ export function AgentPanel() {
   const status = activeTab.status;
   const timeline = activeTab.timeline;
   const draft = activeTab.draft;
-  const resetToken = activeTab.resetToken;
   const connectionName = activeTab.connectionName;
   const contextUsage = activeTab.contextUsage;
   const compacting = activeTab.compacting;
@@ -255,11 +252,10 @@ export function AgentPanel() {
   }, [timeline]);
 
   const getResourceCandidates = useCallback(async (query: string): Promise<AgentMessageResource[]> => {
-    const tableNames = connectionName
-      ? (peekAutocompleteFor(connectionName).length > 0
-          ? peekAutocompleteFor(connectionName)
-          : await ensureAutocompleteFor(connectionName).catch(() => []))
-      : [];
+    const tableNames = connectionName ? peekAutocompleteFor(connectionName) : [];
+    if (connectionName && tableNames.length === 0) {
+      void ensureAutocompleteFor(connectionName).catch(() => []);
+    }
     const indexCandidates = await window.stela.index.listCandidates(query, 24).catch(() => []);
     const notes = indexCandidates
       .filter((candidate) => candidate.kind === "file" && candidate.detail && !isCanvasPath(candidate.detail))
@@ -320,14 +316,13 @@ export function AgentPanel() {
   };
 
   const updatePromptDraft = useCallback(
-    (value: { message: AgentMessageContent; cursorOffset: number; isEmpty: boolean }) => {
+    (editorState: EditorState, isEmpty: boolean) => {
       updateDraft({
-        message: value.message,
-        cursorOffset: value.cursorOffset,
-        isEmpty: isAgentMessageEmpty(value.message),
+        editorState,
+        isEmpty,
       });
     },
-    [draft, updateDraft],
+    [updateDraft],
   );
 
   return (
@@ -487,9 +482,7 @@ export function AgentPanel() {
         <AiPromptInput
           key={activeTabId}
           ref={promptInputRef}
-          resetToken={resetToken}
-          value={draft.message}
-          cursorOffset={draft.cursorOffset}
+          state={draft.editorState}
           placeholder={t("agent.panel.placeholder")}
           disabled={busy}
           submitEnabled={!draft.isEmpty}
@@ -502,16 +495,6 @@ export function AgentPanel() {
         {/* 独立一行放操作按钮——左侧切 AI 配置档，Send/Stop 占最右。 */}
         <div className="mt-1.5 flex items-center justify-between gap-1.5">
           <div className="flex min-w-0 items-center gap-1.5">
-            <button
-              type="button"
-              disabled={busy}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => promptInputRef.current?.openResourcePicker()}
-              title={t("agent.panel.addResource")}
-              className="inline-flex h-7 w-7 flex-none items-center justify-center rounded-md border border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
           {aiSettings.profiles.length > 0 ? (
             <select
               value={aiSettings.activeProfileId}
@@ -545,7 +528,7 @@ export function AgentPanel() {
           ) : (
             <button
               type="button"
-              onClick={() => send({ message: draft.message })}
+              onClick={() => send({ message: agentComposerStateToMessage(draft.editorState) })}
               disabled={draft.isEmpty}
               title={t("agent.panel.send")}
               className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1.5 text-[11px] font-medium text-primary-foreground disabled:opacity-40"
@@ -663,24 +646,15 @@ function openAgentResource(resource: AgentMessageResource): void {
   });
 }
 
-function ResourceIcon({ kind }: { kind: AgentMessageResource["kind"] }) {
-  if (kind === "table" || kind === "runsql") return <Database className="h-3 w-3 flex-none text-primary" />;
-  if (kind === "canvas") return <ChartNoAxesCombined className="h-3 w-3 flex-none text-primary" />;
-  if (kind === "selection") return <MessageSquareQuote className="h-3 w-3 flex-none text-primary" />;
-  return <FileText className="h-3 w-3 flex-none text-primary" />;
-}
-
 function AgentResourcePill({ resource }: { resource: AgentMessageResource }) {
   return (
     <button
       type="button"
       onClick={() => openAgentResource(resource)}
       title={resource.label}
-      className="mx-0.5 inline-flex max-w-full translate-y-[1px] items-center gap-1 rounded-md border border-primary/25 bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-primary/10 hover:text-foreground"
+      className={`stela-agent-resource-pill stela-agent-resource-pill--${resource.kind}`}
     >
-      <ResourceIcon kind={resource.kind} />
-      <span className="text-[9px] font-medium uppercase text-primary/80">{resource.kind}</span>
-      <span className="max-w-[180px] truncate">{resource.label}</span>
+      {agentResourceDisplay(resource)}
     </button>
   );
 }

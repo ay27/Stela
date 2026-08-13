@@ -251,7 +251,6 @@
   "agent.panel.closeTab": "关闭标签页",
   "agent.panel.empty": "让 agent 分析笔记、查询数据、或撰写总结。",
   "agent.panel.placeholder": "输入 @ 引用文档、Canvas、表或 RunSQL block。",
-  "agent.panel.addResource": "在光标处添加资源",
   "agent.panel.thinking": "思考中…",
   "agent.panel.thought": "思考过程",
   "agent.panel.contextUsage": "Context ~{{percent}}%",

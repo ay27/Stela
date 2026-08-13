@@ -11,6 +11,7 @@ import {
   useAgentPanel,
 } from "./agent-panel";
 import { composeAgentMessage } from "@/lib/agent-message";
+import { agentComposerStateToMessage } from "@/lib/agent-composer";
 
 const history: AgentHistorySession = {
   summary: {
@@ -129,9 +130,10 @@ useAgentPanel.getState().addToChat({
 });
 const addToChatState = useAgentPanel.getState();
 const addToChatTab = addToChatState.tabs.find((tab) => tab.id === addToChatState.activeTabId);
+const addToChatMessage = addToChatTab ? agentComposerStateToMessage(addToChatTab.draft.editorState) : null;
 assert.equal(addToChatState.vaultPath, "/vault");
-assert.equal(addToChatTab?.draft.message.resources.length, 1);
-assert.equal(addToChatTab?.draft.message.resources[0]?.kind, "runsql");
+assert.equal(addToChatMessage?.resources.length, 1);
+assert.equal(addToChatMessage?.resources[0]?.kind, "runsql");
 
 // Panel 尚未挂载/绑定 Vault 时，快捷任务必须先完成 store 绑定，不能被随后
 // 的 AgentPanel bindVault effect 重置掉。
@@ -151,14 +153,15 @@ useAgentPanel.getState().openQuickTask({
 });
 const quickTaskState = useAgentPanel.getState();
 const quickTaskTab = quickTaskState.tabs.find((tab) => tab.id === quickTaskState.activeTabId);
+const quickTaskMessage = quickTaskTab ? agentComposerStateToMessage(quickTaskTab.draft.editorState) : null;
 assert.equal(quickTaskState.vaultPath, "/vault");
 assert.equal(quickTaskTab?.entryPoint, "runsql-rewrite");
-assert.equal(quickTaskTab?.draft.message.segments[0]?.kind, "text");
-assert.equal(quickTaskTab?.draft.message.resources.length, 1);
-assert.equal(quickTaskTab?.draft.message.resources.some((resource) => resource.kind === "note"), false);
+assert.equal(quickTaskMessage?.segments[0]?.kind, "text");
+assert.equal(quickTaskMessage?.resources.length, 1);
+assert.equal(quickTaskMessage?.resources.some((resource) => resource.kind === "note"), false);
 assert.equal(
-  quickTaskTab?.draft.message.resources[0]?.kind === "runsql"
-    ? quickTaskTab.draft.message.resources[0].rewriteTargetId
+  quickTaskMessage?.resources[0]?.kind === "runsql"
+    ? quickTaskMessage.resources[0].rewriteTargetId
     : null,
   "target_closed_panel",
 );

@@ -1,0 +1,132 @@
+.stela-agent-composer {
+  width: 100%;
+  min-width: 120px;
+  flex: 1 1 auto;
+  border: 1px solid hsl(var(--border));
+  border-radius: 5px;
+  background: hsl(var(--muted) / 0.35);
+  color: hsl(var(--foreground));
+  cursor: text;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.stela-agent-composer:focus-within {
+  border-color: hsl(var(--primary) / 0.55);
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.12);
+}
+
+.stela-agent-composer.is-disabled {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+.stela-agent-composer__editor {
+  min-height: inherit;
+  box-sizing: border-box;
+  outline: none;
+  color: hsl(var(--foreground));
+  font-size: 12px;
+  line-height: 1.4;
+  caret-color: hsl(var(--foreground));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.stela-agent-composer__editor p {
+  min-height: inherit;
+  margin: 0;
+}
+
+.stela-agent-composer__editor[data-empty]::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: hsl(var(--muted-foreground));
+  pointer-events: none;
+}
+
+.stela-agent-resource-pill {
+  display: inline-block;
+  max-width: 100%;
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: hsl(var(--primary) / 0.14);
+  color: hsl(var(--primary));
+  font-family: inherit;
+  font-weight: 500;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 1px 4px;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  vertical-align: -3px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.stela-agent-resource-pill::before {
+  margin-right: 3px;
+  font-size: 9px;
+}
+
+.stela-agent-resource-pill:hover {
+  background: hsl(var(--primary) / 0.2);
+}
+
+.stela-agent-resource-pill--table::before { content: "▦"; }
+.stela-agent-resource-pill--note::before { content: "▤"; }
+.stela-agent-resource-pill--canvas::before { content: "◇"; }
+.stela-agent-resource-pill--runsql::before { content: "▶"; }
+.stela-agent-resource-pill--selection::before { content: "❝"; }
+
+.stela-agent-composer__suggestions {
+  z-index: 1000;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--background));
+  padding: 4px;
+  box-shadow:
+    0 12px 28px hsl(var(--foreground) / 0.14),
+    0 2px 6px hsl(var(--foreground) / 0.08);
+  font-size: 12px;
+}
+
+.stela-agent-composer__suggestion {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  border-radius: 4px;
+  padding: 5px 8px;
+  color: hsl(var(--foreground));
+  text-align: left;
+}
+
+.stela-agent-composer__suggestion:hover,
+.stela-agent-composer__suggestion[aria-selected="true"] {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+.stela-agent-composer__suggestion-empty {
+  padding: 5px 8px;
+  color: hsl(var(--muted-foreground));
+}
+
+.stela-resource-kind {
+  flex: none;
+  border-radius: 999px;
+  background: hsl(var(--primary) / 0.12);
+  padding: 1px 5px;
+  color: hsl(var(--primary));
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 9px;
+  text-transform: uppercase;
+}

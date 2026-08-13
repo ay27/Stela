@@ -251,7 +251,6 @@
   "agent.panel.closeTab": "Close tab",
   "agent.panel.empty": "Ask the agent to analyze notes, query data, or draft a summary.",
   "agent.panel.placeholder": "Type @ to reference a document, Canvas, table, or RunSQL block.",
-  "agent.panel.addResource": "Add resource at cursor",
   "agent.panel.thinking": "Thinking…",
   "agent.panel.thought": "Thought",
   "agent.panel.contextUsage": "Context ~{{percent}}%",
