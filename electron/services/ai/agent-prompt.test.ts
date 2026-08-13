@@ -6,6 +6,8 @@ const prompt = buildSystemPrompt("STATIC SKILL LIMITS");
 assert.equal(prompt, buildSystemPrompt("STATIC SKILL LIMITS"));
 assert.doesNotMatch(prompt, /prompt-test|warehouse|orders|show the query/);
 
+assert.match(prompt, /for zh, write all conversational narration and the final answer in Simplified Chinese/);
+assert.match(prompt, /for en, write them in English/);
 assert.match(prompt, /conversation and final-answer text, SQL MUST use fenced ```sql```/);
 assert.match(prompt, /never label it ```runsql```/);
 assert.match(prompt, /Only Markdown content being written into a vault note may use executable fenced ```runsql```/);
