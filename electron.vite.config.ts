@@ -1,6 +1,7 @@
 import { defineConfig } from "electron-vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
+import { viteStaticCopy } from "vite-plugin-static-copy";
 
 /**
  * electron-vite v5 配置。
@@ -51,6 +52,9 @@ export default defineConfig({
   },
   renderer: {
     root: ".",
+    worker: {
+      format: "es",
+    },
     build: {
       rollupOptions: {
         input: {
@@ -58,7 +62,17 @@ export default defineConfig({
         },
       },
     },
-    plugins: [react()],
+    plugins: [
+      react(),
+      viteStaticCopy({
+        targets: [
+          {
+            src: path.resolve(__dirname, "node_modules/.cache/stela-pyodide/*"),
+            dest: "pyodide",
+          },
+        ],
+      }),
+    ],
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "src"),

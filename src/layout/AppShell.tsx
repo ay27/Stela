@@ -29,6 +29,7 @@ import { createNewStelaNote } from "@/services/note-actions";
 import { installExternalLinkHandler } from "@/services/opener";
 import { installVaultWatcherSubscriber } from "@/services/vault-watcher-subscriber";
 import { installSqlIndexSubscriber } from "@/state/sql-search";
+import { installPythonRuntime } from "@/services/python-runtime";
 import { useFindState } from "@/editor/find-in-file";
 import { insertRunSqlIntoActiveEditor } from "@/editor/active-editor";
 import { useHotkeys, type HotkeyBinding } from "@/lib/hotkeys";
@@ -99,6 +100,9 @@ export function AppShell() {
 
   // 订阅 main 进程 SQL 事实索引的状态变化（建库进度 / 就绪 / 增量更新）。
   useEffect(() => installSqlIndexSubscriber(), []);
+
+  // App-owned compute runtime: independent from Agent Panel mount/focus state.
+  useEffect(() => installPythonRuntime(), []);
 
   // Ctrl+Tab 切换器键盘驱动。
   //

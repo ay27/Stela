@@ -55,6 +55,8 @@ import type {
   PluginInfo,
   PluginInstallInput,
   QueryResult,
+  PythonExecutionResult,
+  PythonRuntimeInputChunk,
   RowsPage,
   RunRecord,
   SearchHit,
@@ -115,6 +117,10 @@ import * as analysisCanvas from "../services/analysis-canvas";
 import type { AnalysisCanvasFlowLayoutPatch } from "@shared/analysis-canvas";
 import { cancelSkillMaintenance } from "../services/ai/skill-maintenance-queue";
 import { runInlineCompletion } from "../services/ai/inline-completion";
+import {
+  readPythonRuntimeInput,
+  respondPythonRuntime,
+} from "../services/ai/python-runtime-broker";
 
 /** 共用：所有 vault-级 handler 的入口拿当前 vault；没有时按 IPC 错误返回。 */
 function requireVault(): string {
@@ -645,6 +651,15 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
       return { cancelled: true };
     },
   );
+
+  registerHandler<
+    { jobId: string; alias: string; offset: number; length: number },
+    PythonRuntimeInputChunk
+  >(IPC.AI_PYTHON_RUNTIME_READ_INPUT, readPythonRuntimeInput);
+  registerHandler<
+    { jobId: string; result: PythonExecutionResult },
+    { accepted: boolean }
+  >(IPC.AI_PYTHON_RUNTIME_RESPOND, respondPythonRuntime);
 
   // ---------- Harness agent ----------
   registerHandler<{ request: AgentRunRequest }, AgentRunResponse>(

@@ -347,6 +347,110 @@ try {
     assert.equal(new Set(runIds).size, 2);
   }
 
+  // Agent 可显式选择另一个 Vault connection；完整查询落 artifact 后可由同 session 的 Python 引用。
+  {
+    const executedConnections: string[] = [];
+    const recorded: Array<{ connectionName: string; rowCount: number }> = [];
+    let artifactRunId = "";
+    let pythonAliases: string[] = [];
+    const descriptor = {
+      runId: "placeholder",
+      sessionId: "session-1",
+      format: "jsonl" as const,
+      mode: "jsonl-buffered" as const,
+      columns: [{ name: "value", typeName: "INTEGER" }],
+      rowCount: 3,
+      byteSize: 27,
+      createdAt: 1,
+      lastAccessedAt: 1,
+    };
+    const ctx = {
+      ...withConnection,
+      connections: {
+        demo: { kind: "demo-kind", config: {} },
+        warehouse: { kind: "warehouse-kind", config: { database: "analytics" } },
+      },
+      connectionDialects: { demo: "SQLite", warehouse: "PostgreSQL" },
+      run: { runId: "cross-connection", sessionId: "session-1", notePath: null, questionsAsked: 0 },
+      connector: {
+        ...fakeConnector,
+        listKinds: () => [],
+        executeUnbounded: async (kind: string) => {
+          executedConnections.push(kind);
+          return {
+            kind: "query" as const,
+            columns: descriptor.columns,
+            rows: [[1], [2], [3]],
+            elapsedMs: 2,
+          };
+        },
+      },
+      queryArtifacts: {
+        createTarget: async () => { throw new Error("streaming path should not be used"); },
+        finalize: async () => { throw new Error("streaming path should not be used"); },
+        writeBuffered: async (input: { runId: string }) => {
+          artifactRunId = input.runId;
+          return { ...descriptor, runId: input.runId };
+        },
+        resolve: async (_vaultPath: string, sessionId: string, runId: string) =>
+          sessionId === "session-1" && runId === artifactRunId
+            ? { ...descriptor, runId }
+            : null,
+        discard: async () => {},
+      },
+      pythonExecutor: {
+        execute: async (input: { artifacts: Record<string, unknown> }) => {
+          pythonAliases = Object.keys(input.artifacts);
+          return {
+            ok: true,
+            stdout: "",
+            value: { kind: "scalar" as const, value: 6 },
+            elapsedMs: 3,
+          };
+        },
+      },
+      recordRun: async (run: { connectionName: string; rowCount: number }) => {
+        recorded.push({ connectionName: run.connectionName, rowCount: run.rowCount });
+      },
+    };
+    const query = await dispatchTool(
+      "run_sql",
+      JSON.stringify({ sql: "SELECT value FROM facts", connectionName: "warehouse" }),
+      ctx,
+    );
+    assert.equal(query.ok, true, query.text);
+    const queryPayload = JSON.parse(query.text) as {
+      runId: string;
+      connectionName: string;
+      result: { artifactAvailable: boolean; rowCount: number };
+    };
+    assert.deepEqual(executedConnections, ["warehouse-kind"]);
+    assert.equal(queryPayload.connectionName, "warehouse");
+    assert.equal(queryPayload.result.artifactAvailable, true);
+    assert.equal(queryPayload.result.rowCount, 3);
+    assert.deepEqual(recorded, [{ connectionName: "warehouse", rowCount: 3 }]);
+
+    const python = await dispatchTool(
+      "execute_python",
+      JSON.stringify({ code: "result = 6", inputs: { facts: queryPayload.runId } }),
+      ctx,
+    );
+    assert.equal(python.ok, true, python.text);
+    assert.deepEqual(pythonAliases, ["facts"]);
+    assert.equal(JSON.parse(python.text).result.value, 6);
+
+    const wrongRun = await dispatchTool(
+      "execute_python",
+      JSON.stringify({ code: "result = 1", inputs: { facts: "another-session-run" } }),
+      ctx,
+    );
+    assert.equal(wrongRun.ok, false);
+    assert.match(wrongRun.text, /local Agent session/i);
+
+    const toolNames = createAgentTools({ ctx, requestProposal: async () => false }).map((tool) => tool.name);
+    assert.ok(toolNames.includes("execute_python"));
+  }
+
   // get_table_schema 必须把 connector.execute 传给 schema-context，否则 DESCRIBE 永远跑不到。
   {
     const executed: string[] = [];

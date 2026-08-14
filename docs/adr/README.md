@@ -116,3 +116,4 @@ proposed → active → superseded
 | [0061](0061-ordered-inline-agent-message-resources.md) | Ordered inline Agent message resources | superseded → [0062](0062-implicit-workspace-context-explicit-inline-resources.md) |
 | [0062](0062-implicit-workspace-context-explicit-inline-resources.md) | Implicit Workspace context and explicit inline resources | active |
 | [0063](0063-prosemirror-agent-composer.md) | ProseMirror-backed Agent composer | active |
+| [0064](0064-session-query-artifacts-and-sandboxed-python.md) | Session query artifacts and sandboxed Python | active |

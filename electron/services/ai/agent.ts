@@ -25,6 +25,7 @@ import type {
   AgentProposalResponse,
   AgentRunRequest,
   ConnectionEntry,
+  ConnectionMap,
 } from "@shared/types";
 
 import * as connectionsStore from "../connections-store";
@@ -35,6 +36,13 @@ import { getLogger } from "../logger";
 import * as resultStore from "../result-store";
 import * as settingsStore from "../settings-store";
 import * as sqlIndex from "../sql-index";
+import {
+  createQueryArtifactTarget,
+  discardQueryArtifactTarget,
+  finalizeMaterializedQueryArtifact,
+  resolveQueryArtifact,
+  writeBufferedQueryArtifact,
+} from "../query-artifacts";
 import { assistantText, buildSystemPrompt, buildUserContent } from "./agent-prompt";
 import {
   AGENT_SKILL_LIMITS_PROMPT,
@@ -54,6 +62,7 @@ import {
   type ProposalRequest,
 } from "./agent-tools";
 import { createTransportForProfile, getActiveProfile, loadApiKey } from "./provider";
+import { executePython } from "./python-runtime-broker";
 import * as agentMetrics from "./agent-metrics";
 import {
   buildSkillMaintenanceEvidence,
@@ -164,21 +173,27 @@ export async function prunePersistentAgentHistory(
   }
 }
 
-async function resolveConnection(
+async function loadAvailableConnections(
   vaultPath: string,
   slug: string,
-  connectionName: string | null | undefined,
-): Promise<{ connection: ConnectionEntry | null; dialect: string | null }> {
-  if (!connectionName) return { connection: null, dialect: null };
+): Promise<{ connections: ConnectionMap; dialects: Record<string, string | null> }> {
   try {
     const connections = await connectionsStore.loadConnections(vaultPath, slug);
-    const connection = connections[connectionName] ?? null;
-    if (!connection) return { connection: null, dialect: null };
-    const meta = connectorRegistry.listKinds().find((item) => item.kind === connection.kind);
-    return { connection, dialect: meta?.dialect ?? null };
+    const kindDialects = new Map(
+      connectorRegistry.listKinds().map((item) => [item.kind, item.dialect ?? null]),
+    );
+    return {
+      connections,
+      dialects: Object.fromEntries(
+        Object.entries(connections).map(([name, connection]) => [
+          name,
+          kindDialects.get(connection.kind) ?? null,
+        ]),
+      ),
+    };
   } catch (err) {
-    log.warn("resolveConnection failed", { err: (err as Error).message });
-    return { connection: null, dialect: null };
+    log.warn("loadAvailableConnections failed", { err: (err as Error).message });
+    return { connections: {}, dialects: {} };
   }
 }
 
@@ -635,7 +650,13 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       agentMetrics.addEvent(metricRunId, { type: "started", payload: { runId } });
     }
     const apiKey = await loadApiKey(vaultPath, slug, profile.id);
-    const { connection, dialect } = await resolveConnection(vaultPath, slug, request.connectionName);
+    const available = await loadAvailableConnections(vaultPath, slug);
+    const connection = request.connectionName
+      ? available.connections[request.connectionName] ?? null
+      : null;
+    const dialect = request.connectionName
+      ? available.dialects[request.connectionName] ?? null
+      : null;
     const skills = await loadAgentSkills(vaultPath);
     const promptSkills = rankAgentSkills(skills.loaded, request.prompt, SKILL_PROMPT_LIMIT);
     const { models, model } = createTransportForProfile(settings.ai, apiKey, profile.id);
@@ -695,14 +716,27 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           vaultPath,
           connectionName: request.connectionName ?? null,
           connection,
+          connections: available.connections,
+          connectionDialects: available.dialects,
           aiSettings: settings.ai,
           connector: {
             listKinds: connectorRegistry.listKinds,
             listDatabases: connectorRegistry.listDatabases,
             listTables: connectorRegistry.listTables,
             execute: connectorRegistry.execute,
+            executeUnbounded: connectorRegistry.executeUnbounded,
+            materializeQuery: connectorRegistry.materializeQuery,
             describeTables: connectorRegistry.describeTables,
           },
+          queryArtifacts: {
+            createTarget: createQueryArtifactTarget,
+            finalize: finalizeMaterializedQueryArtifact,
+            writeBuffered: writeBufferedQueryArtifact,
+            resolve: resolveQueryArtifact,
+            discard: discardQueryArtifactTarget,
+          },
+          pythonExecutor: { execute: executePython },
+          signal,
           sqlIndex: { query: sqlIndex.query },
           skills: skills.loaded,
           mode: "normal",
@@ -858,7 +892,18 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         await compactOnce();
       }
 
-      const userContent = buildUserContent(request, { connection, dialect, skillMetadata });
+      const userContent = buildUserContent(request, {
+        connection,
+        dialect,
+        skillMetadata,
+        availableConnections: Object.entries(available.connections)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([name, entry]) => ({
+            name,
+            kind: entry.kind,
+            dialect: available.dialects[name] ?? null,
+          })),
+      });
       let result = await harness.prompt(userContent);
       await emitUsage(false);
 

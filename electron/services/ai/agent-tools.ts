@@ -28,13 +28,19 @@ import type {
   AiSettings,
   ColumnDef,
   ConnectionEntry,
+  ConnectionMap,
   ConnectorKindMeta,
+  MaterializedQueryResult,
+  PythonExecutionResult,
+  QueryArtifactDescriptor,
+  QueryArtifactRequest,
   QueryResult,
   RunRecord,
   SqlIndexFilter,
   SqlIndexHit,
   SqlIndexOperation,
 } from "@shared/types";
+import type { QueryArtifactTarget } from "../query-artifacts";
 
 import { getLogger } from "../logger";
 import * as analysisCanvasService from "../analysis-canvas";
@@ -66,6 +72,13 @@ export interface AgentConnectorOps {
   listDatabases(kind: string, config: unknown): Promise<string[]>;
   listTables(kind: string, config: unknown, db?: string | null): Promise<string[]>;
   execute(kind: string, config: unknown, sql: string): Promise<QueryResult>;
+  executeUnbounded?(kind: string, config: unknown, sql: string): Promise<QueryResult>;
+  materializeQuery?(
+    kind: string,
+    config: unknown,
+    sql: string,
+    request: QueryArtifactRequest,
+  ): Promise<MaterializedQueryResult | null>;
   /**
    * 可选：批量拿带 COMMENT 的列。caller 需要 ignore 它不存在的情形（runtime
    * 注入来自 registry.describeTables）。
@@ -82,6 +95,43 @@ export interface AgentConnectorOps {
       ddlSnippet: string | null;
     }>
   >;
+}
+
+export interface AgentQueryArtifactOps {
+  createTarget(
+    vaultPath: string,
+    sessionId: string,
+    runId: string,
+    format: "parquet" | "jsonl",
+  ): Promise<QueryArtifactTarget>;
+  finalize(
+    target: QueryArtifactTarget,
+    result: MaterializedQueryResult,
+    mode: "parquet-stream" | "jsonl-stream",
+  ): Promise<QueryArtifactDescriptor>;
+  writeBuffered(input: {
+    vaultPath: string;
+    sessionId: string;
+    runId: string;
+    columns: ColumnDef[];
+    rows: unknown[][];
+  }): Promise<QueryArtifactDescriptor | null>;
+  resolve(
+    vaultPath: string,
+    sessionId: string,
+    runId: string,
+  ): Promise<QueryArtifactDescriptor | null>;
+  discard(target: QueryArtifactTarget): Promise<void>;
+}
+
+export interface AgentPythonExecutorOps {
+  execute(input: {
+    vaultPath: string;
+    sessionId: string;
+    code: string;
+    artifacts: Record<string, QueryArtifactDescriptor>;
+    signal?: AbortSignal;
+  }): Promise<PythonExecutionResult>;
 }
 
 /**
@@ -115,6 +165,11 @@ export type AgentRunRecorder = (run: {
 
 const log = getLogger("ai.agent-tools");
 const RESULT_CHAR_BUDGET = 30_000;
+const SQL_PREVIEW_ROWS = 200;
+const QUERY_ARTIFACT_MAX_BYTES = 1024 * 1024 * 1024;
+const PYTHON_CODE_MAX_CHARS = 50_000;
+const PYTHON_INPUT_MAX_COUNT = 8;
+const PYTHON_ALIAS_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
 function truncate(text: string, maxChars = RESULT_CHAR_BUDGET): string {
   return text.length <= maxChars
@@ -156,6 +211,8 @@ export interface AgentToolContext {
   vaultPath: string;
   connectionName: string | null;
   connection: ConnectionEntry | null;
+  connections?: ConnectionMap;
+  connectionDialects?: Record<string, string | null>;
   maintenanceDialect?: string | null;
   maintenanceTables?: string[];
   maintenanceSourcePaths?: string[];
@@ -163,6 +220,9 @@ export interface AgentToolContext {
   maintenanceRelatedNotes?: { paths: Set<string>; reads: number };
   aiSettings: AiSettings;
   connector: AgentConnectorOps;
+  queryArtifacts?: AgentQueryArtifactOps;
+  pythonExecutor?: AgentPythonExecutorOps;
+  signal?: AbortSignal;
   sqlIndex: AgentSqlIndexOps;
   skills: LoadedAgentSkill[];
   mode: "normal" | "maintenance" | "refresh";
@@ -209,17 +269,20 @@ export function createAgentTools(options: {
     {
       name: "list_databases",
       label: "List databases",
-      description: "List databases/schemas visible through the current data connection.",
-      parameters: Type.Object({}),
+      description: "List databases/schemas visible through a named Stela connection. Omit connectionName to use the current note connection.",
+      parameters: Type.Object({
+        connectionName: Type.Optional(Type.String({ description: "Available Stela connection name." })),
+      }),
       executionMode: "parallel",
-      execute: (toolCallId) => runTool("list_databases", toolCallId, {}, ctx, requestProposal),
+      execute: (toolCallId, params) => runTool("list_databases", toolCallId, params, ctx, requestProposal),
     },
     {
       name: "list_tables",
       label: "List tables",
-      description: "List tables in a database through the current data connection.",
+      description: "List tables in a database through a named Stela connection.",
       parameters: Type.Object({
         database: Type.Optional(Type.String({ description: "Database name; omit to use the connector default." })),
+        connectionName: Type.Optional(Type.String({ description: "Available Stela connection name; defaults to current." })),
       }),
       executionMode: "parallel",
       execute: (toolCallId, params) => runTool("list_tables", toolCallId, params, ctx, requestProposal),
@@ -234,6 +297,7 @@ export function createAgentTools(options: {
           description: 'Keywords to match against table/column names and DDL, e.g. ["quarter", "revenue", "order"].',
         }),
         limit: Type.Optional(Type.Number({ description: "Optional max candidate tables to return. Defaults to 10." })),
+        connectionName: Type.Optional(Type.String({ description: "Available Stela connection name; defaults to current." })),
       }),
       executionMode: "parallel",
       execute: (toolCallId, params) => runTool("search_tables", toolCallId, params, ctx, requestProposal),
@@ -246,6 +310,7 @@ export function createAgentTools(options: {
         tables: Type.Array(Type.String(), {
           description: "Table names, optionally qualified as db.table.",
         }),
+        connectionName: Type.Optional(Type.String({ description: "Available Stela connection name; defaults to current." })),
       }),
       executionMode: "parallel",
       execute: (toolCallId, params) => runTool("get_table_schema", toolCallId, params, ctx, requestProposal),
@@ -254,12 +319,27 @@ export function createAgentTools(options: {
       name: "run_sql",
       label: "Run SQL",
       description:
-        "Run a SQL statement through the current data connection. Read-only statements (SELECT/WITH/SHOW/DESCRIBE/EXPLAIN) run immediately; Stela caps saved/displayed result rows without rewriting SQL. Mutating statements (INSERT/UPDATE/DELETE/DDL/...) are blocked unless the user has enabled mutations, and always require explicit approval.",
+        "Run a SQL statement through a named Stela connection. Read-only queries return a bounded preview and a session-local artifact that execute_python can consume by runId. Mutations are blocked unless enabled and always require explicit approval.",
       parameters: Type.Object({
         sql: Type.String(),
+        connectionName: Type.Optional(Type.String({ description: "Available Stela connection name; defaults to current." })),
       }),
       executionMode: "parallel",
       execute: (toolCallId, params) => runTool("run_sql", toolCallId, params, ctx, requestProposal),
+    },
+    {
+      name: "execute_python",
+      label: "Execute Python",
+      description:
+        "Run bounded Python in Stela's local Pyodide sandbox. DuckDB, pandas, con, and tables are preloaded. inputs maps valid Python/SQL aliases to successful run_sql runIds from this local Agent session. Use DuckDB SQL for joins/aggregations and assign the final value to result. No network, host files, subprocesses, or package installation are available.",
+      parameters: Type.Object({
+        code: Type.String({ description: "Python code. Assign the final scalar, DataFrame, or DuckDB relation to result." }),
+        inputs: Type.Record(Type.String(), Type.String(), {
+          description: "Alias to successful run_sql runId.",
+        }),
+      }),
+      executionMode: "sequential",
+      execute: (toolCallId, params) => runTool("execute_python", toolCallId, params, ctx, requestProposal),
     },
     {
       name: "create_chart",
@@ -531,7 +611,9 @@ export function createAgentTools(options: {
   if (ctx.mode === "maintenance" || ctx.mode === "refresh") {
     return tools.filter((tool) => tool.name === "save_skill");
   }
-  return tools;
+  return tools.filter((tool) =>
+    tool.name !== "execute_python" || Boolean(ctx.queryArtifacts && ctx.pythonExecutor),
+  );
 }
 
 async function runTool(
@@ -559,14 +641,23 @@ function resolveDialect(kind: string, ctx: AgentToolContext): string {
   return ctx.connector.listKinds().find((meta) => meta.kind === kind)?.dialect ?? kind;
 }
 
-function requireConnection(ctx: AgentToolContext): ConnectionEntry {
-  if (!ctx.connectionName || !ctx.connection) {
+function requireNamedConnection(
+  ctx: AgentToolContext,
+  requested?: unknown,
+): { name: string; connection: ConnectionEntry } {
+  const requestedName = typeof requested === "string" ? requested.trim() : "";
+  const name = requestedName || ctx.connectionName || "";
+  const connection = (name && ctx.connections?.[name]) ||
+    (name === ctx.connectionName ? ctx.connection : null);
+  if (!name || !connection) {
     throw new AppError(
       "no_connection",
-      "No data connection is configured for the current note. Ask the user to set `connection_name` in frontmatter, or answer from vault notes only.",
+      requestedName
+        ? `Unknown data connection '${requestedName}'. Use one of the available connection names from the turn context.`
+        : "No data connection is configured for the current note. Ask the user to set `connection_name` in frontmatter, or pass an available connectionName.",
     );
   }
-  return ctx.connection;
+  return { name, connection };
 }
 
 function stringList(value: unknown): string[] {
@@ -601,25 +692,31 @@ function formatQueryResult(result: QueryResult): unknown {
   };
 }
 
-async function runListDatabases(ctx: AgentToolContext): Promise<ToolOutcome> {
-  const connection = requireConnection(ctx);
+async function runListDatabases(
+  args: { connectionName?: unknown },
+  ctx: AgentToolContext,
+): Promise<ToolOutcome> {
+  const { name, connection } = requireNamedConnection(ctx, args.connectionName);
   const dbs = await ctx.connector.listDatabases(connection.kind, connection.config);
-  return ok(dbs);
+  return ok({ connectionName: name, databases: dbs });
 }
 
-async function runListTables(args: { database?: string }, ctx: AgentToolContext): Promise<ToolOutcome> {
-  const connection = requireConnection(ctx);
+async function runListTables(
+  args: { database?: string; connectionName?: unknown },
+  ctx: AgentToolContext,
+): Promise<ToolOutcome> {
+  const { name, connection } = requireNamedConnection(ctx, args.connectionName);
   const tables = await ctx.connector.listTables(connection.kind, connection.config, args.database ?? null);
-  return ok(tables);
+  return ok({ connectionName: name, database: args.database ?? null, tables });
 }
 
-async function runSearchTables(args: { keywords?: unknown; limit?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
-  const connection = requireConnection(ctx);
+async function runSearchTables(args: { keywords?: unknown; limit?: unknown; connectionName?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
+  const { name, connection } = requireNamedConnection(ctx, args.connectionName);
   const keywords = stringList(args.keywords);
   if (keywords.length === 0) return fail("keywords must be a non-empty array of strings.");
   const limit = boundedInt(args.limit, 10, 1, 20);
   const targets = await searchTables({
-    connectionName: ctx.connectionName!,
+    connectionName: name,
     connection,
     keywords,
     limit,
@@ -676,19 +773,19 @@ async function tableUsage(
   }
 }
 
-async function runGetTableSchema(args: { tables?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
-  const connection = requireConnection(ctx);
+async function runGetTableSchema(args: { tables?: unknown; connectionName?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
+  const { name, connection } = requireNamedConnection(ctx, args.connectionName);
   const tables = stringList(args.tables);
   if (tables.length === 0) return fail("tables must be a non-empty array of table names.");
   const targets = await resolveNamedTableSchemas({
     tableNames: tables,
-    connectionName: ctx.connectionName!,
+    connectionName: name,
     connection,
     matchReason: "agent get_table_schema",
     preferLocalSchemaDir: false,
     request: {
       context: {
-        connector: { dialect: resolveDialect(connection.kind, ctx) },
+        connector: { dialect: ctx.connectionDialects?.[name] ?? resolveDialect(connection.kind, ctx) },
       },
     },
     deps: {
@@ -710,8 +807,11 @@ async function runGetTableSchema(args: { tables?: unknown }, ctx: AgentToolConte
   );
 }
 
-async function runSql(args: { sql?: string }, ctx: AgentToolContext): Promise<ToolOutcome> {
-  const connection = requireConnection(ctx);
+async function runSql(
+  args: { sql?: string; connectionName?: unknown },
+  ctx: AgentToolContext,
+): Promise<ToolOutcome> {
+  const { name: connectionName, connection } = requireNamedConnection(ctx, args.connectionName);
   const sql = args.sql;
   if (!sql || !sql.trim()) return fail("sql must be a non-empty string.");
   const classified = classifySql(sql, ctx.aiSettings.agentAllowMutations);
@@ -724,24 +824,193 @@ async function runSql(args: { sql?: string }, ctx: AgentToolContext): Promise<To
     }
     const approved = await ctx.requestProposal({
       kind: "mutation_sql",
-      payload: { sql, description: `Run ${classified.keyword ?? "mutation"} statement` },
+      payload: {
+        sql,
+        description: `Run ${classified.keyword ?? "mutation"} statement on connection '${connectionName}'`,
+      },
     });
     if (!approved) return fail("The user rejected this SQL statement. Do not retry it as-is.");
   }
-  // 行数上限已在 registry.execute 内核心层统一注入，这里不重复处理。
+
+  const runId = `${ctx.run.runId}-sql-${randomUUID()}`;
   const startedAt = Date.now();
-  let result: QueryResult;
+  let result: QueryResult | null = null;
+  let artifact: QueryArtifactDescriptor | null = null;
+  let totalRowCount: number | undefined;
   try {
-    result = await ctx.connector.execute(connection.kind, connection.config, sql);
+    if (
+      classified.classification !== "mutation" &&
+      ctx.queryArtifacts &&
+      ctx.connector.materializeQuery &&
+      ctx.run.sessionId
+    ) {
+      const connectorMeta = ctx.connector.listKinds().find((item) => item.kind === connection.kind);
+      const format = connectorMeta?.queryArtifactFormats?.includes("parquet")
+        ? "parquet"
+        : connectorMeta?.queryArtifactFormats?.includes("jsonl")
+          ? "jsonl"
+          : null;
+      if (format) {
+        const target = await ctx.queryArtifacts.createTarget(
+          ctx.vaultPath,
+          ctx.run.sessionId,
+          runId,
+          format,
+        );
+        try {
+          const materialized = await ctx.connector.materializeQuery(
+            connection.kind,
+            connection.config,
+            sql,
+            {
+              format,
+              outputPath: target.tempPath,
+              previewRows: SQL_PREVIEW_ROWS,
+              maxBytes: QUERY_ARTIFACT_MAX_BYTES,
+            },
+          );
+          if (materialized) {
+            artifact = await ctx.queryArtifacts.finalize(
+              target,
+              materialized,
+              format === "parquet" ? "parquet-stream" : "jsonl-stream",
+            );
+            totalRowCount = materialized.rowCount;
+            result = {
+              kind: "query",
+              columns: materialized.columns,
+              rows: materialized.previewRows.slice(0, SQL_PREVIEW_ROWS),
+              elapsedMs: materialized.elapsedMs,
+            };
+          } else {
+            await ctx.queryArtifacts.discard(target);
+          }
+        } catch (err) {
+          await ctx.queryArtifacts.discard(target).catch(() => {});
+          throw err;
+        }
+      }
+    }
+
+    if (!result) {
+      result = await (ctx.connector.executeUnbounded ?? ctx.connector.execute)(
+        connection.kind,
+        connection.config,
+        sql,
+      );
+      if (result.kind === "query") {
+        totalRowCount = result.rows.length;
+        if (ctx.queryArtifacts && ctx.run.sessionId) {
+          try {
+            artifact = await ctx.queryArtifacts.writeBuffered({
+              vaultPath: ctx.vaultPath,
+              sessionId: ctx.run.sessionId,
+              runId,
+              columns: result.columns,
+              rows: result.rows,
+            });
+          } catch (artifactError) {
+            log.warn("agent query artifact write failed", {
+              runId,
+              err: artifactError instanceof Error ? artifactError.message : String(artifactError),
+            });
+          }
+        }
+      }
+    }
   } catch (err) {
-    await recordAgentRun(ctx, sql, startedAt, null, err);
+    await recordAgentRun(ctx, sql, startedAt, null, err, {
+      runId,
+      connectionName,
+    });
     throw err;
   }
-  const runId = await recordAgentRun(ctx, sql, startedAt, result, null);
-  if (runId && result.kind === "query") {
-    ctx.chartRuns?.set(runId, { sql, columns: result.columns, rows: result.rows });
+  await recordAgentRun(ctx, sql, startedAt, result, null, {
+    runId,
+    connectionName,
+    rowCount: totalRowCount,
+  });
+  if (result.kind === "query") {
+    ctx.chartRuns?.set(runId, {
+      sql,
+      columns: result.columns,
+      rows: result.rows.slice(0, SQL_PREVIEW_ROWS),
+    });
   }
-  return ok({ runId, result: formatQueryResult(result) });
+  if (result.kind === "mutation") {
+    return ok({ runId, connectionName, result: formatQueryResult(result) });
+  }
+  const rowCount = totalRowCount ?? result.rows.length;
+  return ok({
+    runId,
+    connectionName,
+    result: {
+      kind: "query",
+      columns: result.columns,
+      rowCount,
+      rows: result.rows.slice(0, SQL_PREVIEW_ROWS),
+      previewTruncated: rowCount > Math.min(result.rows.length, SQL_PREVIEW_ROWS),
+      artifactAvailable: artifact !== null,
+      artifactMode: artifact?.mode ?? null,
+      elapsedMs: result.elapsedMs,
+    },
+  });
+}
+
+async function runExecutePython(
+  args: { code?: unknown; inputs?: unknown },
+  ctx: AgentToolContext,
+): Promise<ToolOutcome> {
+  if (!ctx.pythonExecutor || !ctx.queryArtifacts || !ctx.run.sessionId) {
+    return fail("Python execution is unavailable in this Agent session.");
+  }
+  const code = typeof args.code === "string" ? args.code.trim() : "";
+  if (!code) return fail("code must be a non-empty string.");
+  if (code.length > PYTHON_CODE_MAX_CHARS) {
+    return fail(`code exceeds ${PYTHON_CODE_MAX_CHARS} characters.`);
+  }
+  if (!args.inputs || typeof args.inputs !== "object" || Array.isArray(args.inputs)) {
+    return fail("inputs must be an object mapping aliases to run_sql runIds.");
+  }
+  const entries = Object.entries(args.inputs as Record<string, unknown>);
+  if (entries.length > PYTHON_INPUT_MAX_COUNT) {
+    return fail(`inputs supports at most ${PYTHON_INPUT_MAX_COUNT} run_sql results.`);
+  }
+  const artifacts: Record<string, QueryArtifactDescriptor> = {};
+  for (const [alias, rawRunId] of entries) {
+    if (!PYTHON_ALIAS_PATTERN.test(alias)) {
+      return fail(`Invalid Python input alias '${alias}'. Use a valid identifier up to 64 characters.`);
+    }
+    if (typeof rawRunId !== "string" || !rawRunId.trim()) {
+      return fail(`Input '${alias}' must reference a non-empty run_sql runId.`);
+    }
+    const artifact = await ctx.queryArtifacts.resolve(
+      ctx.vaultPath,
+      ctx.run.sessionId,
+      rawRunId.trim(),
+    );
+    if (!artifact) {
+      return fail(
+        `Input '${alias}' does not reference an available artifact from this local Agent session. ` +
+          "Run the query again and use the returned runId.",
+      );
+    }
+    artifacts[alias] = artifact;
+  }
+  const result = await ctx.pythonExecutor.execute({
+    vaultPath: ctx.vaultPath,
+    sessionId: ctx.run.sessionId,
+    code,
+    artifacts,
+    signal: ctx.signal,
+  });
+  if (!result.ok) {
+    return fail(
+      `${result.error ?? "Python execution failed."}` +
+        (result.stdout ? `\nstdout:\n${result.stdout}` : ""),
+    );
+  }
+  return ok({ stdout: result.stdout, result: result.value, elapsedMs: result.elapsedMs });
 }
 
 function runCreateChart(args: Record<string, unknown>, ctx: AgentToolContext): ToolOutcome {
@@ -867,10 +1136,11 @@ async function recordAgentRun(
   startedAt: number,
   result: QueryResult | null,
   err: unknown,
+  options: { runId?: string; connectionName?: string; rowCount?: number } = {},
 ): Promise<string | null> {
   const elapsedMs = result?.elapsedMs ?? Date.now() - startedAt;
   const isQuery = result?.kind === "query";
-  const runId = `${ctx.run.runId}-sql-${randomUUID()}`;
+  const runId = options.runId ?? `${ctx.run.runId}-sql-${randomUUID()}`;
   try {
     await ctx.recordRun({
       // 一次 agent run 可能跑多条 SQL，runId 必须唯一；blockId 保持同一个
@@ -882,8 +1152,8 @@ async function recordAgentRun(
       message: result ? null : err instanceof Error ? err.message : String(err),
       startedAt,
       elapsedMs,
-      rowCount: isQuery ? result.rows.length : (result?.affectedRows ?? 0),
-      connectionName: ctx.connectionName ?? "",
+      rowCount: options.rowCount ?? (isQuery ? result.rows.length : (result?.affectedRows ?? 0)),
+      connectionName: options.connectionName ?? ctx.connectionName ?? "",
       notePath: ctx.run.notePath,
       columns: isQuery ? result.columns : [],
       rows: isQuery ? result.rows : [],
@@ -1356,7 +1626,7 @@ export async function dispatchTool(
   try {
     switch (name as AgentToolName) {
       case "list_databases":
-        return await runListDatabases(ctx);
+        return await runListDatabases(args, ctx);
       case "list_tables":
         return await runListTables(args, ctx);
       case "search_tables":
@@ -1365,6 +1635,8 @@ export async function dispatchTool(
         return await runGetTableSchema(args, ctx);
       case "run_sql":
         return await runSql(args, ctx);
+      case "execute_python":
+        return await runExecutePython(args, ctx);
       case "create_chart":
         return runCreateChart(args, ctx);
       case "create_analysis_canvas":

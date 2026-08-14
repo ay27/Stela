@@ -2,6 +2,6 @@
   "id": "connector-postgresql",
   "kind": "postgresql",
   "displayName": "PostgreSQL",
-  "apiVersion": 1,
+  "apiVersion": 2,
   "entry": "dist/index.cjs"
 }

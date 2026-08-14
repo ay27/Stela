@@ -331,6 +331,7 @@ interface ConnectorKindMeta {
   defaultConfig: unknown;
   subprocess: boolean;
   dialect?: string;         // "MySQL", "PostgreSQL", etc.
+  queryArtifactFormats?: Array<"parquet" | "jsonl">;
 }
 ```
 
@@ -344,10 +345,21 @@ export interface StelaConnectorPlugin {
   meta: ConnectorKindMeta;
   test(config: unknown): Promise<TestResult>;
   execute(config: unknown, sql: string): Promise<QueryResult>;
+  materializeQuery?(
+    config: unknown,
+    sql: string,
+    request: QueryArtifactRequest,
+  ): Promise<MaterializedQueryResult | null>;
   listDatabases?(config: unknown): Promise<string[]>;
   listTables?(config: unknown, database: string): Promise<TableInfo[]>;
 }
 ```
+
+`QueryArtifactRequest.outputPath` is host-selected and visible only inside the
+trusted connector/main boundary. A successful materialization writes that path
+atomically and returns a bounded preview plus exact `rowCount`; it never returns
+the path to renderer or model code. Connectors without this optional v2 method
+continue through the buffered v1 result contract.
 
 ## AppSettings
 
@@ -533,8 +545,9 @@ Hits always come from deterministic `sql-index` intersection — the model must 
 
 ### Agent harness
 
-Agent schema tools have one authority: the current live connector. `search_tables`
-enumerates its catalog and `get_table_schema` fetches current DDL or columns;
+Agent schema tools have one authority: the selected live connector (the current
+note connection by default, or an explicit listed `connectionName`). `search_tables`
+enumerates that catalog and `get_table_schema` fetches current DDL or columns;
 they do not read the optional connection `schemaDir` dump ([ADR-0041](./adr/0041-agent-live-schema-authority.md)).
 
 When the connector implements `describeTables(kind, config, tables)` the schema
@@ -546,7 +559,7 @@ columns (with `comment`) directly. Otherwise it falls back to `SHOW CREATE TABLE
 ```typescript
 type AgentToolName =
   | "list_databases" | "list_tables" | "search_tables" | "get_table_schema"
-  | "run_sql" | "create_chart" | "search_sql_usage"
+  | "run_sql" | "execute_python" | "create_chart" | "search_sql_usage"
   | "create_analysis_canvas" | "read_analysis_canvas" | "update_analysis_canvas"
   | "search_vault" | "list_vault_files" | "read_note"
   | "create_plan" | "update_plan" | "get_plan"
@@ -660,6 +673,41 @@ local; a remote session is read-only and a new prompt forks it to a local
 Each device retains only its 20 most recently updated session files; cleanup
 never deletes another device's directory ([ADR-0047](./adr/0047-bounded-device-agent-history-retention.md)).
 
+Agent `run_sql` accepts an optional Vault `connectionName`; omission selects the
+current note connection. A successful read returns at most 200 preview rows to
+the model and records the same bounded rows in normal history, while `rowCount`
+describes the full result. When possible it also creates a machine-local
+artifact under Electron `userData`, keyed by Vault hash, local `sessionId`, and
+SQL `runId`:
+
+```typescript
+type QueryArtifactFormat = "parquet" | "jsonl";
+type QueryArtifactMode = "parquet-stream" | "jsonl-stream" | "jsonl-buffered";
+
+interface QueryArtifactDescriptor {
+  runId: string;
+  sessionId: string;
+  format: QueryArtifactFormat;
+  mode: QueryArtifactMode;
+  columns: ColumnDef[];
+  rowCount: number;
+  byteSize: number;
+  createdAt: number;
+  lastAccessedAt: number;
+}
+```
+
+`execute_python({ code, inputs })` maps valid aliases to run ids from that exact
+local session. Main resolves descriptors and authorizes bounded chunk reads;
+renderer receives bytes but no host path. An app-owned Web Worker loads bundled
+Pyodide, DuckDB, pandas, NumPy, and their pinned offline dependencies, registers
+the selected inputs in an in-memory DuckDB connection, and requires code to
+assign a bounded scalar/DataFrame/relation to `result`. There is no Node API,
+host filesystem, subprocess, package installation, or general network bridge.
+Timeout/cancellation terminates the Worker. Artifacts are disposable, capped,
+TTL-cleaned, and never written to Vault SQLite/JSONL, Markdown, Agent history,
+or Git. ([ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md))
+
 `search_sql_usage({ table })` finds a table in either read or write position.
 `readTable` and `writeTable` remain available when the caller needs only one
 direction.
@@ -669,7 +717,7 @@ Safety ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md)):
 - `sql-guard` classifies read-only vs mutation vs multi-statement
 - Mutations + `propose_edit` block on `ai:agent-respond-proposal`
 - Runs continue until model completion, error, or explicit user cancellation ([ADR-0017](./adr/0017-user-cancelled-agent-runs.md))
-- Read tools and `run_sql` may execute in parallel. Plan mutations, chart creation, Canvas creation/update, and `propose_edit` are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md)). NodeExecutionEnv is harness cwd only (not exposed as model tools)
+- Read tools and `run_sql` may execute in parallel. `execute_python`, plan mutations, chart creation, Canvas creation/update, and `propose_edit` are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md)). NodeExecutionEnv is harness cwd only (not exposed as model tools)
 - Compaction uses `ai.contextWindow` + one overflow recovery ([ADR-0018](./adr/0018-pi-ai-agent-harness.md))
 - Execution plans are bounded and linear. Their active store is main-process runtime state; every versioned `AgentPlanSnapshot` is appended immutably to the pi session, and only the highest version for the current run is active ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md), [ADR-0046](./adr/0046-device-sharded-agent-session-history.md))
 - The Agent system prompt and tool list are request-invariant. Dynamic context is bounded, redacted, and appended in the user turn immediately before the request; pi-ai uses short cache retention and session affinity ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md))

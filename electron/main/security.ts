@@ -67,7 +67,7 @@ export function applyCsp(): void {
     const csp = dev
       ? [
           `default-src 'self' ${DEV_RENDERER_ORIGIN}`,
-          `script-src 'self' 'unsafe-inline' 'unsafe-eval' ${DEV_RENDERER_ORIGIN}`,
+          `script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' ${DEV_RENDERER_ORIGIN}`,
           `style-src 'self' 'unsafe-inline' ${DEV_RENDERER_ORIGIN}`,
           `connect-src 'self' ${DEV_RENDERER_ORIGIN} ${wsOrigin}`,
           "img-src 'self' data: blob:",
@@ -75,7 +75,7 @@ export function applyCsp(): void {
         ].join("; ")
       : [
           "default-src 'self'",
-          "script-src 'self'",
+          "script-src 'self' 'wasm-unsafe-eval'",
           "style-src 'self' 'unsafe-inline'",
           "connect-src 'self'",
           "img-src 'self' data: blob:",

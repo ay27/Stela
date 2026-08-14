@@ -22,9 +22,11 @@ import type {
   BundledPluginInfo,
   ConnectorKindMeta,
   ModulePluginInstallInput,
+  MaterializedQueryResult,
   PluginInfo,
   PluginInstallInput,
   QueryResult,
+  QueryArtifactRequest,
   TableDescriptor,
   TestResult,
 } from "@shared/types";
@@ -243,6 +245,32 @@ export async function execute(
     }
   }
   return capQueryRows(await connector.execute(config, sql), maxRows);
+}
+
+/** Internal Agent path: no UI/history row cap. Never expose this through IPC. */
+export async function executeUnbounded(
+  kind: string,
+  config: unknown,
+  sql: string,
+): Promise<QueryResult> {
+  return getOrThrow(kind).execute(config, sql);
+}
+
+/** Optional API v2 streaming materialization. `null` keeps v1 plugins compatible. */
+export async function materializeQuery(
+  kind: string,
+  config: unknown,
+  sql: string,
+  request: QueryArtifactRequest,
+): Promise<MaterializedQueryResult | null> {
+  const connector = getOrThrow(kind);
+  if (
+    !connector.meta().queryArtifactFormats?.includes(request.format) ||
+    !connector.materializeQuery
+  ) {
+    return null;
+  }
+  return connector.materializeQuery(config, sql, request);
 }
 
 export async function listDatabases(

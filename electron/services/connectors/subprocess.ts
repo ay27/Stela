@@ -1,10 +1,11 @@
 /**
  * Subprocess connector：通过 stdin/stdout 行分隔 JSON-RPC 与外部插件通信。
  *
- * 协议（v1）：
+ * 协议（v2，v1 方法保持兼容）：
  *   1. 启动 → 子进程吐第一行 `{ method: "hello", result: ConnectorKindMeta }` 完成握手
  *   2. 主进程发 `{ id, method, params }`，子进程回 `{ id, ok, result|error }`
  *   3. 单实例并发：内部 mutex 串行；超时（默认 60s）杀掉重启
+ *   4. hello 可选声明 queryArtifactFormats；声明后 host 可调用 materialize_query
  *
  * 注意：本类**只在 main 进程使用**，与 renderer 完全隔离。
  *
@@ -21,6 +22,8 @@ import readline from "node:readline";
 import { AppError } from "@shared/errors";
 import type {
   ConnectorKindMeta,
+  MaterializedQueryResult,
+  QueryArtifactRequest,
   QueryResult,
   TableDescriptor,
   TestResult,
@@ -263,6 +266,23 @@ export class SubprocessConnector implements Connector {
   }
   async execute(cfg: unknown, sql: string): Promise<QueryResult> {
     return (await this.call("execute", { config: cfg, sql })) as QueryResult;
+  }
+  async materializeQuery(
+    cfg: unknown,
+    sql: string,
+    request: QueryArtifactRequest,
+  ): Promise<MaterializedQueryResult> {
+    if (!this.metaCache.queryArtifactFormats?.includes(request.format)) {
+      throw new AppError(
+        "unsupported_artifact",
+        `connector '${this.metaCache.kind}' cannot materialize ${request.format}`,
+      );
+    }
+    return (await this.call("materialize_query", {
+      config: cfg,
+      sql,
+      request,
+    })) as MaterializedQueryResult;
   }
   async listDatabases(cfg: unknown): Promise<string[]> {
     return (await this.call("list_databases", { config: cfg })) as string[];

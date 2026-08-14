@@ -36,12 +36,17 @@ const user = buildUserContent(
   {
     connection: { kind: "duckdb" } as never,
     dialect: "DuckDB SQL",
+    availableConnections: [
+      { name: "archive", kind: "postgresql", dialect: "PostgreSQL" },
+      { name: "warehouse", kind: "duckdb", dialect: "DuckDB SQL" },
+    ],
     skillMetadata: "orders metric",
   },
 );
 assert.match(user, /^<stela_turn_context>/);
 assert.match(user, /entry_point: runsql-fix/);
 assert.match(user, /active_connection: warehouse \(kind: duckdb, dialect: DuckDB SQL\)/);
+assert.match(user, /available_connections: \[\{"name":"archive","kind":"postgresql","dialect":"PostgreSQL"\}/);
 assert.match(user, /active_workspace_resource: \{"kind":"note","path":"reports\/orders.md"\}/);
 assert.match(user, /"rewriteTargetId":"target-1"/);
 assert.match(user, /Execution error:/);

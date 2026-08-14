@@ -22,6 +22,14 @@ import * as sqlIndex from "../services/sql-index";
 import * as syncOrchestrator from "../services/sync-orchestrator";
 import * as vaultIndex from "../services/vault-index";
 import * as vaultWatcher from "../services/vault-watcher";
+import {
+  cleanupQueryArtifacts,
+  configureQueryArtifactRoot,
+} from "../services/query-artifacts";
+import {
+  cancelAllPythonRuntimeJobs,
+  setPythonRuntimeBroadcaster,
+} from "../services/ai/python-runtime-broker";
 import { bootstrapFromLegacyIfFresh } from "../services/user-cache-store";
 import { log } from "../services/logger";
 import { IPC_EVENTS } from "@shared/ipc-events";
@@ -87,6 +95,17 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     applyCsp();
+
+    configureQueryArtifactRoot(path.join(app.getPath("userData"), "query-artifacts"));
+    void cleanupQueryArtifacts().catch((err) => {
+      log.warn("query artifact startup cleanup failed", err);
+    });
+    setPythonRuntimeBroadcaster((channel, payload) => {
+      const win = mainWindow;
+      if (!win || win.isDestroyed()) return false;
+      win.webContents.send(channel, payload);
+      return true;
+    });
 
     registerAllHandlers({ getMainWindow });
     assertAllRegistered();
@@ -197,6 +216,7 @@ if (!gotLock) {
       } finally {
         log.info("quit: teardown start", { elapsed: elapsed() });
         try {
+          cancelAllPythonRuntimeJobs("Application is quitting");
           await shutdownVaultContext();
           log.info("quit: vault context down", { elapsed: elapsed() });
           connectorRegistry.shutdown();

@@ -13,7 +13,7 @@
  *     删一个 cache key 即可甩掉整棵依赖树）。
  *   - 加载失败不抛到上层 setVault，由调用方收集成 ModulePluginLoadError 展示在 UI。
  *
- * 协议版本：v1（与 plugin-sdk 的 CONNECTOR_PLUGIN_API_VERSION 对齐）。
+ * 协议版本：v2（与 plugin-sdk 的 CONNECTOR_PLUGIN_API_VERSION 对齐）。
  */
 
 import { createRequire } from "node:module";
@@ -29,7 +29,7 @@ const log = getLogger("connector:module-loader");
 const requireModule = createRequire(import.meta.url);
 
 /** host 支持的最高 module 插件协议版本。 */
-export const MODULE_PLUGIN_API_VERSION = 1;
+export const MODULE_PLUGIN_API_VERSION = 2;
 
 /** vault 内放 module 插件的子目录（位于 `{vault}/.stela/plugins/`）。 */
 export const PLUGINS_DIRNAME = "plugins";
@@ -81,6 +81,19 @@ export class ModulePluginConnector implements Connector {
   }
   execute(cfg: unknown, sql: string) {
     return this.inner.execute(cfg, sql);
+  }
+  async materializeQuery(
+    cfg: unknown,
+    sql: string,
+    request: import("@shared/types").QueryArtifactRequest,
+  ) {
+    if (!this.inner.materializeQuery) {
+      throw new AppError(
+        "unsupported_artifact",
+        `plugin '${this.manifest.id}' does not implement materializeQuery`,
+      );
+    }
+    return this.inner.materializeQuery(cfg, sql, request);
   }
   listDatabases(cfg: unknown) {
     return this.inner.listDatabases(cfg);

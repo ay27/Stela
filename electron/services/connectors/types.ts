@@ -12,6 +12,8 @@
 
 import type {
   ConnectorKindMeta,
+  MaterializedQueryResult,
+  QueryArtifactRequest,
   QueryResult,
   TableDescriptor,
   TestResult,
@@ -21,6 +23,11 @@ export interface Connector {
   meta(): ConnectorKindMeta;
   test(cfg: unknown): Promise<TestResult>;
   execute(cfg: unknown, sql: string): Promise<QueryResult>;
+  materializeQuery?(
+    cfg: unknown,
+    sql: string,
+    request: QueryArtifactRequest,
+  ): Promise<MaterializedQueryResult>;
   listDatabases(cfg: unknown): Promise<string[]>;
   listTables(cfg: unknown, db?: string | null): Promise<string[]>;
   /**

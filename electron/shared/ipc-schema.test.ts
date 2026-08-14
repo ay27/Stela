@@ -115,4 +115,28 @@ assert.throws(() => parseInput(IPC.CANVAS_UPDATE_FLOW_LAYOUT, {
   patch: { positions: [{ nodeId: "source", position: { x: Number.POSITIVE_INFINITY, y: 0 } }] },
 }));
 
+assert.deepEqual(parseInput(IPC.AI_PYTHON_RUNTIME_READ_INPUT, {
+  jobId: "da9a1a89-41b1-4c12-8b3a-e7b7b4f625c5",
+  alias: "orders",
+  offset: 0,
+  length: 4 * 1024 * 1024,
+}), {
+  jobId: "da9a1a89-41b1-4c12-8b3a-e7b7b4f625c5",
+  alias: "orders",
+  offset: 0,
+  length: 4 * 1024 * 1024,
+});
+assert.throws(() => parseInput(IPC.AI_PYTHON_RUNTIME_READ_INPUT, {
+  jobId: "da9a1a89-41b1-4c12-8b3a-e7b7b4f625c5",
+  alias: "../secret",
+  offset: 0,
+  length: 1,
+}));
+assert.throws(() => parseInput(IPC.AI_PYTHON_RUNTIME_READ_INPUT, {
+  jobId: "da9a1a89-41b1-4c12-8b3a-e7b7b4f625c5",
+  alias: "orders",
+  offset: 0,
+  length: 4 * 1024 * 1024 + 1,
+}));
+
 console.log("ipc-schema tests passed.");

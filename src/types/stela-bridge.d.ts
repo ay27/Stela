@@ -45,6 +45,9 @@ import type {
   PluginInfo,
   PluginInstallInput,
   QueryResult,
+  PythonExecutionRequest,
+  PythonExecutionResult,
+  PythonRuntimeInputChunk,
   RowsPage,
   RunRecord,
   SearchHit,
@@ -247,6 +250,20 @@ interface StelaBridge {
     respondProposal: (response: AgentProposalResponse) => Promise<{ ok: boolean }>;
     /** 订阅 agent 单步事件流；返回 unsubscribe 函数。 */
     onEvent: (callback: (event: AgentEvent) => void) => () => void;
+  };
+  pythonRuntime: {
+    readInput: (
+      jobId: string,
+      alias: string,
+      offset: number,
+      length: number,
+    ) => Promise<PythonRuntimeInputChunk>;
+    respond: (
+      jobId: string,
+      result: PythonExecutionResult,
+    ) => Promise<{ accepted: boolean }>;
+    onRequest: (callback: (request: PythonExecutionRequest) => void) => () => void;
+    onCancel: (callback: (jobId: string) => void) => () => void;
   };
   agentMetrics: {
     getDashboard: (range: AgentMetricRange) => Promise<AgentMetricsDashboard>;

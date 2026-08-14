@@ -22,6 +22,10 @@ export const IPC_EVENTS = {
   AI_INLINE_COMPLETION_EVENT: "ai:inline-completion-event",
   /** Harness agent 单步事件流（started/tool_call/tool_result/proposal/final/error/cancelled）。payload: AgentEvent */
   AI_AGENT_EVENT: "ai:agent-event",
+  /** App-owned Pyodide worker request; unrelated to Agent Panel mounting. */
+  AI_PYTHON_RUNTIME_REQUEST: "ai:python-runtime-request",
+  /** Abort an active Pyodide job and reset its worker namespace. */
+  AI_PYTHON_RUNTIME_CANCEL: "ai:python-runtime-cancel",
   /** 应用开始退出前的最后 Git checkpoint。payload: void */
   APP_QUIT_CHECKPOINT_STARTED: "app:quit-checkpoint-started",
 } as const;

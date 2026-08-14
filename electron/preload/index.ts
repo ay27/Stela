@@ -58,6 +58,9 @@ import type {
   PluginInfo,
   PluginInstallInput,
   QueryResult,
+  PythonExecutionRequest,
+  PythonExecutionResult,
+  PythonRuntimeInputChunk,
   RowsPage,
   RunRecord,
   SearchHit,
@@ -351,6 +354,34 @@ const stela = {
       return () => {
         ipcRenderer.removeListener(IPC_EVENTS.AI_AGENT_EVENT, handler);
       };
+    },
+  },
+
+  pythonRuntime: {
+    readInput: (jobId: string, alias: string, offset: number, length: number) =>
+      call<PythonRuntimeInputChunk>(IPC.AI_PYTHON_RUNTIME_READ_INPUT, {
+        jobId,
+        alias,
+        offset,
+        length,
+      }),
+    respond: (jobId: string, result: PythonExecutionResult) =>
+      call<{ accepted: boolean }>(IPC.AI_PYTHON_RUNTIME_RESPOND, { jobId, result }),
+    onRequest: (callback: (request: PythonExecutionRequest) => void) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        request: PythonExecutionRequest,
+      ) => callback(request);
+      ipcRenderer.on(IPC_EVENTS.AI_PYTHON_RUNTIME_REQUEST, handler);
+      return () => ipcRenderer.removeListener(IPC_EVENTS.AI_PYTHON_RUNTIME_REQUEST, handler);
+    },
+    onCancel: (callback: (jobId: string) => void) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        payload: { jobId: string },
+      ) => callback(payload.jobId);
+      ipcRenderer.on(IPC_EVENTS.AI_PYTHON_RUNTIME_CANCEL, handler);
+      return () => ipcRenderer.removeListener(IPC_EVENTS.AI_PYTHON_RUNTIME_CANCEL, handler);
     },
   },
 

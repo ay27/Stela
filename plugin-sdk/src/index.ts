@@ -14,7 +14,7 @@
  */
 
 /** 当前 module 插件协议版本。host 加载时校验 `apiVersion <=` 它支持的版本。 */
-export const CONNECTOR_PLUGIN_API_VERSION = 1;
+export const CONNECTOR_PLUGIN_API_VERSION = 2;
 
 /** 结果集列定义。 */
 export interface ColumnDef {
@@ -77,6 +77,26 @@ export interface ConnectorKindMeta {
    * 不填时 host 端按 `kind`/`displayName` 做启发式回退（见 `resolveDialect`）。
    */
   dialect?: string;
+  /** API v2: formats accepted by materializeQuery. */
+  queryArtifactFormats?: QueryArtifactFormat[];
+}
+
+export type QueryArtifactFormat = "parquet" | "jsonl";
+
+export interface QueryArtifactRequest {
+  format: QueryArtifactFormat;
+  /** Host-created temporary path. Write only this exact file. */
+  outputPath: string;
+  previewRows: number;
+  maxBytes: number;
+}
+
+export interface MaterializedQueryResult {
+  kind: "query";
+  columns: ColumnDef[];
+  previewRows: unknown[][];
+  rowCount: number;
+  elapsedMs: number;
 }
 
 /**
@@ -87,6 +107,15 @@ export interface Connector {
   meta(): ConnectorKindMeta;
   test(config: unknown): Promise<TestResult>;
   execute(config: unknown, sql: string): Promise<QueryResult>;
+  /**
+   * API v2 optional capability. Stream a read-only query to the host-selected
+   * artifact file instead of materializing the whole result in process memory.
+   */
+  materializeQuery?(
+    config: unknown,
+    sql: string,
+    request: QueryArtifactRequest,
+  ): Promise<MaterializedQueryResult>;
   listDatabases(config: unknown): Promise<string[]>;
   listTables(config: unknown, db?: string | null): Promise<string[]>;
   /**

@@ -565,6 +565,40 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
     /** `question` kind 的自由文本答案；approve=false 时忽略。 */
     answer: z.string().max(4_000).optional(),
   }),
+  [IPC.AI_PYTHON_RUNTIME_READ_INPUT]: z
+    .object({
+      jobId: z.string().uuid(),
+      alias: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/),
+      offset: z.number().int().nonnegative(),
+      length: z.number().int().min(1).max(4 * 1024 * 1024),
+    })
+    .strict(),
+  [IPC.AI_PYTHON_RUNTIME_RESPOND]: z
+    .object({
+      jobId: z.string().uuid(),
+      result: z
+        .object({
+          ok: z.boolean(),
+          stdout: z.string().max(64 * 1024),
+          value: z.discriminatedUnion("kind", [
+            z.object({ kind: z.literal("none") }).strict(),
+            z.object({ kind: z.literal("scalar"), value: z.unknown() }).strict(),
+            z
+              .object({
+                kind: z.literal("table"),
+                columns: z.array(columnDefSchema).max(500),
+                rows: z.array(z.array(z.unknown()).max(500)).max(200),
+                rowCount: z.number().int().nonnegative(),
+                truncated: z.boolean(),
+              })
+              .strict(),
+          ]),
+          elapsedMs: z.number().int().nonnegative(),
+          error: z.string().max(16_000).optional(),
+        })
+        .strict(),
+    })
+    .strict(),
 
   // Git 版本控制
   [IPC.GIT_IS_REPO]: z.object({}).strict(),

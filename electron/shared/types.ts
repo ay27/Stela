@@ -71,6 +71,41 @@ export interface ConnectorKindMeta {
   subprocess: boolean;
   /** SQL 方言名（"MySQL" / "PostgreSQL" / "StarRocks" 等），不填时按 kind 启发式回退 */
   dialect?: string;
+  /** Optional host-managed result artifact formats supported by API v2 plugins. */
+  queryArtifactFormats?: QueryArtifactFormat[];
+}
+
+export type QueryArtifactFormat = "parquet" | "jsonl";
+export type QueryArtifactMode = "parquet-stream" | "jsonl-stream" | "jsonl-buffered";
+
+/** Host-selected destination for an incremental, read-only query result. */
+export interface QueryArtifactRequest {
+  format: QueryArtifactFormat;
+  outputPath: string;
+  previewRows: number;
+  maxBytes: number;
+}
+
+/** Metadata returned by a connector after it atomically finishes its output. */
+export interface MaterializedQueryResult {
+  kind: "query";
+  columns: ColumnDef[];
+  previewRows: unknown[][];
+  rowCount: number;
+  elapsedMs: number;
+}
+
+/** Machine-local descriptor. Absolute paths never cross a model or renderer API. */
+export interface QueryArtifactDescriptor {
+  runId: string;
+  sessionId: string;
+  format: QueryArtifactFormat;
+  mode: QueryArtifactMode;
+  columns: ColumnDef[];
+  rowCount: number;
+  byteSize: number;
+  createdAt: number;
+  lastAccessedAt: number;
 }
 
 /**
@@ -669,6 +704,7 @@ export type AgentToolName =
   | "search_tables"
   | "get_table_schema"
   | "run_sql"
+  | "execute_python"
   | "create_chart"
   | "create_analysis_canvas"
   | "read_analysis_canvas"
@@ -685,6 +721,40 @@ export type AgentToolName =
   | "save_skill"
   | "propose_edit"
   | "ask_user";
+
+export interface PythonExecutionInput {
+  alias: string;
+  runId: string;
+  format: QueryArtifactFormat;
+  columns: ColumnDef[];
+  rowCount: number;
+  byteSize: number;
+}
+
+export interface PythonExecutionRequest {
+  jobId: string;
+  code: string;
+  inputs: PythonExecutionInput[];
+  timeoutMs: number;
+}
+
+export type PythonExecutionValue =
+  | { kind: "none" }
+  | { kind: "scalar"; value: unknown }
+  | { kind: "table"; columns: ColumnDef[]; rows: unknown[][]; rowCount: number; truncated: boolean };
+
+export interface PythonExecutionResult {
+  ok: boolean;
+  stdout: string;
+  value: PythonExecutionValue;
+  elapsedMs: number;
+  error?: string;
+}
+
+export interface PythonRuntimeInputChunk {
+  data: Uint8Array;
+  eof: boolean;
+}
 
 export interface AgentSkillListItem {
   name: string;

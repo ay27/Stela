@@ -14,6 +14,7 @@ import { requestAgentMessage } from "@shared/agent-message";
 import { redactForPrompt } from "./redaction";
 
 const AGENT_ATTACHMENT_CHAR_BUDGET = 30_000;
+const AGENT_CONNECTION_CONTEXT_LIMIT = 50;
 
 export function buildSystemPrompt(skillLimitsPrompt?: string): string {
   return [
@@ -75,6 +76,7 @@ function truncateForAgentContext(
 export interface AgentTurnPromptContext {
   connection: ConnectionEntry | null;
   dialect: string | null;
+  availableConnections?: Array<{ name: string; kind: string; dialect: string | null }>;
   skillMetadata?: string;
 }
 
@@ -93,6 +95,12 @@ export function buildUserContent(
       ? `active_connection: ${safeRequest.connectionName} (kind: ${context.connection.kind}${context.dialect ? `, dialect: ${context.dialect}` : ""})`
       : "active_connection: none",
   ];
+  if (context.availableConnections?.length) {
+    parts.push(
+      `available_connections: ${JSON.stringify(context.availableConnections.slice(0, AGENT_CONNECTION_CONTEXT_LIMIT))}`,
+      "SQL tools accept connectionName. Use the active connection by default; select another listed connection only when the task needs it.",
+    );
+  }
   if (context.skillMetadata?.trim()) {
     parts.push(
       "matched_skill_metadata:",
