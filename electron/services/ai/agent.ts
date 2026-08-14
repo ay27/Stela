@@ -807,8 +807,36 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
     });
 
     const toolCalls = new Map<string, { name: string; args: unknown; startedAt: number; metricRunId: string }>();
+    let harnessStepIndex = 0;
+    let harnessStepStartedAt = metricStartedAt;
+    let modelRequestStartedAt: number | null = null;
     const unsubscribe = harness.subscribe(async (event) => {
+      if (event.type === "turn_start") {
+        harnessStepIndex += 1;
+        harnessStepStartedAt = Date.now();
+        modelRequestStartedAt = null;
+        if (agentMetrics.isOpen()) {
+          agentMetrics.addEvent(metricRunId, {
+            type: "agent_step_start",
+            name: `step:${harnessStepIndex}`,
+            occurredAt: harnessStepStartedAt,
+            payload: { stepIndex: harnessStepIndex },
+          });
+        }
+        return;
+      }
       if (event.type === "turn_end") {
+        if (agentMetrics.isOpen()) {
+          agentMetrics.addEvent(metricRunId, {
+            type: "agent_step_end",
+            name: `step:${harnessStepIndex}`,
+            durationMs: Date.now() - harnessStepStartedAt,
+            payload: {
+              stepIndex: harnessStepIndex,
+              toolResultCount: event.toolResults.length,
+            },
+          });
+        }
         await planPersistence.flush();
         return;
       }
@@ -875,13 +903,37 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         void emitUsage(true);
         return;
       }
+      if (event.type === "message_start" && event.message.role === "assistant" && agentMetrics.isOpen()) {
+        const now = Date.now();
+        agentMetrics.addEvent(metricRunId, {
+          type: "model_first_token",
+          name: `step:${harnessStepIndex}`,
+          occurredAt: now,
+          durationMs: modelRequestStartedAt === null ? null : now - modelRequestStartedAt,
+          payload: { stepIndex: harnessStepIndex },
+        });
+        return;
+      }
       if (event.type === "message_end" && event.message.role === "assistant" && agentMetrics.isOpen()) {
+        const now = Date.now();
         agentMetrics.addUsage(metricRunId, event.message.usage);
-        agentMetrics.addEvent(metricRunId, { type: "assistant_message", payload: event.message });
+        agentMetrics.addEvent(metricRunId, {
+          type: "assistant_message",
+          name: `step:${harnessStepIndex}`,
+          occurredAt: now,
+          durationMs: modelRequestStartedAt === null ? null : now - modelRequestStartedAt,
+          payload: event.message,
+        });
         return;
       }
       if (event.type === "before_provider_payload" && agentMetrics.isOpen()) {
-        agentMetrics.addEvent(metricRunId, { type: "provider_payload", payload: event.payload });
+        modelRequestStartedAt = Date.now();
+        agentMetrics.addEvent(metricRunId, {
+          type: "provider_payload",
+          name: `step:${harnessStepIndex}`,
+          occurredAt: modelRequestStartedAt,
+          payload: event.payload,
+        });
       }
     });
 

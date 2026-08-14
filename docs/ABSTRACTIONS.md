@@ -786,6 +786,14 @@ token usage, error metadata, and optional parent run. Ordered metric events
 carry the redacted trace. Tool and maintenance runs use their Agent run as
 `parentRunId`.
 
+`AgentMetricSessionTrace` is a read-only projection, not a third storage
+authority. It contains the authoritative `AgentHistorySession`, one-based user
+Turns in history order, and an optional `AgentMetricRunTree` for every history
+run. A run tree contains the root Agent trace and every descendant tool or
+maintenance trace. The tree is `null` when local Metrics have expired or been
+cleared. Harness model requests, first-token arrival, assistant completion, and
+step completion use a shared `step:<index>` event name for trajectory timing.
+
 Dashboard token usage exposes `promptTokens = inputTokens + cacheReadTokens +
 cacheWriteTokens` and `cacheHitRate = cacheReadTokens / promptTokens`. The rate
 uses provider-reported counters, excludes output tokens, and is `null` when no
@@ -793,7 +801,9 @@ prompt usage was reported. Surface breakdowns expose the same derived rate, and
 individual traces retain their raw token counters.
 
 The renderer can only call `agentMetrics.getDashboard`, `listRuns`, `getTrace`,
-and `clear`. Date ranges are exactly `7d`, `30d`, or `90d`; trace queries are
+`getSessionTrace`, and `clear`. `getSessionTrace` accepts an `AgentHistoryRef`;
+the main process loads that history and joins it to the already-open local
+Metrics store by `agent:<runId>`. Date ranges are exactly `7d`, `30d`, or `90d`; trace queries are
 cursor-paginated, bounded to 100 records by IPC, and displayed ten at a time.
 Inline completion does not enter this store; schema version 2 removes legacy
 inline runs and their events. Cancellations are reported separately from

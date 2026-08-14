@@ -10,6 +10,8 @@ import {
   clear,
   finishRun,
   getDashboard,
+  getRunTree,
+  getSessionTrace,
   getTrace,
   listRuns,
   open,
@@ -124,6 +126,69 @@ try {
   assert.equal((trace.request as { apiKey: string }).apiKey, "***redacted***");
   assert.equal((trace.response as { text: string }).text, "done");
 
+  startRun({
+    runId: "agent:session-run-1",
+    surface: "agent",
+    operation: "chat",
+    startedAt: Date.now() - 90,
+  });
+  addEvent("agent:session-run-1", {
+    type: "assistant_message",
+    name: "step:1",
+    payload: { role: "assistant", content: [{ type: "text", text: "answer" }] },
+  });
+  startRun({
+    runId: "tool:session-run-1:call-1",
+    parentRunId: "agent:session-run-1",
+    surface: "tool",
+    operation: "run_sql",
+    startedAt: Date.now() - 80,
+  });
+  finishRun("tool:session-run-1:call-1", { status: "completed", endedAt: Date.now() - 60 });
+  finishRun("agent:session-run-1", {
+    status: "completed",
+    endedAt: Date.now() - 50,
+    inputTokens: 5,
+    outputTokens: 3,
+    cacheReadTokens: 7,
+  });
+  const runTree = getRunTree("agent:session-run-1");
+  assert.equal(runTree.root.run.surface, "agent");
+  assert.deepEqual(runTree.descendants.map((item) => item.run.operation), ["run_sql"]);
+  const sessionTrace = getSessionTrace({
+    summary: {
+      sessionId: "sess-1",
+      deviceSlug: "test-device",
+      title: "Session trace",
+      createdAt: Date.now() - 100,
+      updatedAt: Date.now(),
+      isLocal: true,
+    },
+    runs: [
+      {
+        request: { runId: "session-run-1", sessionId: "sess-1", prompt: "question" },
+        startedAt: Date.now() - 100,
+        finishedAt: Date.now() - 50,
+        events: [],
+        proposalResponses: [],
+      },
+      {
+        request: { runId: "missing-run", sessionId: "sess-1", prompt: "older history" },
+        startedAt: Date.now() - 40,
+        finishedAt: Date.now() - 30,
+        events: [],
+        proposalResponses: [],
+      },
+    ],
+  });
+  assert.equal(sessionTrace.turns.length, 2);
+  assert.equal(sessionTrace.turns[0]?.trace?.descendants.length, 1);
+  assert.equal(sessionTrace.turns[1]?.trace, null);
+  assert.equal(sessionTrace.totals.modelStepCount, 1);
+  assert.equal(sessionTrace.totals.toolCallCount, 1);
+  assert.equal(sessionTrace.totals.promptTokens, 12);
+  assert.equal(sessionTrace.totals.cacheHitRate, 7 / 12);
+
   startRun({ runId: "large-trace", surface: "ai_action", operation: "debug", request: "x".repeat(300_000) });
   finishRun("large-trace", { status: "completed" });
   assert.equal(getTrace("large-trace").run.traceTruncated, true);
@@ -132,8 +197,11 @@ try {
   assert.equal(page.runs.length, 3);
   assert.ok(page.nextCursor);
   const next = listRuns({ range: "7d", limit: 3, cursor: page.nextCursor! });
-  assert.equal(next.runs.length, 2);
-  assert.equal(next.nextCursor, null);
+  assert.equal(next.runs.length, 3);
+  assert.ok(next.nextCursor);
+  const last = listRuns({ range: "7d", limit: 3, cursor: next.nextCursor! });
+  assert.equal(last.runs.length, 1);
+  assert.equal(last.nextCursor, null);
 
   startRun({
     runId: "too-old",

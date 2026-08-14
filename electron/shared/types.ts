@@ -483,6 +483,40 @@ export interface AgentMetricTrace {
   events: AgentMetricEventRecord[];
 }
 
+export interface AgentMetricRunTree {
+  root: AgentMetricTrace;
+  /** All descendants, ordered by start time. Tool and maintenance runs are currently direct children. */
+  descendants: AgentMetricTrace[];
+}
+
+export interface AgentMetricSessionTotals {
+  turnCount: number;
+  modelStepCount: number;
+  toolCallCount: number;
+  durationMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  promptTokens: number;
+  cacheHitRate: number | null;
+}
+
+export interface AgentMetricSessionTurn {
+  /** One-based conversation turn index, ordered by Agent History. */
+  index: number;
+  history: AgentHistoryRun;
+  /** Null when local metrics were cleared or expired while conversation history still exists. */
+  trace: AgentMetricRunTree | null;
+}
+
+/** Read-only projection joining Agent History with the local observability store by runId. */
+export interface AgentMetricSessionTrace {
+  history: AgentHistorySession;
+  totals: AgentMetricSessionTotals;
+  turns: AgentMetricSessionTurn[];
+}
+
 export interface AgentMetricRunFilter {
   range: AgentMetricRange;
   surface?: AgentMetricSurface;

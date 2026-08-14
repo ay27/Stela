@@ -28,6 +28,7 @@ import type {
   AgentMetricRange,
   AgentMetricRunFilter,
   AgentMetricRunPage,
+  AgentMetricSessionTrace,
   AgentMetricTrace,
   AgentMetricsDashboard,
   AnalysisCanvasFile,
@@ -318,6 +319,15 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
   registerHandler<{ runId: string }, AgentMetricTrace>(
     IPC.AI_METRICS_GET_TRACE,
     ({ runId }) => agentMetrics.getTrace(runId),
+  );
+  registerHandler<AgentHistoryRef, AgentMetricSessionTrace>(
+    IPC.AI_METRICS_GET_SESSION_TRACE,
+    async (ref) => {
+      const vaultPath = requireVault();
+      const slug = (await deviceProfile.loadDeviceProfile()).slug;
+      const history = await agentHistory.loadAgentHistory(vaultPath, ref, slug);
+      return agentMetrics.getSessionTrace(history);
+    },
   );
   registerHandler<Record<string, never>, void>(IPC.AI_METRICS_CLEAR, () => agentMetrics.clear());
 

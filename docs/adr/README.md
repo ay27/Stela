@@ -117,3 +117,4 @@ proposed → active → superseded
 | [0062](0062-implicit-workspace-context-explicit-inline-resources.md) | Implicit Workspace context and explicit inline resources | active |
 | [0063](0063-prosemirror-agent-composer.md) | ProseMirror-backed Agent composer | active |
 | [0064](0064-session-query-artifacts-and-sandboxed-python.md) | Session query artifacts and sandboxed Python | active |
+| [0065](0065-session-oriented-agent-observability.md) | Session-oriented Agent observability projection | active |

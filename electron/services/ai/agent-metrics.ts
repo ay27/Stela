@@ -9,11 +9,14 @@ import type {
   AgentMetricRange,
   AgentMetricRunFilter,
   AgentMetricRunPage,
+  AgentMetricRunTree,
   AgentMetricRunSummary,
+  AgentMetricSessionTrace,
   AgentMetricStatus,
   AgentMetricSurface,
   AgentMetricTrace,
   AgentMetricsDashboard,
+  AgentHistorySession,
 } from "@shared/types";
 
 import { vaultConfigDir } from "../vault-paths";
@@ -545,12 +548,9 @@ export function listRuns(filter: AgentMetricRunFilter): AgentMetricRunPage {
   };
 }
 
-export function getTrace(runId: string): AgentMetricTrace {
-  const db = ensureOpen();
-  const row = db.prepare("SELECT * FROM metric_runs WHERE run_id = ?").get(runId) as RunRow | undefined;
-  if (!row) throw new AppError("agent_metric_not_found", `Agent metric run not found: ${runId}`);
+function traceFromRow(db: Database.Database, row: RunRow): AgentMetricTrace {
   const events = db.prepare("SELECT * FROM metric_events WHERE run_id = ? ORDER BY id")
-    .all(runId) as Array<{
+    .all(row.run_id) as Array<{
       id: number; run_id: string; event_type: string; occurred_at: number;
       duration_ms: number | null; ok: number | null; name: string | null;
       payload_json: string | null; truncated: number;
@@ -579,6 +579,80 @@ export function getTrace(runId: string): AgentMetricTrace {
       payload: parsePayload(event.payload_json),
       truncated: event.truncated === 1,
     })),
+  };
+}
+
+export function getTrace(runId: string): AgentMetricTrace {
+  const db = ensureOpen();
+  const row = db.prepare("SELECT * FROM metric_runs WHERE run_id = ?").get(runId) as RunRow | undefined;
+  if (!row) throw new AppError("agent_metric_not_found", `Agent metric run not found: ${runId}`);
+  return traceFromRow(db, row);
+}
+
+export function getRunTree(runId: string): AgentMetricRunTree {
+  const db = ensureOpen();
+  const rows = db.prepare(`
+    WITH RECURSIVE run_tree(run_id) AS (
+      SELECT run_id FROM metric_runs WHERE run_id = ?
+      UNION ALL
+      SELECT child.run_id
+      FROM metric_runs child
+      JOIN run_tree parent ON child.parent_run_id = parent.run_id
+    )
+    SELECT runs.*
+    FROM metric_runs runs
+    JOIN run_tree ON run_tree.run_id = runs.run_id
+    ORDER BY runs.started_at, runs.run_id
+  `).all(runId) as RunRow[];
+  const root = rows.find((row) => row.run_id === runId);
+  if (!root) throw new AppError("agent_metric_not_found", `Agent metric run not found: ${runId}`);
+  return {
+    root: traceFromRow(db, root),
+    descendants: rows
+      .filter((row) => row.run_id !== runId)
+      .map((row) => traceFromRow(db, row)),
+  };
+}
+
+export function getSessionTrace(history: AgentHistorySession): AgentMetricSessionTrace {
+  const turns = history.runs.map((run, index) => {
+    let trace: AgentMetricRunTree | null = null;
+    try {
+      trace = getRunTree(`agent:${run.request.runId}`);
+    } catch (err) {
+      if (!(err instanceof AppError) || err.code !== "agent_metric_not_found") throw err;
+    }
+    return { index: index + 1, history: run, trace };
+  });
+  const trees = turns.flatMap((turn) => turn.trace ? [turn.trace] : []);
+  const modelRuns = trees.flatMap((tree) => [tree.root, ...tree.descendants])
+    .filter((trace) => trace.run.surface !== "tool");
+  const inputTokens = modelRuns.reduce((sum, trace) => sum + trace.run.inputTokens, 0);
+  const outputTokens = modelRuns.reduce((sum, trace) => sum + trace.run.outputTokens, 0);
+  const cacheReadTokens = modelRuns.reduce((sum, trace) => sum + trace.run.cacheReadTokens, 0);
+  const cacheWriteTokens = modelRuns.reduce((sum, trace) => sum + trace.run.cacheWriteTokens, 0);
+  const promptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
+  return {
+    history,
+    totals: {
+      turnCount: history.runs.length,
+      modelStepCount: trees.reduce(
+        (sum, tree) => sum + tree.root.events.filter((event) => event.type === "assistant_message").length,
+        0,
+      ),
+      toolCallCount: trees.reduce(
+        (sum, tree) => sum + tree.descendants.filter((trace) => trace.run.surface === "tool").length,
+        0,
+      ),
+      durationMs: trees.reduce((sum, tree) => sum + (tree.root.run.durationMs ?? 0), 0),
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      promptTokens,
+      cacheHitRate: promptTokens > 0 ? cacheReadTokens / promptTokens : null,
+    },
+    turns,
   };
 }
 

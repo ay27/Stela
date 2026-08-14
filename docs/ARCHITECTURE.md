@@ -470,7 +470,18 @@ through typed `window.stela.agentMetrics.*` methods. One-shot AI actions, SQL
 query parsing, Harness Agent turns, tool calls, and Skill maintenance use
 correlated run/event records. Inline completion deliberately emits no metrics
 or traces because its high-frequency requests obscure Agent diagnostics. The
-Dashboard reports surface-specific completion/error/cancellation funnels,
+Dashboard keeps an aggregate Overview and a Session-oriented execution view.
+The Session view joins device-local Agent History with Metrics by Agent run id:
+History remains authoritative for Session and user-Turn order, while Metrics
+provides model steps, child tool/maintenance runs, timing, tokens, cache usage,
+and redacted payloads. It does not persist a second Session model in Metrics.
+Each user Turn can be inspected as a conversation or as an ordered trajectory;
+the latter includes a Model/Tools waterfall and per-event payload, result, and
+timing details. Missing or expired Metrics leave the conversation readable and
+show an unavailable trace. Refresh is explicit rather than polled. See
+[ADR-0065](./adr/0065-session-oriented-agent-observability.md).
+
+The Overview reports surface-specific completion/error/cancellation funnels,
 p50/p95 latency, token usage, provider-reported prompt-cache hit rate, tool rankings, maintenance outcomes, daily
 activity, local Skill candidate-to-load usage, and a redacted trace drill-down.
 It does not compute a single cross-surface success score. Overview run
@@ -486,6 +497,11 @@ their count/share. A `no_source` outcome stores an explicit skip reason and
 lookup context because it means the maintenance model was not called, not that
 a maintenance write succeeded. Recent traces use cursor pagination with ten
 rows per UI page.
+
+New Harness runs also record model-request start, first-token arrival,
+assistant-message completion, and Agent-step boundaries with a stable step
+index. This provides direct timing for new Session trajectories; legacy events
+remain readable, with missing timing shown as unavailable rather than invented.
 
 `{vault}/.stela/agent-metrics.local.sqlite` is gitignored, retains 90 days, and
 caps each trace JSON payload at 256 KiB. Full SQL result rows and API keys are

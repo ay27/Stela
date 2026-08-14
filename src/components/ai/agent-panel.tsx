@@ -659,7 +659,7 @@ function AgentResourcePill({ resource }: { resource: AgentMessageResource }) {
   );
 }
 
-function AgentUserMessage({ message }: { message: AgentMessageContent }) {
+export function AgentUserMessage({ message }: { message: AgentMessageContent }) {
   const resources = new Map(message.resources.map((resource) => [resource.id, resource]));
   return (
     <div className="whitespace-pre-wrap break-words">
@@ -734,7 +734,7 @@ function SkillMaintenanceIndicator({
   );
 }
 
-function AssistantMessage({ content }: { content: string }) {
+export function AssistantMessage({ content }: { content: string }) {
   if (!content.trim()) return null;
   return <div className="stela-ai-markdown text-sm leading-6">{renderMarkdown(content)}</div>;
 }

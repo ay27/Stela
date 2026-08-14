@@ -31,6 +31,7 @@ import type {
   AgentMetricRange,
   AgentMetricRunFilter,
   AgentMetricRunPage,
+  AgentMetricSessionTrace,
   AgentMetricTrace,
   AgentMetricsDashboard,
   AnalysisCanvasFile,
@@ -392,6 +393,8 @@ const stela = {
       call<AgentMetricRunPage>(IPC.AI_METRICS_LIST_RUNS, { filter }),
     getTrace: (runId: string) =>
       call<AgentMetricTrace>(IPC.AI_METRICS_GET_TRACE, { runId }),
+    getSessionTrace: (ref: AgentHistoryRef) =>
+      call<AgentMetricSessionTrace>(IPC.AI_METRICS_GET_SESSION_TRACE, ref),
     clear: () => call<void>(IPC.AI_METRICS_CLEAR, {}),
   },
 

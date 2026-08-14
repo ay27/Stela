@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { Activity, AlertTriangle, ChevronLeft, ChevronRight, Clock3, Database, RefreshCw, Trash2, X } from "lucide-react";
+import { Activity, AlertTriangle, ChevronLeft, ChevronRight, Clock3, Database, LayoutDashboard, MessagesSquare, RefreshCw, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import type {
@@ -12,6 +12,7 @@ import type {
 } from "@shared/types";
 
 import { agentActivityLevel, buildAgentActivityGrid } from "@/components/agent-dashboard-activity";
+import { AgentDashboardSessions } from "@/components/agent-dashboard-sessions";
 import { i18n } from "@/i18n";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
@@ -192,6 +193,8 @@ function DailyActivityGrid({ data, range }: { data: AgentMetricsDashboard; range
 export function AgentDashboardDialog({ open, onOpenChange }: AgentDashboardDialogProps) {
   const t = useT();
   const [range, setRange] = useState<AgentMetricRange>("7d");
+  const [view, setView] = useState<"overview" | "sessions">("overview");
+  const [sessionRefreshToken, setSessionRefreshToken] = useState(0);
   const [data, setData] = useState<AgentMetricsDashboard | null>(null);
   const [runPage, setRunPage] = useState<AgentMetricRunPage | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
@@ -271,17 +274,26 @@ export function AgentDashboardDialog({ open, onOpenChange }: AgentDashboardDialo
     await load();
   };
 
+  const refresh = () => {
+    setSessionRefreshToken((value) => value + 1);
+    void load();
+  };
+
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/45 backdrop-blur-sm" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[88vh] w-[1120px] max-w-[96vw] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl">
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[90vh] w-[1400px] max-w-[96vw] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl">
           <header className="flex items-center justify-between border-b border-border px-5 py-3">
             <div className="flex items-center gap-2.5">
               <Activity className="h-4 w-4 text-primary" />
               <div>
                 <Dialog.Title className="text-sm font-semibold">{t("agentDashboard.title")}</Dialog.Title>
                 <Dialog.Description className="text-[11px] text-muted-foreground">{t("agentDashboard.description")}</Dialog.Description>
+              </div>
+              <div className="ml-3 flex rounded-md border border-border p-0.5">
+                <button type="button" onClick={() => setView("overview")} className={cn("flex items-center gap-1.5 rounded px-2.5 py-1 text-[11px]", view === "overview" ? "bg-accent text-foreground" : "text-muted-foreground")}><LayoutDashboard className="h-3 w-3" />{t("agentDashboard.overview")}</button>
+                <button type="button" onClick={() => setView("sessions")} className={cn("flex items-center gap-1.5 rounded px-2.5 py-1 text-[11px]", view === "sessions" ? "bg-accent text-foreground" : "text-muted-foreground")}><MessagesSquare className="h-3 w-3" />{t("agentDashboard.sessions")}</button>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -290,11 +302,14 @@ export function AgentDashboardDialog({ open, onOpenChange }: AgentDashboardDialo
                   <button key={value} type="button" onClick={() => setRange(value)} className={cn("rounded px-2 py-1 text-[11px]", range === value ? "bg-accent text-foreground" : "text-muted-foreground")}>{value}</button>
                 ))}
               </div>
-              <button type="button" onClick={() => void load()} className="rounded-md border border-border p-1.5 text-muted-foreground hover:text-foreground" aria-label={t("agentDashboard.refresh")}><RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} /></button>
+              <button type="button" onClick={refresh} className="rounded-md border border-border p-1.5 text-muted-foreground hover:text-foreground" aria-label={t("agentDashboard.refresh")}><RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} /></button>
               <Dialog.Close asChild><button type="button" className="rounded-md p-1.5 text-muted-foreground hover:bg-accent"><X className="h-4 w-4" /></button></Dialog.Close>
             </div>
           </header>
 
+          {view === "sessions" ? (
+            <AgentDashboardSessions range={range} refreshToken={sessionRefreshToken} />
+          ) : (
           <div className="flex min-h-0 flex-1">
             <div className="min-w-0 flex-1 overflow-auto p-5">
               {error ? <div className="mb-4 flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"><AlertTriangle className="h-4 w-4" />{error}</div> : null}
@@ -405,6 +420,7 @@ export function AgentDashboardDialog({ open, onOpenChange }: AgentDashboardDialo
               </aside>
             ) : null}
           </div>
+          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
