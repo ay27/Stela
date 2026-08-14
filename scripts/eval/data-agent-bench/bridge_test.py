@@ -1,0 +1,53 @@
+import importlib.util
+import pathlib
+import unittest
+
+
+BRIDGE_PATH = pathlib.Path(__file__).with_name("bridge.py")
+SPEC = importlib.util.spec_from_file_location("stela_dab_bridge", BRIDGE_PATH)
+BRIDGE = importlib.util.module_from_spec(SPEC)
+assert SPEC and SPEC.loader
+SPEC.loader.exec_module(BRIDGE)
+
+
+class BridgeHelpersTest(unittest.TestCase):
+    def test_route_and_strip_database_prefix(self):
+        database, query = BRIDGE.parse_routed_query(
+            "-- stela-dab-database: books_database\nSELECT * FROM books_database.books_info",
+            ["books_database", "review_database"],
+        )
+        self.assertEqual(database, "books_database")
+        self.assertEqual(query, "SELECT * FROM books_info")
+
+    def test_reject_cross_database_query(self):
+        with self.assertRaisesRegex(BRIDGE.BridgeError, "only one logical database"):
+            BRIDGE.parse_routed_query(
+                "-- stela-dab-database: books_database\n"
+                "SELECT * FROM books_database.books_info b JOIN review_database.review r ON 1=1",
+                ["books_database", "review_database"],
+            )
+
+    def test_normalize_records(self):
+        result = BRIDGE.normalize_query_result(
+            [{"name": "a", "score": 1.5}, {"name": "b", "score": 2.0}],
+            12,
+        )
+        self.assertEqual(result["kind"], "query")
+        self.assertEqual([column["name"] for column in result["columns"]], ["name", "score"])
+        self.assertEqual(result["rows"], [["a", 1.5], ["b", 2.0]])
+
+    def test_extract_description_columns(self):
+        description = """1. books_database
+   - books_info:
+     - Fields:
+       - title (str): Book title
+       - price (float): Book price
+2. review_database
+"""
+        columns, snippet = BRIDGE.table_description(description, "books_info")
+        self.assertIn("books_info", snippet)
+        self.assertEqual([column["name"] for column in columns], ["title", "price"])
+
+
+if __name__ == "__main__":
+    unittest.main()

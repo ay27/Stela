@@ -35,7 +35,9 @@
     "test:runsql-agent-rewrite": "tsx src/editor/runsql/agent-rewrite-targets.test.ts",
     "eval:retrieval": "tsx scripts/eval/run-retrieval.ts",
     "eval:completion": "tsx scripts/eval/run-completion.ts",
-    "eval:agent-ask": "tsx scripts/eval/run-agent-ask.ts"
+    "eval:agent-ask": "tsx scripts/eval/run-agent-ask.ts",
+    "eval:data-agent-bench": "tsx scripts/eval/run-data-agent-bench.ts",
+    "test:eval:data-agent-bench": "tsx scripts/eval/data-agent-bench/runtime.test.ts && python3 -m unittest scripts/eval/data-agent-bench/bridge_test.py && tsx scripts/eval/data-agent-bench/bridge.integration.test.ts && tsx scripts/eval/data-agent-bench/runner.integration.test.ts && node scripts/eval/data-agent-bench/ssh-connector.test.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",

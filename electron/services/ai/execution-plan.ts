@@ -18,6 +18,26 @@ export interface UpdatePlanStep {
   runId?: string;
 }
 
+export interface IPlanPersistenceBuffer {
+  enqueue(snapshot: AgentPlanSnapshot): Promise<void>;
+  flush(): Promise<void>;
+}
+
+export function createPlanPersistenceBuffer(
+  persist: (snapshot: AgentPlanSnapshot) => Promise<void>,
+): IPlanPersistenceBuffer {
+  const pending: AgentPlanSnapshot[] = [];
+  return {
+    async enqueue(snapshot) {
+      pending.push(structuredClone(snapshot));
+    },
+    async flush() {
+      const batch = pending.splice(0);
+      for (const snapshot of batch) await persist(snapshot);
+    },
+  };
+}
+
 export function formatExecutionPlan(snapshot: AgentPlanSnapshot | null): string {
   if (!snapshot) return "No execution plan exists yet. Create a concise linear plan before using analysis tools.";
   return snapshot.steps

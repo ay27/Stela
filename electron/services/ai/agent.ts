@@ -43,7 +43,11 @@ import {
   type AgentSkillMaintenanceRecord,
   type LoadedAgentSkill,
 } from "./agent-skills";
-import { ExecutionPlanStore, formatExecutionPlanEntry } from "./execution-plan";
+import {
+  createPlanPersistenceBuffer,
+  ExecutionPlanStore,
+  formatExecutionPlanEntry,
+} from "./execution-plan";
 import {
   createAgentTools,
   type AgentRunRecorder,
@@ -651,6 +655,9 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
     plan = new ExecutionPlanStore(runId, (snapshot) => {
       emit({ type: "plan_updated", runId, plan: snapshot });
     });
+    const planPersistence = createPlanPersistenceBuffer((snapshot) =>
+      appendPlanEntry(session!, snapshot).then(() => undefined)
+    );
 
     const emitUsage = async (estimated: boolean) => {
       const context = await session.buildContext();
@@ -741,7 +748,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           },
           onCanvasUpdated: (event) => emit({ type: "canvas_updated", runId, ...event }),
           plan,
-          persistPlan: (snapshot) => appendPlanEntry(session!, snapshot).then(() => undefined),
+          persistPlan: planPersistence.enqueue,
           rewriteTargets: new Map(
             (request.attachments ?? []).flatMap((attachment) =>
               attachment.kind === "runsql" && attachment.rewriteTargetId
@@ -766,7 +773,11 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
     });
 
     const toolCalls = new Map<string, { name: string; args: unknown; startedAt: number; metricRunId: string }>();
-    const unsubscribe = harness.subscribe((event) => {
+    const unsubscribe = harness.subscribe(async (event) => {
+      if (event.type === "turn_end") {
+        await planPersistence.flush();
+        return;
+      }
       if (event.type === "tool_execution_start") {
         const startedAt = Date.now();
         const toolMetricRunId = `tool:${runId}:${event.toolCallId}`;

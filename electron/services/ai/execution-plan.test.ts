@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 
-import { ExecutionPlanStore, formatExecutionPlanEntry } from "./execution-plan";
+import {
+  createPlanPersistenceBuffer,
+  ExecutionPlanStore,
+  formatExecutionPlanEntry,
+} from "./execution-plan";
 
 const store = new ExecutionPlanStore("agent_test");
 
@@ -71,5 +75,21 @@ assert.match(
   formatExecutionPlanEntry({ plan: JSON.parse(JSON.stringify(completed)) }),
   /\[completed\] Query the daily trend/,
 );
+
+// Plan entries must be deferred until the harness emits turn_end, after every
+// toolResult from the current assistant tool-call batch has been persisted.
+{
+  const persisted: number[] = [];
+  const buffer = createPlanPersistenceBuffer(async (value) => {
+    persisted.push(value.version);
+  });
+  await buffer.enqueue(snapshot);
+  await buffer.enqueue(afterScope);
+  assert.deepEqual(persisted, []);
+  await buffer.flush();
+  assert.deepEqual(persisted, [1, 2]);
+  await buffer.flush();
+  assert.deepEqual(persisted, [1, 2]);
+}
 
 console.log("execution plan tests passed.");

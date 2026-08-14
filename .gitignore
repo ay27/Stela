@@ -1,5 +1,7 @@
 node_modules
 dist
+__pycache__/
+*.py[cod]
 .stela-vault
 .stela-release-tmp
 release
