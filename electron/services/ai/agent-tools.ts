@@ -30,6 +30,7 @@ import type {
   ConnectionEntry,
   ConnectionMap,
   ConnectorKindMeta,
+  DataQueryRequest,
   MaterializedQueryResult,
   PythonExecutionResult,
   QueryArtifactDescriptor,
@@ -73,10 +74,17 @@ export interface AgentConnectorOps {
   listTables(kind: string, config: unknown, db?: string | null): Promise<string[]>;
   execute(kind: string, config: unknown, sql: string): Promise<QueryResult>;
   executeUnbounded?(kind: string, config: unknown, sql: string): Promise<QueryResult>;
+  executeQuery?(kind: string, config: unknown, query: DataQueryRequest): Promise<QueryResult>;
   materializeQuery?(
     kind: string,
     config: unknown,
     sql: string,
+    request: QueryArtifactRequest,
+  ): Promise<MaterializedQueryResult | null>;
+  materializeDataQuery?(
+    kind: string,
+    config: unknown,
+    query: DataQueryRequest,
     request: QueryArtifactRequest,
   ): Promise<MaterializedQueryResult | null>;
   /**
@@ -152,6 +160,7 @@ export type AgentRunRecorder = (run: {
   runId: string;
   blockId: string;
   sql: string;
+  queryLanguage?: "sql" | "mongodb";
   status: "ok" | "err";
   message: string | null;
   startedAt: number;
@@ -234,7 +243,7 @@ export interface AgentToolContext {
     name: string;
     category: string | null;
   }) => void;
-  /** 本次 Agent 会话内 run_sql 的真实结果，只供 create_chart 校验。 */
+  /** 本次 Agent 会话内 run_query 的真实结果，只供 create_chart 校验。 */
   chartRuns?: Map<string, { sql: string; columns: ColumnDef[]; rows: unknown[][] }>;
   resolveChartRun?: (runId: string) => Promise<RunRecord | null>;
   onCanvasUpdated?: (event: { path: string; title: string; action: "created" | "updated" }) => void;
@@ -256,7 +265,7 @@ export interface AgentToolContext {
  *
  * Read-oriented tools use `executionMode: "parallel"` so one assistant turn can
  * fan out schema/vault/SQL lookups. Stateful plan, Canvas, chart, and edit
- * proposals stay sequential. `run_sql` is parallel: sql-guard blocks
+ * proposals stay sequential. `run_query` is parallel: sql-guard blocks
  * writes by default and mutations still wait on proposal. Pi rule: if any call
  * in a batch is sequential, the whole batch runs sequentially.
  */
@@ -316,26 +325,34 @@ export function createAgentTools(options: {
       execute: (toolCallId, params) => runTool("get_table_schema", toolCallId, params, ctx, requestProposal),
     },
     {
-      name: "run_sql",
-      label: "Run SQL",
+      name: "run_query",
+      label: "Run query",
       description:
-        "Run a SQL statement through a named Stela connection. Read-only queries return a bounded preview and a session-local artifact that execute_python can consume by runId. Mutations are blocked unless enabled and always require explicit approval.",
+        "Run one structured SQL or MongoDB query through a named Stela connection. SQL mutations remain guarded. MongoDB accepts read-only find requests only. Results include a bounded preview and, when supported, a session-local artifact for execute_python.",
+      // Function providers require the top-level schema to be type=object.
+      // SQL/Mongo field requirements are discriminated again in runQuery.
       parameters: Type.Object({
-        sql: Type.String(),
+        language: Type.Union([Type.Literal("sql"), Type.Literal("mongodb")]),
+        query: Type.Optional(Type.String({ description: "Required for SQL: one SQL statement." })),
+        collection: Type.Optional(Type.String({ description: "Required for MongoDB: collection name." })),
+        database: Type.Optional(Type.String({ description: "Optional logical database." })),
+        filter: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "MongoDB find filter." })),
+        projection: Type.Optional(Type.Union([Type.Record(Type.String(), Type.Unknown()), Type.Null()])),
+        limit: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
         connectionName: Type.Optional(Type.String({ description: "Available Stela connection name; defaults to current." })),
       }),
       executionMode: "parallel",
-      execute: (toolCallId, params) => runTool("run_sql", toolCallId, params, ctx, requestProposal),
+      execute: (toolCallId, params) => runTool("run_query", toolCallId, params, ctx, requestProposal),
     },
     {
       name: "execute_python",
       label: "Execute Python",
       description:
-        "Run bounded Python in Stela's local Pyodide sandbox. DuckDB, pandas, con, and tables are preloaded. inputs maps valid Python/SQL aliases to successful run_sql runIds from this local Agent session. Use DuckDB SQL for joins/aggregations and assign the final value to result. No network, host files, subprocesses, or package installation are available.",
+        "Run bounded Python in Stela's local Pyodide sandbox. DuckDB, pandas, con, and tables are preloaded. inputs maps aliases to successful run_query runIds from this local Agent session. Use DuckDB SQL for joins/aggregations and assign the final value to result. No network, host files, subprocesses, or package installation are available.",
       parameters: Type.Object({
         code: Type.String({ description: "Python code. Assign the final scalar, DataFrame, or DuckDB relation to result." }),
         inputs: Type.Record(Type.String(), Type.String(), {
-          description: "Alias to successful run_sql runId.",
+          description: "Alias to successful run_query runId.",
         }),
       }),
       executionMode: "sequential",
@@ -345,9 +362,9 @@ export function createAgentTools(options: {
       name: "create_chart",
       label: "Create chart",
       description:
-        "Validate a Stela v2 chart against a successful run_sql result. Choose a preset, declare semantic fields, and map 1-2 controlled layers through encoding channels. Presets: trend, ranking, composition, distribution, correlation, funnel, retention, comparison, custom. Marks: bar, line, area, point, arc, rect, rule, histogram, boxplot, funnel. Use only real result columns and keep business aggregation in SQL.",
+        "Validate a Stela v2 chart against a successful SQL run_query result. Choose a preset, declare semantic fields, and map 1-2 controlled layers through encoding channels. Presets: trend, ranking, composition, distribution, correlation, funnel, retention, comparison, custom. Marks: bar, line, area, point, arc, rect, rule, histogram, boxplot, funnel. Use only real result columns and keep business aggregation in SQL.",
       parameters: Type.Object({
-        runId: Type.String({ description: "Exact runId returned by run_sql in this Agent run." }),
+        runId: Type.String({ description: "Exact runId returned by a SQL run_query in this Agent run." }),
         title: Type.Optional(Type.String()),
         description: Type.Optional(Type.String()),
         preset: Type.Union(["trend", "ranking", "composition", "distribution", "correlation", "funnel", "retention", "comparison", "custom"].map((value) => Type.Literal(value))),
@@ -404,7 +421,7 @@ export function createAgentTools(options: {
     },
     {
       name: "update_analysis_canvas", label: "Update analysis Canvas",
-      description: "Replace a Canvas with a validated structured version. Bind every new or changed SQL source to a successful run_sql runId; Stela copies the audited SQL and connection metadata. Canvas sources must be refreshable table-backed queries: never turn fetched values into SELECT literals, VALUES, or constant UNION rows. Preserve stable source, section, card, Flow node, and Flow edge ids across updates. Flow direction and existing node positions are user-owned and will be preserved; omit node positions.",
+      description: "Replace a Canvas with a validated structured version. Bind every new or changed SQL source to a successful SQL run_query runId; Stela copies the audited SQL and connection metadata. Canvas sources must be refreshable table-backed queries: never turn fetched values into SELECT literals, VALUES, or constant UNION rows. Preserve stable source, section, card, Flow node, and Flow edge ids across updates. Flow direction and existing node positions are user-owned and will be preserved; omit node positions.",
       parameters: Type.Object({
         path: Type.String(), etag: Type.String(), content: Type.String({ description: "Complete version 1 .stela.canvas JSON." }),
         sourceRuns: Type.Array(Type.Object({ sourceId: Type.String(), runId: Type.String() })),
@@ -807,44 +824,110 @@ async function runGetTableSchema(args: { tables?: unknown; connectionName?: unkn
   );
 }
 
-async function runSql(
-  args: { sql?: string; connectionName?: unknown },
+const FORBIDDEN_MONGO_OPERATORS = new Set(["$where", "$function", "$accumulator"]);
+
+function hasForbiddenMongoOperator(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasForbiddenMongoOperator);
+  if (!value || typeof value !== "object") return false;
+  return Object.entries(value as Record<string, unknown>).some(
+    ([key, item]) => FORBIDDEN_MONGO_OPERATORS.has(key.toLowerCase()) || hasForbiddenMongoOperator(item),
+  );
+}
+
+function normalizeDataQuery(args: Record<string, unknown>): DataQueryRequest | string {
+  if (args.language !== undefined && args.language !== "sql" && args.language !== "mongodb") {
+    return `unsupported query language: ${String(args.language)}`;
+  }
+  const language = args.language === "mongodb" ? "mongodb" : "sql";
+  if (language === "sql") {
+    const query = typeof args.query === "string" ? args.query : typeof args.sql === "string" ? args.sql : "";
+    if (!query.trim()) return "query must be a non-empty SQL string.";
+    return {
+      language,
+      query,
+      ...(typeof args.database === "string" && args.database.trim()
+        ? { database: args.database.trim() }
+        : {}),
+    };
+  }
+  const collection = typeof args.collection === "string" ? args.collection.trim() : "";
+  if (!collection) return "collection must be a non-empty string.";
+  const filter = args.filter === undefined ? {} : args.filter;
+  const projection = args.projection === undefined ? null : args.projection;
+  if (!filter || typeof filter !== "object" || Array.isArray(filter)) {
+    return "filter must be an object.";
+  }
+  if (projection !== null && (typeof projection !== "object" || Array.isArray(projection))) {
+    return "projection must be an object or null.";
+  }
+  if (hasForbiddenMongoOperator(filter) || hasForbiddenMongoOperator(projection)) {
+    return "MongoDB server-side JavaScript operators are not allowed.";
+  }
+  let limit: number | null = 200;
+  if (args.limit === null) limit = null;
+  else if (typeof args.limit === "number" && Number.isFinite(args.limit)) {
+    limit = Math.min(1_000_000, Math.max(1, Math.floor(args.limit)));
+  } else if (args.limit !== undefined) {
+    return "limit must be a finite number or null.";
+  }
+  return {
+    language,
+    collection,
+    filter: filter as Record<string, unknown>,
+    projection: projection as Record<string, unknown> | null,
+    limit,
+    ...(typeof args.database === "string" && args.database.trim()
+      ? { database: args.database.trim() }
+      : {}),
+  };
+}
+
+async function runQuery(
+  args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
   const { name: connectionName, connection } = requireNamedConnection(ctx, args.connectionName);
-  const sql = args.sql;
-  if (!sql || !sql.trim()) return fail("sql must be a non-empty string.");
-  const classified = classifySql(sql, ctx.aiSettings.agentAllowMutations);
-  if (classified.classification === "multi-statement") {
+  const normalized = normalizeDataQuery(args);
+  if (typeof normalized === "string") return fail(normalized);
+  const query = normalized;
+  const connectorMeta = ctx.connector.listKinds().find((item) => item.kind === connection.kind);
+  const languages = connectorMeta?.queryLanguages ?? ["sql"];
+  if (!languages.includes(query.language)) {
+    return fail(`Connection '${connectionName}' does not support ${query.language} queries.`);
+  }
+  const classified = query.language === "sql"
+    ? classifySql(query.query, ctx.aiSettings.agentAllowMutations)
+    : null;
+  if (classified?.classification === "multi-statement") {
     return fail(classified.blockedReason ?? "Multiple statements are not allowed.");
   }
-  if (classified.classification === "mutation") {
+  if (classified?.classification === "mutation") {
     if (!ctx.aiSettings.agentAllowMutations) {
       return fail(classified.blockedReason ?? "Mutating statements are blocked by default.");
     }
     const approved = await ctx.requestProposal({
       kind: "mutation_sql",
       payload: {
-        sql,
+        sql: query.query,
         description: `Run ${classified.keyword ?? "mutation"} statement on connection '${connectionName}'`,
       },
     });
     if (!approved) return fail("The user rejected this SQL statement. Do not retry it as-is.");
   }
 
-  const runId = `${ctx.run.runId}-sql-${randomUUID()}`;
+  const auditText = query.language === "sql" ? query.query : JSON.stringify(query);
+  const runId = `${ctx.run.runId}-query-${randomUUID()}`;
   const startedAt = Date.now();
   let result: QueryResult | null = null;
   let artifact: QueryArtifactDescriptor | null = null;
   let totalRowCount: number | undefined;
   try {
     if (
-      classified.classification !== "mutation" &&
+      classified?.classification !== "mutation" &&
       ctx.queryArtifacts &&
-      ctx.connector.materializeQuery &&
+      (ctx.connector.materializeDataQuery || (query.language === "sql" && ctx.connector.materializeQuery)) &&
       ctx.run.sessionId
     ) {
-      const connectorMeta = ctx.connector.listKinds().find((item) => item.kind === connection.kind);
       const format = connectorMeta?.queryArtifactFormats?.includes("parquet")
         ? "parquet"
         : connectorMeta?.queryArtifactFormats?.includes("jsonl")
@@ -858,17 +941,15 @@ async function runSql(
           format,
         );
         try {
-          const materialized = await ctx.connector.materializeQuery(
-            connection.kind,
-            connection.config,
-            sql,
-            {
+          const artifactRequest = {
               format,
               outputPath: target.tempPath,
               previewRows: SQL_PREVIEW_ROWS,
               maxBytes: QUERY_ARTIFACT_MAX_BYTES,
-            },
-          );
+            };
+          const materialized = ctx.connector.materializeDataQuery
+            ? await ctx.connector.materializeDataQuery(connection.kind, connection.config, query, artifactRequest)
+            : await ctx.connector.materializeQuery!(connection.kind, connection.config, query.language === "sql" ? query.query : "", artifactRequest);
           if (materialized) {
             artifact = await ctx.queryArtifacts.finalize(
               target,
@@ -893,11 +974,17 @@ async function runSql(
     }
 
     if (!result) {
-      result = await (ctx.connector.executeUnbounded ?? ctx.connector.execute)(
-        connection.kind,
-        connection.config,
-        sql,
-      );
+      if (ctx.connector.executeQuery) {
+        result = await ctx.connector.executeQuery(connection.kind, connection.config, query);
+      } else if (query.language === "sql") {
+        result = await (ctx.connector.executeUnbounded ?? ctx.connector.execute)(
+          connection.kind,
+          connection.config,
+          query.query,
+        );
+      } else {
+        return fail(`Connection '${connectionName}' cannot execute structured MongoDB queries.`);
+      }
       if (result.kind === "query") {
         totalRowCount = result.rows.length;
         if (ctx.queryArtifacts && ctx.run.sessionId) {
@@ -919,31 +1006,34 @@ async function runSql(
       }
     }
   } catch (err) {
-    await recordAgentRun(ctx, sql, startedAt, null, err, {
+    await recordAgentRun(ctx, auditText, startedAt, null, err, {
       runId,
       connectionName,
+      queryLanguage: query.language,
     });
     throw err;
   }
-  await recordAgentRun(ctx, sql, startedAt, result, null, {
+  await recordAgentRun(ctx, auditText, startedAt, result, null, {
     runId,
     connectionName,
     rowCount: totalRowCount,
+    queryLanguage: query.language,
   });
-  if (result.kind === "query") {
+  if (result.kind === "query" && query.language === "sql") {
     ctx.chartRuns?.set(runId, {
-      sql,
+      sql: auditText,
       columns: result.columns,
       rows: result.rows.slice(0, SQL_PREVIEW_ROWS),
     });
   }
   if (result.kind === "mutation") {
-    return ok({ runId, connectionName, result: formatQueryResult(result) });
+    return ok({ runId, connectionName, language: query.language, result: formatQueryResult(result) });
   }
   const rowCount = totalRowCount ?? result.rows.length;
   return ok({
     runId,
     connectionName,
+    language: query.language,
     result: {
       kind: "query",
       columns: result.columns,
@@ -970,11 +1060,11 @@ async function runExecutePython(
     return fail(`code exceeds ${PYTHON_CODE_MAX_CHARS} characters.`);
   }
   if (!args.inputs || typeof args.inputs !== "object" || Array.isArray(args.inputs)) {
-    return fail("inputs must be an object mapping aliases to run_sql runIds.");
+    return fail("inputs must be an object mapping aliases to run_query runIds.");
   }
   const entries = Object.entries(args.inputs as Record<string, unknown>);
   if (entries.length > PYTHON_INPUT_MAX_COUNT) {
-    return fail(`inputs supports at most ${PYTHON_INPUT_MAX_COUNT} run_sql results.`);
+    return fail(`inputs supports at most ${PYTHON_INPUT_MAX_COUNT} run_query results.`);
   }
   const artifacts: Record<string, QueryArtifactDescriptor> = {};
   for (const [alias, rawRunId] of entries) {
@@ -982,7 +1072,7 @@ async function runExecutePython(
       return fail(`Invalid Python input alias '${alias}'. Use a valid identifier up to 64 characters.`);
     }
     if (typeof rawRunId !== "string" || !rawRunId.trim()) {
-      return fail(`Input '${alias}' must reference a non-empty run_sql runId.`);
+      return fail(`Input '${alias}' must reference a non-empty run_query runId.`);
     }
     const artifact = await ctx.queryArtifacts.resolve(
       ctx.vaultPath,
@@ -1016,7 +1106,7 @@ async function runExecutePython(
 function runCreateChart(args: Record<string, unknown>, ctx: AgentToolContext): ToolOutcome {
   const runId = typeof args.runId === "string" ? args.runId : "";
   const run = ctx.chartRuns?.get(runId);
-  if (!run) return fail("runId must refer to a successful run_sql query from this Agent run.");
+  if (!run) return fail("runId must refer to a successful SQL run_query from this Agent run.");
   const { runId: _discardRunId, fields: rawFields, ...chartArgs } = args;
   void _discardRunId;
   const fieldEntries = (Array.isArray(rawFields) ? rawFields : []).flatMap((raw) => {
@@ -1058,7 +1148,7 @@ async function runCreateAnalysisCanvas(args: Record<string, unknown>, ctx: Agent
   );
   const canvas = parseAnalysisCanvas(file.content);
   ctx.onCanvasUpdated?.({ path: vaultRelativePath(ctx.vaultPath, file.path), title: canvas.title, action: "created" });
-  return ok({ path: file.path, etag: file.etag, content: file.content, instruction: "Populate this Canvas incrementally with update_analysis_canvas after verified run_sql results." });
+  return ok({ path: file.path, etag: file.etag, content: file.content, instruction: "Populate this Canvas incrementally with update_analysis_canvas after verified SQL run_query results." });
 }
 
 async function runReadAnalysisCanvas(args: Record<string, unknown>, ctx: AgentToolContext): Promise<ToolOutcome> {
@@ -1136,7 +1226,12 @@ async function recordAgentRun(
   startedAt: number,
   result: QueryResult | null,
   err: unknown,
-  options: { runId?: string; connectionName?: string; rowCount?: number } = {},
+  options: {
+    runId?: string;
+    connectionName?: string;
+    rowCount?: number;
+    queryLanguage?: "sql" | "mongodb";
+  } = {},
 ): Promise<string | null> {
   const elapsedMs = result?.elapsedMs ?? Date.now() - startedAt;
   const isQuery = result?.kind === "query";
@@ -1148,6 +1243,7 @@ async function recordAgentRun(
       runId,
       blockId: `agent:${ctx.run.runId}`,
       sql,
+      queryLanguage: options.queryLanguage ?? "sql",
       status: result ? "ok" : "err",
       message: result ? null : err instanceof Error ? err.message : String(err),
       startedAt,
@@ -1160,7 +1256,7 @@ async function recordAgentRun(
     });
     return runId;
   } catch (recordErr) {
-    log.warn("agent run_sql history write failed", {
+    log.warn("agent query history write failed", {
       err: recordErr instanceof Error ? recordErr.message : String(recordErr),
     });
     return null;
@@ -1633,8 +1729,9 @@ export async function dispatchTool(
         return await runSearchTables(args, ctx);
       case "get_table_schema":
         return await runGetTableSchema(args, ctx);
+      case "run_query":
       case "run_sql":
-        return await runSql(args, ctx);
+        return await runQuery(args, ctx);
       case "execute_python":
         return await runExecutePython(args, ctx);
       case "create_chart":

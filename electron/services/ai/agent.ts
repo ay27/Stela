@@ -176,12 +176,16 @@ export async function prunePersistentAgentHistory(
 async function loadAvailableConnections(
   vaultPath: string,
   slug: string,
-): Promise<{ connections: ConnectionMap; dialects: Record<string, string | null> }> {
+): Promise<{
+  connections: ConnectionMap;
+  dialects: Record<string, string | null>;
+  queryLanguages: Record<string, Array<"sql" | "mongodb">>;
+}> {
   try {
     const connections = await connectionsStore.loadConnections(vaultPath, slug);
-    const kindDialects = new Map(
-      connectorRegistry.listKinds().map((item) => [item.kind, item.dialect ?? null]),
-    );
+    const kinds = connectorRegistry.listKinds();
+    const kindDialects = new Map(kinds.map((item) => [item.kind, item.dialect ?? null]));
+    const kindLanguages = new Map(kinds.map((item) => [item.kind, item.queryLanguages ?? ["sql"]]));
     return {
       connections,
       dialects: Object.fromEntries(
@@ -190,16 +194,22 @@ async function loadAvailableConnections(
           kindDialects.get(connection.kind) ?? null,
         ]),
       ),
+      queryLanguages: Object.fromEntries(
+        Object.entries(connections).map(([name, connection]) => [
+          name,
+          kindLanguages.get(connection.kind) ?? ["sql"],
+        ]),
+      ),
     };
   } catch (err) {
     log.warn("loadAvailableConnections failed", { err: (err as Error).message });
-    return { connections: {}, dialects: {} };
+    return { connections: {}, dialects: {}, queryLanguages: {} };
   }
 }
 
 /**
- * agent 执行的 SQL 走与 RunSQL 完全相同的落盘路径：SQLite 缓存 + JSONL journal。
- * 这样 Run History 能看到、Git 能同步、用户能复核 agent 究竟查了什么。
+ * Agent 数据查询走与 RunSQL 相同的落盘路径：SQLite 缓存 + JSONL journal。
+ * queryLanguage 区分 SQL 与结构化 MongoDB 查询。
  */
 function recordAgentRun(vaultPath: string): AgentRunRecorder {
   return async (run) => {
@@ -207,6 +217,7 @@ function recordAgentRun(vaultPath: string): AgentRunRecorder {
       runId: run.runId,
       blockId: run.blockId,
       sql: run.sql,
+      queryLanguage: run.queryLanguage ?? "sql",
       status: run.status,
       message: run.message,
       startedAt: run.startedAt,
@@ -725,7 +736,9 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
             listTables: connectorRegistry.listTables,
             execute: connectorRegistry.execute,
             executeUnbounded: connectorRegistry.executeUnbounded,
+            executeQuery: connectorRegistry.executeQuery,
             materializeQuery: connectorRegistry.materializeQuery,
+            materializeDataQuery: connectorRegistry.materializeDataQuery,
             describeTables: connectorRegistry.describeTables,
           },
           queryArtifacts: {
@@ -947,6 +960,16 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       const userContent = buildUserContent(request, {
         connection,
         dialect,
+        queryLanguages: request.connectionName
+          ? available.queryLanguages[request.connectionName] ?? ["sql"]
+          : [],
+        contextSources: {
+          vault_notes: "unknown",
+          skills: skills.loaded.length > 0 ? "available" : "empty",
+          sql_history: "unknown",
+          canvas: "unknown",
+          clarification: "available",
+        },
         skillMetadata,
         availableConnections: Object.entries(available.connections)
           .sort(([left], [right]) => left.localeCompare(right))
@@ -954,6 +977,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
             name,
             kind: entry.kind,
             dialect: available.dialects[name] ?? null,
+            queryLanguages: available.queryLanguages[name] ?? ["sql"],
           })),
       });
       let result = await harness.prompt(userContent);

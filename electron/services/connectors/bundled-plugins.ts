@@ -9,7 +9,7 @@
  *
  * 用途：
  *   1. Plugins 面板「安装自带示例」一键安装（listBundled / installBundled 走 registry）
- *   2. 向后兼容 seed：打开任意 vault 时，确保官方 mysql/postgresql 插件已就位。
+ *   2. 向后兼容 seed：打开任意 vault 时，确保官方 mysql/postgresql/mongodb 插件已就位。
  *      用 marker 记录已 seed 的 id，用户主动卸载后不会被重新塞回。
  *
  * 本模块 import electron `app`，仅在 main 进程使用。
@@ -39,11 +39,12 @@ const log = getLogger("connector:bundled-plugins");
 const DEFAULT_BUNDLED_PLUGIN_IDS = [
   "connector-mysql",
   "connector-postgresql",
+  "connector-mongodb",
   "connector-http-sample",
 ];
 
 /** 打开 vault 时自动 seed 的官方 connector。 */
-const AUTO_SEED_IDS = ["connector-mysql", "connector-postgresql"];
+const AUTO_SEED_IDS = ["connector-mysql", "connector-postgresql", "connector-mongodb"];
 const SEED_MARKER = ".bundled-seeded.json";
 
 interface SeedMarker {

@@ -25,6 +25,8 @@ export interface RunRecord {
   runId: string;
   blockId: string;
   sql: string;
+  /** Query language used for this run. Missing legacy values are SQL. */
+  queryLanguage?: QueryLanguage;
   status: "ok" | "err" | "running";
   message: string | null;
   /** Unix epoch ms */
@@ -71,9 +73,33 @@ export interface ConnectorKindMeta {
   subprocess: boolean;
   /** SQL 方言名（"MySQL" / "PostgreSQL" / "StarRocks" 等），不填时按 kind 启发式回退 */
   dialect?: string;
+  /** Agent query languages accepted by this connector. Missing means SQL-only. */
+  queryLanguages?: QueryLanguage[];
   /** Optional host-managed result artifact formats supported by API v2 plugins. */
   queryArtifactFormats?: QueryArtifactFormat[];
 }
+
+export type QueryLanguage = "sql" | "mongodb";
+
+export interface SqlDataQuery {
+  language: "sql";
+  query: string;
+  /** Optional logical database for connectors that multiplex databases. */
+  database?: string | null;
+}
+
+/** Structured, read-only MongoDB find. JavaScript expressions are never accepted. */
+export interface MongoDataQuery {
+  language: "mongodb";
+  collection: string;
+  database?: string | null;
+  filter?: Record<string, unknown>;
+  projection?: Record<string, unknown> | null;
+  /** null means no connector-side limit; host preview/artifact limits still apply. */
+  limit?: number | null;
+}
+
+export type DataQueryRequest = SqlDataQuery | MongoDataQuery;
 
 export type QueryArtifactFormat = "parquet" | "jsonl";
 export type QueryArtifactMode = "parquet-stream" | "jsonl-stream" | "jsonl-buffered";
@@ -737,6 +763,8 @@ export type AgentToolName =
   | "list_tables"
   | "search_tables"
   | "get_table_schema"
+  | "run_query"
+  /** @deprecated Accepted only for old tests/session traces. */
   | "run_sql"
   | "execute_python"
   | "create_chart"

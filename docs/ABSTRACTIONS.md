@@ -107,14 +107,15 @@ RunSQL block or note Markdown.
 
 ### RunRecord
 
-One SQL execution, stored in SQLite and mirrored in JSONL.
+One SQL or structured MongoDB execution, stored in SQLite and mirrored in JSONL.
 
 ```typescript
 // electron/shared/types.ts, src/contracts/storage.ts
 interface RunRecord {
   runId: string;
   blockId: string;
-  sql: string;
+  sql: string;              // SQL text or canonical structured-query JSON
+  queryLanguage?: "sql" | "mongodb"; // old rows/packages default to sql
   status: "ok" | "err" | "running";
   message: string | null;
   startedAt: number;      // Unix epoch ms
@@ -331,8 +332,24 @@ interface ConnectorKindMeta {
   defaultConfig: unknown;
   subprocess: boolean;
   dialect?: string;         // "MySQL", "PostgreSQL", etc.
+  queryLanguages?: Array<"sql" | "mongodb">; // missing means SQL-only
   queryArtifactFormats?: Array<"parquet" | "jsonl">;
 }
+```
+
+The Agent-only structured query contract is discriminated by language:
+
+```typescript
+type DataQueryRequest =
+  | { language: "sql"; query: string; database?: string | null }
+  | {
+      language: "mongodb";
+      database?: string | null;
+      collection: string;
+      filter?: Record<string, unknown>;
+      projection?: Record<string, unknown> | null;
+      limit?: number | null;
+    };
 ```
 
 ### Plugin SDK
@@ -341,13 +358,22 @@ Third-party module connectors publish against `plugin-sdk/`:
 
 ```typescript
 // plugin-sdk/src/index.ts
-export interface StelaConnectorPlugin {
-  meta: ConnectorKindMeta;
+export interface Connector {
+  meta(): ConnectorKindMeta;
   test(config: unknown): Promise<TestResult>;
   execute(config: unknown, sql: string): Promise<QueryResult>;
+  executeQuery?(
+    config: unknown,
+    query: DataQueryRequest,
+  ): Promise<QueryResult>;
   materializeQuery?(
     config: unknown,
     sql: string,
+    request: QueryArtifactRequest,
+  ): Promise<MaterializedQueryResult | null>;
+  materializeDataQuery?(
+    config: unknown,
+    query: DataQueryRequest,
     request: QueryArtifactRequest,
   ): Promise<MaterializedQueryResult | null>;
   listDatabases?(config: unknown): Promise<string[]>;
@@ -358,8 +384,10 @@ export interface StelaConnectorPlugin {
 `QueryArtifactRequest.outputPath` is host-selected and visible only inside the
 trusted connector/main boundary. A successful materialization writes that path
 atomically and returns a bounded preview plus exact `rowCount`; it never returns
-the path to renderer or model code. Connectors without this optional v2 method
-continue through the buffered v1 result contract.
+the path to renderer or model code. Connectors without the v2 materialization
+method continue through the buffered v1 result contract. Plugin API v3 adds
+`queryLanguages`, `executeQuery`, and `materializeDataQuery`; absent language
+metadata remains SQL-only, so v1/v2 plugins require no migration.
 
 ## AppSettings
 
@@ -559,7 +587,7 @@ columns (with `comment`) directly. Otherwise it falls back to `SHOW CREATE TABLE
 ```typescript
 type AgentToolName =
   | "list_databases" | "list_tables" | "search_tables" | "get_table_schema"
-  | "run_sql" | "execute_python" | "create_chart" | "search_sql_usage"
+  | "run_query" | "execute_python" | "create_chart" | "search_sql_usage"
   | "create_analysis_canvas" | "read_analysis_canvas" | "update_analysis_canvas"
   | "search_vault" | "list_vault_files" | "read_note"
   | "create_plan" | "update_plan" | "get_plan"
@@ -673,12 +701,14 @@ local; a remote session is read-only and a new prompt forks it to a local
 Each device retains only its 20 most recently updated session files; cleanup
 never deletes another device's directory ([ADR-0047](./adr/0047-bounded-device-agent-history-retention.md)).
 
-Agent `run_sql` accepts an optional Vault `connectionName`; omission selects the
-current note connection. A successful read returns at most 200 preview rows to
-the model and records the same bounded rows in normal history, while `rowCount`
-describes the full result. When possible it also creates a machine-local
-artifact under Electron `userData`, keyed by Vault hash, local `sessionId`, and
-SQL `runId`:
+Agent `run_query` accepts an optional Vault `connectionName`; omission selects
+the current note connection. The connector's `queryLanguages` determines
+whether SQL or structured MongoDB finds are accepted. MongoDB requests expose
+only collection/filter/projection/limit and reject server-side JavaScript. A
+successful read returns at most 200 preview rows to the model and records the
+same bounded rows in normal history, while `rowCount` describes the full
+result. When possible it also creates a machine-local artifact under Electron
+`userData`, keyed by Vault hash, local `sessionId`, and query `runId`:
 
 ```typescript
 type QueryArtifactFormat = "parquet" | "jsonl";
@@ -712,15 +742,15 @@ or Git. ([ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md))
 `readTable` and `writeTable` remain available when the caller needs only one
 direction.
 
-Safety ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md)):
+Safety ([ADR-0066](./adr/0066-structured-read-only-agent-queries.md)):
 
 - `sql-guard` classifies read-only vs mutation vs multi-statement
 - Mutations + `propose_edit` block on `ai:agent-respond-proposal`
 - Runs continue until model completion, error, or explicit user cancellation ([ADR-0017](./adr/0017-user-cancelled-agent-runs.md))
-- Read tools and `run_sql` may execute in parallel. `execute_python`, plan mutations, chart creation, Canvas creation/update, and `propose_edit` are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md)). NodeExecutionEnv is harness cwd only (not exposed as model tools)
+- Read tools and `run_query` may execute in parallel. `execute_python`, plan mutations, chart creation, Canvas creation/update, and `propose_edit` are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md)). NodeExecutionEnv is harness cwd only (not exposed as model tools)
 - Compaction uses `ai.contextWindow` + one overflow recovery ([ADR-0018](./adr/0018-pi-ai-agent-harness.md))
 - Execution plans are bounded and linear. Their active store is main-process runtime state; every versioned `AgentPlanSnapshot` is appended immutably to the pi session, and only the highest version for the current run is active ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md), [ADR-0046](./adr/0046-device-sharded-agent-session-history.md))
-- The Agent system prompt and tool list are request-invariant. Dynamic context is bounded, redacted, and appended in the user turn immediately before the request; pi-ai uses short cache retention and session affinity ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md))
+- The Agent system prompt and tool list are request-invariant. Dynamic context, including explicit availability states for Vault notes, Skills, SQL history, Canvas, and clarification, is bounded, redacted, and appended in the user turn immediately before the request; pi-ai uses short cache retention and session affinity ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md))
 - RunSQL fix/schema quick actions auto-submit in a new Agent tab; rewrite/question actions open editable drafts. `runsql_rewrite` proposals are bound to the original SQL snapshot and renderer target, then reuse the inline diff accept/discard UI ([ADR-0059](./adr/0059-agent-panel-quick-actions.md))
 - Note references are paths only; the agent should call `read_note` before relying on note contents
 - Selection / RunSQL attachments are bounded and included only on the user turn that added them

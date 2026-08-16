@@ -2,13 +2,13 @@
  * 全局 Run History 侧栏面板（v0.2 #5）。
  *
  * - 按 startedAt 倒序展示当前 vault 内的所有 RunRecord
- * - 折叠态：状态点 + 连接名 + 相对时间 + SQL 摘要 + rows / elapsed
+ * - 折叠态：状态点 + 连接名 + 查询语言 + 相对时间 + 查询摘要 + rows / elapsed
  * - 点击行展开：
- *     · 多行 SQL <pre>（保留原换行 / 缩进）
+ *     · 完整查询 <pre>（保留原换行 / 缩进）
  *     · status=err 时的完整错误信息
  *     · blockId + 完整时间戳 + 文件路径
- *     · 操作按钮：打开笔记（notePath 缺失时置灰）/ 复制 SQL
- * - 顶部：关键字过滤（client-side，按 sql / 连接 / blockId）+ 刷新按钮
+ *     · 操作按钮：打开笔记（notePath 缺失时置灰）/ 复制查询
+ * - 顶部：关键字过滤（client-side，按查询 / 连接 / blockId）+ 刷新按钮
  *
  * 性能：listRuns 一次拉全量，对于 dogfood 量级（数百到数千行）够用；超大 vault
  * 后续再接分页 IPC（不在 v0.2 范围）。
@@ -209,6 +209,9 @@ function RunRow({
           <span className="truncate font-medium" title={run.connectionName}>
             {run.connectionName || t("common.noConnection")}
           </span>
+          <span className="flex-none rounded bg-muted px-1 py-px font-mono text-[9px] uppercase text-muted-foreground">
+            {run.queryLanguage ?? "sql"}
+          </span>
           <span
             className="ml-auto flex-none text-[10px] text-muted-foreground"
             title={new Date(run.startedAt).toLocaleString()}
@@ -249,6 +252,10 @@ function RunRow({
             <dt>{t("runHistory.field.started")}</dt>
             <dd className="font-mono text-foreground/80">
               {new Date(run.startedAt).toLocaleString()}
+            </dd>
+            <dt>{t("runHistory.field.language")}</dt>
+            <dd className="font-mono uppercase text-foreground/80">
+              {run.queryLanguage ?? "sql"}
             </dd>
             <dt>{t("runHistory.field.blockId")}</dt>
             <dd className="truncate font-mono text-foreground/80">
@@ -291,10 +298,10 @@ function RunRow({
               type="button"
               onClick={() => void onCopy(copyKey, run.sql)}
               className="inline-flex items-center gap-1 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] hover:bg-accent"
-              title={t("runHistory.copySqlTitle")}
+              title={t("runHistory.copyQueryTitle")}
             >
               <Copy className="h-3 w-3" />
-              {flash === copyKey ? t("common.copied") : t("runHistory.copySql")}
+              {flash === copyKey ? t("common.copied") : t("runHistory.copyQuery")}
             </button>
           </div>
         </div>

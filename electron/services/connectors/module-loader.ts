@@ -13,7 +13,7 @@
  *     删一个 cache key 即可甩掉整棵依赖树）。
  *   - 加载失败不抛到上层 setVault，由调用方收集成 ModulePluginLoadError 展示在 UI。
  *
- * 协议版本：v2（与 plugin-sdk 的 CONNECTOR_PLUGIN_API_VERSION 对齐）。
+ * 协议版本：v3（与 plugin-sdk 的 CONNECTOR_PLUGIN_API_VERSION 对齐）。
  */
 
 import { createRequire } from "node:module";
@@ -29,7 +29,7 @@ const log = getLogger("connector:module-loader");
 const requireModule = createRequire(import.meta.url);
 
 /** host 支持的最高 module 插件协议版本。 */
-export const MODULE_PLUGIN_API_VERSION = 2;
+export const MODULE_PLUGIN_API_VERSION = 3;
 
 /** vault 内放 module 插件的子目录（位于 `{vault}/.stela/plugins/`）。 */
 export const PLUGINS_DIRNAME = "plugins";
@@ -82,6 +82,14 @@ export class ModulePluginConnector implements Connector {
   execute(cfg: unknown, sql: string) {
     return this.inner.execute(cfg, sql);
   }
+  executeQuery(cfg: unknown, query: import("@shared/types").DataQueryRequest) {
+    if (this.inner.executeQuery) return this.inner.executeQuery(cfg, query);
+    if (query.language === "sql") return this.inner.execute(cfg, query.query);
+    throw new AppError(
+      "unsupported_query_language",
+      `plugin '${this.manifest.id}' does not support ${query.language}`,
+    );
+  }
   async materializeQuery(
     cfg: unknown,
     sql: string,
@@ -94,6 +102,22 @@ export class ModulePluginConnector implements Connector {
       );
     }
     return this.inner.materializeQuery(cfg, sql, request);
+  }
+  async materializeDataQuery(
+    cfg: unknown,
+    query: import("@shared/types").DataQueryRequest,
+    request: import("@shared/types").QueryArtifactRequest,
+  ) {
+    if (this.inner.materializeDataQuery) {
+      return this.inner.materializeDataQuery(cfg, query, request);
+    }
+    if (query.language === "sql" && this.inner.materializeQuery) {
+      return this.inner.materializeQuery(cfg, query.query, request);
+    }
+    throw new AppError(
+      "unsupported_artifact",
+      `plugin '${this.manifest.id}' cannot materialize ${query.language}`,
+    );
   }
   listDatabases(cfg: unknown) {
     return this.inner.listDatabases(cfg);

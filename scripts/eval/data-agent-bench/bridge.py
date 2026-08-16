@@ -119,6 +119,69 @@ def normalize_query_result(value: Any, elapsed_ms: int) -> dict[str, Any]:
     }
 
 
+def contains_server_side_javascript(value: Any) -> bool:
+    if isinstance(value, list):
+        return any(contains_server_side_javascript(item) for item in value)
+    if not isinstance(value, dict):
+        return False
+    forbidden = {"$where", "$function", "$accumulator"}
+    return any(
+        str(key).lower() in forbidden or contains_server_side_javascript(nested)
+        for key, nested in value.items()
+    )
+
+
+def official_query_from_structured(request: dict[str, Any], database_names: list[str]) -> tuple[str, str]:
+    """Convert Stela's product query DTO to DAB QueryDBTool's official string input."""
+    language = str(request.get("language") or "").strip().lower()
+    database = str(request.get("database") or "").strip()
+    if database not in database_names:
+        raise BridgeError(
+            "unknown_database",
+            f"Unknown logical database '{database}'. Available: {', '.join(database_names)}",
+        )
+    if language == "sql":
+        query = str(request.get("query") or "").strip()
+        if not query:
+            raise BridgeError("invalid_query", "SQL query must not be empty.")
+        other_prefixes = [
+            name for name in database_names
+            if name != database and re.search(rf"\b{re.escape(name)}\s*\.", query, re.IGNORECASE)
+        ]
+        if other_prefixes:
+            raise BridgeError(
+                "cross_database_query",
+                "One run_query call may target only one logical database; query databases separately. "
+                f"Also referenced: {', '.join(other_prefixes)}",
+            )
+        return database, re.sub(rf"\b{re.escape(database)}\s*\.", "", query, flags=re.IGNORECASE)
+    if language == "mongodb":
+        collection = str(request.get("collection") or "").strip()
+        if not collection:
+            raise BridgeError("invalid_query", "MongoDB collection must not be empty.")
+        filter_value = request.get("filter", {})
+        projection_value = request.get("projection")
+        limit_value = request.get("limit", 200)
+        if not isinstance(filter_value, dict):
+            raise BridgeError("invalid_query", "MongoDB filter must be an object.")
+        if projection_value is not None and not isinstance(projection_value, dict):
+            raise BridgeError("invalid_query", "MongoDB projection must be an object or null.")
+        if limit_value is not None:
+            if isinstance(limit_value, bool) or not isinstance(limit_value, (int, float)):
+                raise BridgeError("invalid_query", "MongoDB limit must be a number or null.")
+            limit_value = min(1_000_000, max(1, int(limit_value)))
+        if contains_server_side_javascript(filter_value) or contains_server_side_javascript(projection_value):
+            raise BridgeError("unsafe_query", "MongoDB server-side JavaScript operators are not allowed.")
+        query = {
+            "collection": collection,
+            "filter": filter_value,
+            "projection": projection_value,
+            "limit": limit_value,
+        }
+        return database, json.dumps(query, ensure_ascii=False)
+    raise BridgeError("unsupported_query_language", f"Unsupported query language: {language or '(empty)'}")
+
+
 def table_description(description: str, table: str) -> tuple[list[dict[str, str]], str]:
     """Extract a best-effort table section from DAB's human-readable description."""
     lines = description.splitlines()
@@ -243,6 +306,19 @@ class DabRuntime:
             self.ensure(config)
             return {"ok": True, "message": f"DAB dataset {self.dataset} is ready."}
 
+        if method == "validate":
+            config = dict(params.get("config") or {})
+            dataset = str(config.get("dataset") or "").strip()
+            query_id_raw = config.get("queryId")
+            if not dataset or query_id_raw is None:
+                raise BridgeError("query_not_initialized", "config.dataset and config.queryId are required for validation.")
+            query_dir = self._dataset_dir(dataset) / f"query{int(query_id_raw)}"
+            return self.validate_fn(
+                query_dir=query_dir,
+                llm_answer=str(params.get("answer") or ""),
+                reason=str(params.get("terminateReason") or ""),
+            )
+
         config = dict(params.get("config") or {})
         if config:
             self.ensure(config)
@@ -280,15 +356,20 @@ class DabRuntime:
             started = time.monotonic()
             value = self.invoke_tool(self.query_tool, {"db_name": database, "query": query})
             return normalize_query_result(value, round((time.monotonic() - started) * 1000))
-        if method == "validate":
-            if self.query_id is None or self.dataset is None:
-                raise BridgeError("query_not_initialized", "queryId is required before validation.")
-            query_dir = self._dataset_dir(self.dataset) / f"query{self.query_id}"
-            return self.validate_fn(
-                query_dir=query_dir,
-                llm_answer=str(params.get("answer") or ""),
-                reason=str(params.get("terminateReason") or ""),
-            )
+        if method == "execute_query":
+            request = params.get("query")
+            if not isinstance(request, dict):
+                raise BridgeError("invalid_query", "query must be a structured object.")
+            database, query = official_query_from_structured(request, self.databases())
+            db_type = self.query_tool.db_clients[database]["db_type"]
+            language = str(request.get("language") or "").lower()
+            if db_type == "mongo" and language != "mongodb":
+                raise BridgeError("query_language_mismatch", f"{database} requires language=mongodb.")
+            if db_type != "mongo" and language != "sql":
+                raise BridgeError("query_language_mismatch", f"{database} requires language=sql.")
+            started = time.monotonic()
+            value = self.invoke_tool(self.query_tool, {"db_name": database, "query": query})
+            return normalize_query_result(value, round((time.monotonic() - started) * 1000))
         if method in {"close", "shutdown"}:
             self.close()
             return {"ok": True}

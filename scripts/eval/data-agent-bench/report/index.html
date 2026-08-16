@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stela DataAgentBench 分析</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="stela-report-shell">
+      <header class="stela-report-header">
+        <div>
+          <p class="stela-eyebrow">STELA · DATA AGENT EVALUATION</p>
+          <h1>DataAgentBench 分析</h1>
+          <p id="report-meta" class="stela-muted">正在读取评测结果…</p>
+        </div>
+        <div class="stela-legend" aria-label="状态图例">
+          <span><i class="stela-dot stela-dot-pass"></i>通过</span>
+          <span><i class="stela-dot stela-dot-fail"></i>失败</span>
+        </div>
+      </header>
+
+      <main id="report-root" aria-live="polite">
+        <section id="summary" class="stela-summary-grid"></section>
+
+        <section class="stela-panel stela-signals-panel">
+          <div class="stela-section-heading">
+            <div>
+              <p class="stela-section-kicker">WHERE TO IMPROVE</p>
+              <h2>优先信号</h2>
+            </div>
+            <p class="stela-muted">由失败类别、耗时和工具轨迹直接计算</p>
+          </div>
+          <div id="signals" class="stela-signal-grid"></div>
+        </section>
+
+        <section class="stela-overview-grid">
+          <article class="stela-panel">
+            <div class="stela-section-heading">
+              <div>
+                <p class="stela-section-kicker">DATASETS</p>
+                <h2>各数据集通过率</h2>
+              </div>
+              <span class="stela-muted">点击筛选 case</span>
+            </div>
+            <div id="dataset-chart" class="stela-bar-list"></div>
+          </article>
+
+          <article class="stela-panel">
+            <div class="stela-section-heading">
+              <div>
+                <p class="stela-section-kicker">FAILURES</p>
+                <h2>失败归因</h2>
+              </div>
+              <span class="stela-muted">按主要阻塞归类</span>
+            </div>
+            <div id="failure-chart" class="stela-failure-list"></div>
+          </article>
+        </section>
+
+        <section class="stela-panel">
+          <div class="stela-section-heading">
+            <div>
+              <p class="stela-section-kicker">EFFICIENCY</p>
+              <h2>耗时与工具调用</h2>
+            </div>
+            <span class="stela-muted">点击散点查看 case</span>
+          </div>
+          <div id="scatter-chart" class="stela-scatter"></div>
+        </section>
+
+        <section class="stela-panel stela-case-section">
+          <div class="stela-section-heading stela-case-heading">
+            <div>
+              <p class="stela-section-kicker">CASE EXPLORER</p>
+              <h2>逐题分析</h2>
+            </div>
+            <span id="case-count" class="stela-muted"></span>
+          </div>
+          <div class="stela-filters">
+            <label>
+              <span>数据集</span>
+              <select id="dataset-filter"></select>
+            </label>
+            <label>
+              <span>状态</span>
+              <select id="status-filter">
+                <option value="all">全部</option>
+                <option value="pass">通过</option>
+                <option value="fail">失败</option>
+              </select>
+            </label>
+            <label>
+              <span>失败类别</span>
+              <select id="category-filter"></select>
+            </label>
+            <label class="stela-search-label">
+              <span>搜索</span>
+              <input id="case-search" type="search" placeholder="dataset、问题、答案或 validator" />
+            </label>
+            <label>
+              <span>排序</span>
+              <select id="sort-filter">
+                <option value="dataset">数据集 / 题号</option>
+                <option value="duration-desc">耗时从高到低</option>
+                <option value="tools-desc">工具调用从高到低</option>
+                <option value="tokens-desc">Token 从高到低</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="stela-explorer-grid">
+            <div class="stela-case-list-wrap">
+              <table class="stela-case-table">
+                <thead>
+                  <tr>
+                    <th>Case</th>
+                    <th>状态</th>
+                    <th>耗时</th>
+                    <th>工具</th>
+                    <th>模型轮次</th>
+                    <th>失败类别</th>
+                  </tr>
+                </thead>
+                <tbody id="case-list"></tbody>
+              </table>
+            </div>
+            <aside id="case-detail" class="stela-case-detail"></aside>
+          </div>
+        </section>
+
+        <section class="stela-panel">
+          <div class="stela-section-heading">
+            <div>
+              <p class="stela-section-kicker">TOOLS</p>
+              <h2>工具调用分布</h2>
+            </div>
+            <span class="stela-muted">按总调用数排序</span>
+          </div>
+          <div id="tool-stats" class="stela-tool-grid"></div>
+        </section>
+      </main>
+
+      <div id="report-error" class="stela-error" hidden></div>
+    </div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

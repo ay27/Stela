@@ -16,6 +16,7 @@ export interface ConnectorKindMeta {
   subprocess: boolean;
   /** SQL 方言名（"MySQL" / "PostgreSQL" / "StarRocks" 等），不填时按 kind 启发式回退 */
   dialect?: string;
+  queryLanguages?: Array<"sql" | "mongodb">;
 }
 
 export interface ColumnDef {

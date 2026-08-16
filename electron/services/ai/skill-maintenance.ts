@@ -50,7 +50,9 @@ export function buildSkillMaintenanceEvidence(
   isError: boolean,
 ): SkillMaintenanceEvidence {
   const params = args && typeof args === "object" ? args as Record<string, unknown> : {};
-  const tables = tool === "run_sql" ? tablesFromSql(params.sql) : [];
+  const tables = tool === "run_query" || tool === "run_sql"
+    ? tablesFromSql(params.query ?? params.sql)
+    : [];
   const source = [
     ...stringValues(params.tables),
     ...stringValues(params.path),

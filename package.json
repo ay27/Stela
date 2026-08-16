@@ -38,7 +38,8 @@
     "eval:completion": "tsx scripts/eval/run-completion.ts",
     "eval:agent-ask": "tsx scripts/eval/run-agent-ask.ts",
     "eval:data-agent-bench": "tsx scripts/eval/run-data-agent-bench.ts",
-    "test:eval:data-agent-bench": "tsx scripts/eval/data-agent-bench/runtime.test.ts && python3 -m unittest scripts/eval/data-agent-bench/bridge_test.py && tsx scripts/eval/data-agent-bench/bridge.integration.test.ts && tsx scripts/eval/data-agent-bench/runner.integration.test.ts && node scripts/eval/data-agent-bench/ssh-connector.test.mjs"
+    "report:data-agent-bench": "tsx scripts/eval/build-data-agent-bench-report.ts",
+    "test:eval:data-agent-bench": "tsx scripts/eval/data-agent-bench/runtime.test.ts && python3 -m unittest scripts/eval/data-agent-bench/bridge_test.py && tsx scripts/eval/data-agent-bench/bridge.integration.test.ts && tsx scripts/eval/data-agent-bench/runner.integration.test.ts && tsx scripts/eval/data-agent-bench/report.test.ts && node scripts/eval/data-agent-bench/ssh-connector.test.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",
@@ -112,6 +113,7 @@
     "electron-builder": "^25.0.0",
     "electron-vite": "^5.0.0",
     "esbuild": "^0.24.0",
+    "mongodb": "^6.21.0",
     "mysql2": "^3.10.0",
     "pg": "^8.22.0",
     "postcss": "^8.4.49",

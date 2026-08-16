@@ -22,6 +22,7 @@ examples/demo-vault/.stela/plugins/
 plugins/*
 !plugins/connector-mysql/
 !plugins/connector-postgresql/
+!plugins/connector-mongodb/
 !plugins/connector-http-sample/
 
 # Internal-only tooling / release gate extensions (never commit)
@@ -30,6 +31,7 @@ scripts/local-macos-package.sh
 
 # Local analysis / agent artifacts
 .understand-anything/
+.dab-results/
 .worktrees/
 worktrees/
 .cursor/.docs-gate-pending

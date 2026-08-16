@@ -14,7 +14,7 @@
  */
 
 /** 当前 module 插件协议版本。host 加载时校验 `apiVersion <=` 它支持的版本。 */
-export const CONNECTOR_PLUGIN_API_VERSION = 2;
+export const CONNECTOR_PLUGIN_API_VERSION = 3;
 
 /** 结果集列定义。 */
 export interface ColumnDef {
@@ -77,9 +77,24 @@ export interface ConnectorKindMeta {
    * 不填时 host 端按 `kind`/`displayName` 做启发式回退（见 `resolveDialect`）。
    */
   dialect?: string;
+  /** API v3: structured query languages supported by the Agent path. */
+  queryLanguages?: QueryLanguage[];
   /** API v2: formats accepted by materializeQuery. */
   queryArtifactFormats?: QueryArtifactFormat[];
 }
+
+export type QueryLanguage = "sql" | "mongodb";
+
+export type DataQueryRequest =
+  | { language: "sql"; query: string; database?: string | null }
+  | {
+      language: "mongodb";
+      collection: string;
+      database?: string | null;
+      filter?: Record<string, unknown>;
+      projection?: Record<string, unknown> | null;
+      limit?: number | null;
+    };
 
 export type QueryArtifactFormat = "parquet" | "jsonl";
 
@@ -107,6 +122,11 @@ export interface Connector {
   meta(): ConnectorKindMeta;
   test(config: unknown): Promise<TestResult>;
   execute(config: unknown, sql: string): Promise<QueryResult>;
+  /** API v3 structured query entry. */
+  executeQuery?(
+    config: unknown,
+    query: DataQueryRequest,
+  ): Promise<QueryResult>;
   /**
    * API v2 optional capability. Stream a read-only query to the host-selected
    * artifact file instead of materializing the whole result in process memory.
@@ -114,6 +134,12 @@ export interface Connector {
   materializeQuery?(
     config: unknown,
     sql: string,
+    request: QueryArtifactRequest,
+  ): Promise<MaterializedQueryResult>;
+  /** API v3 structured-query artifact entry. */
+  materializeDataQuery?(
+    config: unknown,
+    query: DataQueryRequest,
     request: QueryArtifactRequest,
   ): Promise<MaterializedQueryResult>;
   listDatabases(config: unknown): Promise<string[]>;

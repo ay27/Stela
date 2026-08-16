@@ -21,6 +21,7 @@ import { AppError } from "@shared/errors";
 import type {
   BundledPluginInfo,
   ConnectorKindMeta,
+  DataQueryRequest,
   ModulePluginInstallInput,
   MaterializedQueryResult,
   PluginInfo,
@@ -256,6 +257,21 @@ export async function executeUnbounded(
   return getOrThrow(kind).execute(config, sql);
 }
 
+/** Internal Agent path for structured SQL/MongoDB queries. */
+export async function executeQuery(
+  kind: string,
+  config: unknown,
+  query: DataQueryRequest,
+): Promise<QueryResult> {
+  const connector = getOrThrow(kind);
+  if (connector.executeQuery) return connector.executeQuery(config, query);
+  if (query.language === "sql") return connector.execute(config, query.query);
+  throw new AppError(
+    "unsupported_query_language",
+    `connector '${kind}' does not support ${query.language}`,
+  );
+}
+
 /** Optional API v2 streaming materialization. `null` keeps v1 plugins compatible. */
 export async function materializeQuery(
   kind: string,
@@ -271,6 +287,23 @@ export async function materializeQuery(
     return null;
   }
   return connector.materializeQuery(config, sql, request);
+}
+
+export async function materializeDataQuery(
+  kind: string,
+  config: unknown,
+  query: DataQueryRequest,
+  request: QueryArtifactRequest,
+): Promise<MaterializedQueryResult | null> {
+  const connector = getOrThrow(kind);
+  if (!connector.meta().queryArtifactFormats?.includes(request.format)) return null;
+  if (connector.materializeDataQuery) {
+    return connector.materializeDataQuery(config, query, request);
+  }
+  if (query.language === "sql" && connector.materializeQuery) {
+    return connector.materializeQuery(config, query.query, request);
+  }
+  return null;
 }
 
 export async function listDatabases(

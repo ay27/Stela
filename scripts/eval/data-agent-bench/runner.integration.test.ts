@@ -114,6 +114,8 @@ def validate(query_dir, llm_answer, reason=None):
       "--runs", "1",
       "--output", output,
       "--python", "python3",
+      "--concurrency", "2",
+      "--bridge-timeout-ms", "10000",
     ],
     {
       cwd: repoRoot,
@@ -162,6 +164,12 @@ def validate(query_dir, llm_answer, reason=None):
   );
   const summary = JSON.parse(await fs.readFile(path.join(output, "summary.json"), "utf-8")) as { validRate: number };
   assert.equal(summary.validRate, 1);
+  const manifest = JSON.parse(await fs.readFile(path.join(output, "manifest.json"), "utf-8")) as {
+    concurrency: number;
+    bridgeTimeoutMs: number;
+  };
+  assert.equal(manifest.concurrency, 2);
+  assert.equal(manifest.bridgeTimeoutMs, 10_000);
 } finally {
   server.close();
   await fs.rm(root, { recursive: true, force: true });

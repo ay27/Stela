@@ -13,6 +13,7 @@ export interface RunRecord {
   runId: string;
   blockId: string;
   sql: string;
+  queryLanguage?: "sql" | "mongodb";
   status: "ok" | "err" | "running";
   message: string | null;
   /** Unix epoch ms */

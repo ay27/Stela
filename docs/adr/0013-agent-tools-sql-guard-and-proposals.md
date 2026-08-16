@@ -2,8 +2,9 @@
 type: ADR
 id: "0013"
 title: "Agent tools with SQL guard and user proposal confirmation"
-status: active
+status: superseded
 date: 2026-06-20
+superseded_by: "0066"
 ---
 
 ## Context

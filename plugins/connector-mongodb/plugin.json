@@ -1,0 +1,7 @@
+{
+  "id": "connector-mongodb",
+  "kind": "mongodb",
+  "displayName": "MongoDB",
+  "apiVersion": 3,
+  "entry": "dist/index.cjs"
+}

@@ -5,7 +5,7 @@
  * 同一 vault 切换运行时无需迁移即可复用。
  *
  * Schema：
- *   runs(run_id PK, block_id, sql, status, message, started_at, elapsed_ms, row_count, connection_name)
+ *   runs(run_id PK, block_id, sql, query_language, status, message, started_at, elapsed_ms, row_count, connection_name, note_path)
  *   result_schemas(run_id PK, columns_json)
  *   result_rows(run_id, row_index, row_json) PK=(run_id, row_index)
  *
@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS runs (
     run_id           TEXT PRIMARY KEY,
     block_id         TEXT NOT NULL,
     sql              TEXT NOT NULL,
+    query_language   TEXT NOT NULL DEFAULT 'sql',
     status           TEXT NOT NULL,
     message          TEXT,
     started_at       INTEGER NOT NULL,
@@ -95,8 +96,15 @@ export async function open(vaultPath: string): Promise<void> {
   db.exec(SCHEMA_SQL);
   copyLegacyIntoNewIfPresent(db);
   ensureRunsNotePathColumn(db);
+  ensureRunsQueryLanguageColumn(db);
 
   current = { db, vaultPath };
+}
+
+function ensureRunsQueryLanguageColumn(db: Database.Database): void {
+  if (!tableExists(db, "runs")) return;
+  if (tableHasColumn(db, "runs", "query_language")) return;
+  db.exec(`ALTER TABLE runs ADD COLUMN query_language TEXT NOT NULL DEFAULT 'sql'`);
 }
 
 /**
@@ -144,12 +152,13 @@ export function saveRun(record: RunRecord): void {
   // 这里规整成 null，保持与"老 run 没有 path"语义一致。
   const normalized: RunRecord = {
     ...record,
+    queryLanguage: record.queryLanguage ?? "sql",
     notePath: record.notePath ?? null,
   };
   db.prepare(
     `INSERT OR REPLACE INTO runs
-     (run_id, block_id, sql, status, message, started_at, elapsed_ms, row_count, connection_name, note_path)
-     VALUES (@runId, @blockId, @sql, @status, @message, @startedAt, @elapsedMs, @rowCount, @connectionName, @notePath)`,
+     (run_id, block_id, sql, query_language, status, message, started_at, elapsed_ms, row_count, connection_name, note_path)
+     VALUES (@runId, @blockId, @sql, @queryLanguage, @status, @message, @startedAt, @elapsedMs, @rowCount, @connectionName, @notePath)`,
   ).run(normalized);
 }
 
@@ -237,6 +246,7 @@ export function listRuns(): RunRecord[] {
       `SELECT run_id          AS runId,
               block_id        AS blockId,
               sql             AS sql,
+              query_language  AS queryLanguage,
               status          AS status,
               message         AS message,
               started_at      AS startedAt,
@@ -275,6 +285,7 @@ export function listRunsByBlockId(
       `SELECT run_id          AS runId,
               block_id        AS blockId,
               sql             AS sql,
+              query_language  AS queryLanguage,
               status          AS status,
               message         AS message,
               started_at      AS startedAt,
@@ -298,6 +309,7 @@ export function getRun(runId: string): RunRecord | null {
       `SELECT run_id          AS runId,
               block_id        AS blockId,
               sql             AS sql,
+              query_language  AS queryLanguage,
               status          AS status,
               message         AS message,
               started_at      AS startedAt,
@@ -390,13 +402,14 @@ export function importRunPackage(pkg: RunPackage): boolean {
   if (runExists(pkg.record.runId)) return false;
   const record: RunRecord = {
     ...pkg.record,
+    queryLanguage: pkg.record.queryLanguage ?? "sql",
     notePath: pkg.record.notePath ?? null,
   };
   const tx = db.transaction(() => {
     db.prepare(
       `INSERT OR IGNORE INTO runs
-       (run_id, block_id, sql, status, message, started_at, elapsed_ms, row_count, connection_name, note_path)
-       VALUES (@runId, @blockId, @sql, @status, @message, @startedAt, @elapsedMs, @rowCount, @connectionName, @notePath)`,
+       (run_id, block_id, sql, query_language, status, message, started_at, elapsed_ms, row_count, connection_name, note_path)
+       VALUES (@runId, @blockId, @sql, @queryLanguage, @status, @message, @startedAt, @elapsedMs, @rowCount, @connectionName, @notePath)`,
     ).run(record);
     if (pkg.columns.length > 0) {
       db.prepare(

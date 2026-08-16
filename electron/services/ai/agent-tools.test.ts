@@ -75,6 +75,15 @@ try {
     );
   }
   {
+    const tools = createAgentTools({ ctx: baseCtx, requestProposal: async () => false });
+    const runQuery = tools.find((tool) => tool.name === "run_query");
+    assert.equal(
+      (runQuery?.parameters as { type?: string } | undefined)?.type,
+      "object",
+      "function providers require run_query parameters to have a top-level object schema",
+    );
+  }
+  {
     const r = await dispatchTool(
       "search_sql_usage",
       JSON.stringify({ table: "threed.unrelated" }),
@@ -192,7 +201,75 @@ try {
     },
   };
 
-  // create_chart 只能引用本轮真实 run_sql 结果，并校验字段。
+  // run_query exposes one structured MongoDB find path and rejects server-side JavaScript.
+  {
+    const received: unknown[] = [];
+    const recorded: Array<{ queryLanguage?: string; sql: string }> = [];
+    const ctx = {
+      ...withConnection,
+      connection: { kind: "mongodb", config: {} },
+      connector: {
+        ...fakeConnector,
+        listKinds: () => [{
+          kind: "mongodb",
+          displayName: "MongoDB",
+          configSchema: {},
+          defaultConfig: {},
+          subprocess: false,
+          queryLanguages: ["mongodb" as const],
+        }],
+        executeQuery: async (_kind: string, _config: unknown, query: unknown) => {
+          received.push(query);
+          return {
+            kind: "query" as const,
+            columns: [{ name: "name", typeName: "TEXT" }],
+            rows: [["Stela"]],
+            elapsedMs: 2,
+          };
+        },
+      },
+      recordRun: async (run: { queryLanguage?: string; sql: string }) => {
+        recorded.push({ queryLanguage: run.queryLanguage, sql: run.sql });
+      },
+    };
+    const query = await dispatchTool("run_query", JSON.stringify({
+      language: "mongodb",
+      database: "catalog",
+      collection: "books",
+      filter: { rating: { $gte: 4 } },
+      projection: { name: 1, _id: 0 },
+      limit: 25,
+    }), ctx);
+    assert.equal(query.ok, true, query.text);
+    assert.deepEqual(received, [{
+      language: "mongodb",
+      database: "catalog",
+      collection: "books",
+      filter: { rating: { $gte: 4 } },
+      projection: { name: 1, _id: 0 },
+      limit: 25,
+    }]);
+    assert.equal(recorded[0]?.queryLanguage, "mongodb");
+    assert.match(recorded[0]?.sql ?? "", /\"collection\":\"books\"/);
+
+    const unsafe = await dispatchTool("run_query", JSON.stringify({
+      language: "mongodb",
+      collection: "books",
+      filter: { nested: { $where: "return true" } },
+    }), ctx);
+    assert.equal(unsafe.ok, false);
+    assert.match(unsafe.text, /server-side JavaScript/);
+    assert.equal(received.length, 1);
+
+    const unknownLanguage = await dispatchTool("run_query", JSON.stringify({
+      language: "javascript",
+      query: "return db.books.find({})",
+    }), ctx);
+    assert.equal(unknownLanguage.ok, false);
+    assert.match(unknownLanguage.text, /unsupported query language/);
+  }
+
+  // create_chart 只能引用本轮真实 run_query 结果，并校验字段。
   {
     const chartRuns = new Map();
     const ctx = {

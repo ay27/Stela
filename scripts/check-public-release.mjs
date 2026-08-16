@@ -16,6 +16,7 @@ const FORBIDDEN_PATTERNS = [/Bearer\s+sk-/i];
 const ALLOWED_PLUGIN_DIRS = new Set([
   "connector-mysql",
   "connector-postgresql",
+  "connector-mongodb",
   "connector-http-sample",
 ]);
 

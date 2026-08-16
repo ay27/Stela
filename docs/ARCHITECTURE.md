@@ -149,7 +149,7 @@ The renderer has **no Node privileges**. All desktop capabilities flow through a
 `electron/main/vault-context.ts` owns the current vault singleton. `setCurrentVault(path)` runs a fixed sequence:
 
 1. Seed legacy userData config if `.stela/` is missing
-2. Seed bundled connector plugins (MySQL, PostgreSQL, HTTP sample)
+2. Seed bundled connector plugins (MySQL, PostgreSQL, MongoDB, HTTP sample)
 3. Ensure `.gitignore` covers SQLite and local-only files
 4. Shutdown old connector subprocesses; load new vault's plugin registry
 5. Open SQLite cache and incrementally import JSONL history
@@ -236,7 +236,7 @@ executable ECharts configuration. It covers trend, ranking, composition,
 distribution, correlation, funnel, retention, comparison, and bounded custom
 views; compatible bar/line/area/point/rule marks may use two shared-x layers.
 Stela validates the contract and compiles it locally to ECharts. A simple Agent
-chart binds to the exact `runId` returned by `run_sql` and renders only in the
+chart binds to the exact `runId` returned by SQL `run_query` and renders only in the
 Agent timeline. Charts are not a Markdown or RunSQL abstraction.
 
 Long or multi-stage analyses use a normal Vault file named `*.stela.canvas`.
@@ -275,6 +275,7 @@ All database access goes through a **plugin registry** (`electron/services/conne
 |--------|------|----------|
 | MySQL | module | `plugins/connector-mysql/` |
 | PostgreSQL | module | `plugins/connector-postgresql/` |
+| MongoDB | module | `plugins/connector-mongodb/` |
 | HTTP sample | module | `plugins/connector-http-sample/` |
 
 Two plugin tracks coexist:
@@ -291,12 +292,15 @@ Registration:
 
 See [ADR-0005](./adr/0005-connector-plugin-dual-track.md).
 
-Connector API v2 adds optional `queryArtifactFormats` metadata and
-`materializeQuery(config, sql, request)`. Supporting connectors stream a
+Connector API v2 added optional `queryArtifactFormats` metadata and
+`materializeQuery(config, sql, request)`. API v3 adds declared
+`queryLanguages` plus `executeQuery` / `materializeDataQuery` for discriminated
+SQL and structured MongoDB-find requests. Supporting connectors stream a
 read-only result directly into a main-selected temporary Parquet or JSONL path
 and return only columns, total row count, elapsed time, and a bounded preview.
-API v1 connectors remain valid; Agent SQL uses their buffered result to create a
-size-limited JSONL artifact when possible. Renderer `connector.execute` keeps
+API v1/v2 connectors remain valid and default to SQL-only; Agent SQL uses their
+buffered result to create a size-limited JSONL artifact when possible. Renderer
+`connector.execute` keeps
 the existing `execution.maxRows` behavior, while this unbounded fallback is an
 internal Agent-only registry path. ([ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md))
 
@@ -368,7 +372,7 @@ flowchart TB
 
 1. **SQL inline completion** — `AI_INLINE_COMPLETION_START` / `AI_INLINE_COMPLETION_CANCEL` invoke channels and the `ai:inline-completion-event` push channel stream insertion text correlated by `requestId`; preload exposes `window.stela.ai.startInlineCompletion`, `cancelInlineCompletion`, and `onInlineCompletionEvent`. The selected completion profile's model receives bounded prefix/suffix sections, up to 8K characters of nearest-first sibling RunSQL blocks, the nearest heading plus a 500-character prose excerpt, and table schemas from two sources: columns the renderer already has in `column-cache` (sent in the request, preferred per table) and DDL for referenced tables found in the connection's local `schemaDir`. Requests never trigger a column probe; the probe is warmed on block focus instead. This path uses pi-ai `streamSimple`, not AgentHarness, and never falls back to connector list/execute calls. RunSQL triggers only after an edit, waits 120 ms at a line tail, and shows at most one ghost-text line; focus, click, or selection movement never starts a model request. A native completion popup takes priority, then a pending edited context is re-scheduled after it closes. Stale requests are cancelled, Tab accepts, Escape dismisses, and IME composition, blur, or editor destruction suppress or cancel completion. ([ADR-0028](./adr/0028-inline-completion-schema-and-note-context.md))
 2. **Harness agent** — `AgentHarness` tool loop with streaming `ai:agent-event`.
-   Tools browse live connector schema, run SQL, execute bounded local Python,
+   Tools browse live connector schema, run structured SQL or MongoDB queries, execute bounded local Python,
    validate timeline charts against
    the current run's real rows, create/read/update Analysis Canvas artifacts,
    search/read notes, ask the user questions, propose edits, and manage a bounded
@@ -393,7 +397,7 @@ flowchart TB
    plain text, hard breaks, and atomic resource nodes; it serializes only at the
    existing ordered-message boundary. The user timeline reuses that exact ordered
    message while assistant bubbles remain Markdown-only. Device-sharded session history restores timelines,
-   including Canvas artifact links. ([ADR-0013](./adr/0013-agent-tools-sql-guard-and-proposals.md),
+   including Canvas artifact links. ([ADR-0066](./adr/0066-structured-read-only-agent-queries.md),
    [ADR-0062](./adr/0062-implicit-workspace-context-explicit-inline-resources.md),
    [ADR-0063](./adr/0063-prosemirror-agent-composer.md),
    [ADR-0017](./adr/0017-user-cancelled-agent-runs.md),
@@ -405,7 +409,10 @@ flowchart TB
    [ADR-0041](./adr/0041-agent-live-schema-authority.md),
    [ADR-0046](./adr/0046-device-sharded-agent-session-history.md),
    [ADR-0055](./adr/0055-vault-analysis-canvas-artifacts.md))
-   `run_sql` may select any named Vault connection. Read-only calls return a
+   `run_query` may select any named Vault connection and validates its language
+   against connector capabilities. SQL keeps mutation proposals and
+   multi-statement blocking; MongoDB is a structured read-only find and rejects
+   server-side JavaScript. Read-only calls return a
    bounded model preview and, when available, a same-session machine-local
    artifact addressed only by run id. `execute_python` resolves explicit aliases
    to those artifacts and runs in an app-owned, Node-free Web Worker with
@@ -517,16 +524,17 @@ All retrieval is lexical and in-process — no embeddings, no FTS5 index ([ADR-0
 - `search_vault` calls `searchVaultNotes`, which scans every note, then sorts, then truncates. Results are note-level (`path`, `title`, `score`, `matchCount`, `matchedKeywords`, `matchedHeadings`, `bestSnippet`) and report `scannedNotes / totalMatchedNotes / returned / truncated`. Scoring: title or path 40, heading 12 (≤3 per keyword), body line 1 (≤10 per keyword), multiplied by distinct keywords matched. The line-level `searchVault` remains for the UI.
 - `search_tables` ranks the live connector catalog by table name plus column COMMENT, the latter via the connector's optional `describeTables` API (one batched call per lookup, see [ADR-0042](./adr/0042-connector-describe-tables-api.md)). CJK runs are expanded into bigrams so Chinese business terms match. Each candidate also carries `vaultUsage` (notes, blocks, last run date) as information for the model — usage never enters the score. The agent retrieves live DDL or columns with `get_table_schema` when it needs structure ([ADR-0041](./adr/0041-agent-live-schema-authority.md)).
 - `search_sql_usage` queries `sql-index` in-process for exact table→block facts. Its `table` input unions read and write uses; `readTable` / `writeTable` are directional filters. `INSERT ... SELECT` indexes both its target write and source reads. `sql-index.query()` sorts by `runDate` descending before truncating.
-- Agent `run_sql` records to `result-store` and `history-journal` under `blockId` `agent:<runId>`, so agent executions are auditable and feed the same usage statistics as user runs.
+- Agent `run_query` records SQL text or canonical structured-query JSON plus `queryLanguage` to `result-store` and `history-journal` under `blockId` `agent:<runId>`, so Agent executions remain auditable. Old history defaults to SQL.
 - Retrieval quality is measured by `npm run eval:retrieval` against mechanically labelled slices; labels never share a signal with the ranker. That eval calls the ranking functions directly, so it says nothing about whether the model picks the right tool or writes a usable query.
 - Ask discipline (`ask_user`) is measured by `npm run eval:agent-ask`, which drives the real `AgentHarness` with the real system prompt and tools. Tasks are generated in pairs from same-family table names in the vault: one version names the table, one leaves ≥3 used candidates open. Asking on the open version and not asking on the named one are both counted, so an agent that always asks cannot score well. Only `connector.execute`, `recordRun`, and `sqlIndex.query` are stubbed — answer correctness needs a live connection and is out of scope. `--self-check` verifies the whole rig without a model call.
-- End-to-end answer quality is measured by `npm run eval:data-agent-bench` against DataAgentBench on the Linux host that owns its PostgreSQL, MongoDB, SQLite, and DuckDB environments. The runner reuses Stela's real system prompt, `AgentHarness`, provider transport, and every Agent tool available in the headless runtime without starting Electron. A thin stdio bridge delegates database loading/querying and validation to DAB's official Python implementation. Because the product `execute_python` runtime is an app-owned renderer Worker, the headless baseline explicitly omits that tool instead of substituting host Python. Its `run_sql` uses a leading `-- stela-dab-database: <logical_name>` comment to select one logical database per call; cross-database work uses separate queries, and unsupported MongoDB/Python-processing requirements are reported as capability failures rather than emulated. Linux headless results are authoritative; a temporary Mac subprocess connector may tunnel the same bridge over SSH for desktop parity smoke tests only.
+- End-to-end answer quality is measured by `npm run eval:data-agent-bench` against DataAgentBench on the Linux host that owns its PostgreSQL, MongoDB, SQLite, and DuckDB environments. The runner reuses Stela's real system prompt, `AgentHarness`, provider transport, and headless-compatible Agent tools without starting Electron. A thin stdio bridge maps the product `run_query` request to DAB's official `QueryDBTool`, including structured MongoDB finds, and delegates validation to DAB's official implementation. Because product `execute_python` is an app-owned renderer Worker, Linux headless runs explicitly omit it instead of substituting host Python; cross-database Python remains a separate Mac desktop smoke. The runner may process distinct datasets concurrently while serializing runs within each dataset; datasets backed by the shared MongoDB service are mutually exclusive. A fatal bridge timeout aborts the Agent and preserves its root error, while validation runs through an independent bridge. Task/bridge timeouts terminate the complete Python process group so blocking database calls cannot outlive a run. Large file-backed datasets should live on the Linux host's local disk rather than NFS. Linux headless results are authoritative; a temporary Mac subprocess connector may tunnel the same bridge over SSH for desktop parity smoke tests only.
 
 ### Prompt cache boundary
 
 The Agent system prompt and tool declarations are request-invariant. Per-turn
-locale, active connection/dialect, up to 50 named connection summaries, table and note references, Canvas path, matched Skill
-metadata, and attachments are bounded and passed through `redactForPrompt` in a
+locale, active connection/dialect/query languages, up to 50 named connection
+summaries, source-availability states, table and note references, Canvas path,
+matched Skill metadata, and attachments are bounded and passed through `redactForPrompt` in a
 `<stela_turn_context>` user-message envelope; the user's actual request is the
 last segment. Plan versions are appended as immutable run/version snapshots.
 Agent, inline completion, and SQL query parsing use pi-ai short cache retention;
@@ -535,6 +543,7 @@ the Agent session id supplies session affinity ([ADR-0060](./adr/0060-cache-stab
 ### Agent safety
 
 - Read-only SQL runs immediately; core execution caps saved/displayed result rows without rewriting SQL
+- Structured MongoDB queries allow read-only `find` fields only and reject server-side JavaScript operators
 - Multi-statement SQL blocked
 - Mutations require `agentAllowMutations` **and** `ai:agent-respond-proposal`
 - `propose_edit` handles both note and explicitly targeted RunSQL edits; it never writes until approved, and a RunSQL edit never changes the editor until the renderer target is still valid
@@ -635,7 +644,7 @@ docs/               # Architecture docs + product screenshots
 | Electron desktop app | Tauri/Rust backend |
 | Git + JSONL sync | COS object storage |
 | Search-first AI | RAG embeddings (onnxruntime, transformers.js) |
-| Bundled MySQL/PostgreSQL/HTTP connectors | Private connector plugins |
+| Bundled MySQL/PostgreSQL/MongoDB/HTTP connectors | Private connector plugins |
 | Wiki links + SQL index | MCP server child process |
 | Module + subprocess connector framework | Obsidian plugin runtime |
 

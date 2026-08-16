@@ -101,7 +101,7 @@ interface RunOutcome {
   asked: boolean;
   questions: string[];
   toolCalls: string[];
-  /** get_table_schema / run_sql 里出现过的表名（小写裸名） */
+  /** get_table_schema / run_query 里出现过的表名（小写裸名） */
   tablesTouched: string[];
   finalText: string;
   aborted: boolean;
@@ -253,7 +253,7 @@ interface EvalWorld {
 
 /**
  * 工具上下文：除了三处替身（execute / recordRun / sqlIndex），其余都是产品真货。
- * `run_sql` 走真的 sql-guard、`search_tables` 走真的 schema-context、
+ * `run_query` 走真的 sql-guard、`search_tables` 走真的 schema-context、
  * `search_vault` 走真的排名检索。
  */
 function buildToolContext(world: EvalWorld, runId: string, settings: AiSettings) {
@@ -349,7 +349,7 @@ async function runOne(
     if (event.type === "tool_execution_start") {
       outcome.toolCalls.push(event.toolName);
       const args = JSON.stringify(event.args ?? {});
-      if (event.toolName === "get_table_schema" || event.toolName === "run_sql") {
+      if (event.toolName === "get_table_schema" || event.toolName === "run_query") {
         outcome.tablesTouched.push(...bareTablesIn(args));
       }
       if (outcome.toolCalls.length > MAX_TOOL_CALLS) stop("tool call cap");
@@ -412,13 +412,17 @@ async function selfCheck(world: EvalWorld, sampleTable: string): Promise<void> {
   );
 
   const select = await dispatchTool(
-    "run_sql",
-    JSON.stringify({ sql: `SELECT count(1) FROM ${sampleTable}` }),
+    "run_query",
+    JSON.stringify({ language: "sql", query: `SELECT count(1) FROM ${sampleTable}` }),
     ctx,
   );
-  assert("run_sql 拿到替身结果", select.ok && select.text.includes(String(FAKE_ROW_COUNT)), select.text);
+  assert("run_query 拿到替身结果", select.ok && select.text.includes(String(FAKE_ROW_COUNT)), select.text);
 
-  const mutation = await dispatchTool("run_sql", JSON.stringify({ sql: "DELETE FROM t" }), ctx);
+  const mutation = await dispatchTool(
+    "run_query",
+    JSON.stringify({ language: "sql", query: "DELETE FROM t" }),
+    ctx,
+  );
   assert("写操作被拒（评测绝不落改动）", !mutation.ok, mutation.text);
 
   const usage = await dispatchTool(

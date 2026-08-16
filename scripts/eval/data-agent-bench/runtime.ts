@@ -31,6 +31,20 @@ interface BridgeResponse {
 interface PendingCall {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+export class DabBridgeError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly fatal: boolean,
+    readonly method?: string,
+    readonly timeoutMs?: number,
+  ) {
+    super(`${code}: ${message}`);
+    this.name = "DabBridgeError";
+  }
 }
 
 export interface DabBridgeOptions {
@@ -39,6 +53,76 @@ export interface DabBridgeOptions {
   condaEnv?: string;
   python?: string;
   stderrPath?: string;
+  callTimeoutMs?: number;
+}
+
+export async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  return mapWithResourceConcurrency(items, concurrency, () => [], mapper);
+}
+
+export async function mapWithResourceConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  resourcesForItem: (item: T, index: number) => readonly string[],
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results = new Array<R>(items.length);
+  const pending = items.map((item, index) => ({
+    item,
+    index,
+    resources: [...new Set(resourcesForItem(item, index))],
+  }));
+  const activeResources = new Set<string>();
+  const limit = Math.min(items.length, Math.max(1, Math.floor(concurrency)));
+  let active = 0;
+  let completed = 0;
+  let firstError: unknown;
+
+  return new Promise<R[]>((resolve, reject) => {
+    const schedule = (): void => {
+      if (firstError !== undefined) {
+        if (active === 0) reject(firstError);
+        return;
+      }
+      if (completed === items.length) {
+        resolve(results);
+        return;
+      }
+      while (active < limit) {
+        const pendingIndex = pending.findIndex((candidate) =>
+          candidate.resources.every((resource) => !activeResources.has(resource)));
+        if (pendingIndex < 0) return;
+        const [job] = pending.splice(pendingIndex, 1);
+        if (!job) return;
+        active += 1;
+        for (const resource of job.resources) activeResources.add(resource);
+        void mapper(job.item, job.index)
+          .then((result) => {
+            results[job.index] = result;
+          })
+          .catch((error: unknown) => {
+            firstError = error;
+          })
+          .finally(() => {
+            active -= 1;
+            completed += 1;
+            for (const resource of job.resources) activeResources.delete(resource);
+            schedule();
+          });
+      }
+    };
+    schedule();
+  });
+}
+
+export async function readDabDatasetResourceLocks(task: DabTask): Promise<string[]> {
+  const config = await fs.readFile(path.join(path.dirname(task.queryDir), "db_config.yaml"), "utf-8");
+  return /^\s*db_type\s*:\s*["']?mongo\b/im.test(config) ? ["dab:mongodb"] : [];
 }
 
 export function buildDabBridgeCommand(options: DabBridgeOptions): { command: string; args: string[] } {
@@ -64,8 +148,14 @@ export function buildDabBridgeCommand(options: DabBridgeOptions): { command: str
   };
 }
 
-export function buildDabBridgePath(dabRoot: string, currentPath = process.env.PATH ?? ""): string {
-  return [path.join(dabRoot, "scripts"), currentPath].filter(Boolean).join(path.delimiter);
+export function buildDabBridgePath(
+  dabRoot: string,
+  currentPath = process.env.PATH ?? "",
+  python?: string,
+): string {
+  return [path.join(dabRoot, "scripts"), python ? path.dirname(python) : "", currentPath]
+    .filter(Boolean)
+    .join(path.delimiter);
 }
 
 export class DabBridgeClient {
@@ -76,11 +166,16 @@ export class DabBridgeClient {
   constructor(private readonly options: DabBridgeOptions) {}
 
   async start(): Promise<void> {
+    if (this.exited) throw this.exited;
     if (this.child) return;
     const { command, args } = buildDabBridgeCommand(this.options);
     const child = spawn(command, args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, PATH: buildDabBridgePath(this.options.dabRoot) },
+      detached: process.platform !== "win32",
+      env: {
+        ...process.env,
+        PATH: buildDabBridgePath(this.options.dabRoot, process.env.PATH ?? "", this.options.python),
+      },
     });
     this.child = child;
     const stdout = readline.createInterface({ input: child.stdout });
@@ -89,10 +184,10 @@ export class DabBridgeClient {
       if (this.options.stderrPath) void fs.appendFile(this.options.stderrPath, chunk);
       else process.stderr.write(chunk);
     });
-    child.on("error", (error) => this.failAll(error));
+    child.on("error", (error) => this.failAll(new DabBridgeError("bridge_spawn_error", error.message, true)));
     child.on("exit", (code, signal) => {
-      this.failAll(new Error(`DAB bridge exited (${signal ?? code ?? "unknown"}).`));
-      this.child = null;
+      if (this.child === child) this.child = null;
+      this.failAll(new DabBridgeError("bridge_exit", `DAB bridge exited (${signal ?? code ?? "unknown"}).`, true));
     });
     await new Promise<void>((resolve, reject) => {
       child.once("spawn", resolve);
@@ -105,38 +200,80 @@ export class DabBridgeClient {
     try {
       response = JSON.parse(line) as BridgeResponse;
     } catch {
-      this.failAll(new Error(`DAB bridge emitted invalid JSON: ${line.slice(0, 240)}`));
+      this.failAll(new DabBridgeError("bridge_protocol_error", `DAB bridge emitted invalid JSON: ${line.slice(0, 240)}`, true));
       return;
     }
     if (!response.id) return;
     const pending = this.pending.get(response.id);
     if (!pending) return;
     this.pending.delete(response.id);
+    if (pending.timer) clearTimeout(pending.timer);
     if (response.ok) {
       pending.resolve(response.result);
       return;
     }
     const code = response.error?.code ?? "bridge_error";
-    pending.reject(new Error(`${code}: ${response.error?.message ?? "unknown DAB bridge error"}`));
+    pending.reject(new DabBridgeError(
+      code,
+      response.error?.message ?? "unknown DAB bridge error",
+      false,
+    ));
   }
 
   private failAll(error: Error): void {
-    this.exited = error;
-    for (const pending of this.pending.values()) pending.reject(error);
+    this.exited ??= error;
+    const terminal = this.exited;
+    for (const pending of this.pending.values()) {
+      if (pending.timer) clearTimeout(pending.timer);
+      pending.reject(terminal);
+    }
     this.pending.clear();
   }
 
-  async call<T>(method: string, params: unknown = {}): Promise<T> {
-    await this.start();
+  terminate(reason = "terminated", cause?: Error): void {
+    const child = this.child;
+    const error = cause ?? new DabBridgeError("bridge_terminated", `DAB bridge ${reason}.`, true);
+    this.child = null;
+    this.failAll(error);
+    if (!child || child.killed) return;
+    if (process.platform !== "win32" && child.pid) {
+      try {
+        process.kill(-child.pid, "SIGTERM");
+        return;
+      } catch {
+        // Fall back to the direct child if process-group signalling is unavailable.
+      }
+    }
+    child.kill("SIGTERM");
+  }
+
+  async call<T>(method: string, params: unknown = {}, timeoutMs = this.options.callTimeoutMs): Promise<T> {
     if (this.exited) throw this.exited;
+    await this.start();
     const child = this.child;
     if (!child) throw new Error("DAB bridge is not running.");
     const id = randomUUID();
     const result = new Promise<T>((resolve, reject) => {
-      this.pending.set(id, {
+      const pending: PendingCall = {
         resolve: (value) => resolve(value as T),
         reject,
-      });
+        timer: null,
+      };
+      if (timeoutMs && timeoutMs > 0) {
+        pending.timer = setTimeout(() => {
+          if (!this.pending.delete(id)) return;
+          const error = new DabBridgeError(
+            "bridge_call_timeout",
+            `DAB bridge call '${method}' timed out after ${timeoutMs}ms.`,
+            true,
+            method,
+            timeoutMs,
+          );
+          reject(error);
+          this.terminate(`call '${method}' timed out`, error);
+        }, timeoutMs);
+      }
+      this.pending.set(id, pending);
     });
     child.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
     return result;
@@ -146,9 +283,9 @@ export class DabBridgeClient {
     const child = this.child;
     if (!child) return;
     try {
-      await this.call("shutdown", {});
+      await this.call("shutdown", {}, Math.min(this.options.callTimeoutMs ?? 5_000, 5_000));
     } catch {
-      child.kill("SIGTERM");
+      this.terminate("shutdown failed");
     }
     this.child = null;
   }
@@ -222,9 +359,10 @@ export function buildDabUserPrompt(input: {
     input.hintsText ? "DATASET HINTS:\n" + input.hintsText : "",
     `ACTIVE CONNECTION CONTRACT:\n` +
       `- This is a product-faithful Stela benchmark connection. Use Stela's existing tools only.\n` +
-      `- Each run_sql call targets exactly one logical database. Its first non-empty line must be '${DAB_ROUTE_PREFIX} <logical_name>'.\n` +
-      `- Query different logical databases separately; do not join them in one SQL statement. Combine returned values in your analysis.\n` +
-      `- No Python execution tool is available. MongoDB logical databases cannot be queried by Stela's SQL-only run_sql.`,
+      `- Each run_query call targets exactly one logical database through its database field. Use language=sql for PostgreSQL/SQLite/DuckDB and language=mongodb for MongoDB collections.\n` +
+      `- MongoDB supports a structured read-only find with collection/filter/projection/limit. Use limit:null only when the exact answer requires the full filtered set.\n` +
+      `- Query different logical databases separately; do not join them in one query. Combine small returned values in your analysis.\n` +
+      `- No Python execution tool is available in this headless baseline; if a large exact cross-database join cannot be completed from bounded query results, report the capability boundary.`,
     "QUERY:\n" + input.query,
   ];
   return sections.filter(Boolean).join("\n\n");

@@ -12,6 +12,7 @@
 
 import type {
   ConnectorKindMeta,
+  DataQueryRequest,
   MaterializedQueryResult,
   QueryArtifactRequest,
   QueryResult,
@@ -23,9 +24,17 @@ export interface Connector {
   meta(): ConnectorKindMeta;
   test(cfg: unknown): Promise<TestResult>;
   execute(cfg: unknown, sql: string): Promise<QueryResult>;
+  /** API v3 structured query entry. Missing implementations remain SQL-only. */
+  executeQuery?(cfg: unknown, request: DataQueryRequest): Promise<QueryResult>;
   materializeQuery?(
     cfg: unknown,
     sql: string,
+    request: QueryArtifactRequest,
+  ): Promise<MaterializedQueryResult>;
+  /** API v3 structured-query artifact path. */
+  materializeDataQuery?(
+    cfg: unknown,
+    query: DataQueryRequest,
     request: QueryArtifactRequest,
   ): Promise<MaterializedQueryResult>;
   listDatabases(cfg: unknown): Promise<string[]>;

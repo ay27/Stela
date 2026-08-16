@@ -65,7 +65,7 @@ proposed → active → superseded
 | [0010](0010-in-memory-derived-indexes.md) | In-memory derived indexes (vault-index, sql-index) | active |
 | [0011](0011-openai-compatible-provider-and-fim.md) | OpenAI-compatible chat provider with separate FIM endpoint | superseded → [0015](0015-openai-compatible-provider-without-fim.md) |
 | [0012](0012-dual-ai-surfaces-actions-and-agent.md) | Dual AI surfaces — action complete and harness agent | superseded → [0018](0018-pi-ai-agent-harness.md) |
-| [0013](0013-agent-tools-sql-guard-and-proposals.md) | Agent tools with SQL guard and user proposal confirmation | active |
+| [0013](0013-agent-tools-sql-guard-and-proposals.md) | Agent tools with SQL guard and user proposal confirmation | superseded → [0066](0066-structured-read-only-agent-queries.md) |
 | [0014](0014-ai-context-redaction-and-schema-enrichment.md) | AI context assembly with redaction and schema enrichment | superseded → [0059](0059-agent-panel-quick-actions.md) |
 | [0015](0015-openai-compatible-provider-without-fim.md) | OpenAI-compatible chat provider without FIM inline completion | superseded → [0018](0018-pi-ai-agent-harness.md) |
 | [0016](0016-agent-chat-references-and-add-to-chat.md) | Agent chat references and Add to Chat | superseded → [0061](0061-ordered-inline-agent-message-resources.md) |
@@ -118,3 +118,4 @@ proposed → active → superseded
 | [0063](0063-prosemirror-agent-composer.md) | ProseMirror-backed Agent composer | active |
 | [0064](0064-session-query-artifacts-and-sandboxed-python.md) | Session query artifacts and sandboxed Python | active |
 | [0065](0065-session-oriented-agent-observability.md) | Session-oriented Agent observability projection | active |
+| [0066](0066-structured-read-only-agent-queries.md) | Structured read-only Agent queries across connector languages | active |

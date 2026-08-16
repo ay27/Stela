@@ -27,6 +27,53 @@ class BridgeHelpersTest(unittest.TestCase):
                 ["books_database", "review_database"],
             )
 
+    def test_structured_sql_query(self):
+        database, query = BRIDGE.official_query_from_structured(
+            {
+                "language": "sql",
+                "database": "books_database",
+                "query": "SELECT * FROM books_database.books_info",
+            },
+            ["books_database", "review_database"],
+        )
+        self.assertEqual(database, "books_database")
+        self.assertEqual(query, "SELECT * FROM books_info")
+
+    def test_structured_mongodb_find(self):
+        database, raw = BRIDGE.official_query_from_structured(
+            {
+                "language": "mongodb",
+                "database": "articles_database",
+                "collection": "articles",
+                "filter": {"region": "US"},
+                "projection": {"title": 1},
+                "limit": None,
+            },
+            ["articles_database"],
+        )
+        self.assertEqual(database, "articles_database")
+        self.assertEqual(
+            BRIDGE.json.loads(raw),
+            {
+                "collection": "articles",
+                "filter": {"region": "US"},
+                "projection": {"title": 1},
+                "limit": None,
+            },
+        )
+
+    def test_reject_mongodb_server_side_javascript(self):
+        with self.assertRaisesRegex(BRIDGE.BridgeError, "server-side JavaScript"):
+            BRIDGE.official_query_from_structured(
+                {
+                    "language": "mongodb",
+                    "database": "articles_database",
+                    "collection": "articles",
+                    "filter": {"$expr": {"$function": {"body": "return true"}}},
+                },
+                ["articles_database"],
+            )
+
     def test_normalize_records(self):
         result = BRIDGE.normalize_query_result(
             [{"name": "a", "score": 1.5}, {"name": "b", "score": 2.0}],

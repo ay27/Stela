@@ -30,11 +30,13 @@ function run(
   blockId: string,
   startedAt: number,
   status: "ok" | "err" = "ok",
+  queryLanguage?: "sql" | "mongodb",
 ): RunRecord {
   return {
     runId,
     blockId,
     sql: "SELECT 1",
+    queryLanguage,
     status,
     message: status === "err" ? "boom" : null,
     startedAt,
@@ -58,6 +60,10 @@ async function main(): Promise<void> {
     resultStore.saveRun(run("a3", "blockA", 3000));
     resultStore.saveRun(run("a4", "blockA", 4000, "err"));
     resultStore.saveRun(run("b1", "blockB", 1500));
+    resultStore.saveRun({
+      ...run("mongo1", "agent:mongo", 2500, "ok", "mongodb"),
+      sql: JSON.stringify({ language: "mongodb", collection: "books", filter: {} }),
+    });
 
     const byA = resultStore.listRunsByBlockId("blockA");
     checks.push(
@@ -70,6 +76,16 @@ async function main(): Promise<void> {
         byA.map((r) => r.runId).join(","),
       ),
     );
+    checks.push(expect(
+      "旧 SQL run 默认 queryLanguage=sql",
+      byA.every((item) => item.queryLanguage === "sql"),
+      byA.map((item) => String(item.queryLanguage)).join(","),
+    ));
+    checks.push(expect(
+      "MongoDB run 保留 queryLanguage",
+      resultStore.getRun("mongo1")?.queryLanguage === "mongodb",
+      String(resultStore.getRun("mongo1")?.queryLanguage),
+    ));
 
     const onlyOk = resultStore.listRunsByBlockId("blockA", { status: "ok" });
     checks.push(

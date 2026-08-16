@@ -13,20 +13,20 @@ const schema = buildSkillMaintenanceEvidence(
   false,
 );
 const syntaxFailure = buildSkillMaintenanceEvidence(
-  "run_sql",
-  { sql: "SELECT broken" },
+  "run_query",
+  { language: "sql", query: "SELECT broken" },
   "Unknown column 'broken'",
   true,
 );
 const timeout = buildSkillMaintenanceEvidence(
-  "run_sql",
-  { sql: "SELECT 1" },
+  "run_query",
+  { language: "sql", query: "SELECT 1" },
   "Connection timed out",
   true,
 );
 const sqlRun = buildSkillMaintenanceEvidence(
-  "run_sql",
-  { sql: "INSERT INTO threed.render_task SELECT * FROM threed.source_candidates" },
+  "run_query",
+  { language: "sql", query: "INSERT INTO threed.render_task SELECT * FROM threed.source_candidates" },
   { kind: "mutation" },
   false,
 );

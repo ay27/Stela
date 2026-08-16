@@ -24,6 +24,7 @@ import type {
   AgentRunRequest,
   AiSettings,
   ConnectionEntry,
+  DataQueryRequest,
   QueryResult,
   RunRecord,
 } from "@shared/types";
@@ -49,10 +50,13 @@ import {
   buildDabUserPrompt,
   cacheHitRate,
   DabBridgeClient,
+  DabBridgeError,
   type DabTask,
   type DabValidation,
   discoverDabTasks,
   endpointHash,
+  mapWithResourceConcurrency,
+  readDabDatasetResourceLocks,
   readDabPrompt,
   safeSlug,
   writeJson,
@@ -77,6 +81,8 @@ interface CliOptions {
   maxModelTurns: number;
   maxToolCalls: number;
   timeoutMs: number;
+  bridgeTimeoutMs: number;
+  concurrency: number;
   condaEnv: string;
   python: string | null;
 }
@@ -142,6 +148,8 @@ function parseArgs(argv: string[]): CliOptions {
     maxModelTurns: intArg(value("--max-model-turns") ?? "100", "--max-model-turns", 1),
     maxToolCalls: intArg(value("--max-tool-calls") ?? "200", "--max-tool-calls", 1),
     timeoutMs: intArg(value("--timeout-ms") ?? "1800000", "--timeout-ms", 1000),
+    bridgeTimeoutMs: intArg(value("--bridge-timeout-ms") ?? "600000", "--bridge-timeout-ms", 1000),
+    concurrency: intArg(value("--concurrency") ?? "1", "--concurrency", 1),
     condaEnv: value("--conda-env") ?? "dabench",
     python: value("--python") ?? null,
   };
@@ -184,6 +192,7 @@ async function runSelfCheck(tasks: DabTask[], options: CliOptions): Promise<void
       condaEnv: options.condaEnv,
       python: options.python ?? undefined,
       stderrPath: path.join(temp, "bridge.stderr.log"),
+      callTimeoutMs: options.bridgeTimeoutMs,
     });
     const config = { dataset: task.dataset, queryId: task.queryId, runDir: temp };
     try {
@@ -202,14 +211,27 @@ async function runSelfCheck(tasks: DabTask[], options: CliOptions): Promise<void
           if (descriptors.length !== 1) throw new Error(`${database}: schema description unavailable`);
           described += 1;
         }
-        try {
-          await bridge.call<QueryResult>("execute", {
-            config,
-            sql: `-- stela-dab-database: ${database}\nSELECT 1 AS stela_self_check`,
-          });
+        if (tables.length > 0) {
+          try {
+            await bridge.call<QueryResult>("execute_query", {
+              config,
+              query: { language: "sql", database, query: "SELECT 1 AS stela_self_check" } satisfies DataQueryRequest,
+            });
+          } catch (error) {
+            if (!(error instanceof DabBridgeError) || error.code !== "query_language_mismatch") throw error;
+            await bridge.call<QueryResult>("execute_query", {
+              config,
+              query: {
+                language: "mongodb",
+                database,
+                collection: tables[0],
+                filter: {},
+                projection: { _id: 1 },
+                limit: 1,
+              } satisfies DataQueryRequest,
+            });
+          }
           readOnlyQueries += 1;
-        } catch (error) {
-          if (!String(error).includes("unsupported_mongodb")) throw error;
         }
       }
       const validation = await bridge.call<DabValidation>("validate", {
@@ -218,7 +240,7 @@ async function runSelfCheck(tasks: DabTask[], options: CliOptions): Promise<void
         terminateReason: "self_check",
       });
       if (typeof validation.is_valid !== "boolean") throw new Error("validator returned no is_valid flag");
-      console.log(`  PASS ${task.dataset}: ${databases.length} db, ${described} schema, ${readOnlyQueries} SQL probes`);
+      console.log(`  PASS ${task.dataset}: ${databases.length} db, ${described} schema, ${readOnlyQueries} query probes`);
     } finally {
       await bridge.close();
       await fs.rm(temp, { recursive: true, force: true });
@@ -252,6 +274,7 @@ async function runTask(input: {
     condaEnv: options.condaEnv,
     python: options.python ?? undefined,
     stderrPath: path.join(runDir, "bridge.stderr.log"),
+    callTimeoutMs: options.bridgeTimeoutMs,
   });
   try {
   const bridgeConfig = buildConnectionConfig(task, runDir);
@@ -302,11 +325,28 @@ async function runTask(input: {
   let error: string | null = null;
   let answer = "";
   const started = Date.now();
+  let abortAgent = (): void => {};
 
-  const requestProposal = async (_toolCallId: string, proposal: ProposalRequest): Promise<boolean | string> =>
-    proposal.kind === "question"
-      ? "No additional information is available. Use the query, database description, and dataset hints."
-      : false;
+  const stop = (reason: string): void => {
+    if (forcedStop) return;
+    forcedStop = reason;
+    bridge.terminate(`run stopped: ${reason}`);
+    abortAgent();
+  };
+
+  const bridgeCall = async <T>(method: string, params: unknown): Promise<T> => {
+    try {
+      return await bridge.call<T>(method, params);
+    } catch (caught) {
+      if (caught instanceof DabBridgeError && caught.fatal) {
+        error ??= caught.message;
+        stop(caught.code);
+      }
+      throw caught;
+    }
+  };
+
+  const requestProposal = async (_toolCallId: string, _proposal: ProposalRequest): Promise<boolean | string> => false;
 
   const harness = new AgentHarness({
     env: new NodeExecutionEnv({ cwd: vaultPath }),
@@ -331,14 +371,17 @@ async function runTask(input: {
             defaultConfig: {},
             subprocess: true,
             dialect: "DAB routed SQL",
+            queryLanguages: ["sql", "mongodb"],
           }],
-          listDatabases: async () => bridge.call("list_databases", { config: bridgeConfig }),
+          listDatabases: async () => bridgeCall("list_databases", { config: bridgeConfig }),
           listTables: async (_kind, _config, database) =>
-            bridge.call("list_tables", { config: bridgeConfig, db: database }),
+            bridgeCall("list_tables", { config: bridgeConfig, db: database }),
           describeTables: async (_kind, _config, tables) =>
-            bridge.call("describe_tables", { config: bridgeConfig, tables }),
+            bridgeCall("describe_tables", { config: bridgeConfig, tables }),
           execute: async (_kind, _config, sql) =>
-            bridge.call("execute", { config: bridgeConfig, sql }),
+            bridgeCall("execute", { config: bridgeConfig, sql }),
+          executeQuery: async (_kind, _config, query: DataQueryRequest) =>
+            bridgeCall("execute_query", { config: bridgeConfig, query }),
         },
         sqlIndex: { query: async () => [] },
         skills: [],
@@ -357,13 +400,8 @@ async function runTask(input: {
       requestProposal,
     }),
   });
-
-  const stop = (reason: string): void => {
-    if (forcedStop) return;
-    forcedStop = reason;
-    void harness.abort();
-  };
-  const timer = setTimeout(() => stop("timeout"), options.timeoutMs);
+  abortAgent = () => { void harness.abort(); };
+  const timer = setTimeout(() => stop("task_timeout"), options.timeoutMs);
   const unsubscribe = harness.subscribe(async (event) => {
     if (event.type === "turn_end") {
       await planPersistence.flush();
@@ -377,7 +415,7 @@ async function runTask(input: {
       if (toolCalls > options.maxToolCalls) stop("tool_call_cap");
     } else if (event.type === "tool_execution_end") {
       const resultText = JSON.stringify(event.result ?? null);
-      for (const code of ["unsupported_mongodb", "cross_database_query", "missing_database_route", "unknown_database"]) {
+      for (const code of ["unsupported_mongodb", "cross_database_query", "missing_database_route", "unknown_database", "query_language_mismatch"]) {
         if (resultText.includes(code)) capabilityFailures[code] = (capabilityFailures[code] ?? 0) + 1;
       }
       toolEvents.push({ at: Date.now(), type: event.type, callId: event.toolCallId, isError: event.isError, result: event.result });
@@ -397,7 +435,15 @@ async function runTask(input: {
   try {
     const result = await harness.prompt(buildUserContent(request, {
       connection,
-      dialect: "DAB routed SQL (PostgreSQL, SQLite, DuckDB; MongoDB unsupported)",
+      dialect: "DAB structured query (SQL and MongoDB find)",
+      queryLanguages: ["sql", "mongodb"],
+      contextSources: {
+        vault_notes: "empty",
+        skills: "empty",
+        sql_history: "empty",
+        canvas: "empty",
+        clarification: "unavailable",
+      },
     }));
     answer = assistantText(result);
     if (result.stopReason === "error") error = result.errorMessage ?? "agent error";
@@ -414,8 +460,16 @@ async function runTask(input: {
   }
 
   let validation: DabValidation;
+  const validatorBridge = new DabBridgeClient({
+    dabRoot: options.dabRoot,
+    bridgePath,
+    condaEnv: options.condaEnv,
+    python: options.python ?? undefined,
+    stderrPath: path.join(runDir, "validator.stderr.log"),
+    callTimeoutMs: Math.min(options.bridgeTimeoutMs, 120_000),
+  });
   try {
-    validation = await bridge.call("validate", {
+    validation = await validatorBridge.call("validate", {
       config: bridgeConfig,
       answer,
       terminateReason: forcedStop ?? (error ? "error" : "final_answer"),
@@ -424,6 +478,8 @@ async function runTask(input: {
     const message = caught instanceof Error ? caught.message : String(caught);
     validation = { is_valid: false, reason: `validator_error: ${message}`, llm_answer: answer };
     error ??= message;
+  } finally {
+    await validatorBridge.close();
   }
   const transcript = (await session.buildContext()).messages;
 
@@ -552,60 +608,91 @@ async function main(): Promise<void> {
     maxModelTurns: options.maxModelTurns,
     maxToolCalls: options.maxToolCalls,
     timeoutMs: options.timeoutMs,
+    bridgeTimeoutMs: options.bridgeTimeoutMs,
+    concurrency: options.concurrency,
     host: { platform: process.platform, arch: process.arch, node: process.version },
   });
 
-  const results: FinalRun[] = [];
+  const jobsByDataset = new Map<string, Array<{ task: DabTask; runNumber: number }>>();
   for (const task of tasks) {
     for (let runNumber = 0; runNumber < options.runs; runNumber += 1) {
-      const runDir = path.join(output, `query_${task.dataset}`, `query${task.queryId}`, `run_${runNumber}`);
-      const finalPath = path.join(runDir, "final_agent.json");
-      if (options.resume) {
-        const completed = await readCompleted(finalPath);
-        if (completed) {
-          results.push(completed);
-          console.log(`SKIP ${task.dataset}/query${task.queryId}/run_${runNumber}`);
-          continue;
-        }
-      }
-      console.log(`RUN  ${task.dataset}/query${task.queryId}/run_${runNumber}`);
-      try {
-        const result = await runTask({ task, runNumber, runDir, options, settings, credentials });
-        await writeJson(finalPath, result);
-        await fs.rm(path.join(runDir, "runner_failure.json"), { force: true });
-        results.push(result);
-        console.log(`  ${result.valid ? "PASS" : "FAIL"} ${result.elapsedMs}ms ${result.terminateReason}`);
-      } catch (caught) {
-        const message = caught instanceof Error ? caught.stack ?? caught.message : String(caught);
-        const failure: FinalRun = {
-          complete: true,
-          dataset: task.dataset,
-          query: String(task.queryId),
-          run: runNumber,
-          answer: "",
-          valid: false,
-          validation: { is_valid: false, reason: `runner_error: ${message}`, llm_answer: "" },
-          terminateReason: "runner_error",
-          error: message,
-          model: credentials.model,
-          hints: options.hints,
-          startedAt: new Date().toISOString(),
-          elapsedMs: 0,
-          firstResultMs: null,
-          modelTurns: 0,
-          toolCalls: 0,
-          toolCallCounts: {},
-          capabilityFailures: { runner_error: 1 },
-          usage: usageWithRate({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }),
-          transcript: [],
-        };
-        // Do not create final_agent.json: --resume must retry runner/environment failures.
-        await writeJson(path.join(runDir, "runner_failure.json"), failure);
-        results.push(failure);
-        console.log(`  ERROR ${message.split("\n")[0]}`);
-      }
+      const jobs = jobsByDataset.get(task.dataset) ?? [];
+      jobs.push({ task, runNumber });
+      jobsByDataset.set(task.dataset, jobs);
     }
   }
+  const datasetJobs = [...jobsByDataset.values()];
+  const datasetResourceLocks = new Map<string, string[]>();
+  await Promise.all(datasetJobs.map(async (jobs) => {
+    const task = jobs[0]?.task;
+    if (task) datasetResourceLocks.set(task.dataset, await readDabDatasetResourceLocks(task));
+  }));
+  const resultGroups = await mapWithResourceConcurrency(
+    datasetJobs,
+    options.concurrency,
+    (jobs) => datasetResourceLocks.get(jobs[0]?.task.dataset ?? "") ?? [],
+    async (jobs): Promise<FinalRun[]> => {
+      const groupResults: FinalRun[] = [];
+      for (const { task, runNumber } of jobs) {
+        const runDir = path.join(output, `query_${task.dataset}`, `query${task.queryId}`, `run_${runNumber}`);
+        const finalPath = path.join(runDir, "final_agent.json");
+        if (options.resume) {
+          const completed = await readCompleted(finalPath);
+          if (completed) {
+            groupResults.push(completed);
+            console.log(`SKIP ${task.dataset}/query${task.queryId}/run_${runNumber}`);
+            continue;
+          }
+        }
+        console.log(`RUN  ${task.dataset}/query${task.queryId}/run_${runNumber}`);
+        try {
+          const result = await runTask({ task, runNumber, runDir, options, settings, credentials });
+          await writeJson(finalPath, result);
+          await fs.rm(path.join(runDir, "runner_failure.json"), { force: true });
+          groupResults.push(result);
+          console.log(
+            `  ${result.valid ? "PASS" : "FAIL"} ${task.dataset}/query${task.queryId}/run_${runNumber} ` +
+            `${result.elapsedMs}ms ${result.terminateReason}`,
+          );
+        } catch (caught) {
+          const message = caught instanceof Error ? caught.stack ?? caught.message : String(caught);
+          const failure: FinalRun = {
+            complete: true,
+            dataset: task.dataset,
+            query: String(task.queryId),
+            run: runNumber,
+            answer: "",
+            valid: false,
+            validation: { is_valid: false, reason: `runner_error: ${message}`, llm_answer: "" },
+            terminateReason: "runner_error",
+            error: message,
+            model: credentials.model,
+            hints: options.hints,
+            startedAt: new Date().toISOString(),
+            elapsedMs: 0,
+            firstResultMs: null,
+            modelTurns: 0,
+            toolCalls: 0,
+            toolCallCounts: {},
+            capabilityFailures: { runner_error: 1 },
+            usage: usageWithRate({
+              inputTokens: 0,
+              outputTokens: 0,
+              cacheReadTokens: 0,
+              cacheWriteTokens: 0,
+            }),
+            transcript: [],
+          };
+          // Do not create final_agent.json: --resume must retry runner/environment failures.
+          await writeJson(path.join(runDir, "runner_failure.json"), failure);
+          groupResults.push(failure);
+          console.log(`  ERROR ${task.dataset}/query${task.queryId}/run_${runNumber} ${message.split("\n")[0]}`);
+        }
+      }
+      return groupResults;
+    },
+  );
+  const results = resultGroups.flat();
   await writeSummary(output, results);
   console.log(`\n${results.filter((result) => result.valid).length}/${results.length} valid -> ${output}`);
 }

@@ -8,6 +8,7 @@ const repoRoot = path.resolve(here, "..");
 const DEFAULT_PUBLIC_PLUGINS = [
   "connector-mysql",
   "connector-postgresql",
+  "connector-mongodb",
   "connector-http-sample",
 ];
 

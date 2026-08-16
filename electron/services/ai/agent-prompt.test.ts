@@ -41,14 +41,23 @@ const user = buildUserContent(
       { name: "warehouse", kind: "duckdb", dialect: "DuckDB SQL" },
     ],
     skillMetadata: "orders metric",
+    queryLanguages: ["sql"],
+    contextSources: {
+      vault_notes: "available",
+      skills: "available",
+      sql_history: "available",
+      canvas: "unknown",
+      clarification: "available",
+    },
   },
 );
 assert.match(user, /^<stela_turn_context>/);
 assert.match(user, /entry_point: runsql-fix/);
-assert.match(user, /active_connection: warehouse \(kind: duckdb, dialect: DuckDB SQL\)/);
+assert.match(user, /active_connection: warehouse \(kind: duckdb, dialect: DuckDB SQL, query_languages: sql\)/);
 assert.match(user, /available_connections: \[\{"name":"archive","kind":"postgresql","dialect":"PostgreSQL"\}/);
 assert.match(user, /active_workspace_resource: \{"kind":"note","path":"reports\/orders.md"\}/);
 assert.match(user, /"rewriteTargetId":"target-1"/);
+assert.match(user, /context_sources: \{"vault_notes":"available"/);
 assert.match(user, /Execution error:/);
 assert.match(user, /"kind":"resource","resourceId":"resource_table_/);
 assert.match(user, /<user_request>\n\n\{"version":1,"segments":/);
