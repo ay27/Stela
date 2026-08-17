@@ -2,8 +2,9 @@
 """DataAgentBench bridge for Stela's headless eval and subprocess connector.
 
 The process speaks one JSON object per line on stdin/stdout. It imports DAB's
-official database tools and validator from ``--dab-root``; Stela owns only the
-transport adapter and QueryResult normalization.
+official database tools and validator from ``--dab-root``. SQL and MongoDB find
+use the official query tool; safe aggregation uses the same dataset MongoDB
+service directly because the upstream tool has no pipeline input.
 """
 
 from __future__ import annotations
@@ -24,6 +25,16 @@ ROUTE_RE = re.compile(
     r"^\s*--\s*stela-dab-database\s*:\s*([A-Za-z0-9_.-]+)\s*$",
     re.IGNORECASE,
 )
+MONGO_AGGREGATION_MAX_STAGES = 32
+MONGO_AGGREGATION_MAX_BYTES = 64 * 1024
+MONGO_AGGREGATION_MAX_DEPTH = 32
+MONGO_AGGREGATION_MAX_TIME_MS = 120_000
+ALLOWED_MONGO_AGGREGATION_STAGES = {
+    "$match", "$project", "$set", "$addFields", "$unset", "$unwind",
+    "$group", "$sort", "$skip", "$limit", "$count", "$replaceRoot",
+    "$replaceWith",
+}
+FORBIDDEN_MONGO_OPERATORS = {"$where", "$function", "$accumulator"}
 
 
 class BridgeError(Exception):
@@ -124,11 +135,61 @@ def contains_server_side_javascript(value: Any) -> bool:
         return any(contains_server_side_javascript(item) for item in value)
     if not isinstance(value, dict):
         return False
-    forbidden = {"$where", "$function", "$accumulator"}
     return any(
-        str(key).lower() in forbidden or contains_server_side_javascript(nested)
+        str(key).lower() in FORBIDDEN_MONGO_OPERATORS or contains_server_side_javascript(nested)
         for key, nested in value.items()
     )
+
+
+def _mongo_nested_error(value: Any, depth: int) -> str | None:
+    if depth > MONGO_AGGREGATION_MAX_DEPTH:
+        return f"MongoDB aggregation exceeds the maximum nesting depth of {MONGO_AGGREGATION_MAX_DEPTH}."
+    if isinstance(value, list):
+        for item in value:
+            error = _mongo_nested_error(item, depth + 1)
+            if error:
+                return error
+        return None
+    if not isinstance(value, dict):
+        return None
+    for key, nested in value.items():
+        if str(key).lower() in FORBIDDEN_MONGO_OPERATORS:
+            return f"MongoDB operator '{key}' is not allowed."
+        error = _mongo_nested_error(nested, depth + 1)
+        if error:
+            return error
+    return None
+
+
+def validate_mongo_aggregation_pipeline(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not value:
+        raise BridgeError("invalid_query", "pipeline must be a non-empty array.")
+    if len(value) > MONGO_AGGREGATION_MAX_STAGES:
+        raise BridgeError(
+            "unsafe_query",
+            f"MongoDB aggregation supports at most {MONGO_AGGREGATION_MAX_STAGES} stages.",
+        )
+    serialized = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if len(serialized) > MONGO_AGGREGATION_MAX_BYTES:
+        raise BridgeError(
+            "unsafe_query",
+            f"MongoDB aggregation pipeline exceeds {MONGO_AGGREGATION_MAX_BYTES} bytes.",
+        )
+    pipeline: list[dict[str, Any]] = []
+    for stage in value:
+        if not isinstance(stage, dict) or len(stage) != 1:
+            raise BridgeError(
+                "invalid_query",
+                "Each MongoDB aggregation stage must be an object with exactly one stage key.",
+            )
+        name = next(iter(stage))
+        if name not in ALLOWED_MONGO_AGGREGATION_STAGES:
+            raise BridgeError("unsafe_query", f"MongoDB aggregation stage '{name}' is not allowed.")
+        error = _mongo_nested_error(stage[name], 1)
+        if error:
+            raise BridgeError("unsafe_query", error)
+        pipeline.append(stage)
+    return pipeline
 
 
 def official_query_from_structured(request: dict[str, Any], database_names: list[str]) -> tuple[str, str]:
@@ -156,20 +217,38 @@ def official_query_from_structured(request: dict[str, Any], database_names: list
             )
         return database, re.sub(rf"\b{re.escape(database)}\s*\.", "", query, flags=re.IGNORECASE)
     if language == "mongodb":
+        operation = str(request.get("operation") or "find").strip().lower()
+        if operation not in {"find", "aggregate"}:
+            raise BridgeError("invalid_query", f"Unsupported MongoDB operation: {operation}")
         collection = str(request.get("collection") or "").strip()
         if not collection:
             raise BridgeError("invalid_query", "MongoDB collection must not be empty.")
-        filter_value = request.get("filter", {})
-        projection_value = request.get("projection")
         limit_value = request.get("limit", 200)
-        if not isinstance(filter_value, dict):
-            raise BridgeError("invalid_query", "MongoDB filter must be an object.")
-        if projection_value is not None and not isinstance(projection_value, dict):
-            raise BridgeError("invalid_query", "MongoDB projection must be an object or null.")
         if limit_value is not None:
             if isinstance(limit_value, bool) or not isinstance(limit_value, (int, float)):
                 raise BridgeError("invalid_query", "MongoDB limit must be a number or null.")
             limit_value = min(1_000_000, max(1, int(limit_value)))
+        if operation == "aggregate":
+            if "filter" in request or "projection" in request:
+                raise BridgeError(
+                    "invalid_query",
+                    "MongoDB aggregate requests cannot include find filter or projection fields.",
+                )
+            pipeline = validate_mongo_aggregation_pipeline(request.get("pipeline"))
+            return database, json.dumps({
+                "operation": "aggregate",
+                "collection": collection,
+                "pipeline": pipeline,
+                "limit": limit_value,
+            }, ensure_ascii=False)
+        if "pipeline" in request:
+            raise BridgeError("invalid_query", "MongoDB find requests cannot include pipeline.")
+        filter_value = request.get("filter", {})
+        projection_value = request.get("projection")
+        if not isinstance(filter_value, dict):
+            raise BridgeError("invalid_query", "MongoDB filter must be an object.")
+        if projection_value is not None and not isinstance(projection_value, dict):
+            raise BridgeError("invalid_query", "MongoDB projection must be an object or null.")
         if contains_server_side_javascript(filter_value) or contains_server_side_javascript(projection_value):
             raise BridgeError("unsafe_query", "MongoDB server-side JavaScript operators are not allowed.")
         query = {
@@ -246,6 +325,35 @@ class DabRuntime:
             self.validate_fn = importlib.import_module(
                 "common_scaffold.validate.validate"
             ).validate
+
+    def execute_mongo_aggregation(self, database: str, raw_query: str) -> list[dict[str, Any]]:
+        request = json.loads(raw_query)
+        pipeline = list(request["pipeline"])
+        limit = request.get("limit", 200)
+        if limit is not None:
+            pipeline.append({"$limit": int(limit)})
+        db_client = self.query_tool.db_clients[database]
+        mongo_uri = importlib.import_module(
+            "common_scaffold.tools.db_utils.db_config"
+        ).MONGO_URI
+        mongo_client_class = importlib.import_module("pymongo").MongoClient
+        with mongo_client_class(mongo_uri) as client:
+            db = client[db_client["db_name"]]
+            collection = str(request["collection"])
+            if collection not in db.list_collection_names():
+                raise BridgeError("invalid_query", f"Collection does not exist: {collection}")
+            try:
+                return list(db[collection].aggregate(
+                    pipeline,
+                    allowDiskUse=False,
+                    maxTimeMS=MONGO_AGGREGATION_MAX_TIME_MS,
+                ))
+            except Exception as error:
+                raise BridgeError(
+                    "dab_tool_error",
+                    f"MongoDB aggregation error ({type(error).__name__}): {error}",
+                    True,
+                ) from error
 
     def _dataset_dir(self, dataset: str) -> Path:
         directory = self.dab_root / f"query_{dataset}"
@@ -368,7 +476,11 @@ class DabRuntime:
             if db_type != "mongo" and language != "sql":
                 raise BridgeError("query_language_mismatch", f"{database} requires language=sql.")
             started = time.monotonic()
-            value = self.invoke_tool(self.query_tool, {"db_name": database, "query": query})
+            structured = json.loads(query) if language == "mongodb" else None
+            if isinstance(structured, dict) and structured.get("operation") == "aggregate":
+                value = self.execute_mongo_aggregation(database, query)
+            else:
+                value = self.invoke_tool(self.query_tool, {"db_name": database, "query": query})
             return normalize_query_result(value, round((time.monotonic() - started) * 1000))
         if method in {"close", "shutdown"}:
             self.close()

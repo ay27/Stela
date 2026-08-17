@@ -128,6 +128,25 @@ export interface DataAgentBenchReport {
   cases: ReportCase[];
 }
 
+export interface DataAgentBenchHistoryRun {
+  id: string;
+  label: string;
+  dataFile: string;
+  sourceGeneratedAt: string | null;
+  manifest: Record<string, unknown>;
+  totals: DataAgentBenchReport["totals"];
+  datasets: DataAgentBenchReport["datasets"];
+  failureCategories: DataAgentBenchReport["failureCategories"];
+}
+
+export interface DataAgentBenchHistory {
+  version: 1;
+  generatedAt: string;
+  defaultRunId: string;
+  defaultComparisonRunId: string | null;
+  runs: DataAgentBenchHistoryRun[];
+}
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const assetsDir = path.join(here, "data-agent-bench", "report");
 
@@ -380,16 +399,118 @@ export async function writeDataAgentBenchReport(input: string, output: string): 
   console.log(`Open: ${path.join(output, "index.html")}`);
 }
 
+function safeRunId(value: string): string {
+  const slug = value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug || "run";
+}
+
+async function copyReportAssets(output: string): Promise<void> {
+  await Promise.all([
+    fs.copyFile(path.join(assetsDir, "index.html"), path.join(output, "index.html")),
+    fs.copyFile(path.join(assetsDir, "app.js"), path.join(output, "app.js")),
+    fs.copyFile(path.join(assetsDir, "styles.css"), path.join(output, "styles.css")),
+  ]);
+}
+
+export async function writeDataAgentBenchHistory(
+  inputs: string[],
+  output: string,
+): Promise<DataAgentBenchHistory> {
+  if (inputs.length === 0) throw new Error("At least one benchmark result directory is required.");
+  const resolvedInputs = [...new Set(inputs.map((input) => path.resolve(input)))];
+  const reports = await Promise.all(resolvedInputs.map(async (input) => ({
+    input,
+    report: await buildDataAgentBenchReport(input),
+  })));
+  reports.sort((a, b) => {
+    const left = Date.parse(a.report.sourceGeneratedAt ?? "") || 0;
+    const right = Date.parse(b.report.sourceGeneratedAt ?? "") || 0;
+    return right - left || a.input.localeCompare(b.input);
+  });
+
+  const usedIds = new Map<string, number>();
+  const entries = reports.map(({ input, report }) => {
+    const base = safeRunId(path.basename(input));
+    const count = usedIds.get(base) ?? 0;
+    usedIds.set(base, count + 1);
+    const id = count === 0 ? base : `${base}-${count + 1}`;
+    return {
+      id,
+      label: path.basename(input),
+      dataFile: `./runs/${id}.json`,
+      sourceGeneratedAt: report.sourceGeneratedAt,
+      manifest: report.manifest,
+      totals: report.totals,
+      datasets: report.datasets,
+      failureCategories: report.failureCategories,
+      report,
+    };
+  });
+  const history: DataAgentBenchHistory = {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    defaultRunId: entries[0]!.id,
+    defaultComparisonRunId: entries[1]?.id ?? null,
+    runs: entries.map(({ report: _report, ...entry }) => entry),
+  };
+
+  await fs.mkdir(path.join(output, "runs"), { recursive: true });
+  await Promise.all([
+    copyReportAssets(output),
+    fs.writeFile(path.join(output, "history.json"), JSON.stringify(history), "utf-8"),
+    ...entries.map((entry) =>
+      fs.writeFile(path.join(output, "runs", `${entry.id}.json`), JSON.stringify(entry.report), "utf-8")),
+  ]);
+  console.log(`DataAgentBench history: ${entries.length} runs`);
+  for (const entry of entries) {
+    console.log(`  ${entry.label}: ${entry.totals.valid}/${entry.totals.cases} valid`);
+  }
+  console.log(`Open: ${path.join(output, "index.html")}`);
+  return history;
+}
+
 function argValue(argv: string[], name: string): string | undefined {
   const index = argv.indexOf(name);
   return index >= 0 ? argv[index + 1] : undefined;
 }
 
+function argValues(argv: string[], name: string): string[] {
+  return argv.flatMap((value, index) => value === name && argv[index + 1] ? [argv[index + 1]!] : []);
+}
+
+async function discoverHistoryInputs(root: string): Promise<string[]> {
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  const candidates = entries.filter((entry) => entry.isDirectory()).map((entry) => path.join(root, entry.name));
+  const completed = await Promise.all(candidates.map(async (candidate) => {
+    try {
+      await fs.access(path.join(candidate, "summary.json"));
+      const finalRuns = await findFinalRuns(candidate);
+      return finalRuns.length > 0 ? candidate : null;
+    } catch {
+      return null;
+    }
+  }));
+  return completed.filter((candidate): candidate is string => candidate !== null);
+}
+
 async function main(): Promise<void> {
-  const inputValue = argValue(process.argv.slice(2), "--input");
-  if (!inputValue) throw new Error("Pass --input <benchmark result directory>.");
-  const input = path.resolve(inputValue);
-  const output = path.resolve(argValue(process.argv.slice(2), "--output") ?? path.join(input, "analysis"));
+  const argv = process.argv.slice(2);
+  const inputValues = argValues(argv, "--input");
+  const historyRootValue = argValue(argv, "--history-root");
+  if (!historyRootValue && inputValues.length === 0) {
+    throw new Error("Pass --input <result directory> or --history-root <directory containing result runs>.");
+  }
+  if (historyRootValue || inputValues.length > 1) {
+    const historyRoot = historyRootValue ? path.resolve(historyRootValue) : null;
+    const inputs = historyRoot ? await discoverHistoryInputs(historyRoot) : inputValues.map((input) => path.resolve(input));
+    const output = path.resolve(
+      argValue(argv, "--output") ?? path.join(historyRoot ?? path.dirname(inputs[0]!), "analysis"),
+    );
+    await writeDataAgentBenchHistory(inputs, output);
+    return;
+  }
+  const input = path.resolve(inputValues[0]!);
+  const output = path.resolve(argValue(argv, "--output") ?? path.join(input, "analysis"));
   await writeDataAgentBenchReport(input, output);
 }
 

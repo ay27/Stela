@@ -5,12 +5,14 @@ import path from "node:path";
 
 import {
   buildDataAgentBenchReport,
+  writeDataAgentBenchHistory,
   writeDataAgentBenchReport,
 } from "../build-data-agent-bench-report";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "stela-dab-report-"));
 const input = path.join(root, "results");
 const output = path.join(root, "report");
+const historyOutput = path.join(root, "history-report");
 
 async function writeRun(dataset: string, query: number, valid: boolean): Promise<void> {
   const directory = path.join(input, `query_${dataset}`, `query${query}`, "run_0");
@@ -89,6 +91,33 @@ try {
   for (const name of ["index.html", "styles.css", "app.js", "analysis-data.json"]) {
     const stat = await fs.stat(path.join(output, name));
     assert.ok(stat.size > 0, `${name} must be generated`);
+  }
+
+  const newerInput = path.join(root, "results-v2");
+  await fs.cp(input, newerInput, { recursive: true });
+  await fs.writeFile(
+    path.join(newerInput, "summary.json"),
+    JSON.stringify({ generatedAt: "2026-08-17T00:00:00.000Z" }),
+  );
+  const newerRun = path.join(newerInput, "query_mongo_demo", "query2", "run_0", "final_agent.json");
+  const newer = JSON.parse(await fs.readFile(newerRun, "utf-8")) as Record<string, unknown>;
+  newer.valid = true;
+  newer.answer = "42";
+  newer.capabilityFailures = {};
+  await fs.writeFile(newerRun, JSON.stringify(newer), "utf-8");
+
+  const history = await writeDataAgentBenchHistory([input, newerInput], historyOutput);
+  assert.equal(history.runs.length, 2);
+  assert.equal(history.defaultRunId, "results-v2");
+  assert.equal(history.defaultComparisonRunId, "results");
+  assert.equal(history.runs[0]?.totals.valid, 2);
+  for (const name of ["index.html", "styles.css", "app.js", "history.json"]) {
+    const stat = await fs.stat(path.join(historyOutput, name));
+    assert.ok(stat.size > 0, `${name} must be generated in history mode`);
+  }
+  for (const run of history.runs) {
+    const stat = await fs.stat(path.join(historyOutput, run.dataFile));
+    assert.ok(stat.size > 0, `${run.dataFile} must be generated`);
   }
 } finally {
   await fs.rm(root, { recursive: true, force: true });

@@ -75,11 +75,14 @@ export interface ConnectorKindMeta {
   dialect?: string;
   /** Agent query languages accepted by this connector. Missing means SQL-only. */
   queryLanguages?: QueryLanguage[];
+  /** MongoDB operations accepted by API v4 connectors. Missing means find-only. */
+  mongoOperations?: MongoQueryOperation[];
   /** Optional host-managed result artifact formats supported by API v2 plugins. */
   queryArtifactFormats?: QueryArtifactFormat[];
 }
 
 export type QueryLanguage = "sql" | "mongodb";
+export type MongoQueryOperation = "find" | "aggregate";
 
 export interface SqlDataQuery {
   language: "sql";
@@ -89,8 +92,10 @@ export interface SqlDataQuery {
 }
 
 /** Structured, read-only MongoDB find. JavaScript expressions are never accepted. */
-export interface MongoDataQuery {
+export interface MongoFindDataQuery {
   language: "mongodb";
+  /** Missing remains a backward-compatible find request. */
+  operation?: "find";
   collection: string;
   database?: string | null;
   filter?: Record<string, unknown>;
@@ -99,6 +104,17 @@ export interface MongoDataQuery {
   limit?: number | null;
 }
 
+export interface MongoAggregateDataQuery {
+  language: "mongodb";
+  operation: "aggregate";
+  collection: string;
+  database?: string | null;
+  pipeline: Record<string, unknown>[];
+  /** null means no connector-side result limit; artifact limits still apply. */
+  limit?: number | null;
+}
+
+export type MongoDataQuery = MongoFindDataQuery | MongoAggregateDataQuery;
 export type DataQueryRequest = SqlDataQuery | MongoDataQuery;
 
 export type QueryArtifactFormat = "parquet" | "jsonl";

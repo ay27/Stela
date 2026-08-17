@@ -101,7 +101,16 @@ assert.ok(prompt.indexOf("DATABASE DESCRIPTION") < prompt.indexOf("DATASET HINTS
 assert.ok(prompt.indexOf("ACTIVE CONNECTION CONTRACT") < prompt.indexOf("QUERY:"));
 assert.match(prompt, /run_query call targets exactly one logical database/);
 assert.match(prompt, /language=mongodb/);
+assert.match(prompt, /safe aggregate operations/);
+assert.match(prompt, /execute_python/);
 assert.match(prompt, /QUERY:\nWhich decade wins\?$/);
+
+const legacyPrompt = buildDabUserPrompt({
+  databaseDescription: "books_database has books_info",
+  hintsText: "",
+  query: "Which decade wins?",
+}, { pythonAvailable: false });
+assert.match(legacyPrompt, /Python execution is disabled/);
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "stela-dab-runtime-"));
 try {

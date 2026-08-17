@@ -16,6 +16,10 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { AppError } from "@shared/errors";
 import { parseAnalysisCanvas, type AnalysisCanvas } from "@shared/analysis-canvas";
 import {
+  asMongoAggregationPipeline,
+  containsForbiddenMongoOperator,
+} from "@shared/mongodb-query";
+import {
   stelaChartSpecSchema,
   stringifyStelaChartSpec,
   validateStelaChartData,
@@ -328,7 +332,7 @@ export function createAgentTools(options: {
       name: "run_query",
       label: "Run query",
       description:
-        "Run one structured SQL or MongoDB query through a named Stela connection. SQL mutations remain guarded. MongoDB accepts read-only find requests only. Results include a bounded preview and, when supported, a session-local artifact for execute_python.",
+        "Run one structured SQL or MongoDB query through a named Stela connection. SQL mutations remain guarded. MongoDB supports read-only find and, when declared by the connector, a safe aggregation pipeline. Results include a bounded preview and, when supported, a session-local artifact for execute_python.",
       // Function providers require the top-level schema to be type=object.
       // SQL/Mongo field requirements are discriminated again in runQuery.
       parameters: Type.Object({
@@ -336,8 +340,12 @@ export function createAgentTools(options: {
         query: Type.Optional(Type.String({ description: "Required for SQL: one SQL statement." })),
         collection: Type.Optional(Type.String({ description: "Required for MongoDB: collection name." })),
         database: Type.Optional(Type.String({ description: "Optional logical database." })),
+        operation: Type.Optional(Type.Union([Type.Literal("find"), Type.Literal("aggregate")])),
         filter: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "MongoDB find filter." })),
         projection: Type.Optional(Type.Union([Type.Record(Type.String(), Type.Unknown()), Type.Null()])),
+        pipeline: Type.Optional(Type.Array(Type.Record(Type.String(), Type.Unknown()), {
+          description: "MongoDB aggregation stages. Required when operation=aggregate.",
+        })),
         limit: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
         connectionName: Type.Optional(Type.String({ description: "Available Stela connection name; defaults to current." })),
       }),
@@ -824,16 +832,6 @@ async function runGetTableSchema(args: { tables?: unknown; connectionName?: unkn
   );
 }
 
-const FORBIDDEN_MONGO_OPERATORS = new Set(["$where", "$function", "$accumulator"]);
-
-function hasForbiddenMongoOperator(value: unknown): boolean {
-  if (Array.isArray(value)) return value.some(hasForbiddenMongoOperator);
-  if (!value || typeof value !== "object") return false;
-  return Object.entries(value as Record<string, unknown>).some(
-    ([key, item]) => FORBIDDEN_MONGO_OPERATORS.has(key.toLowerCase()) || hasForbiddenMongoOperator(item),
-  );
-}
-
 function normalizeDataQuery(args: Record<string, unknown>): DataQueryRequest | string {
   if (args.language !== undefined && args.language !== "sql" && args.language !== "mongodb") {
     return `unsupported query language: ${String(args.language)}`;
@@ -852,16 +850,9 @@ function normalizeDataQuery(args: Record<string, unknown>): DataQueryRequest | s
   }
   const collection = typeof args.collection === "string" ? args.collection.trim() : "";
   if (!collection) return "collection must be a non-empty string.";
-  const filter = args.filter === undefined ? {} : args.filter;
-  const projection = args.projection === undefined ? null : args.projection;
-  if (!filter || typeof filter !== "object" || Array.isArray(filter)) {
-    return "filter must be an object.";
-  }
-  if (projection !== null && (typeof projection !== "object" || Array.isArray(projection))) {
-    return "projection must be an object or null.";
-  }
-  if (hasForbiddenMongoOperator(filter) || hasForbiddenMongoOperator(projection)) {
-    return "MongoDB server-side JavaScript operators are not allowed.";
+  const operation = args.operation === undefined ? "find" : args.operation;
+  if (operation !== "find" && operation !== "aggregate") {
+    return `unsupported MongoDB operation: ${String(operation)}`;
   }
   let limit: number | null = 200;
   if (args.limit === null) limit = null;
@@ -870,15 +861,37 @@ function normalizeDataQuery(args: Record<string, unknown>): DataQueryRequest | s
   } else if (args.limit !== undefined) {
     return "limit must be a finite number or null.";
   }
+  const database = typeof args.database === "string" && args.database.trim()
+    ? { database: args.database.trim() }
+    : {};
+  if (operation === "aggregate") {
+    if (args.filter !== undefined || args.projection !== undefined) {
+      return "MongoDB aggregate requests cannot include find filter or projection fields.";
+    }
+    const pipeline = asMongoAggregationPipeline(args.pipeline);
+    if (typeof pipeline === "string") return pipeline;
+    return { language, operation, collection, pipeline, limit, ...database };
+  }
+  if (args.pipeline !== undefined) return "MongoDB find requests cannot include pipeline.";
+  const filter = args.filter === undefined ? {} : args.filter;
+  const projection = args.projection === undefined ? null : args.projection;
+  if (!filter || typeof filter !== "object" || Array.isArray(filter)) {
+    return "filter must be an object.";
+  }
+  if (projection !== null && (typeof projection !== "object" || Array.isArray(projection))) {
+    return "projection must be an object or null.";
+  }
+  if (containsForbiddenMongoOperator(filter) || containsForbiddenMongoOperator(projection)) {
+    return "MongoDB server-side JavaScript operators are not allowed.";
+  }
   return {
     language,
+    ...(args.operation === undefined ? {} : { operation }),
     collection,
     filter: filter as Record<string, unknown>,
     projection: projection as Record<string, unknown> | null,
     limit,
-    ...(typeof args.database === "string" && args.database.trim()
-      ? { database: args.database.trim() }
-      : {}),
+    ...database,
   };
 }
 
@@ -894,6 +907,13 @@ async function runQuery(
   const languages = connectorMeta?.queryLanguages ?? ["sql"];
   if (!languages.includes(query.language)) {
     return fail(`Connection '${connectionName}' does not support ${query.language} queries.`);
+  }
+  if (query.language === "mongodb") {
+    const operation = query.operation ?? "find";
+    const operations = connectorMeta?.mongoOperations ?? ["find"];
+    if (!operations.includes(operation)) {
+      return fail(`Connection '${connectionName}' does not support MongoDB ${operation} queries.`);
+    }
   }
   const classified = query.language === "sql"
     ? classifySql(query.query, ctx.aiSettings.agentAllowMutations)

@@ -15,6 +15,9 @@ assert.match(prompt, /Never preserve already fetched numbers or rows by turning 
 assert.match(prompt, /Use preset trend/);
 assert.match(prompt, /use a flow card for processes/);
 assert.match(prompt, /Omit Flow node positions because layout is user-owned/);
+assert.match(prompt, /prefer one database-side aggregation over repeated preview probes/);
+assert.match(prompt, /Preserve source values exactly/);
+assert.match(prompt, /connector-declared safe aggregate requests/);
 
 const user = buildUserContent(
   {
@@ -53,7 +56,7 @@ const user = buildUserContent(
 );
 assert.match(user, /^<stela_turn_context>/);
 assert.match(user, /entry_point: runsql-fix/);
-assert.match(user, /active_connection: warehouse \(kind: duckdb, dialect: DuckDB SQL, query_languages: sql\)/);
+assert.match(user, /active_connection: warehouse \(kind: duckdb, dialect: DuckDB SQL, query_languages: sql, mongo_operations: find\)/);
 assert.match(user, /available_connections: \[\{"name":"archive","kind":"postgresql","dialect":"PostgreSQL"\}/);
 assert.match(user, /active_workspace_resource: \{"kind":"note","path":"reports\/orders.md"\}/);
 assert.match(user, /"rewriteTargetId":"target-1"/);

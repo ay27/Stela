@@ -14,11 +14,25 @@ const labels = {
   validation_failure: "验证失败",
 };
 
+const changeLabels = {
+  fixed: "已修复",
+  regressed: "新回归",
+  "still-fail": "持续失败",
+  "still-pass": "持续通过",
+  new: "新增 case",
+};
+
 const state = {
   data: null,
+  history: null,
+  currentRunId: null,
+  comparisonRunId: null,
+  comparisonData: null,
+  runCache: new Map(),
   dataset: "all",
   status: "all",
   category: "all",
+  change: "all",
   search: "",
   sort: "dataset",
   selected: null,
@@ -58,6 +72,36 @@ function categoryLabel(category) {
   return labels[category] ?? category;
 }
 
+function signed(value, digits = 0) {
+  if (!Number.isFinite(value)) return "—";
+  const formatted = Math.abs(value).toFixed(digits);
+  return `${value > 0 ? "+" : value < 0 ? "−" : ""}${formatted}`;
+}
+
+function currentHistoryRun() {
+  return state.history?.runs.find((run) => run.id === state.currentRunId) ?? null;
+}
+
+function comparisonHistoryRun() {
+  return state.history?.runs.find((run) => run.id === state.comparisonRunId) ?? null;
+}
+
+function comparisonCases() {
+  return new Map((state.comparisonData?.cases ?? []).map((item) => [item.id, item]));
+}
+
+function caseChange(item, previous = comparisonCases().get(item.id)) {
+  if (!state.comparisonData || !previous) return state.comparisonData ? "new" : null;
+  if (item.valid && !previous.valid) return "fixed";
+  if (!item.valid && previous.valid) return "regressed";
+  return item.valid ? "still-pass" : "still-fail";
+}
+
+function changeNode(change) {
+  if (!change) return document.createTextNode("—");
+  return element("span", `stela-change stela-change-${change}`, changeLabels[change] ?? change);
+}
+
 function metric(label, value, note) {
   const card = element("article", "stela-metric");
   card.append(element("div", "stela-metric-label", label));
@@ -73,6 +117,7 @@ function filteredCases() {
     if (state.status === "pass" && !item.valid) return false;
     if (state.status === "fail" && item.valid) return false;
     if (state.category !== "all" && item.failureCategory !== state.category) return false;
+    if (state.change !== "all" && caseChange(item) !== state.change) return false;
     if (!query) return true;
     return [item.id, item.question, item.answer, item.validationReason, item.groundTruth]
       .some((value) => String(value ?? "").toLowerCase().includes(query));
@@ -92,13 +137,127 @@ function filteredCases() {
 function renderSummary() {
   const target = document.getElementById("summary");
   const totals = state.data.totals;
+  const previous = state.comparisonData?.totals ?? null;
+  const validNote = previous
+    ? `${formatPercent(totals.validRate)} · ${signed((totals.validRate - previous.validRate) * 100, 1)} pp`
+    : formatPercent(totals.validRate);
+  const durationNote = previous
+    ? `对照轮 ${formatDuration(previous.averageElapsedMs)} · ${signed((totals.averageElapsedMs / previous.averageElapsedMs - 1) * 100, 1)}%`
+    : `累计 ${formatDuration(totals.elapsedMs)}`;
+  const toolNote = previous
+    ? `对照轮 ${formatNumber(previous.toolCalls)} · ${signed(totals.toolCalls - previous.toolCalls)}`
+    : `平均 ${(totals.toolCalls / totals.cases).toFixed(1)} / case`;
+  const outputNote = previous
+    ? `对照轮 ${compactNumber(previous.outputTokens)} · ${signed((totals.outputTokens / previous.outputTokens - 1) * 100, 1)}%`
+    : `${formatNumber(totals.modelTurns)} 个模型轮次`;
+  const cacheNote = previous && totals.cacheHitRate != null && previous.cacheHitRate != null
+    ? `对照轮 ${formatPercent(previous.cacheHitRate)} · ${signed((totals.cacheHitRate - previous.cacheHitRate) * 100, 1)} pp`
+    : `${compactNumber(totals.cacheReadTokens)} cached tokens`;
   target.replaceChildren(
-    metric("通过率", `${totals.valid} / ${totals.cases}`, formatPercent(totals.validRate)),
-    metric("平均耗时", formatDuration(totals.averageElapsedMs), `累计 ${formatDuration(totals.elapsedMs)}`),
-    metric("工具调用", formatNumber(totals.toolCalls), `平均 ${(totals.toolCalls / totals.cases).toFixed(1)} / case`),
-    metric("模型输出 Token", compactNumber(totals.outputTokens), `${formatNumber(totals.modelTurns)} 个模型轮次`),
-    metric("Prompt Cache", totals.cacheHitRate == null ? "—" : formatPercent(totals.cacheHitRate), `${compactNumber(totals.cacheReadTokens)} cached tokens`),
+    metric("通过率", `${totals.valid} / ${totals.cases}`, validNote),
+    metric("平均耗时", formatDuration(totals.averageElapsedMs), durationNote),
+    metric("工具调用", formatNumber(totals.toolCalls), toolNote),
+    metric("模型输出 Token", compactNumber(totals.outputTokens), outputNote),
+    metric("Prompt Cache", totals.cacheHitRate == null ? "—" : formatPercent(totals.cacheHitRate), cacheNote),
   );
+}
+
+function historyRunLabel(run) {
+  const date = run.sourceGeneratedAt ? new Date(run.sourceGeneratedAt).toLocaleString("zh-CN") : "未知时间";
+  return `${run.label} · ${run.totals.valid}/${run.totals.cases} · ${date}`;
+}
+
+function renderHistory() {
+  const panel = document.getElementById("history-controls");
+  if (!state.history) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  document.getElementById("history-count").textContent = `${state.history.runs.length} 轮已归档`;
+  const current = document.getElementById("current-run-filter");
+  const comparison = document.getElementById("comparison-run-filter");
+  current.replaceChildren(...state.history.runs.map((run) => new Option(historyRunLabel(run), run.id)));
+  comparison.replaceChildren(
+    new Option("不对比", "none"),
+    ...state.history.runs.map((run) => new Option(historyRunLabel(run), run.id)),
+  );
+  current.value = state.currentRunId;
+  comparison.value = state.comparisonRunId ?? "none";
+
+  const maxRate = Math.max(...state.history.runs.map((run) => run.totals.validRate), 0.01);
+  const trend = document.getElementById("history-trend");
+  trend.replaceChildren(...[...state.history.runs].reverse().map((run) => {
+    const button = element("button", "stela-history-run");
+    button.type = "button";
+    button.dataset.current = String(run.id === state.currentRunId);
+    button.addEventListener("click", () => switchCurrentRun(run.id));
+    const bar = element("span", "stela-history-bar");
+    const fill = element("span", "stela-history-bar-fill");
+    fill.style.height = `${Math.max(6, (run.totals.validRate / maxRate) * 100)}%`;
+    bar.append(fill);
+    const date = run.sourceGeneratedAt
+      ? new Date(run.sourceGeneratedAt).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" })
+      : "—";
+    button.append(
+      element("strong", "", formatPercent(run.totals.validRate)),
+      bar,
+      element("span", "", date),
+      element("small", "", run.label),
+    );
+    return button;
+  }));
+}
+
+function renderComparison() {
+  const panel = document.getElementById("comparison");
+  const previous = state.comparisonData;
+  if (!previous) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  const currentRun = currentHistoryRun();
+  const previousRun = comparisonHistoryRun();
+  document.getElementById("comparison-label").textContent =
+    `${currentRun?.label ?? "当前轮"} vs ${previousRun?.label ?? "对照轮"}`;
+  const previousCases = comparisonCases();
+  const changes = state.data.cases.map((item) => caseChange(item, previousCases.get(item.id)));
+  const count = (change) => changes.filter((item) => item === change).length;
+  const summary = document.getElementById("comparison-summary");
+  summary.replaceChildren(
+    metric("净提升", signed(state.data.totals.valid - previous.totals.valid), `${signed((state.data.totals.validRate - previous.totals.validRate) * 100, 1)} pp`),
+    metric("已修复", String(count("fixed")), "失败 → 通过"),
+    metric("新回归", String(count("regressed")), "通过 → 失败"),
+    metric("持续失败", String(count("still-fail")), "两轮均未通过"),
+  );
+
+  const previousDatasets = new Map(previous.datasets.map((item) => [item.name, item]));
+  const rows = state.data.datasets.map((item) => {
+    const before = previousDatasets.get(item.name);
+    return { item, before, delta: before ? item.validRate - before.validRate : null };
+  }).sort((a, b) => (b.delta ?? -Infinity) - (a.delta ?? -Infinity) || a.item.name.localeCompare(b.item.name));
+  const table = element("table", "stela-comparison-table");
+  const head = element("thead", "");
+  const headRow = element("tr", "");
+  for (const title of ["数据集", "当前", "对照", "变化", "当前平均耗时"]) headRow.append(element("th", "", title));
+  head.append(headRow);
+  const body = element("tbody", "");
+  for (const row of rows) {
+    const tr = element("tr", "");
+    tr.addEventListener("click", () => setDatasetFilter(row.item.name));
+    const values = [
+      row.item.name,
+      `${row.item.valid}/${row.item.cases} · ${formatPercent(row.item.validRate)}`,
+      row.before ? `${row.before.valid}/${row.before.cases} · ${formatPercent(row.before.validRate)}` : "—",
+      row.delta == null ? "新增" : `${signed(row.delta * 100, 1)} pp`,
+      formatDuration(row.item.averageElapsedMs),
+    ];
+    values.forEach((value, index) => tr.append(element("td", index === 3 && row.delta !== 0 ? (row.delta > 0 ? "stela-delta-up" : "stela-delta-down") : "", value)));
+    body.append(tr);
+  }
+  table.append(head, body);
+  document.getElementById("dataset-comparison").replaceChildren(table);
 }
 
 function renderSignals() {
@@ -106,10 +265,10 @@ function renderSignals() {
   const mongo = failures.filter((item) => item.failureCategory === "mongodb_unavailable");
   const timeout = failures.filter((item) => ["timeout", "bridge_terminated"].includes(item.failureCategory));
   const validation = failures.filter((item) => item.failureCategory === "validation_failure");
-  const emptyContextTools = ["search_vault", "search_skills", "list_vault_files", "read_note", "search_sql_usage", "read_analysis_canvas"];
-  const emptyContextCalls = state.data.toolStats
-    .filter((item) => emptyContextTools.includes(item.tool))
-    .reduce((sum, item) => sum + item.calls, 0);
+  const languageMismatches = state.data.cases.reduce(
+    (sum, item) => sum + (item.capabilityFailures.query_language_mismatch ?? 0),
+    0,
+  );
   const signals = [
     {
       value: `${mongo.length} cases`,
@@ -127,9 +286,9 @@ function renderSignals() {
       className: "stela-signal-warning",
     },
     {
-      value: `${emptyContextCalls} calls`,
-      text: "空 Vault 下仍调用检索、Skill、文件和历史 SQL 工具，是可直接消除的探索开销。",
-      className: "",
+      value: `${languageMismatches} calls`,
+      text: "SQL 与 MongoDB 查询语言路由错配；即使最终重试成功，也会增加耗时和上下文噪声。",
+      className: languageMismatches > 0 ? "stela-signal-warning" : "",
     },
   ];
   const target = document.getElementById("signals");
@@ -348,11 +507,21 @@ function renderDetail(item) {
   const trace = element("section", "stela-trace");
   trace.append(element("h4", "", `执行轨迹 · ${item.trace.length} steps`));
   trace.append(...item.trace.map(traceStepNode));
+  const previous = state.comparisonData?.cases.find((candidate) => candidate.id === item.id) ?? null;
+  const comparison = previous ? element("section", "stela-detail-block stela-previous-result") : null;
+  if (comparison && previous) {
+    comparison.append(element("h4", "", `对照轮 · ${previous.valid ? "通过" : categoryLabel(previous.failureCategory)}`));
+    comparison.append(element("div", "stela-trace-label", "Validator"));
+    comparison.append(element("pre", previous.valid ? "" : "stela-validation", previous.validationReason || "—"));
+    comparison.append(element("div", "stela-trace-label", "Final answer"));
+    comparison.append(element("pre", "", previous.answer || "—"));
+  }
   target.replaceChildren(
     head,
     detailBlock("问题", item.question),
     validation,
     detailBlock("最终回答", item.answer),
+    ...(comparison ? [comparison] : []),
     trace,
   );
 }
@@ -373,8 +542,10 @@ function renderExplorer() {
       String(item.toolCalls),
       String(item.modelTurns),
       item.valid ? "—" : categoryLabel(item.failureCategory),
+      changeNode(caseChange(item)),
     ];
     values.forEach((value, index) => {
+      if (index === 6 && !state.comparisonData) return;
       const cell = element("td", index === 5 ? "stela-category" : "");
       if (value instanceof Node) cell.append(value);
       else cell.textContent = value;
@@ -411,31 +582,103 @@ function renderToolStats() {
 
 function setupFilters() {
   const dataset = document.getElementById("dataset-filter");
-  dataset.replaceChildren(new Option("全部数据集", "all"), ...state.data.datasets.map((item) => new Option(item.name, item.name)));
   const category = document.getElementById("category-filter");
-  category.replaceChildren(new Option("全部失败类别", "all"), ...state.data.failureCategories.map((item) => new Option(categoryLabel(item.category), item.category)));
   dataset.addEventListener("change", (event) => { state.dataset = event.target.value; renderExplorer(); });
   document.getElementById("status-filter").addEventListener("change", (event) => { state.status = event.target.value; renderExplorer(); });
   category.addEventListener("change", (event) => { state.category = event.target.value; renderExplorer(); });
+  document.getElementById("change-filter").addEventListener("change", (event) => { state.change = event.target.value; renderExplorer(); });
   document.getElementById("sort-filter").addEventListener("change", (event) => { state.sort = event.target.value; renderExplorer(); });
   document.getElementById("case-search").addEventListener("input", (event) => { state.search = event.target.value; renderExplorer(); });
+  document.getElementById("current-run-filter").addEventListener("change", (event) => switchCurrentRun(event.target.value));
+  document.getElementById("comparison-run-filter").addEventListener("change", (event) => switchComparisonRun(event.target.value));
 }
 
-async function main() {
-  const response = await fetch("./analysis-data.json");
-  if (!response.ok) throw new Error(`无法读取 analysis-data.json (${response.status})`);
-  state.data = await response.json();
+function refreshFilters() {
+  const datasets = state.data.datasets.map((item) => item.name);
+  if (state.dataset !== "all" && !datasets.includes(state.dataset)) state.dataset = "all";
+  const categories = state.data.failureCategories.map((item) => item.category);
+  if (state.category !== "all" && !categories.includes(state.category)) state.category = "all";
+  const dataset = document.getElementById("dataset-filter");
+  dataset.replaceChildren(new Option("全部数据集", "all"), ...datasets.map((item) => new Option(item, item)));
+  dataset.value = state.dataset;
+  const category = document.getElementById("category-filter");
+  category.replaceChildren(new Option("全部失败类别", "all"), ...categories.map((item) => new Option(categoryLabel(item), item)));
+  category.value = state.category;
+  document.getElementById("change-filter-label").hidden = !state.comparisonData;
+  document.getElementById("change-column").hidden = !state.comparisonData;
+  if (!state.comparisonData) state.change = "all";
+  document.getElementById("change-filter").value = state.change;
+}
+
+function updateReportMeta() {
   const model = state.data.manifest.model ?? state.data.cases[0]?.model ?? "unknown model";
   const generated = state.data.sourceGeneratedAt ? new Date(state.data.sourceGeneratedAt).toLocaleString("zh-CN") : "未知时间";
-  document.getElementById("report-meta").textContent = `${model} · ${state.data.totals.cases} cases · 完成于 ${generated}`;
-  setupFilters();
+  const label = currentHistoryRun()?.label;
+  document.getElementById("report-meta").textContent = `${label ? `${label} · ` : ""}${model} · ${state.data.totals.cases} cases · 完成于 ${generated}`;
+}
+
+function renderAll() {
+  updateReportMeta();
+  refreshFilters();
+  renderHistory();
   renderSummary();
+  renderComparison();
   renderSignals();
   renderDatasetChart();
   renderFailureChart();
   renderScatter();
   renderExplorer();
   renderToolStats();
+}
+
+async function loadHistoryRun(runId) {
+  if (!runId) return null;
+  if (state.runCache.has(runId)) return state.runCache.get(runId);
+  const run = state.history?.runs.find((candidate) => candidate.id === runId);
+  if (!run) throw new Error(`找不到历史评测 ${runId}`);
+  const response = await fetch(run.dataFile);
+  if (!response.ok) throw new Error(`无法读取 ${run.dataFile} (${response.status})`);
+  const data = await response.json();
+  state.runCache.set(runId, data);
+  return data;
+}
+
+async function switchCurrentRun(runId) {
+  if (!runId || runId === state.currentRunId) return;
+  state.currentRunId = runId;
+  state.data = await loadHistoryRun(runId);
+  if (state.comparisonRunId === runId) {
+    const fallback = state.history.runs.find((run) => run.id !== runId)?.id ?? null;
+    state.comparisonRunId = fallback;
+    state.comparisonData = fallback ? await loadHistoryRun(fallback) : null;
+  }
+  state.selected = null;
+  renderAll();
+}
+
+async function switchComparisonRun(runId) {
+  const next = runId === "none" ? null : runId;
+  state.comparisonRunId = next;
+  state.comparisonData = next ? await loadHistoryRun(next) : null;
+  state.change = "all";
+  renderAll();
+}
+
+async function main() {
+  const historyResponse = await fetch("./history.json");
+  if (historyResponse.ok) {
+    state.history = await historyResponse.json();
+    state.currentRunId = state.history.defaultRunId;
+    state.comparisonRunId = state.history.defaultComparisonRunId;
+    state.data = await loadHistoryRun(state.currentRunId);
+    state.comparisonData = await loadHistoryRun(state.comparisonRunId);
+  } else {
+    const response = await fetch("./analysis-data.json");
+    if (!response.ok) throw new Error(`无法读取 analysis-data.json (${response.status})`);
+    state.data = await response.json();
+  }
+  setupFilters();
+  renderAll();
 }
 
 main().catch((error) => {

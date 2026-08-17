@@ -353,16 +353,18 @@ export function buildDabUserPrompt(input: {
   query: string;
   databaseDescription: string;
   hintsText: string;
-}): string {
+}, capabilities: { pythonAvailable: boolean } = { pythonAvailable: true }): string {
   const sections = [
     "DATABASE DESCRIPTION:\n" + input.databaseDescription,
     input.hintsText ? "DATASET HINTS:\n" + input.hintsText : "",
     `ACTIVE CONNECTION CONTRACT:\n` +
       `- This is a product-faithful Stela benchmark connection. Use Stela's existing tools only.\n` +
       `- Each run_query call targets exactly one logical database through its database field. Use language=sql for PostgreSQL/SQLite/DuckDB and language=mongodb for MongoDB collections.\n` +
-      `- MongoDB supports a structured read-only find with collection/filter/projection/limit. Use limit:null only when the exact answer requires the full filtered set.\n` +
-      `- Query different logical databases separately; do not join them in one query. Combine small returned values in your analysis.\n` +
-      `- No Python execution tool is available in this headless baseline; if a large exact cross-database join cannot be completed from bounded query results, report the capability boundary.`,
+      `- MongoDB supports structured read-only find and safe aggregate operations. Prefer aggregate for grouping, ranking, string expressions, and counts.\n` +
+      `- Query different logical databases separately; do not join them in one database query.\n` +
+      (capabilities.pythonAvailable
+        ? `- Successful run_query results can be combined through their artifacts with execute_python. Use DuckDB/pandas there for exact cross-database joins and large calculations.`
+        : `- Python execution is disabled for this legacy baseline; report the capability boundary instead of inventing a cross-database answer.`),
     "QUERY:\n" + input.query,
   ];
   return sections.filter(Boolean).join("\n\n");

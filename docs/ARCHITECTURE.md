@@ -295,14 +295,17 @@ See [ADR-0005](./adr/0005-connector-plugin-dual-track.md).
 Connector API v2 added optional `queryArtifactFormats` metadata and
 `materializeQuery(config, sql, request)`. API v3 adds declared
 `queryLanguages` plus `executeQuery` / `materializeDataQuery` for discriminated
-SQL and structured MongoDB-find requests. Supporting connectors stream a
+SQL and structured MongoDB-find requests. API v4 adds `mongoOperations` and a
+safe, typed MongoDB aggregation variant; missing operation metadata remains
+find-only. Supporting connectors stream a
 read-only result directly into a main-selected temporary Parquet or JSONL path
 and return only columns, total row count, elapsed time, and a bounded preview.
 API v1/v2 connectors remain valid and default to SQL-only; Agent SQL uses their
 buffered result to create a size-limited JSONL artifact when possible. Renderer
 `connector.execute` keeps
 the existing `execution.maxRows` behavior, while this unbounded fallback is an
-internal Agent-only registry path. ([ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md))
+internal Agent-only registry path. ([ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md),
+[ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md))
 
 ## Git Sync
 
@@ -356,7 +359,7 @@ flowchart TB
   HARNESS["agent.ts → stable prompt + turn envelope\n+ compact / overflow recovery"]
   TOOLS["agent-tools → parallel reads\nsequential state changes\n→ connectors / search / vault-fs"]
   ART["main query-artifact cache\nsession + runId scoped"]
-  PY["renderer Web Worker\nPyodide + DuckDB + pandas"]
+  PY["renderer Web Worker / eval Node Worker\nshared Pyodide + DuckDB + pandas core"]
   GUARD["sql-guard + proposal IPC"]
 
   UI --> PRE
@@ -397,7 +400,7 @@ flowchart TB
    plain text, hard breaks, and atomic resource nodes; it serializes only at the
    existing ordered-message boundary. The user timeline reuses that exact ordered
    message while assistant bubbles remain Markdown-only. Device-sharded session history restores timelines,
-   including Canvas artifact links. ([ADR-0066](./adr/0066-structured-read-only-agent-queries.md),
+   including Canvas artifact links. ([ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md),
    [ADR-0062](./adr/0062-implicit-workspace-context-explicit-inline-resources.md),
    [ADR-0063](./adr/0063-prosemirror-agent-composer.md),
    [ADR-0017](./adr/0017-user-cancelled-agent-runs.md),
@@ -411,15 +414,18 @@ flowchart TB
    [ADR-0055](./adr/0055-vault-analysis-canvas-artifacts.md))
    `run_query` may select any named Vault connection and validates its language
    against connector capabilities. SQL keeps mutation proposals and
-   multi-statement blocking; MongoDB is a structured read-only find and rejects
-   server-side JavaScript. Read-only calls return a
+   multi-statement blocking; MongoDB supports structured read-only find and a
+   connector-declared aggregation allowlist, and rejects writes,
+   cross-collection stages, and server-side JavaScript. Read-only calls return a
    bounded model preview and, when available, a same-session machine-local
    artifact addressed only by run id. `execute_python` resolves explicit aliases
    to those artifacts and runs in an app-owned, Node-free Web Worker with
    offline Pyodide, DuckDB, and pandas. Main validates chunk reads; absolute
-   paths never cross preload or enter prompts/history. DAB's headless runner has
-   no renderer Worker and therefore continues to declare Python unavailable
-   instead of measuring a non-product substitute. ([ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md))
+   paths never cross preload or enter prompts/history. DAB's headless runner
+   uses an isolated Node Worker around that same execution core, with an empty
+   JavaScript global object and the same artifact, timeout, and result limits;
+   the desktop product remains Node-free. ([ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md),
+   [ADR-0068](./adr/0068-headless-pyodide-agent-evaluation.md))
    Production CSP adds only `wasm-unsafe-eval` for Pyodide compilation; scripts
    and connections remain self-only and normal `unsafe-eval` stays disabled.
 3. **SQL query parse** — model only emits a `SqlIndexFilter`; hits always come from deterministic `sql-index`.
@@ -527,7 +533,7 @@ All retrieval is lexical and in-process — no embeddings, no FTS5 index ([ADR-0
 - Agent `run_query` records SQL text or canonical structured-query JSON plus `queryLanguage` to `result-store` and `history-journal` under `blockId` `agent:<runId>`, so Agent executions remain auditable. Old history defaults to SQL.
 - Retrieval quality is measured by `npm run eval:retrieval` against mechanically labelled slices; labels never share a signal with the ranker. That eval calls the ranking functions directly, so it says nothing about whether the model picks the right tool or writes a usable query.
 - Ask discipline (`ask_user`) is measured by `npm run eval:agent-ask`, which drives the real `AgentHarness` with the real system prompt and tools. Tasks are generated in pairs from same-family table names in the vault: one version names the table, one leaves ≥3 used candidates open. Asking on the open version and not asking on the named one are both counted, so an agent that always asks cannot score well. Only `connector.execute`, `recordRun`, and `sqlIndex.query` are stubbed — answer correctness needs a live connection and is out of scope. `--self-check` verifies the whole rig without a model call.
-- End-to-end answer quality is measured by `npm run eval:data-agent-bench` against DataAgentBench on the Linux host that owns its PostgreSQL, MongoDB, SQLite, and DuckDB environments. The runner reuses Stela's real system prompt, `AgentHarness`, provider transport, and headless-compatible Agent tools without starting Electron. A thin stdio bridge maps the product `run_query` request to DAB's official `QueryDBTool`, including structured MongoDB finds, and delegates validation to DAB's official implementation. Because product `execute_python` is an app-owned renderer Worker, Linux headless runs explicitly omit it instead of substituting host Python; cross-database Python remains a separate Mac desktop smoke. The runner may process distinct datasets concurrently while serializing runs within each dataset; datasets backed by the shared MongoDB service are mutually exclusive. A fatal bridge timeout aborts the Agent and preserves its root error, while validation runs through an independent bridge. Task/bridge timeouts terminate the complete Python process group so blocking database calls cannot outlive a run. Large file-backed datasets should live on the Linux host's local disk rather than NFS. Linux headless results are authoritative; a temporary Mac subprocess connector may tunnel the same bridge over SSH for desktop parity smoke tests only.
+- End-to-end answer quality is measured by `npm run eval:data-agent-bench` against DataAgentBench on the Linux host that owns its PostgreSQL, MongoDB, SQLite, and DuckDB environments. The runner reuses Stela's real system prompt, `AgentHarness`, provider transport, and Agent tools without starting Electron. A thin stdio bridge maps SQL and structured MongoDB find to DAB's official `QueryDBTool`; safe aggregation uses the same dataset MongoDB service directly because upstream has no pipeline input. The existing `execute_python` tool runs the shared offline Pyodide/DuckDB/pandas core in isolated evaluation Node workers and consumes the normal session query artifacts, never system Python. The runner may process distinct datasets concurrently while serializing runs within each dataset; datasets backed by the shared MongoDB service are mutually exclusive, and Python worker concurrency is bounded separately. A fatal bridge timeout aborts the Agent and preserves its root error, while validation runs through an independent bridge. Task/bridge timeouts terminate the complete Python process group so blocking database calls cannot outlive a run. Large file-backed datasets should live on the Linux host's local disk rather than NFS. Linux headless results are authoritative; a temporary Mac subprocess connector may tunnel the same bridge over SSH for desktop parity smoke tests only. ([ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md), [ADR-0068](./adr/0068-headless-pyodide-agent-evaluation.md))
 
 ### Prompt cache boundary
 

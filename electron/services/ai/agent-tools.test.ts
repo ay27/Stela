@@ -201,7 +201,7 @@ try {
     },
   };
 
-  // run_query exposes one structured MongoDB find path and rejects server-side JavaScript.
+  // run_query exposes structured MongoDB find/aggregate and rejects unsafe operators/stages.
   {
     const received: unknown[] = [];
     const recorded: Array<{ queryLanguage?: string; sql: string }> = [];
@@ -217,6 +217,7 @@ try {
           defaultConfig: {},
           subprocess: false,
           queryLanguages: ["mongodb" as const],
+          mongoOperations: ["find" as const, "aggregate" as const],
         }],
         executeQuery: async (_kind: string, _config: unknown, query: unknown) => {
           received.push(query);
@@ -252,6 +253,41 @@ try {
     assert.equal(recorded[0]?.queryLanguage, "mongodb");
     assert.match(recorded[0]?.sql ?? "", /\"collection\":\"books\"/);
 
+    const aggregate = await dispatchTool("run_query", JSON.stringify({
+      language: "mongodb",
+      operation: "aggregate",
+      database: "catalog",
+      collection: "books",
+      pipeline: [
+        { $match: { rating: { $gte: 4 } } },
+        { $group: { _id: "$author", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ],
+      limit: 10,
+    }), ctx);
+    assert.equal(aggregate.ok, true, aggregate.text);
+    assert.deepEqual(received[1], {
+      language: "mongodb",
+      operation: "aggregate",
+      database: "catalog",
+      collection: "books",
+      pipeline: [
+        { $match: { rating: { $gte: 4 } } },
+        { $group: { _id: "$author", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ],
+      limit: 10,
+    });
+
+    const unsafeAggregate = await dispatchTool("run_query", JSON.stringify({
+      language: "mongodb",
+      operation: "aggregate",
+      collection: "books",
+      pipeline: [{ $lookup: { from: "authors", as: "authors" } }],
+    }), ctx);
+    assert.equal(unsafeAggregate.ok, false);
+    assert.match(unsafeAggregate.text, /stage '\$lookup' is not allowed/);
+
     const unsafe = await dispatchTool("run_query", JSON.stringify({
       language: "mongodb",
       collection: "books",
@@ -259,7 +295,7 @@ try {
     }), ctx);
     assert.equal(unsafe.ok, false);
     assert.match(unsafe.text, /server-side JavaScript/);
-    assert.equal(received.length, 1);
+    assert.equal(received.length, 2);
 
     const unknownLanguage = await dispatchTool("run_query", JSON.stringify({
       language: "javascript",

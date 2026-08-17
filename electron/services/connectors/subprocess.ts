@@ -1,12 +1,13 @@
 /**
  * Subprocess connector：通过 stdin/stdout 行分隔 JSON-RPC 与外部插件通信。
  *
- * 协议（v3，v1/v2 方法保持兼容）：
+ * 协议（v4，v1/v2/v3 方法保持兼容）：
  *   1. 启动 → 子进程吐第一行 `{ method: "hello", result: ConnectorKindMeta }` 完成握手
  *   2. 主进程发 `{ id, method, params }`，子进程回 `{ id, ok, result|error }`
  *   3. 单实例并发：内部 mutex 串行；超时（默认 60s）杀掉重启
- *   4. hello 可选声明 queryArtifactFormats / queryLanguages；v3 子进程可实现
- *      execute_query / materialize_data_query
+ *   4. hello 可选声明 queryArtifactFormats / queryLanguages / mongoOperations；
+ *      v3 子进程可实现 execute_query / materialize_data_query，v4 可声明安全
+ *      MongoDB aggregation
  *
  * 注意：本类**只在 main 进程使用**，与 renderer 完全隔离。
  *

@@ -39,6 +39,14 @@ import {
   type ProposalRequest,
 } from "../../electron/services/ai/agent-tools";
 import {
+  configureQueryArtifactRoot,
+  createQueryArtifactTarget,
+  discardQueryArtifactTarget,
+  finalizeMaterializedQueryArtifact,
+  resolveQueryArtifact,
+  writeBufferedQueryArtifact,
+} from "../../electron/services/query-artifacts";
+import {
   createPlanPersistenceBuffer,
   ExecutionPlanStore,
   formatExecutionPlanEntry,
@@ -61,6 +69,10 @@ import {
   safeSlug,
   writeJson,
 } from "./data-agent-bench/runtime";
+import {
+  assertPyodideAssets,
+  HeadlessPyodidePool,
+} from "./data-agent-bench/headless-python";
 
 const execFileAsync = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -83,6 +95,9 @@ interface CliOptions {
   timeoutMs: number;
   bridgeTimeoutMs: number;
   concurrency: number;
+  pythonConcurrency: number;
+  pyodideAssets: string;
+  noPython: boolean;
   condaEnv: string;
   python: string | null;
 }
@@ -150,6 +165,11 @@ function parseArgs(argv: string[]): CliOptions {
     timeoutMs: intArg(value("--timeout-ms") ?? "1800000", "--timeout-ms", 1000),
     bridgeTimeoutMs: intArg(value("--bridge-timeout-ms") ?? "600000", "--bridge-timeout-ms", 1000),
     concurrency: intArg(value("--concurrency") ?? "1", "--concurrency", 1),
+    pythonConcurrency: intArg(value("--python-concurrency") ?? "2", "--python-concurrency", 1),
+    pyodideAssets: path.resolve(
+      value("--pyodide-assets") ?? path.join(repoRoot, "node_modules", ".cache", "stela-pyodide"),
+    ),
+    noPython: argv.includes("--no-python"),
     condaEnv: value("--conda-env") ?? "dabench",
     python: value("--python") ?? null,
   };
@@ -230,6 +250,17 @@ async function runSelfCheck(tasks: DabTask[], options: CliOptions): Promise<void
                 limit: 1,
               } satisfies DataQueryRequest,
             });
+            await bridge.call<QueryResult>("execute_query", {
+              config,
+              query: {
+                language: "mongodb",
+                operation: "aggregate",
+                database,
+                collection: tables[0],
+                pipeline: [{ $limit: 1 }],
+                limit: 1,
+              } satisfies DataQueryRequest,
+            });
           }
           readOnlyQueries += 1;
         }
@@ -263,8 +294,9 @@ async function runTask(input: {
   options: CliOptions;
   settings: AiSettings;
   credentials: ReturnType<typeof requireCredentials>;
+  pythonPool: HeadlessPyodidePool | null;
 }): Promise<FinalRun> {
-  const { task, runNumber, runDir, options, settings, credentials } = input;
+  const { task, runNumber, runDir, options, settings, credentials, pythonPool } = input;
   await fs.mkdir(runDir, { recursive: true });
   const vaultPath = path.join(runDir, "vault");
   await fs.mkdir(path.join(vaultPath, ".stela"), { recursive: true });
@@ -284,7 +316,7 @@ async function runTask(input: {
   const promptInput = await readDabPrompt(task, options.hints);
   const request: AgentRunRequest = {
     runId: `dab-${safeSlug(task.dataset)}-${task.queryId}-${runNumber}`,
-    prompt: buildDabUserPrompt(promptInput),
+    prompt: buildDabUserPrompt(promptInput, { pythonAvailable: pythonPool !== null }),
     entryPoint: "chat",
     locale: "en",
     connectionName: "dab",
@@ -372,6 +404,7 @@ async function runTask(input: {
             subprocess: true,
             dialect: "DAB routed SQL",
             queryLanguages: ["sql", "mongodb"],
+            mongoOperations: ["find", "aggregate"],
           }],
           listDatabases: async () => bridgeCall("list_databases", { config: bridgeConfig }),
           listTables: async (_kind, _config, database) =>
@@ -383,10 +416,22 @@ async function runTask(input: {
           executeQuery: async (_kind, _config, query: DataQueryRequest) =>
             bridgeCall("execute_query", { config: bridgeConfig, query }),
         },
+        ...(pythonPool
+          ? {
+              queryArtifacts: {
+                createTarget: createQueryArtifactTarget,
+                finalize: finalizeMaterializedQueryArtifact,
+                writeBuffered: writeBufferedQueryArtifact,
+                resolve: resolveQueryArtifact,
+                discard: discardQueryArtifactTarget,
+              },
+              pythonExecutor: pythonPool,
+            }
+          : {}),
         sqlIndex: { query: async () => [] },
         skills: [],
         mode: "normal",
-        run: { runId: request.runId, notePath: null, questionsAsked: 0 },
+        run: { runId: request.runId, sessionId: request.runId, notePath: null, questionsAsked: 0 },
         chartRuns: new Map(),
         resolveChartRun: async (runId) => runRecords.get(runId) ?? null,
         plan,
@@ -435,8 +480,9 @@ async function runTask(input: {
   try {
     const result = await harness.prompt(buildUserContent(request, {
       connection,
-      dialect: "DAB structured query (SQL and MongoDB find)",
+      dialect: "DAB structured query (SQL and MongoDB find/aggregate)",
       queryLanguages: ["sql", "mongodb"],
+      mongoOperations: ["find", "aggregate"],
       contextSources: {
         vault_notes: "empty",
         skills: "empty",
@@ -596,6 +642,22 @@ async function main(): Promise<void> {
     `stela-product-${safeSlug(credentials.model)}-${options.hints ? "hints" : "no-hints"}`,
   );
   await fs.mkdir(output, { recursive: true });
+  let pythonPool: HeadlessPyodidePool | null = null;
+  let artifactRoot: string | null = null;
+  if (!options.noPython) {
+    try {
+      await assertPyodideAssets(options.pyodideAssets);
+    } catch (error) {
+      throw new Error(
+        `Pyodide assets are unavailable at ${options.pyodideAssets}. ` +
+        `Run 'npm run prepare:pyodide' or pass --no-python for a legacy baseline. ` +
+        `Cause: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "stela-dab-artifacts-"));
+    configureQueryArtifactRoot(artifactRoot);
+    pythonPool = new HeadlessPyodidePool(options.pyodideAssets, options.pythonConcurrency);
+  }
   const [stelaGit, dabGit] = await Promise.all([gitState(repoRoot), gitState(options.dabRoot)]);
   await writeJson(path.join(output, "manifest.json"), {
     generatedAt: new Date().toISOString(),
@@ -610,6 +672,8 @@ async function main(): Promise<void> {
     timeoutMs: options.timeoutMs,
     bridgeTimeoutMs: options.bridgeTimeoutMs,
     concurrency: options.concurrency,
+    pythonRuntime: options.noPython ? "disabled" : "pyodide",
+    pythonConcurrency: options.noPython ? 0 : options.pythonConcurrency,
     host: { platform: process.platform, arch: process.arch, node: process.version },
   });
 
@@ -627,11 +691,12 @@ async function main(): Promise<void> {
     const task = jobs[0]?.task;
     if (task) datasetResourceLocks.set(task.dataset, await readDabDatasetResourceLocks(task));
   }));
-  const resultGroups = await mapWithResourceConcurrency(
-    datasetJobs,
-    options.concurrency,
-    (jobs) => datasetResourceLocks.get(jobs[0]?.task.dataset ?? "") ?? [],
-    async (jobs): Promise<FinalRun[]> => {
+  try {
+    const resultGroups = await mapWithResourceConcurrency(
+      datasetJobs,
+      options.concurrency,
+      (jobs) => datasetResourceLocks.get(jobs[0]?.task.dataset ?? "") ?? [],
+      async (jobs): Promise<FinalRun[]> => {
       const groupResults: FinalRun[] = [];
       for (const { task, runNumber } of jobs) {
         const runDir = path.join(output, `query_${task.dataset}`, `query${task.queryId}`, `run_${runNumber}`);
@@ -646,7 +711,7 @@ async function main(): Promise<void> {
         }
         console.log(`RUN  ${task.dataset}/query${task.queryId}/run_${runNumber}`);
         try {
-          const result = await runTask({ task, runNumber, runDir, options, settings, credentials });
+          const result = await runTask({ task, runNumber, runDir, options, settings, credentials, pythonPool });
           await writeJson(finalPath, result);
           await fs.rm(path.join(runDir, "runner_failure.json"), { force: true });
           groupResults.push(result);
@@ -690,11 +755,15 @@ async function main(): Promise<void> {
         }
       }
       return groupResults;
-    },
-  );
-  const results = resultGroups.flat();
-  await writeSummary(output, results);
-  console.log(`\n${results.filter((result) => result.valid).length}/${results.length} valid -> ${output}`);
+      },
+    );
+    const results = resultGroups.flat();
+    await writeSummary(output, results);
+    console.log(`\n${results.filter((result) => result.valid).length}/${results.length} valid -> ${output}`);
+  } finally {
+    await pythonPool?.close();
+    if (artifactRoot) await fs.rm(artifactRoot, { recursive: true, force: true });
+  }
 }
 
 if (path.resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {

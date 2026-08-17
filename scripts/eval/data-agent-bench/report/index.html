@@ -21,7 +21,40 @@
       </header>
 
       <main id="report-root" aria-live="polite">
+        <section id="history-controls" class="stela-panel stela-history-controls" hidden>
+          <div class="stela-section-heading">
+            <div>
+              <p class="stela-section-kicker">RUN HISTORY</p>
+              <h2>历史评测对比</h2>
+            </div>
+            <span id="history-count" class="stela-muted"></span>
+          </div>
+          <div class="stela-history-selectors">
+            <label>
+              <span>当前轮</span>
+              <select id="current-run-filter"></select>
+            </label>
+            <label>
+              <span>对照轮</span>
+              <select id="comparison-run-filter"></select>
+            </label>
+          </div>
+          <div id="history-trend" class="stela-history-trend"></div>
+        </section>
+
         <section id="summary" class="stela-summary-grid"></section>
+
+        <section id="comparison" class="stela-panel" hidden>
+          <div class="stela-section-heading">
+            <div>
+              <p class="stela-section-kicker">RUN-TO-RUN DELTA</p>
+              <h2>结果变化</h2>
+            </div>
+            <span id="comparison-label" class="stela-muted"></span>
+          </div>
+          <div id="comparison-summary" class="stela-comparison-grid"></div>
+          <div id="dataset-comparison" class="stela-dataset-comparison"></div>
+        </section>
 
         <section class="stela-panel stela-signals-panel">
           <div class="stela-section-heading">
@@ -94,6 +127,17 @@
               <span>失败类别</span>
               <select id="category-filter"></select>
             </label>
+            <label id="change-filter-label" hidden>
+              <span>相比对照轮</span>
+              <select id="change-filter">
+                <option value="all">全部变化</option>
+                <option value="fixed">已修复</option>
+                <option value="regressed">新回归</option>
+                <option value="still-fail">持续失败</option>
+                <option value="still-pass">持续通过</option>
+                <option value="new">新增 case</option>
+              </select>
+            </label>
             <label class="stela-search-label">
               <span>搜索</span>
               <input id="case-search" type="search" placeholder="dataset、问题、答案或 validator" />
@@ -120,6 +164,7 @@
                     <th>工具</th>
                     <th>模型轮次</th>
                     <th>失败类别</th>
+                    <th id="change-column" hidden>相比对照轮</th>
                   </tr>
                 </thead>
                 <tbody id="case-list"></tbody>

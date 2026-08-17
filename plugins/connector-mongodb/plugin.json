@@ -2,6 +2,6 @@
   "id": "connector-mongodb",
   "kind": "mongodb",
   "displayName": "MongoDB",
-  "apiVersion": 3,
+  "apiVersion": 4,
   "entry": "dist/index.cjs"
 }

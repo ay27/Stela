@@ -26,11 +26,13 @@ export function buildSystemPrompt(skillLimitsPrompt?: string): string {
     "When you don't know which table to query, use search_tables with business keywords before guessing table names.",
     "Use search_skills before relying on domain knowledge that may exist in the internal Skill library, but never call it when context_sources.skills is empty or unavailable.",
     "For data-analysis questions, follow this playbook: (1) identify candidate tables with mentioned tables, search_tables, and only then list_databases/list_tables; (2) inspect schemas before writing SQL; (3) if the user uses business terms such as pbr/coloring/status, map them to concrete columns by checking column names, DDL comments, vault notes, and small grouped samples; (4) run a small verification SQL first when field meaning is uncertain; (5) if results contradict the hypothesis, try the next plausible field and say what changed; (6) finish with the exact table, fields, SQL logic, and numbers used.",
+    "Keep exact computation close to the data: prefer one database-side aggregation over repeated preview probes; use execute_python when available for cross-connection joins, large artifact-backed calculations, or transformations the source cannot express. Never manually enumerate dozens of previews or calculate from a truncated preview.",
+    "Preserve source values exactly when the user asks for identifiers, codes, categories, names, or ordered rows. Before answering, verify the requested scope, time range, unit, denominator, ranking rule, and output shape; do not silently replace raw keys with friendlier labels.",
     "Use search_vault/list_vault_files/read_note for business definitions in notes, unless context_sources.vault_notes is empty or unavailable. read_note supports offset/maxChars for paging through large notes.",
     "Once you know a table name, use search_sql_usage with its table parameter instead of search_vault to find any note that reads or writes it and learn how it is normally joined and filtered, unless context_sources.sql_history is empty or unavailable. Use readTable or writeTable only when the direction matters — it is an exact AST lookup rather than a text match.",
     "Retrieval results report totalMatches/truncated. If truncated, narrow the keywords rather than assuming you saw everything; if there are zero matches, report that and try other available context sources. Call ask_user only when context_sources.clarification is available or unknown; otherwise state the missing evidence instead of inventing a table or column.",
     "Never assume schema or row values you haven't fetched with a tool.",
-    "SQL row limits are enforced automatically; you don't need to add LIMIT yourself. MongoDB is exposed only as a structured read-only find request; use filter/projection and set limit:null only when an exact full scan is required for execute_python.",
+    "SQL row limits are enforced automatically; you don't need to add LIMIT yourself. MongoDB is exposed as structured read-only find and connector-declared safe aggregate requests. Use aggregate for grouping/ranking/counts; set limit:null only when an exact full result must be materialized for execute_python.",
     "Charts are available through create_chart after a successful SQL run_query. If explicitly requested, create one when suitable; otherwise chart conservatively only when it materially improves the answer, with at most two charts. Use preset trend for ordered/time line or area, ranking for bars, composition for arc with at most five categories, distribution for histogram/boxplot, correlation for point/bubble, funnel for ordered stages, retention for rect heatmaps, and comparison for at most two shared-x bar/line/area/point/rule layers. Declare exact result columns as semantic fields and reference their ids from encodings. Keep aggregation, time buckets, Top N, and business calculations in SQL; ORDER BY ordered axes and never invent or silently sample data. Include the exact stela-chart fence returned by the tool and a short conclusion.",
     "In conversation and final-answer text, SQL MUST use fenced ```sql``` blocks. Conversation SQL is read-only evidence for the user to inspect and copy; never label it ```runsql```.",
     "Only Markdown content being written into a vault note may use executable fenced ```runsql``` blocks. In vault Markdown, ```sql``` remains a plain, non-executable code fence.",
@@ -77,11 +79,13 @@ export interface AgentTurnPromptContext {
   connection: ConnectionEntry | null;
   dialect: string | null;
   queryLanguages?: Array<"sql" | "mongodb">;
+  mongoOperations?: Array<"find" | "aggregate">;
   availableConnections?: Array<{
     name: string;
     kind: string;
     dialect: string | null;
     queryLanguages?: Array<"sql" | "mongodb">;
+    mongoOperations?: Array<"find" | "aggregate">;
   }>;
   skillMetadata?: string;
   contextSources?: Partial<Record<
@@ -102,7 +106,7 @@ export function buildUserContent(
     `entry_point: ${safeRequest.entryPoint ?? "chat"}`,
     `locale: ${safeRequest.locale ?? "en"}`,
     safeRequest.connectionName && context.connection
-      ? `active_connection: ${safeRequest.connectionName} (kind: ${context.connection.kind}${context.dialect ? `, dialect: ${context.dialect}` : ""}, query_languages: ${(context.queryLanguages ?? ["sql"]).join(",")})`
+      ? `active_connection: ${safeRequest.connectionName} (kind: ${context.connection.kind}${context.dialect ? `, dialect: ${context.dialect}` : ""}, query_languages: ${(context.queryLanguages ?? ["sql"]).join(",")}, mongo_operations: ${(context.mongoOperations ?? ["find"]).join(",")})`
       : "active_connection: none",
   ];
   if (context.availableConnections?.length) {

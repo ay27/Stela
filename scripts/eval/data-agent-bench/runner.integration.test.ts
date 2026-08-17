@@ -115,6 +115,7 @@ def validate(query_dir, llm_answer, reason=None):
       "--output", output,
       "--python", "python3",
       "--concurrency", "2",
+      "--no-python",
       "--bridge-timeout-ms", "10000",
     ],
     {

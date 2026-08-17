@@ -333,6 +333,7 @@ interface ConnectorKindMeta {
   subprocess: boolean;
   dialect?: string;         // "MySQL", "PostgreSQL", etc.
   queryLanguages?: Array<"sql" | "mongodb">; // missing means SQL-only
+  mongoOperations?: Array<"find" | "aggregate">; // missing means find-only
   queryArtifactFormats?: Array<"parquet" | "jsonl">;
 }
 ```
@@ -344,10 +345,19 @@ type DataQueryRequest =
   | { language: "sql"; query: string; database?: string | null }
   | {
       language: "mongodb";
+      operation?: "find";
       database?: string | null;
       collection: string;
       filter?: Record<string, unknown>;
       projection?: Record<string, unknown> | null;
+      limit?: number | null;
+    }
+  | {
+      language: "mongodb";
+      operation: "aggregate";
+      database?: string | null;
+      collection: string;
+      pipeline: Record<string, unknown>[];
       limit?: number | null;
     };
 ```
@@ -388,6 +398,8 @@ the path to renderer or model code. Connectors without the v2 materialization
 method continue through the buffered v1 result contract. Plugin API v3 adds
 `queryLanguages`, `executeQuery`, and `materializeDataQuery`; absent language
 metadata remains SQL-only, so v1/v2 plugins require no migration.
+Plugin API v4 adds `mongoOperations` and safe aggregation; absent operation
+metadata remains find-only, so v1-v3 plugins require no migration.
 
 ## AppSettings
 
@@ -702,9 +714,10 @@ Each device retains only its 20 most recently updated session files; cleanup
 never deletes another device's directory ([ADR-0047](./adr/0047-bounded-device-agent-history-retention.md)).
 
 Agent `run_query` accepts an optional Vault `connectionName`; omission selects
-the current note connection. The connector's `queryLanguages` determines
-whether SQL or structured MongoDB finds are accepted. MongoDB requests expose
-only collection/filter/projection/limit and reject server-side JavaScript. A
+the current note connection. The connector's `queryLanguages` and
+`mongoOperations` determine whether SQL, structured MongoDB find, or safe
+MongoDB aggregation is accepted. Aggregation uses a bounded stage allowlist and
+rejects writes, cross-collection stages, facets, and server-side JavaScript. A
 successful read returns at most 200 preview rows to the model and records the
 same bounded rows in normal history, while `rowCount` describes the full
 result. When possible it also creates a machine-local artifact under Electron
@@ -736,13 +749,16 @@ assign a bounded scalar/DataFrame/relation to `result`. There is no Node API,
 host filesystem, subprocess, package installation, or general network bridge.
 Timeout/cancellation terminates the Worker. Artifacts are disposable, capped,
 TTL-cleaned, and never written to Vault SQLite/JSONL, Markdown, Agent history,
-or Git. ([ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md))
+or Git. Headless evaluation uses the same Python program and offline packages
+inside isolated Node workers, without changing the desktop runtime or exposing
+a second model tool. ([ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md),
+[ADR-0068](./adr/0068-headless-pyodide-agent-evaluation.md))
 
 `search_sql_usage({ table })` finds a table in either read or write position.
 `readTable` and `writeTable` remain available when the caller needs only one
 direction.
 
-Safety ([ADR-0066](./adr/0066-structured-read-only-agent-queries.md)):
+Safety ([ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md)):
 
 - `sql-guard` classifies read-only vs mutation vs multi-statement
 - Mutations + `propose_edit` block on `ai:agent-respond-proposal`

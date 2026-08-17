@@ -180,12 +180,14 @@ async function loadAvailableConnections(
   connections: ConnectionMap;
   dialects: Record<string, string | null>;
   queryLanguages: Record<string, Array<"sql" | "mongodb">>;
+  mongoOperations: Record<string, Array<"find" | "aggregate">>;
 }> {
   try {
     const connections = await connectionsStore.loadConnections(vaultPath, slug);
     const kinds = connectorRegistry.listKinds();
     const kindDialects = new Map(kinds.map((item) => [item.kind, item.dialect ?? null]));
     const kindLanguages = new Map(kinds.map((item) => [item.kind, item.queryLanguages ?? ["sql"]]));
+    const kindMongoOperations = new Map(kinds.map((item) => [item.kind, item.mongoOperations ?? ["find"]]));
     return {
       connections,
       dialects: Object.fromEntries(
@@ -200,10 +202,16 @@ async function loadAvailableConnections(
           kindLanguages.get(connection.kind) ?? ["sql"],
         ]),
       ),
+      mongoOperations: Object.fromEntries(
+        Object.entries(connections).map(([name, connection]) => [
+          name,
+          kindMongoOperations.get(connection.kind) ?? ["find"],
+        ]),
+      ),
     };
   } catch (err) {
     log.warn("loadAvailableConnections failed", { err: (err as Error).message });
-    return { connections: {}, dialects: {}, queryLanguages: {} };
+    return { connections: {}, dialects: {}, queryLanguages: {}, mongoOperations: {} };
   }
 }
 
@@ -963,6 +971,9 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         queryLanguages: request.connectionName
           ? available.queryLanguages[request.connectionName] ?? ["sql"]
           : [],
+        mongoOperations: request.connectionName
+          ? available.mongoOperations[request.connectionName] ?? ["find"]
+          : [],
         contextSources: {
           vault_notes: "unknown",
           skills: skills.loaded.length > 0 ? "available" : "empty",
@@ -978,6 +989,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
             kind: entry.kind,
             dialect: available.dialects[name] ?? null,
             queryLanguages: available.queryLanguages[name] ?? ["sql"],
+            mongoOperations: available.mongoOperations[name] ?? ["find"],
           })),
       });
       let result = await harness.prompt(userContent);

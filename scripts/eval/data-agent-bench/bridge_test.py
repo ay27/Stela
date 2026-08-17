@@ -74,6 +74,46 @@ class BridgeHelpersTest(unittest.TestCase):
                 ["articles_database"],
             )
 
+    def test_structured_mongodb_aggregate(self):
+        database, raw = BRIDGE.official_query_from_structured(
+            {
+                "language": "mongodb",
+                "operation": "aggregate",
+                "database": "articles_database",
+                "collection": "articles",
+                "pipeline": [
+                    {"$match": {"region": "US"}},
+                    {"$group": {"_id": "$author", "count": {"$sum": 1}}},
+                    {"$sort": {"count": -1}},
+                ],
+                "limit": 10,
+            },
+            ["articles_database"],
+        )
+        self.assertEqual(database, "articles_database")
+        parsed = BRIDGE.json.loads(raw)
+        self.assertEqual(parsed["operation"], "aggregate")
+        self.assertEqual(parsed["pipeline"][1]["$group"]["count"], {"$sum": 1})
+
+    def test_reject_mongodb_aggregate_write_and_javascript(self):
+        for pipeline in [
+            [{"$out": "copy"}],
+            [{"$project": {"x": {"$function": {"body": "return 1"}}}}],
+            [{"$lookup": {"from": "other", "as": "rows"}}],
+        ]:
+            with self.subTest(pipeline=pipeline):
+                with self.assertRaises(BRIDGE.BridgeError):
+                    BRIDGE.official_query_from_structured(
+                        {
+                            "language": "mongodb",
+                            "operation": "aggregate",
+                            "database": "articles_database",
+                            "collection": "articles",
+                            "pipeline": pipeline,
+                        },
+                        ["articles_database"],
+                    )
+
     def test_normalize_records(self):
         result = BRIDGE.normalize_query_result(
             [{"name": "a", "score": 1.5}, {"name": "b", "score": 2.0}],

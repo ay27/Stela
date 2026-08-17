@@ -16,6 +16,7 @@ await build({
   logLevel: "info",
   alias: {
     "@stela/connector-plugin-sdk": path.join(repoRoot, "plugin-sdk/src/index.ts"),
+    "@shared": path.join(repoRoot, "electron/shared"),
   },
 });
 

@@ -6,8 +6,15 @@ import {
   Long,
   MongoClient,
   ObjectId,
+  type Collection,
   type Document,
 } from "mongodb";
+
+import {
+  containsForbiddenMongoOperator,
+  MONGO_AGGREGATION_MAX_TIME_MS,
+  validateMongoAggregationPipeline,
+} from "@shared/mongodb-query";
 
 import {
   CONNECTOR_PLUGIN_API_VERSION,
@@ -62,16 +69,6 @@ function clientKey(value: MongoConfig): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-const FORBIDDEN_MONGO_OPERATORS = new Set(["$where", "$function", "$accumulator"]);
-
-function containsServerSideJavaScript(value: unknown): boolean {
-  if (Array.isArray(value)) return value.some(containsServerSideJavaScript);
-  if (!value || typeof value !== "object") return false;
-  return Object.entries(value as Record<string, unknown>).some(
-    ([key, nested]) => FORBIDDEN_MONGO_OPERATORS.has(key.toLowerCase()) || containsServerSideJavaScript(nested),
-  );
-}
-
 function normalize(value: unknown): unknown {
   if (value === null || value === undefined) return null;
   if (value instanceof ObjectId) return value.toHexString();
@@ -114,10 +111,27 @@ function mongoQuery(request: DataQueryRequest): Extract<DataQueryRequest, { lang
     throw new PluginError("unsupported_query_language", "MongoDB connector accepts mongodb queries only");
   }
   if (!request.collection.trim()) throw new PluginError("invalid_query", "collection is required");
-  if (containsServerSideJavaScript(request.filter) || containsServerSideJavaScript(request.projection)) {
+  if (request.operation === "aggregate") {
+    const error = validateMongoAggregationPipeline(request.pipeline);
+    if (error) throw new PluginError("unsafe_query", error);
+  } else if (containsForbiddenMongoOperator(request.filter) || containsForbiddenMongoOperator(request.projection)) {
     throw new PluginError("unsafe_query", "MongoDB server-side JavaScript operators are not allowed");
   }
   return request;
+}
+
+function queryCursor(collection: Collection<Document>, query: ReturnType<typeof mongoQuery>) {
+  if (query.operation === "aggregate") {
+    let cursor = collection.aggregate(query.pipeline, {
+      allowDiskUse: false,
+      maxTimeMS: MONGO_AGGREGATION_MAX_TIME_MS,
+    });
+    if (query.limit !== null) cursor = cursor.limit(query.limit ?? 200);
+    return cursor;
+  }
+  let cursor = collection.find(query.filter ?? {}, { projection: query.projection ?? undefined });
+  if (query.limit !== null) cursor = cursor.limit(query.limit ?? 200);
+  return cursor;
 }
 
 class MongoConnector implements Connector {
@@ -133,8 +147,9 @@ class MongoConnector implements Connector {
       kind: "mongodb",
       displayName: "MongoDB",
       subprocess: false,
-      dialect: "MongoDB find",
+      dialect: "MongoDB",
       queryLanguages: ["mongodb"],
+      mongoOperations: ["find", "aggregate"],
       queryArtifactFormats: ["jsonl"],
       configSchema: {
         type: "object",
@@ -196,11 +211,10 @@ class MongoConnector implements Connector {
   async executeQuery(raw: unknown, input: DataQueryRequest): Promise<QueryResult> {
     const query = mongoQuery(input);
     const started = Date.now();
-    let cursor = this.getClient(raw)
+    const collection = this.getClient(raw)
       .db(this.databaseName(raw, query.database))
-      .collection(query.collection)
-      .find(query.filter ?? {}, { projection: query.projection ?? undefined });
-    if (query.limit !== null) cursor = cursor.limit(query.limit ?? 200);
+      .collection(query.collection);
+    const cursor = queryCursor(collection, query);
     const table = tabular(await cursor.toArray());
     return { kind: "query", columns: table.columns, rows: table.rows, elapsedMs: Date.now() - started };
   }
@@ -213,11 +227,10 @@ class MongoConnector implements Connector {
     if (artifact.format !== "jsonl") throw new PluginError("unsupported_artifact", "MongoDB supports JSONL artifacts only");
     const query = mongoQuery(input);
     const started = Date.now();
-    let cursor = this.getClient(raw)
+    const collection = this.getClient(raw)
       .db(this.databaseName(raw, query.database))
-      .collection(query.collection)
-      .find(query.filter ?? {}, { projection: query.projection ?? undefined });
-    if (query.limit !== null) cursor = cursor.limit(query.limit ?? 200);
+      .collection(query.collection);
+    const cursor = queryCursor(collection, query);
     const handle = await fs.open(artifact.outputPath, "wx");
     const previewRecords: Record<string, unknown>[] = [];
     const fieldSamples = new Map<string, unknown[]>();

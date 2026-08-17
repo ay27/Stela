@@ -14,7 +14,7 @@
  */
 
 /** 当前 module 插件协议版本。host 加载时校验 `apiVersion <=` 它支持的版本。 */
-export const CONNECTOR_PLUGIN_API_VERSION = 3;
+export const CONNECTOR_PLUGIN_API_VERSION = 4;
 
 /** 结果集列定义。 */
 export interface ColumnDef {
@@ -79,20 +79,32 @@ export interface ConnectorKindMeta {
   dialect?: string;
   /** API v3: structured query languages supported by the Agent path. */
   queryLanguages?: QueryLanguage[];
+  /** API v4: supported MongoDB operations. Missing means find-only. */
+  mongoOperations?: MongoQueryOperation[];
   /** API v2: formats accepted by materializeQuery. */
   queryArtifactFormats?: QueryArtifactFormat[];
 }
 
 export type QueryLanguage = "sql" | "mongodb";
+export type MongoQueryOperation = "find" | "aggregate";
 
 export type DataQueryRequest =
   | { language: "sql"; query: string; database?: string | null }
   | {
       language: "mongodb";
+      operation?: "find";
       collection: string;
       database?: string | null;
       filter?: Record<string, unknown>;
       projection?: Record<string, unknown> | null;
+      limit?: number | null;
+    }
+  | {
+      language: "mongodb";
+      operation: "aggregate";
+      collection: string;
+      database?: string | null;
+      pipeline: Record<string, unknown>[];
       limit?: number | null;
     };
 
@@ -122,7 +134,7 @@ export interface Connector {
   meta(): ConnectorKindMeta;
   test(config: unknown): Promise<TestResult>;
   execute(config: unknown, sql: string): Promise<QueryResult>;
-  /** API v3 structured query entry. */
+  /** API v3 structured query entry; API v4 adds safe MongoDB aggregation. */
   executeQuery?(
     config: unknown,
     query: DataQueryRequest,
@@ -136,7 +148,7 @@ export interface Connector {
     sql: string,
     request: QueryArtifactRequest,
   ): Promise<MaterializedQueryResult>;
-  /** API v3 structured-query artifact entry. */
+  /** API v3 structured-query artifact entry; API v4 adds safe MongoDB aggregation. */
   materializeDataQuery?(
     config: unknown,
     query: DataQueryRequest,

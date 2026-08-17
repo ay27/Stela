@@ -2,7 +2,8 @@
 type: ADR
 id: "0066"
 title: "Structured read-only Agent queries across connector languages"
-status: active
+status: superseded
+superseded_by: "0067"
 date: 2026-08-16
 ---
 

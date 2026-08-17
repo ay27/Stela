@@ -118,4 +118,6 @@ proposed → active → superseded
 | [0063](0063-prosemirror-agent-composer.md) | ProseMirror-backed Agent composer | active |
 | [0064](0064-session-query-artifacts-and-sandboxed-python.md) | Session query artifacts and sandboxed Python | active |
 | [0065](0065-session-oriented-agent-observability.md) | Session-oriented Agent observability projection | active |
-| [0066](0066-structured-read-only-agent-queries.md) | Structured read-only Agent queries across connector languages | active |
+| [0066](0066-structured-read-only-agent-queries.md) | Structured read-only Agent queries across connector languages | superseded → [0067](0067-safe-mongodb-aggregation-queries.md) |
+| [0067](0067-safe-mongodb-aggregation-queries.md) | Safe MongoDB aggregation queries | active |
+| [0068](0068-headless-pyodide-agent-evaluation.md) | Headless Pyodide Agent evaluation | active |

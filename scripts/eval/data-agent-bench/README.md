@@ -10,15 +10,14 @@ The benchmark path is intentionally product-faithful:
 
 - Stela exposes the same structured `run_query` tool used by the desktop app;
   the benchmark adds no DAB-only database tool.
-- Each query names exactly one logical database. SQL and MongoDB inputs are
-  dispatched through DAB's official `QueryDBTool`; cross-database work uses
-  separate queries and the normal Stela result artifacts.
-- MongoDB is a bounded, read-only `find` request with structured filter,
-  projection, and limit fields. JavaScript predicates such as `$where` are
-  rejected.
-- Headless Linux runs do not expose `execute_python`, because its Pyodide
-  security boundary is a desktop runtime capability. Cross-database Python
-  analysis therefore requires a separate Mac desktop smoke test.
+- Each query names exactly one logical database. SQL and MongoDB find inputs use
+  DAB's official `QueryDBTool`; safe MongoDB aggregation uses the same dataset
+  service directly because upstream has no pipeline input.
+- MongoDB aggregation accepts a bounded read-only stage allowlist. Writes,
+  cross-collection stages, facets, and JavaScript predicates are rejected.
+- Headless Linux exposes the existing `execute_python` tool through isolated
+  Node workers running the same offline Pyodide, DuckDB, pandas, execution
+  script, artifact authorization, timeout, and result limits as the desktop.
 - Dataset hints are enabled by default; pass `--no-hints` to disable them.
 
 ## Linux runner
@@ -29,6 +28,7 @@ dependencies without running Electron native rebuild scripts:
 ```bash
 cd /path/to/stela-opensource
 npm ci --ignore-scripts
+npm run prepare:pyodide
 
 # Keep large SQLite/DuckDB files on a local disk. NFS can turn one scan into hours.
 export DAB_ROOT=/root/data_agent_bench
@@ -50,6 +50,7 @@ npm run eval:data-agent-bench -- \
   --all \
   --runs 1 \
   --concurrency 3 \
+  --python-concurrency 2 \
   --bridge-timeout-ms 600000 \
   --resume
 ```
@@ -64,6 +65,10 @@ The default result directory is adjacent to the DAB checkout:
 directory. No API key or raw endpoint is written; the manifest records only an
 endpoint hash plus both Git commits and tracked-dirty flags.
 
+Pyodide is required by default. Use `--pyodide-assets /path/to/assets` to point
+at a prepared offline closure. `--no-python` exists only to reproduce the older
+headless baseline and is recorded in the manifest.
+
 Generate the static analysis dashboard from any completed result directory:
 
 ```bash
@@ -74,11 +79,27 @@ python3 -m http.server 8765 --directory /path/to/completed-results/analysis
 Then open `http://127.0.0.1:8765`. The generated analysis JSON truncates large
 tool payloads while the original `final_agent.json` files remain untouched.
 
+For ongoing evaluations, keep every completed run in a separate directory and
+build one historical dashboard from their common parent:
+
+```bash
+npm run report:data-agent-bench -- \
+  --history-root /path/to/dab-results \
+  --output /path/to/dab-results/analysis
+python3 -m http.server 8765 --directory /path/to/dab-results/analysis
+```
+
+History mode discovers completed child directories, writes a small
+`history.json` index, and stores each run's truncated analysis separately below
+`analysis/runs/`. The browser loads only the selected current and comparison
+runs. Re-run the same command after copying in a new result directory; existing
+history remains available by directory identity and completion timestamp.
+
 One internal run per query reports a **valid rate**, not leaderboard Pass@1.
 For a leaderboard-shaped result, run `--all --runs 5`; `submission.json` uses
 DAB's `dataset/query/run/answer` shape.
 
-## Mac desktop smoke through SSH
+## Optional Mac desktop parity smoke through SSH
 
 The scored run stays on Linux. To check that the actual Mac Agent Panel behaves
 the same, install the SSH shim as a subprocess connector in a temporary Vault.
@@ -110,8 +131,11 @@ this smoke is a parity check and is not included in benchmark scores.
 - Defaults: one dataset worker, 100 model responses, 200 tool calls, 10 minutes
   per bridge call, and 30 minutes per task. Task timeout also terminates the
   bridge process group so a blocking SQL call cannot outlive the run.
-- Stela's SQL guard blocks mutations, and MongoDB accepts only structured
-  read-only finds. The bridge uses DAB's official query tool and writes traces
-  only to the selected result directory.
+- Stela's SQL guard blocks mutations. MongoDB accepts only structured read-only
+  find or allowlisted aggregation, with TypeScript and Python validation. The
+  bridge uses DAB's official query tool except for aggregation, which upstream
+  cannot express.
+- `--python-concurrency` defaults to 2 independently isolated runtimes; lower it
+  to 1 on memory-constrained hosts.
 - `--resume` reuses only a complete `final_agent.json`; interrupted runs are
   rerun.
