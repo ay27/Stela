@@ -38,7 +38,9 @@ The built-in **Try Demo Vault** follows one complete commerce review: Northstar 
 
 - **SQL that lives in your notes** — Drop a `runsql` block anywhere in a Markdown note. The query, its results, and your commentary stay together in one file. No more scattered scratchpads.
 
-- **Connect to your data sources** — Bundled plugins support MySQL and PostgreSQL out of the box. The plugin system and HTTP gateway example make it easy to add any other data source you need.
+- **Connect to your data sources** — Bundled plugins support MySQL, PostgreSQL, and MongoDB out of the box. The plugin system and HTTP gateway example make it easy to add any other data source you need.
+
+- **Sandboxed Python analysis** — The Data Agent can analyze query artifacts with Pyodide, DuckDB, pandas, and NumPy without requiring a system Python installation or exposing host filesystem and network access.
 
 - **Keep a complete audit trail** — Every query, including failures, is logged. Compare execution results side by side, inspect metadata, or export a note when you need to share your findings.
 
@@ -162,7 +164,9 @@ For system design and contributor information, see [Architecture](./docs/ARCHITE
 
 - **Agent Dashboard** — 本地查看完成率、耗时、Token、工具调用、Skill 使用、知识维护结果与脱敏 Trace；指标保存在 Git 忽略的 90 天本地存储中。
 
-- **连接任何数据源** — 通过插件系统接入 MySQL、PostgreSQL 等主流数据库，一个工作台管理所有数据。
+- **连接任何数据源** — 内置插件支持 MySQL、PostgreSQL 与 MongoDB，也可以通过插件系统继续扩展其他数据源。
+
+- **沙箱 Python 分析** — Data Agent 可以使用 Pyodide、DuckDB、pandas 与 NumPy 分析查询结果，无需安装系统 Python，也不会获得宿主文件系统或网络访问权限。
 
 - **AI 原生数据分析** — 内置 Data Agent 辅助写 SQL、解读查询结果、自动生成分析报告。
 
