@@ -19,6 +19,28 @@ const parsed = parseInput<{
 
 assert.equal(parsed.patch.ai?.agentAllowMutations, true);
 
+const profileSwitchPatch = {
+  patch: {
+    ai: {
+      activeProfileId: "profile-deepseek",
+      profiles: [{
+        id: "profile-deepseek",
+        name: "DeepSeek",
+        vendorId: "deepseek",
+        model: "deepseek-chat",
+        baseUrl: "",
+        contextWindow: 128_000 as const,
+        hasApiKey: true,
+      }],
+    },
+  },
+};
+assert.deepEqual(
+  parseInput(IPC.SETTINGS_PATCH, profileSwitchPatch),
+  profileSwitchPatch,
+  "settings.patch must preserve AI profile selection fields",
+);
+
 assert.deepEqual(parseInput(IPC.AI_AGENT_HISTORY_LIST, {}), {});
 assert.deepEqual(
   parseInput(IPC.AI_AGENT_HISTORY_LOAD, { sessionId: "sess_abc", deviceSlug: "laptop" }),

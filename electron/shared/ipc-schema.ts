@@ -42,6 +42,24 @@ const runRecordSchema = z.object({
 
 const themeModeSchema = z.enum(["light", "dark", "system"]);
 const editorWidthSchema = z.enum(["narrow", "wide"]);
+const aiContextWindowSchema = z.union([
+  z.literal(64_000),
+  z.literal(128_000),
+  z.literal(200_000),
+  z.literal(256_000),
+  z.literal(1_000_000),
+]);
+const aiProviderProfileSchema = z
+  .object({
+    id: z.string().min(1).max(128),
+    name: z.string().min(1).max(128),
+    vendorId: z.string().min(1).max(128),
+    model: z.string().min(1).max(256),
+    baseUrl: z.string().max(2048),
+    contextWindow: aiContextWindowSchema,
+    hasApiKey: z.boolean(),
+  })
+  .strict();
 
 const recentFileEntrySchema = z.object({
   path: stringMin1,
@@ -88,16 +106,12 @@ const partialSettingsSchema = z
     ai: z
       .object({
         providerMode: z.enum(["disabled", "openai-compatible", "cloud"]),
+        activeProfileId: z.string().min(1).max(128),
+        profiles: z.array(aiProviderProfileSchema).max(32),
         baseUrl: z.string().max(2048),
         model: z.string().max(256),
         hasApiKey: z.boolean(),
-        contextWindow: z.union([
-          z.literal(64_000),
-          z.literal(128_000),
-          z.literal(200_000),
-          z.literal(256_000),
-          z.literal(1_000_000),
-        ]),
+        contextWindow: aiContextWindowSchema,
         agentMaxIterations: z.number().int().min(1).max(10_000),
         agentWallClockMs: z.number().int().min(5_000).max(600_000),
         agentAllowMutations: z.boolean(),
@@ -310,15 +324,7 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
           providerMode: z.enum(["disabled", "openai-compatible", "cloud"]).optional(),
           baseUrl: z.string().max(2048).optional(),
           model: z.string().max(256).optional(),
-          contextWindow: z
-            .union([
-              z.literal(64_000),
-              z.literal(128_000),
-              z.literal(200_000),
-              z.literal(256_000),
-              z.literal(1_000_000),
-            ])
-            .optional(),
+          contextWindow: aiContextWindowSchema.optional(),
           agentMaxIterations: z.number().int().min(1).max(10_000).optional(),
           agentWallClockMs: z.number().int().min(5_000).max(600_000).optional(),
           agentAllowMutations: z.boolean().optional(),
@@ -326,28 +332,7 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
           inlineCompletionEnabled: z.boolean().optional(),
           completionProfileId: z.string().min(1).max(128).nullable().optional(),
           activeProfileId: z.string().min(1).max(128).optional(),
-          profiles: z
-            .array(
-              z
-                .object({
-                  id: z.string().min(1).max(128),
-                  name: z.string().min(1).max(128),
-                  vendorId: z.string().min(1).max(128),
-                  model: z.string().min(1).max(256),
-                  baseUrl: z.string().max(2048),
-                  contextWindow: z.union([
-                    z.literal(64_000),
-                    z.literal(128_000),
-                    z.literal(200_000),
-                    z.literal(256_000),
-                    z.literal(1_000_000),
-                  ]),
-                  hasApiKey: z.boolean(),
-                })
-                .strict(),
-            )
-            .max(32)
-            .optional(),
+          profiles: z.array(aiProviderProfileSchema).max(32).optional(),
         })
         .strict(),
       apiKey: z.string().max(8192).nullable().optional(),

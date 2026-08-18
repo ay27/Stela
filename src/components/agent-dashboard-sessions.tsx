@@ -1,5 +1,7 @@
 import {
   AlertTriangle,
+  Check,
+  Clipboard,
   MessageSquareText,
   RefreshCw,
 } from "lucide-react";
@@ -29,7 +31,7 @@ interface AgentDashboardSessionsProps {
 }
 
 type SessionView = "conversation" | "trace";
-type DetailTab = "summary" | "payload" | "result" | "timing";
+type DetailTab = "payload" | "result" | "timing";
 
 function rangeStart(range: AgentMetricRange): number {
   const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
@@ -54,6 +56,44 @@ function formatJson(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function CopyDataButton({ value }: { value: unknown }) {
+  const t = useT();
+  const [copied, setCopied] = useState(false);
+  const text = typeof value === "string" ? value : formatJson(value);
+
+  const onCopy = () => {
+    window.stela.shell.writeClipboardText(text);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1_500);
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={onCopy}
+      title={copied ? t("common.copied") : t("common.copy")}
+      className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+    >
+      {copied ? <Check className="h-3 w-3" /> : <Clipboard className="h-3 w-3" />}
+      {copied ? t("common.copied") : t("common.copy")}
+    </button>
+  );
+}
+
+function DataDetails({ value }: { value: unknown }) {
+  const isText = typeof value === "string";
+  return (
+    <div className="overflow-hidden rounded-md border border-border/60 bg-background/60">
+      <div className="flex justify-end border-b border-border/60 px-2 py-1">
+        <CopyDataButton value={value} />
+      </div>
+      <pre className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] p-3 font-mono text-[11px] leading-5 text-foreground">
+        <code>{isText ? value : formatJson(value)}</code>
+      </pre>
+    </div>
+  );
 }
 
 function sessionKey(ref: AgentHistoryRef): string {
@@ -262,22 +302,28 @@ function TraceView({
 
 function TraceDetails({ item }: { item: AgentTraceItem }) {
   const t = useT();
-  const [tab, setTab] = useState<DetailTab>("summary");
-  useEffect(() => setTab("summary"), [item.id]);
+  const [tab, setTab] = useState<DetailTab>("payload");
+  useEffect(() => setTab("payload"), [item.id]);
   const tabs: Array<{ id: DetailTab; label: string }> = [
-    { id: "summary", label: t("agentDashboard.summary") },
     { id: "payload", label: t("agentDashboard.payload") },
     { id: "result", label: t("agentDashboard.result") },
     { id: "timing", label: t("agentDashboard.timing") },
   ];
   return (
-    <aside className="flex w-[340px] flex-none flex-col border-l border-border bg-muted/10">
+    <aside className="flex min-w-0 flex-1 flex-col border-l border-border bg-muted/10">
       <div className="border-b border-border px-4 py-3">
         <div className="flex items-center gap-2">
           <span className={cn("rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase", traceKindClass(item.kind))}>{item.kind}</span>
           <span className="min-w-0 flex-1 truncate text-xs font-semibold">{item.label}</span>
         </div>
-        <div className="mt-1 text-[10px] text-muted-foreground">{t("agentDashboard.turn", { count: item.turnIndex })}</div>
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+          <span>{t("agentDashboard.turn", { count: item.turnIndex })}</span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className={cn("h-1.5 w-1.5 rounded-full", statusDotClass(item))} />
+            {item.status}
+          </span>
+          <span className="tabular-nums">{formatDuration(item.durationMs)}</span>
+        </div>
       </div>
       <div className="flex border-b border-border px-2">
         {tabs.map((candidate) => (
@@ -295,27 +341,16 @@ function TraceDetails({ item }: { item: AgentTraceItem }) {
         ))}
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-4">
-        {tab === "summary" ? (
-          <div className="space-y-4 text-[11px]">
-            <div>
-              <div className="mb-1 text-[9px] uppercase tracking-wide text-muted-foreground">{t("agentDashboard.status")}</div>
-              <div className="flex items-center gap-2"><span className={cn("h-2 w-2 rounded-full", statusDotClass(item))} />{item.status}</div>
-            </div>
-            <div>
-              <div className="mb-1 text-[9px] uppercase tracking-wide text-muted-foreground">{t("agentDashboard.summary")}</div>
-              <p className="whitespace-pre-wrap break-words leading-5">{item.summary || "—"}</p>
-            </div>
-          </div>
-        ) : tab === "timing" ? (
+        {tab === "timing" ? (
           <div className="space-y-3 text-[11px]">
             <div><span className="text-muted-foreground">{t("agentDashboard.started")}</span><div className="mt-0.5 font-mono">{new Date(item.startedAt).toLocaleString()}</div></div>
             <div><span className="text-muted-foreground">{t("agentDashboard.duration")}</span><div className="mt-0.5 font-mono">{formatDuration(item.durationMs)}</div></div>
             <div><span className="text-muted-foreground">{t("agentDashboard.firstToken")}</span><div className="mt-0.5 font-mono">{formatDuration(item.firstTokenMs)}</div></div>
           </div>
+        ) : tab === "payload" ? (
+          <DataDetails value={item.payload} />
         ) : (
-          <pre className="whitespace-pre-wrap break-all text-[10px] leading-5 text-foreground">
-            {formatJson(tab === "payload" ? item.payload : item.result)}
-          </pre>
+          <DataDetails value={item.result} />
         )}
       </div>
     </aside>
@@ -371,7 +406,8 @@ export function AgentDashboardSessions({ range, refreshToken }: AgentDashboardSe
         if (!active) return;
         setSession(result);
         const latestTurn = result.turns.at(-1);
-        setSelectedItem(latestTurn ? buildAgentTurnTraceItems(latestTurn).find((item) => item.kind === "model") ?? null : null);
+        const latestItems = latestTurn ? buildAgentTurnTraceItems(latestTurn) : [];
+        setSelectedItem(latestItems.find((item) => item.kind === "model") ?? latestItems[0] ?? null);
       } catch (err: unknown) {
         if (active) setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -384,7 +420,7 @@ export function AgentDashboardSessions({ range, refreshToken }: AgentDashboardSe
 
   return (
     <div className="flex min-h-0 flex-1">
-      <aside className="w-[240px] flex-none overflow-auto border-r border-border bg-muted/10 p-2">
+      <aside className="w-[220px] flex-none overflow-auto border-r border-border bg-muted/10 p-2">
         <div className="px-2 pb-2 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
           {t("agentDashboard.localSessions")}
         </div>
@@ -438,10 +474,19 @@ export function AgentDashboardSessions({ range, refreshToken }: AgentDashboardSe
               </div>
             </header>
             {view === "trace" ? <SessionWaterfall session={session} onSelect={setSelectedItem} /> : null}
-            <div className="min-h-0 flex-1 overflow-auto">
-              {view === "conversation"
-                ? <ConversationView session={session} />
-                : <TraceView session={session} selectedId={selectedItem?.id ?? null} onSelect={setSelectedItem} />}
+            <div className="min-h-0 flex-1 overflow-hidden">
+              {view === "conversation" ? (
+                <div className="h-full overflow-auto">
+                  <ConversationView session={session} />
+                </div>
+              ) : (
+                <div className="flex h-full min-h-0">
+                  <div className="w-[42%] min-w-[360px] max-w-[520px] flex-none overflow-auto">
+                    <TraceView session={session} selectedId={selectedItem?.id ?? null} onSelect={setSelectedItem} />
+                  </div>
+                  {selectedItem ? <TraceDetails item={selectedItem} /> : null}
+                </div>
+              )}
             </div>
           </>
         ) : !loading && !error ? (
@@ -451,7 +496,6 @@ export function AgentDashboardSessions({ range, refreshToken }: AgentDashboardSe
           </div>
         ) : null}
       </div>
-      {view === "trace" && selectedItem ? <TraceDetails item={selectedItem} /> : null}
     </div>
   );
 }

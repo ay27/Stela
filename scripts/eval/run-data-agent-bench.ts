@@ -58,6 +58,7 @@ import {
   formatStrategyCheckpoint,
   runStrategyReview,
   STRATEGY_CHECKPOINT_ENTRY,
+  strategyReviewResponseFromError,
   type AnalysisEfficiencyMetrics,
 } from "../../electron/services/ai/analysis-efficiency";
 import { createTransportForProfile } from "../../electron/services/ai/provider";
@@ -519,7 +520,20 @@ async function runTask(input: {
     } catch (caught) {
       efficiency.markReviewFailed();
       const message = caught instanceof Error ? caught.message : String(caught);
-      toolEvents.push({ at: Date.now(), type: "strategy_review_error", trigger, message });
+      const failureResponse = strategyReviewResponseFromError(caught);
+      if (failureResponse) {
+        usage.inputTokens += failureResponse.usage.input ?? 0;
+        usage.outputTokens += failureResponse.usage.output ?? 0;
+        usage.cacheReadTokens += failureResponse.usage.cacheRead ?? 0;
+        usage.cacheWriteTokens += failureResponse.usage.cacheWrite ?? 0;
+      }
+      toolEvents.push({
+        at: Date.now(),
+        type: "strategy_review_error",
+        trigger,
+        message,
+        usage: failureResponse?.usage,
+      });
       content.push(efficiencyHintContent(
         "Strategy review was unavailable. Continue the main analysis, but use a materially different set-based or artifact-backed approach instead of more probes in the same family.",
       ));

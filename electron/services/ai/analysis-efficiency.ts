@@ -10,6 +10,7 @@ const RECENT_OBSERVATION_LIMIT = 12;
 const INPUT_SUMMARY_LIMIT = 1_200;
 const RESULT_SUMMARY_LIMIT = 600;
 const REVIEW_TEXT_LIMIT = 1_200;
+const DEFAULT_AVOIDANCE_GUIDANCE = "No additional approach-specific restriction.";
 
 export type StrategyReviewTrigger = "query_family_fanout" | "query_churn" | "failure_cluster";
 
@@ -71,6 +72,20 @@ export interface StrategyReviewInput {
 export interface StrategyReviewRunResult {
   checkpoint: AgentStrategyCheckpoint;
   message: AssistantMessage;
+}
+
+export class StrategyReviewResponseError extends Error {
+  readonly response: AssistantMessage;
+
+  constructor(message: string, response: AssistantMessage, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = "StrategyReviewResponseError";
+    this.response = response;
+  }
+}
+
+export function strategyReviewResponseFromError(error: unknown): AssistantMessage | null {
+  return error instanceof StrategyReviewResponseError ? error.response : null;
 }
 
 export const STRATEGY_REVIEW_SYSTEM_PROMPT = [
@@ -362,11 +377,14 @@ export function parseStrategyReview(text: string): StrategyReviewAdvice {
     .slice(0, 3)
     .map((item) => truncate(item, REVIEW_TEXT_LIMIT));
   if (nextActions.length === 0) throw new Error("Strategy reviewer nextActions is required.");
+  const avoid = typeof record.avoid === "string" && record.avoid.trim()
+    ? truncate(record.avoid, REVIEW_TEXT_LIMIT)
+    : DEFAULT_AVOIDANCE_GUIDANCE;
   return {
     assessment,
     diagnosis: stringField("diagnosis"),
     nextActions,
-    avoid: stringField("avoid"),
+    avoid,
     successCondition: stringField("successCondition"),
   };
 }
@@ -393,12 +411,24 @@ export async function runStrategyReview(input: {
     },
   );
   if (message.stopReason === "error" || message.stopReason === "aborted") {
-    throw new Error(message.errorMessage ?? `Strategy reviewer ${message.stopReason}.`);
+    throw new StrategyReviewResponseError(
+      message.errorMessage ?? `Strategy reviewer ${message.stopReason}.`,
+      message,
+    );
   }
   const text = message.content
     .flatMap((block) => block.type === "text" ? [block.text] : [])
     .join("\n");
-  const advice = parseStrategyReview(text);
+  let advice: StrategyReviewAdvice;
+  try {
+    advice = parseStrategyReview(text);
+  } catch (error) {
+    throw new StrategyReviewResponseError(
+      error instanceof Error ? error.message : String(error),
+      message,
+      error,
+    );
+  }
   return {
     checkpoint: {
       runId: input.review.runId,

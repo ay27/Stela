@@ -192,6 +192,7 @@ export function ConnectionsTab() {
   const [kindsError, setKindsError] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState<DraftState>(EMPTY_DRAFT);
   const [testState, setTestState] = useState<TestState>({ status: "idle" });
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -228,11 +229,12 @@ export function ConnectionsTab() {
   }, [selected, entries]);
 
   useEffect(() => {
+    if (creating) return;
     if (selected !== null) return;
     if (entryNames.length > 0) {
       setSelected(entryNames[0]);
     }
-  }, [selected, entryNames]);
+  }, [creating, selected, entryNames]);
 
   // 用户切到某个已存在的连接 → 若缓存处于 idle 就顺手 kick 一次 ensure。
   // 这样进设置面板就能看到徽章从 idle → loading → ready/error 的状态流转，
@@ -249,6 +251,7 @@ export function ConnectionsTab() {
   const startNew = useCallback(() => {
     const defaultKind = kinds[0]?.kind ?? "";
     const defaultConfig = asConfigObject(kinds[0]?.defaultConfig);
+    setCreating(true);
     setSelected(null);
     setDraft({
       originalName: null,
@@ -381,6 +384,7 @@ export function ConnectionsTab() {
         await remove(draft.originalName);
       }
       await upsert(trimmed, entry);
+      setCreating(false);
       setSelected(trimmed);
       // upsert 会 invalidate 补全缓存（config 可能变了）。保存后立刻重拉，让用户看到
       // loading → ready，而不是停在“未加载”——此时 store 已是含本机 secret 的新 entry。
@@ -509,6 +513,7 @@ export function ConnectionsTab() {
     if (!ok) return;
     try {
       await remove(draft.originalName);
+      setCreating(false);
       setSelected(null);
       setDraft(EMPTY_DRAFT);
     } catch (err) {
@@ -543,7 +548,10 @@ export function ConnectionsTab() {
                   <button
                     key={name}
                     type="button"
-                    onClick={() => setSelected(name)}
+                    onClick={() => {
+                      setCreating(false);
+                      setSelected(name);
+                    }}
                     className={cn(
                       "flex w-full items-center gap-2 px-3 py-1.5 text-left",
                       active

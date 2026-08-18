@@ -11,6 +11,7 @@ import {
   QUERY_FAMILY_REVIEW_THRESHOLD,
   queryFamily,
   runStrategyReview,
+  strategyReviewResponseFromError,
 } from "./analysis-efficiency";
 
 const sqlA = queryFamily({ language: "sql", database: "db", query: "SELECT * FROM t WHERE id = 1 AND name = 'A'" });
@@ -155,6 +156,20 @@ assert.deepEqual(
   },
 );
 
+for (const avoid of ["", "   ", null, undefined]) {
+  const payload: Record<string, unknown> = {
+    assessment: "change",
+    diagnosis: "The current strategy is repeating.",
+    nextActions: ["Use one set-based query."],
+    successCondition: "One validated answer.",
+  };
+  if (avoid !== undefined) payload.avoid = avoid;
+  assert.equal(
+    parseStrategyReview(JSON.stringify(payload)).avoid,
+    "No additional approach-specific restriction.",
+  );
+}
+
 assert.throws(() => parseStrategyReview("{}"));
 
 const reviewMessage = {
@@ -225,16 +240,34 @@ const baseReview = {
       errorMessage: "review unavailable",
     }),
   } as unknown as Models;
-  await assert.rejects(
-    runStrategyReview({
+  const error = await runStrategyReview({
       models,
       model: {} as Model,
       signal: new AbortController().signal,
       sessionId: "strategy:run-1",
       review: baseReview,
-    }),
-    /review unavailable/,
-  );
+    }).catch((caught: unknown) => caught);
+  assert.match(error instanceof Error ? error.message : String(error), /review unavailable/);
+  assert.equal(strategyReviewResponseFromError(error)?.usage.totalTokens, 150);
+}
+
+{
+  const malformedMessage = {
+    ...reviewMessage,
+    content: [{ type: "text", text: "{not valid JSON" }],
+  } as unknown as AssistantMessage;
+  const models = {
+    completeSimple: async () => malformedMessage,
+  } as unknown as Models;
+  const error = await runStrategyReview({
+    models,
+    model: {} as Model,
+    signal: new AbortController().signal,
+    sessionId: "strategy:run-1",
+    review: baseReview,
+  }).catch((caught: unknown) => caught);
+  assert.match(error instanceof Error ? error.message : String(error), /did not return JSON/);
+  assert.equal(strategyReviewResponseFromError(error)?.usage.totalTokens, 150);
 }
 
 console.log("analysis-efficiency tests passed");

@@ -51,6 +51,7 @@ import {
   formatStrategyCheckpoint,
   runStrategyReview,
   STRATEGY_CHECKPOINT_ENTRY,
+  strategyReviewResponseFromError,
 } from "./analysis-efficiency";
 import {
   AGENT_SKILL_LIMITS_PROMPT,
@@ -928,12 +929,18 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       } catch (error) {
         efficiency.markReviewFailed();
         const message = error instanceof Error ? error.message : String(error);
+        const failureResponse = strategyReviewResponseFromError(error);
         if (agentMetrics.isOpen()) {
+          if (failureResponse) {
+            agentMetrics.addUsage(metricRunId, failureResponse.usage);
+            agentMetrics.addUsage(reviewMetricRunId, failureResponse.usage);
+          }
           agentMetrics.finishRun(reviewMetricRunId, {
             status: signal.aborted ? "cancelled" : "error",
             outcome: "unavailable",
             errorCode: "strategy_review_failed",
             errorMessage: message,
+            response: failureResponse,
           });
         }
         emit({ type: "strategy_review", runId, status: "failed", trigger, message });

@@ -495,27 +495,26 @@ export function AgentPanel() {
         />
         {/* 独立一行放操作按钮——左侧切 AI 配置档，Send/Stop 占最右。 */}
         <div className="mt-1.5 flex items-center justify-between gap-1.5">
-          <div className="flex min-w-0 items-center gap-1.5">
-          {aiSettings.profiles.length > 0 ? (
-            <select
-              value={aiSettings.activeProfileId}
-              disabled={busy}
-              title={t("agent.panel.provider")}
-              onChange={(e) => {
-                const id = e.target.value;
-                void patchSettings({ ai: { activeProfileId: id } });
-                void window.stela.ai.configure({ activeProfileId: id });
-              }}
-              className="max-w-[55%] truncate rounded-md border border-border bg-background px-1.5 py-1.5 text-[11px] text-foreground disabled:opacity-40"
-            >
-              {aiSettings.profiles.map((profile) => (
-                <option key={profile.id} value={profile.id}>
-                  {profile.name}
-                  {profile.model ? ` · ${profile.model}` : ""}
-                </option>
-              ))}
-            </select>
-          ) : null}
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            {aiSettings.profiles.length > 0 ? (
+              <select
+                value={aiSettings.activeProfileId}
+                disabled={busy}
+                title={t("agent.panel.provider")}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  void patchSettings({ ai: { activeProfileId: id } });
+                }}
+                className="w-full max-w-[240px] truncate rounded-md border border-border bg-background px-1.5 py-1.5 text-[11px] text-foreground disabled:opacity-40"
+              >
+                {aiSettings.profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}
+                    {profile.model ? ` · ${profile.model}` : ""}
+                  </option>
+                ))}
+              </select>
+            ) : null}
           </div>
           {busy ? (
             <button
