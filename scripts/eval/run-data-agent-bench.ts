@@ -27,6 +27,7 @@ import type {
   DataQueryRequest,
   QueryResult,
   RunRecord,
+  AgentStrategyCheckpoint,
 } from "@shared/types";
 import {
   assistantText,
@@ -51,6 +52,14 @@ import {
   ExecutionPlanStore,
   formatExecutionPlanEntry,
 } from "../../electron/services/ai/execution-plan";
+import {
+  AnalysisEfficiencyLedger,
+  efficiencyHintContent,
+  formatStrategyCheckpoint,
+  runStrategyReview,
+  STRATEGY_CHECKPOINT_ENTRY,
+  type AnalysisEfficiencyMetrics,
+} from "../../electron/services/ai/analysis-efficiency";
 import { createTransportForProfile } from "../../electron/services/ai/provider";
 import { buildEvalSettings, requireCredentials } from "./env";
 import {
@@ -98,6 +107,7 @@ interface CliOptions {
   pythonConcurrency: number;
   pyodideAssets: string;
   noPython: boolean;
+  strategyReview: boolean;
   condaEnv: string;
   python: string | null;
 }
@@ -128,6 +138,7 @@ interface FinalRun {
   toolCalls: number;
   toolCallCounts: Record<string, number>;
   capabilityFailures: Record<string, number>;
+  efficiency: AnalysisEfficiencyMetrics;
   usage: UsageTotals & { cacheHitRate: number | null };
   transcript: unknown[];
 }
@@ -170,6 +181,7 @@ function parseArgs(argv: string[]): CliOptions {
       value("--pyodide-assets") ?? path.join(repoRoot, "node_modules", ".cache", "stela-pyodide"),
     ),
     noPython: argv.includes("--no-python"),
+    strategyReview: !argv.includes("--no-strategy-review"),
     condaEnv: value("--conda-env") ?? "dabench",
     python: value("--python") ?? null,
   };
@@ -336,6 +348,12 @@ async function runTask(input: {
           timestamp: Date.now(),
         }];
       },
+      [STRATEGY_CHECKPOINT_ENTRY]: (entry) => {
+        const checkpoint = (entry.data as { checkpoint?: AgentStrategyCheckpoint } | undefined)?.checkpoint;
+        return checkpoint
+          ? [{ role: "user", content: formatStrategyCheckpoint(checkpoint), timestamp: Date.now() }]
+          : [];
+      },
     },
   });
   const plan = new ExecutionPlanStore(request.runId);
@@ -358,11 +376,15 @@ async function runTask(input: {
   let answer = "";
   const started = Date.now();
   let abortAgent = (): void => {};
+  const reviewAbort = new AbortController();
+  const efficiency = new AnalysisEfficiencyLedger({ advisoriesEnabled: options.strategyReview });
+  let pendingStrategyCheckpoint: AgentStrategyCheckpoint | null = null;
 
   const stop = (reason: string): void => {
     if (forcedStop) return;
     forcedStop = reason;
     bridge.terminate(`run stopped: ${reason}`);
+    reviewAbort.abort(reason);
     abortAgent();
   };
 
@@ -445,10 +467,77 @@ async function runTask(input: {
       requestProposal,
     }),
   });
+  const strategyUnsubscribe = harness.on("tool_result", async (event) => {
+    const signalResult = efficiency.recordResult({
+      toolName: event.toolName,
+      args: event.input,
+      content: event.content,
+      isError: event.isError,
+    });
+    if (!options.strategyReview) return undefined;
+    const content = signalResult.hint
+      ? [...event.content, efficiencyHintContent(signalResult.hint)]
+      : [...event.content];
+    if (!signalResult.reviewTrigger) return signalResult.hint ? { content } : undefined;
+    const trigger = signalResult.reviewTrigger;
+    toolEvents.push({ at: Date.now(), type: "strategy_review_start", trigger, metrics: efficiency.metrics() });
+    try {
+      const reviewed = await runStrategyReview({
+        models,
+        model,
+        signal: reviewAbort.signal,
+        sessionId: `stela-dab-strategy-review:${credentials.model}`,
+        review: {
+          runId: request.runId,
+          goal: request.prompt,
+          plan: plan.formatForContext(),
+          capabilities: JSON.stringify({
+            queryLanguages: ["sql", "mongodb"],
+            mongoOperations: ["find", "aggregate"],
+            executePython: pythonPool !== null,
+          }),
+          trigger,
+          metrics: efficiency.metrics(),
+          observations: efficiency.recent(),
+        },
+      });
+      efficiency.markReviewCompleted();
+      reviewed.checkpoint.metrics = efficiency.metrics();
+      pendingStrategyCheckpoint = reviewed.checkpoint;
+      usage.inputTokens += reviewed.message.usage.input ?? 0;
+      usage.outputTokens += reviewed.message.usage.output ?? 0;
+      usage.cacheReadTokens += reviewed.message.usage.cacheRead ?? 0;
+      usage.cacheWriteTokens += reviewed.message.usage.cacheWrite ?? 0;
+      toolEvents.push({
+        at: Date.now(),
+        type: "strategy_review_end",
+        trigger,
+        checkpoint: reviewed.checkpoint,
+        usage: reviewed.message.usage,
+      });
+      content.push(efficiencyHintContent(formatStrategyCheckpoint(reviewed.checkpoint)));
+    } catch (caught) {
+      efficiency.markReviewFailed();
+      const message = caught instanceof Error ? caught.message : String(caught);
+      toolEvents.push({ at: Date.now(), type: "strategy_review_error", trigger, message });
+      content.push(efficiencyHintContent(
+        "Strategy review was unavailable. Continue the main analysis, but use a materially different set-based or artifact-backed approach instead of more probes in the same family.",
+      ));
+    }
+    return { content };
+  });
   abortAgent = () => { void harness.abort(); };
   const timer = setTimeout(() => stop("task_timeout"), options.timeoutMs);
   const unsubscribe = harness.subscribe(async (event) => {
     if (event.type === "turn_end") {
+      if (pendingStrategyCheckpoint) {
+        const checkpoint = pendingStrategyCheckpoint;
+        pendingStrategyCheckpoint = null;
+        await session.appendCustomEntry(STRATEGY_CHECKPOINT_ENTRY, {
+          runId: checkpoint.runId,
+          checkpoint: structuredClone(checkpoint),
+        });
+      }
       await planPersistence.flush();
       return;
     }
@@ -497,6 +586,8 @@ async function runTask(input: {
     error = caught instanceof Error ? caught.message : String(caught);
   } finally {
     clearTimeout(timer);
+    strategyUnsubscribe();
+    reviewAbort.abort("run finished");
     unsubscribe();
     await fs.writeFile(
       path.join(runDir, "tool_calls.jsonl"),
@@ -548,6 +639,7 @@ async function runTask(input: {
     toolCalls,
     toolCallCounts,
     capabilityFailures,
+    efficiency: efficiency.metrics(),
     usage: usageWithRate(usage),
     transcript,
   };
@@ -585,6 +677,17 @@ async function writeSummary(output: string, results: FinalRun[]): Promise<void> 
       capabilityFailures[code] = (capabilityFailures[code] ?? 0) + count;
     }
   }
+  const efficiency = {
+    reviewTriggered: results.filter((result) => result.efficiency.reviewTriggered).length,
+    reviewCompleted: results.filter((result) => result.efficiency.reviewStatus === "completed").length,
+    reviewFailed: results.filter((result) => result.efficiency.reviewStatus === "failed").length,
+    queryFamilyPeak: results.reduce((peak, result) => Math.max(peak, result.efficiency.queryFamilyPeak), 0),
+    strategyHints: results.reduce((sum, result) => sum + result.efficiency.strategyHints, 0),
+    postReviewRunQueryCalls: results.reduce(
+      (sum, result) => sum + result.efficiency.postReviewRunQueryCalls,
+      0,
+    ),
+  };
   const summary = {
     generatedAt: new Date().toISOString(),
     valid,
@@ -592,6 +695,7 @@ async function writeSummary(output: string, results: FinalRun[]): Promise<void> 
     validRate: results.length > 0 ? valid / results.length : 0,
     byDataset,
     capabilityFailures,
+    efficiency,
     usage: usageWithRate(usage),
     averageElapsedMs: results.length > 0
       ? results.reduce((sum, result) => sum + result.elapsedMs, 0) / results.length
@@ -610,6 +714,8 @@ async function writeSummary(output: string, results: FinalRun[]): Promise<void> 
     `- Valid rate: ${valid}/${results.length} (${(summary.validRate * 100).toFixed(1)}%)`,
     `- Cache hit rate: ${summary.usage.cacheHitRate === null ? "n/a" : `${(summary.usage.cacheHitRate * 100).toFixed(1)}%`}`,
     `- Average elapsed: ${(summary.averageElapsedMs / 1000).toFixed(1)}s`,
+    `- Strategy reviews: ${efficiency.reviewCompleted}/${efficiency.reviewTriggered} completed`,
+    `- Peak query-family fan-out: ${efficiency.queryFamilyPeak}`,
     "",
     "## Datasets",
     "",
@@ -674,6 +780,7 @@ async function main(): Promise<void> {
     concurrency: options.concurrency,
     pythonRuntime: options.noPython ? "disabled" : "pyodide",
     pythonConcurrency: options.noPython ? 0 : options.pythonConcurrency,
+    strategyReview: options.strategyReview,
     host: { platform: process.platform, arch: process.arch, node: process.version },
   });
 
@@ -740,6 +847,15 @@ async function main(): Promise<void> {
             toolCalls: 0,
             toolCallCounts: {},
             capabilityFailures: { runner_error: 1 },
+            efficiency: {
+              queryFamilyPeak: 0,
+              strategyHints: 0,
+              reviewTriggered: false,
+              reviewTrigger: null,
+              runQueryCallsAtReview: null,
+              postReviewRunQueryCalls: 0,
+              reviewStatus: "not_triggered",
+            },
             usage: usageWithRate({
               inputTokens: 0,
               outputTokens: 0,

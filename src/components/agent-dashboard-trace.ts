@@ -11,6 +11,7 @@ export type AgentTraceItemKind =
   | "context"
   | "model"
   | "tool"
+  | "review"
   | "maintenance"
   | "event";
 
@@ -99,6 +100,7 @@ const HIDDEN_ROOT_EVENTS = new Set([
   "agent_step_end",
   "tool_call",
   "tool_result",
+  "strategy_review",
   "final",
   "skill_candidate",
   "skill_loaded",
@@ -179,7 +181,11 @@ export function buildAgentTurnTraceItems(turn: AgentMetricSessionTurn): AgentTra
   });
 
   for (const child of trace.descendants) {
-    const kind = child.run.surface === "tool" ? "tool" : "maintenance";
+    const kind = child.run.surface === "tool"
+      ? "tool"
+      : child.run.surface === "strategy_review"
+        ? "review"
+        : "maintenance";
     items.push({
       id: `turn:${turn.index}:run:${child.run.runId}`,
       turnIndex: turn.index,
@@ -229,7 +235,7 @@ export function buildAgentSessionWaterfall(trace: AgentMetricSessionTrace): Agen
   return trace.turns.flatMap((turn) => buildAgentTurnTraceItems(turn).flatMap((item) => {
     const kind = item.kind === "model"
       ? "model"
-      : item.kind === "tool" || item.kind === "maintenance"
+      : item.kind === "tool" || item.kind === "review" || item.kind === "maintenance"
         ? "tool"
         : item.kind === "user" || item.kind === "context"
           ? "input"

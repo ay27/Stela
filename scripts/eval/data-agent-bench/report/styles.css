@@ -75,7 +75,7 @@ button, input, select { font: inherit; }
 
 .stela-summary-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 14px;
 }
@@ -279,7 +279,7 @@ button, input, select { font: inherit; }
 .stela-detail-head { padding: 18px; border-bottom: 1px solid var(--stela-line-soft); }
 .stela-detail-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .stela-detail-title-row h3 { margin: 0; font-size: 17px; }
-.stela-detail-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 14px; }
+.stela-detail-metrics { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-top: 14px; }
 .stela-detail-metric { padding: 9px; border-radius: 8px; background: #f5f5f2; }
 .stela-detail-metric span { display: block; color: var(--stela-muted); font-size: 10px; }
 .stela-detail-metric strong { display: block; margin-top: 3px; font-size: 13px; }

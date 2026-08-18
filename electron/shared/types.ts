@@ -395,6 +395,7 @@ export type AgentMetricRange = "7d" | "30d" | "90d";
 export type AgentMetricSurface =
   | "agent"
   | "tool"
+  | "strategy_review"
   | "skill_maintenance"
   | "ai_action"
   | "sql_query_parse";
@@ -774,6 +775,36 @@ export interface AgentPlanSnapshot {
   steps: AgentPlanStep[];
 }
 
+export type AgentStrategyReviewTrigger =
+  | "query_family_fanout"
+  | "query_churn"
+  | "failure_cluster";
+
+export interface AgentStrategyReviewAdvice {
+  assessment: "continue" | "change";
+  diagnosis: string;
+  nextActions: string[];
+  avoid: string;
+  successCondition: string;
+}
+
+export interface AgentStrategyCheckpoint {
+  runId: string;
+  version: number;
+  trigger: AgentStrategyReviewTrigger;
+  createdAt: number;
+  metrics: {
+    queryFamilyPeak: number;
+    strategyHints: number;
+    reviewTriggered: boolean;
+    reviewTrigger: AgentStrategyReviewTrigger | null;
+    runQueryCallsAtReview: number | null;
+    postReviewRunQueryCalls: number;
+    reviewStatus: "not_triggered" | "running" | "completed" | "failed";
+  };
+  advice: AgentStrategyReviewAdvice;
+}
+
 export type AgentToolName =
   | "list_databases"
   | "list_tables"
@@ -986,6 +1017,26 @@ export type AgentEvent =
   | { type: "started"; runId: string }
   | { type: "canvas_updated"; runId: string; path: string; title: string; action: "created" | "updated" } // Vault-relative path
   | { type: "plan_updated"; runId: string; plan: AgentPlanSnapshot }
+  | {
+      type: "strategy_review";
+      runId: string;
+      status: "started";
+      trigger: AgentStrategyReviewTrigger;
+    }
+  | {
+      type: "strategy_review";
+      runId: string;
+      status: "completed";
+      trigger: AgentStrategyReviewTrigger;
+      checkpoint: AgentStrategyCheckpoint;
+    }
+  | {
+      type: "strategy_review";
+      runId: string;
+      status: "failed";
+      trigger: AgentStrategyReviewTrigger;
+      message: string;
+    }
   | { type: "tool_call"; runId: string; call: AgentToolCallInfo }
   | {
       type: "tool_result";

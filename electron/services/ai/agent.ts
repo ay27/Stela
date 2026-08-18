@@ -24,6 +24,7 @@ import type {
   AgentPlanSnapshot,
   AgentProposalResponse,
   AgentRunRequest,
+  AgentStrategyCheckpoint,
   ConnectionEntry,
   ConnectionMap,
 } from "@shared/types";
@@ -45,6 +46,13 @@ import {
 } from "../query-artifacts";
 import { assistantText, buildSystemPrompt, buildUserContent } from "./agent-prompt";
 import {
+  AnalysisEfficiencyLedger,
+  efficiencyHintContent,
+  formatStrategyCheckpoint,
+  runStrategyReview,
+  STRATEGY_CHECKPOINT_ENTRY,
+} from "./analysis-efficiency";
+import {
   AGENT_SKILL_LIMITS_PROMPT,
   loadAgentSkills,
   rankAgentSkills,
@@ -63,6 +71,7 @@ import {
 } from "./agent-tools";
 import { createTransportForProfile, getActiveProfile, loadApiKey } from "./provider";
 import { executePython } from "./python-runtime-broker";
+import { redactForPrompt } from "./redaction";
 import * as agentMetrics from "./agent-metrics";
 import {
   buildSkillMaintenanceEvidence,
@@ -331,6 +340,12 @@ function createSession(storage: InMemorySessionStorage | JsonlSessionStorage = n
           timestamp: Date.now(),
         }];
       },
+      [STRATEGY_CHECKPOINT_ENTRY]: (entry) => {
+        const checkpoint = (entry.data as { checkpoint?: AgentStrategyCheckpoint } | undefined)?.checkpoint;
+        return checkpoint
+          ? [{ role: "user", content: formatStrategyCheckpoint(checkpoint), timestamp: Date.now() }]
+          : [];
+      },
     },
   });
 }
@@ -339,6 +354,13 @@ function appendPlanEntry(session: Session, snapshot: AgentPlanSnapshot): Promise
   return session.appendCustomEntry(EXECUTION_PLAN_ENTRY, {
     runId: snapshot.runId,
     plan: structuredClone(snapshot),
+  });
+}
+
+function appendStrategyCheckpoint(session: Session, checkpoint: AgentStrategyCheckpoint): Promise<string> {
+  return session.appendCustomEntry(STRATEGY_CHECKPOINT_ENTRY, {
+    runId: checkpoint.runId,
+    checkpoint: structuredClone(checkpoint),
   });
 }
 
@@ -715,7 +737,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       if (!harness) return;
       emit({ type: "compaction", runId, phase: "started" });
       await harness.compact(
-        "Preserve the current execution plan, completed evidence, the active step, and every blocked acceptance condition.",
+        "Preserve the current execution plan, completed evidence, the active step, every blocked acceptance condition, and the latest strategy-review checkpoint.",
       );
       emit({ type: "compaction", runId, phase: "completed" });
       await emitUsage(true);
@@ -827,6 +849,101 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       }),
     });
 
+    const efficiency = new AnalysisEfficiencyLedger();
+    let pendingStrategyCheckpoint: AgentStrategyCheckpoint | null = null;
+    const strategyUnsubscribe = harness.on("tool_result", async (event) => {
+      const signalResult = efficiency.recordResult({
+        toolName: event.toolName,
+        args: event.input,
+        content: event.content,
+        isError: event.isError,
+      });
+      const content = signalResult.hint
+        ? [...event.content, efficiencyHintContent(signalResult.hint)]
+        : [...event.content];
+      if (!signalResult.reviewTrigger) {
+        return signalResult.hint ? { content } : undefined;
+      }
+
+      const trigger = signalResult.reviewTrigger;
+      const reviewMetricRunId = `strategy:${runId}:${randomUUID()}`;
+      emit({ type: "strategy_review", runId, status: "started", trigger });
+      if (agentMetrics.isOpen()) {
+        agentMetrics.startRun({
+          runId: reviewMetricRunId,
+          parentRunId: metricRunId,
+          surface: "strategy_review",
+          operation: trigger,
+          profileId: profile.id,
+          vendorId: profile.vendorId,
+          model: profile.model,
+          request: { metrics: efficiency.metrics(), observations: efficiency.recent() },
+        });
+      }
+      try {
+        const reviewed = await runStrategyReview({
+          models,
+          model,
+          signal,
+          sessionId: `stela-strategy-review:${profile.id}`,
+          review: {
+            runId,
+            goal: redactForPrompt(request.prompt),
+            plan: plan.formatForContext(),
+            capabilities: redactForPrompt(JSON.stringify({
+              activeConnection: request.connectionName ?? null,
+              queryLanguages: request.connectionName
+                ? available.queryLanguages[request.connectionName] ?? ["sql"]
+                : [],
+              mongoOperations: request.connectionName
+                ? available.mongoOperations[request.connectionName] ?? ["find"]
+                : [],
+              executePython: true,
+            })),
+            trigger,
+            metrics: efficiency.metrics(),
+            observations: efficiency.recent(),
+          },
+        });
+        efficiency.markReviewCompleted();
+        reviewed.checkpoint.metrics = efficiency.metrics();
+        pendingStrategyCheckpoint = reviewed.checkpoint;
+        if (agentMetrics.isOpen()) {
+          agentMetrics.addUsage(metricRunId, reviewed.message.usage);
+          agentMetrics.addUsage(reviewMetricRunId, reviewed.message.usage);
+          agentMetrics.finishRun(reviewMetricRunId, {
+            status: "completed",
+            outcome: reviewed.checkpoint.advice.assessment,
+            response: reviewed.checkpoint,
+          });
+        }
+        emit({
+          type: "strategy_review",
+          runId,
+          status: "completed",
+          trigger,
+          checkpoint: reviewed.checkpoint,
+        });
+        content.push(efficiencyHintContent(formatStrategyCheckpoint(reviewed.checkpoint)));
+      } catch (error) {
+        efficiency.markReviewFailed();
+        const message = error instanceof Error ? error.message : String(error);
+        if (agentMetrics.isOpen()) {
+          agentMetrics.finishRun(reviewMetricRunId, {
+            status: signal.aborted ? "cancelled" : "error",
+            outcome: "unavailable",
+            errorCode: "strategy_review_failed",
+            errorMessage: message,
+          });
+        }
+        emit({ type: "strategy_review", runId, status: "failed", trigger, message });
+        content.push(efficiencyHintContent(
+          "Strategy review was unavailable. Continue the main analysis, but prefer a materially different set-based or artifact-backed approach over more probes in the same family.",
+        ));
+      }
+      return { content };
+    });
+
     const toolCalls = new Map<string, { name: string; args: unknown; startedAt: number; metricRunId: string }>();
     let harnessStepIndex = 0;
     let harnessStepStartedAt = metricStartedAt;
@@ -847,6 +964,11 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         return;
       }
       if (event.type === "turn_end") {
+        if (pendingStrategyCheckpoint) {
+          const checkpoint = pendingStrategyCheckpoint;
+          pendingStrategyCheckpoint = null;
+          await appendStrategyCheckpoint(session!, checkpoint);
+        }
         if (agentMetrics.isOpen()) {
           agentMetrics.addEvent(metricRunId, {
             type: "agent_step_end",
@@ -1047,6 +1169,9 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           "",
         )
         .trim();
+      if (agentMetrics.isOpen()) {
+        agentMetrics.addEvent(metricRunId, { type: "analysis_efficiency", payload: efficiency.metrics() });
+      }
       emit({ type: "final", runId, content: finalAnswer });
       if (normalSkillActions.length > 0) {
         emit({
@@ -1120,6 +1245,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         }
       }
     } finally {
+      strategyUnsubscribe();
       unsubscribe();
     }
   } catch (err) {

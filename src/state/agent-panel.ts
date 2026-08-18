@@ -16,6 +16,8 @@ import type {
   AgentHistorySummary,
   AgentMessageResourceInput,
   AgentPlanSnapshot,
+  AgentStrategyCheckpoint,
+  AgentStrategyReviewTrigger,
   AgentProposalKind,
   AgentProposalPayload,
   AgentToolCallInfo,
@@ -95,7 +97,16 @@ export type AgentTimelineEntry =
   | { kind: "cancelled"; id: string }
   | { kind: "interrupted"; id: string }
   | { kind: "canvas"; id: string; path: string; title: string; action: "created" | "updated" }
-  | { kind: "plan"; id: string; runId: string; plan: AgentPlanSnapshot };
+  | { kind: "plan"; id: string; runId: string; plan: AgentPlanSnapshot }
+  | {
+      kind: "strategy";
+      id: string;
+      runId: string;
+      status: "working" | "completed" | "failed";
+      trigger: AgentStrategyReviewTrigger;
+      checkpoint?: AgentStrategyCheckpoint;
+      message?: string;
+    };
 
 export interface AgentTab {
   id: string;
@@ -266,6 +277,23 @@ function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTim
       return timeline.map((entry, i) =>
         i === index && entry.kind === "plan" ? { ...entry, plan: event.plan } : entry,
       );
+    }
+    case "strategy_review": {
+      const index = timeline.findIndex(
+        (entry) => entry.kind === "strategy" && entry.runId === event.runId,
+      );
+      const existing = index >= 0 ? timeline[index] : null;
+      const next: Extract<AgentTimelineEntry, { kind: "strategy" }> = {
+        kind: "strategy",
+        id: existing?.kind === "strategy" ? existing.id : nextId(),
+        runId: event.runId,
+        status: event.status === "started" ? "working" : event.status,
+        trigger: event.trigger,
+        ...(event.status === "completed" ? { checkpoint: event.checkpoint } : {}),
+        ...(event.status === "failed" ? { message: event.message } : {}),
+      };
+      if (index === -1) return [...timeline, next];
+      return timeline.map((entry, itemIndex) => itemIndex === index ? next : entry);
     }
     case "skill_maintenance_started":
       return timeline.map((entry) =>

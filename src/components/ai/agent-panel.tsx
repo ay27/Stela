@@ -12,6 +12,7 @@ import {
   MinusCircle,
   Plus,
   Send,
+  Sparkles,
   ShieldAlert,
   StopCircle,
   X,
@@ -614,11 +615,45 @@ function TimelineItem({
       return <button type="button" onClick={() => useWorkspace.getState().openFile(resolveCanvasArtifactPath(entry.path))} className="w-full rounded-lg border border-primary/30 bg-primary/5 p-3 text-left text-xs hover:bg-primary/10"><div className="font-medium text-foreground">{entry.title}</div><div className="mt-1 text-muted-foreground">{t(entry.action === "created" ? "agent.panel.canvasCreated" : "agent.panel.canvasUpdated")} · {t("agent.panel.openCanvas")}</div></button>;
     case "plan":
       return <ExecutionPlanCard plan={entry.plan} />;
+    case "strategy":
+      return <StrategyReviewCard entry={entry} />;
     case "tool":
       return <ToolChip entry={entry} />;
     case "proposal":
       return <ProposalCard entry={entry} onRespond={onRespond} />;
   }
+}
+
+function StrategyReviewCard({
+  entry,
+}: {
+  entry: Extract<AgentTimelineEntry, { kind: "strategy" }>;
+}) {
+  const t = useT();
+  const advice = entry.checkpoint?.advice;
+  return (
+    <div className="rounded-lg border border-violet-500/25 bg-violet-500/5 p-3 text-xs">
+      <div className="flex items-center gap-2 font-medium text-foreground">
+        {entry.status === "working"
+          ? <Loader2 className="h-3.5 w-3.5 animate-spin text-violet-500" />
+          : <Sparkles className="h-3.5 w-3.5 text-violet-500" />}
+        {t("agent.panel.strategyReview")}
+      </div>
+      {entry.status === "working" ? (
+        <div className="mt-1 text-muted-foreground">{t("agent.panel.strategyReviewWorking")}</div>
+      ) : entry.status === "failed" ? (
+        <div className="mt-1 text-muted-foreground">{entry.message ?? t("agent.panel.strategyReviewFailed")}</div>
+      ) : advice ? (
+        <div className="mt-2 space-y-1.5 text-muted-foreground">
+          <div>{advice.diagnosis}</div>
+          <ol className="list-decimal space-y-1 pl-4">
+            {advice.nextActions.map((action, index) => <li key={`${index}-${action}`}>{action}</li>)}
+          </ol>
+          <div><span className="font-medium text-foreground">{t("agent.panel.strategyReviewAvoid")}:</span> {advice.avoid}</div>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function openAgentResource(resource: AgentMessageResource): void {

@@ -153,12 +153,16 @@ function renderSummary() {
   const cacheNote = previous && totals.cacheHitRate != null && previous.cacheHitRate != null
     ? `对照轮 ${formatPercent(previous.cacheHitRate)} · ${signed((totals.cacheHitRate - previous.cacheHitRate) * 100, 1)} pp`
     : `${compactNumber(totals.cacheReadTokens)} cached tokens`;
+  const reviewNote = previous
+    ? `对照轮 ${previous.strategyReviewsCompleted ?? 0} · ${signed((totals.strategyReviewsCompleted ?? 0) - (previous.strategyReviewsCompleted ?? 0))}`
+    : `${totals.strategyReviewsCompleted ?? 0} completed · ${totals.strategyReviewsFailed ?? 0} failed`;
   target.replaceChildren(
     metric("通过率", `${totals.valid} / ${totals.cases}`, validNote),
     metric("平均耗时", formatDuration(totals.averageElapsedMs), durationNote),
     metric("工具调用", formatNumber(totals.toolCalls), toolNote),
     metric("模型输出 Token", compactNumber(totals.outputTokens), outputNote),
     metric("Prompt Cache", totals.cacheHitRate == null ? "—" : formatPercent(totals.cacheHitRate), cacheNote),
+    metric("策略复盘", String(totals.strategyReviewsTriggered ?? 0), reviewNote),
   );
 }
 
@@ -269,6 +273,7 @@ function renderSignals() {
     (sum, item) => sum + (item.capabilityFailures.query_language_mismatch ?? 0),
     0,
   );
+  const strategyReviews = state.data.cases.filter((item) => item.efficiency?.reviewTriggered);
   const signals = [
     {
       value: `${mongo.length} cases`,
@@ -289,6 +294,11 @@ function renderSignals() {
       value: `${languageMismatches} calls`,
       text: "SQL 与 MongoDB 查询语言路由错配；即使最终重试成功，也会增加耗时和上下文噪声。",
       className: languageMismatches > 0 ? "stela-signal-warning" : "",
+    },
+    {
+      value: `${strategyReviews.length} cases`,
+      text: `触发策略复盘；峰值同族查询 ${state.data.totals.queryFamilyPeak ?? 0} 次，复盘后仍执行 ${state.data.totals.postReviewRunQueryCalls ?? 0} 次 run_query。`,
+      className: strategyReviews.length > 0 ? "stela-signal-warning" : "",
     },
   ];
   const target = document.getElementById("signals");
@@ -488,6 +498,8 @@ function renderDetail(item) {
     ["首次结果", item.firstResultMs == null ? "—" : formatDuration(item.firstResultMs)],
     ["模型轮次", String(item.modelTurns)],
     ["工具调用", String(item.toolCalls)],
+    ["同族查询峰值", String(item.efficiency?.queryFamilyPeak ?? 0)],
+    ["策略复盘", item.efficiency?.reviewStatus ?? "not_triggered"],
   ];
   for (const [label, value] of metricValues) {
     const card = element("div", "stela-detail-metric");

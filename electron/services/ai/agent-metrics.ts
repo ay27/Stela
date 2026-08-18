@@ -385,6 +385,10 @@ export function getDashboard(range: AgentMetricRange): AgentMetricsDashboard {
     .all(rangeStart(range)) as RunRow[];
   const rootRuns = rows.filter((row) => row.parent_run_id === null);
   const nonToolRuns = rows.filter((row) => row.surface !== "tool");
+  // Strategy-review usage is also charged to its root Agent run so overview and
+  // per-turn totals stay complete. Keep the child run for diagnosis, but do not
+  // count its tokens a second time in aggregate usage.
+  const usageRuns = nonToolRuns.filter((row) => row.surface !== "strategy_review");
   const knowledge = rows.filter((row) => row.surface === "skill_maintenance");
   const outcomeMap = new Map<string, number>();
   for (const row of knowledge) {
@@ -464,10 +468,10 @@ export function getDashboard(range: AgentMetricRange): AgentMetricsDashboard {
     const day = localDay(row.started_at);
     dailyGroups.set(day, [...(dailyGroups.get(day) ?? []), row]);
   }
-  const inputTokens = nonToolRuns.reduce((sum, row) => sum + row.input_tokens, 0);
-  const outputTokens = nonToolRuns.reduce((sum, row) => sum + row.output_tokens, 0);
-  const cacheReadTokens = nonToolRuns.reduce((sum, row) => sum + row.cache_read_tokens, 0);
-  const cacheWriteTokens = nonToolRuns.reduce((sum, row) => sum + row.cache_write_tokens, 0);
+  const inputTokens = usageRuns.reduce((sum, row) => sum + row.input_tokens, 0);
+  const outputTokens = usageRuns.reduce((sum, row) => sum + row.output_tokens, 0);
+  const cacheReadTokens = usageRuns.reduce((sum, row) => sum + row.cache_read_tokens, 0);
+  const cacheWriteTokens = usageRuns.reduce((sum, row) => sum + row.cache_write_tokens, 0);
   const promptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
   return {
     range,
@@ -626,7 +630,7 @@ export function getSessionTrace(history: AgentHistorySession): AgentMetricSessio
   });
   const trees = turns.flatMap((turn) => turn.trace ? [turn.trace] : []);
   const modelRuns = trees.flatMap((tree) => [tree.root, ...tree.descendants])
-    .filter((trace) => trace.run.surface !== "tool");
+    .filter((trace) => trace.run.surface !== "tool" && trace.run.surface !== "strategy_review");
   const inputTokens = modelRuns.reduce((sum, trace) => sum + trace.run.inputTokens, 0);
   const outputTokens = modelRuns.reduce((sum, trace) => sum + trace.run.outputTokens, 0);
   const cacheReadTokens = modelRuns.reduce((sum, trace) => sum + trace.run.cacheReadTokens, 0);

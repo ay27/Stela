@@ -121,3 +121,4 @@ proposed → active → superseded
 | [0066](0066-structured-read-only-agent-queries.md) | Structured read-only Agent queries across connector languages | superseded → [0067](0067-safe-mongodb-aggregation-queries.md) |
 | [0067](0067-safe-mongodb-aggregation-queries.md) | Safe MongoDB aggregation queries | active |
 | [0068](0068-headless-pyodide-agent-evaluation.md) | Headless Pyodide Agent evaluation | active |
+| [0069](0069-adaptive-agent-strategy-review.md) | Adaptive Agent strategy review | active |

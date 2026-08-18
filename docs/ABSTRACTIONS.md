@@ -537,6 +537,17 @@ interface AiSettings {
 }
 ```
 
+Data-analysis runs also maintain an in-memory efficiency ledger
+([ADR-0069](./adr/0069-adaptive-agent-strategy-review.md)). It normalizes SQL and
+MongoDB calls into advisory query families and may append one immutable
+`AgentStrategyCheckpoint` to the pi Session. The checkpoint contains its
+trigger, bounded counters, and validated `continue | change` advice; it is not
+a user message, a tool authorization decision, or a persisted data result.
+`AgentEvent.strategy_review` projects its started/completed/failed lifecycle to
+the Panel, while local metrics record the same request as a
+`strategy_review` child surface. No new IPC channel or synchronized storage
+authority is introduced.
+
 API key shard: `{vault}/.stela/secrets/ai_{deviceSlug}_{profileId}.json` (safeStorage-wrapped). Transport: pi-ai built-in provider for `vendorId`, or `createProvider` for `custom` ([ADR-0022](./adr/0022-ai-multi-provider-profiles.md)); agent loop: `AgentHarness` ([ADR-0018](./adr/0018-pi-ai-agent-harness.md)). Inline completion is enabled only when `completionProfileId` names an existing profile.
 
 ### SQL inline completion

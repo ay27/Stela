@@ -49,6 +49,7 @@ interface RawRun {
   toolCalls: number;
   toolCallCounts: Record<string, number>;
   capabilityFailures: Record<string, number>;
+  efficiency?: ReportEfficiency;
   usage: {
     inputTokens: number;
     outputTokens: number;
@@ -57,6 +58,16 @@ interface RawRun {
     cacheHitRate: number | null;
   };
   transcript: RawMessage[];
+}
+
+export interface ReportEfficiency {
+  queryFamilyPeak: number;
+  strategyHints: number;
+  reviewTriggered: boolean;
+  reviewTrigger: "query_family_fanout" | "query_churn" | "failure_cluster" | null;
+  runQueryCallsAtReview: number | null;
+  postReviewRunQueryCalls: number;
+  reviewStatus: "not_triggered" | "running" | "completed" | "failed";
 }
 
 export interface ReportTraceStep {
@@ -92,6 +103,7 @@ export interface ReportCase {
   toolCalls: number;
   toolCallCounts: Record<string, number>;
   capabilityFailures: Record<string, number>;
+  efficiency: ReportEfficiency;
   usage: RawRun["usage"];
   trace: ReportTraceStep[];
 }
@@ -113,6 +125,12 @@ export interface DataAgentBenchReport {
     cacheReadTokens: number;
     cacheWriteTokens: number;
     cacheHitRate: number | null;
+    strategyReviewsTriggered: number;
+    strategyReviewsCompleted: number;
+    strategyReviewsFailed: number;
+    queryFamilyPeak: number;
+    strategyHints: number;
+    postReviewRunQueryCalls: number;
   };
   datasets: Array<{
     name: string;
@@ -149,6 +167,16 @@ export interface DataAgentBenchHistory {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const assetsDir = path.join(here, "data-agent-bench", "report");
+
+const EMPTY_EFFICIENCY: ReportEfficiency = {
+  queryFamilyPeak: 0,
+  strategyHints: 0,
+  reviewTriggered: false,
+  reviewTrigger: null,
+  runQueryCallsAtReview: null,
+  postReviewRunQueryCalls: 0,
+  reviewStatus: "not_triggered",
+};
 
 function truncate(value: string, limit: number): string {
   if (value.length <= limit) return value;
@@ -312,6 +340,7 @@ export async function buildDataAgentBenchReport(input: string): Promise<DataAgen
     toolCalls: run.toolCalls,
     toolCallCounts: run.toolCallCounts ?? {},
     capabilityFailures: run.capabilityFailures ?? {},
+    efficiency: { ...EMPTY_EFFICIENCY, ...(run.efficiency ?? {}) },
     usage: run.usage,
     trace: compactTrace(run.transcript ?? []),
   })).sort((a, b) => a.dataset.localeCompare(b.dataset) || a.query - b.query || a.run - b.run);
@@ -372,6 +401,15 @@ export async function buildDataAgentBenchReport(input: string): Promise<DataAgen
       cacheHitRate: tokenPromptTotal > 0
         ? cases.reduce((sum, item) => sum + item.usage.cacheReadTokens, 0) / tokenPromptTotal
         : null,
+      strategyReviewsTriggered: cases.filter((item) => item.efficiency.reviewTriggered).length,
+      strategyReviewsCompleted: cases.filter((item) => item.efficiency.reviewStatus === "completed").length,
+      strategyReviewsFailed: cases.filter((item) => item.efficiency.reviewStatus === "failed").length,
+      queryFamilyPeak: cases.reduce((peak, item) => Math.max(peak, item.efficiency.queryFamilyPeak), 0),
+      strategyHints: cases.reduce((sum, item) => sum + item.efficiency.strategyHints, 0),
+      postReviewRunQueryCalls: cases.reduce(
+        (sum, item) => sum + item.efficiency.postReviewRunQueryCalls,
+        0,
+      ),
     },
     datasets,
     failureCategories: [...failureCounts.entries()]

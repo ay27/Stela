@@ -101,6 +101,32 @@ const session: AgentMetricSessionTrace = {
         request: { sql: "select count(*) from orders" },
         response: { rows: 1 },
         events: [],
+      }, {
+        run: {
+          runId: "strategy:run-1:review-1",
+          parentRunId: "agent:run-1",
+          surface: "strategy_review",
+          operation: "query_churn",
+          status: "completed",
+          outcome: "change",
+          startedAt: 1_710,
+          endedAt: 1_790,
+          durationMs: 80,
+          firstResultMs: null,
+          profileId: null,
+          vendorId: null,
+          model: "test",
+          inputTokens: 5,
+          outputTokens: 2,
+          cacheReadTokens: 3,
+          cacheWriteTokens: 0,
+          errorCode: null,
+          errorMessage: null,
+          traceTruncated: false,
+        },
+        request: { trigger: "query_churn" },
+        response: { assessment: "change" },
+        events: [],
       }],
     },
   }],
@@ -113,6 +139,7 @@ assert.equal(model?.label, "Model step 1");
 assert.equal(model?.durationMs, 300);
 assert.equal(model?.firstTokenMs, 100);
 assert.equal(items.find((item) => item.kind === "tool")?.label, "run_sql");
+assert.equal(items.find((item) => item.kind === "review")?.label, "query_churn");
 
 const waterfall = buildAgentSessionWaterfall(session);
-assert.deepEqual(waterfall.map((item) => item.kind), ["input", "input", "model", "tool"]);
+assert.deepEqual(waterfall.map((item) => item.kind), ["input", "input", "model", "tool", "tool"]);

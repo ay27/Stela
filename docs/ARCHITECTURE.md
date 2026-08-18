@@ -357,6 +357,7 @@ flowchart TB
   AGENT["ai:agent-run\nAgentHarness loop"]
   PROV["provider.ts → pi-ai Models"]
   HARNESS["agent.ts → stable prompt + turn envelope\n+ compact / overflow recovery"]
+  REVIEW["bounded analysis ledger\n+ one tool-free strategy review"]
   TOOLS["agent-tools → parallel reads\nsequential state changes\n→ connectors / search / vault-fs"]
   ART["main query-artifact cache\nsession + runId scoped"]
   PY["renderer Web Worker / eval Node Worker\nshared Pyodide + DuckDB + pandas core"]
@@ -369,6 +370,7 @@ flowchart TB
   PARSE --> PROV
   AGENT --> HARNESS --> PROV
   HARNESS --> TOOLS
+  HARNESS --> REVIEW --> PROV
   TOOLS --> GUARD
   TOOLS --> ART --> PY --> TOOLS
 ```
@@ -392,6 +394,12 @@ flowchart TB
    Plan versions are immutable appended session
    entries, and pi-ai requests use short cache retention. Read tools may run in parallel;
    plan tools, Python execution, chart creation, Canvas writes, and `propose_edit` are sequential.
+   A bounded in-memory analysis ledger observes schema discovery, structured queries,
+   and Python execution. Repeated query families receive a deterministic hint; structural
+   fan-out, twenty queries without plan progress, or clustered failures can trigger at most
+   one tool-free review by the active model. The validated advice is appended as an immutable
+   strategy checkpoint, never blocks tools, and is preserved by compaction
+   ([ADR-0069](./adr/0069-adaptive-agent-strategy-review.md)).
    Mutations, note writes, and RunSQL rewrites
    wait for user approval. Fix/schema quick actions auto-submit in a new Agent tab;
    rewrite/question actions open editable drafts. The unified `@` picker and Add to Chat

@@ -67,6 +67,7 @@ function traceKindClass(kind: AgentTraceItemKind): string {
     case "context": return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300";
     case "model": return "bg-violet-500/15 text-violet-700 dark:text-violet-300";
     case "tool": return "bg-amber-500/15 text-amber-700 dark:text-amber-300";
+    case "review": return "bg-violet-500/15 text-violet-700 dark:text-violet-300";
     case "maintenance": return "bg-cyan-500/15 text-cyan-700 dark:text-cyan-300";
     default: return "bg-muted text-muted-foreground";
   }
@@ -235,7 +236,7 @@ function TraceView({
                   className={cn(
                     "grid w-full grid-cols-[76px_1fr_82px] items-center gap-3 border-b border-border/60 px-4 py-2 text-left text-[11px] last:border-b-0 hover:bg-accent/50",
                     selectedId === item.id && "bg-accent",
-                    (item.kind === "tool" || item.kind === "maintenance") && "pl-8",
+                    (item.kind === "tool" || item.kind === "review" || item.kind === "maintenance") && "pl-8",
                   )}
                 >
                   <span className={cn("w-fit rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase", traceKindClass(item.kind))}>

@@ -39,6 +39,15 @@ async function writeRun(dataset: string, query: number, valid: boolean): Promise
     toolCalls: valid ? 1 : 2,
     toolCallCounts: { run_sql: valid ? 1 : 2 },
     capabilityFailures: valid ? {} : { unsupported_mongodb: 1 },
+    efficiency: valid ? {
+      queryFamilyPeak: 8,
+      strategyHints: 1,
+      reviewTriggered: true,
+      reviewTrigger: "query_family_fanout",
+      runQueryCallsAtReview: 8,
+      postReviewRunQueryCalls: 2,
+      reviewStatus: "completed",
+    } : undefined,
     usage: {
       inputTokens: 10,
       outputTokens: 20,
@@ -82,8 +91,12 @@ try {
   assert.equal(report.totals.cases, 2);
   assert.equal(report.totals.valid, 1);
   assert.equal(report.totals.cacheHitRate, 0.875);
+  assert.equal(report.totals.strategyReviewsTriggered, 1);
+  assert.equal(report.totals.strategyReviewsCompleted, 1);
+  assert.equal(report.totals.queryFamilyPeak, 8);
   assert.equal(report.cases[0]?.question, "Question 1?");
   assert.equal(report.cases[1]?.failureCategory, "mongodb_unavailable");
+  assert.equal(report.cases[1]?.efficiency.reviewStatus, "not_triggered");
   assert.equal(report.cases[1]?.trace[1]?.toolName, "run_sql");
   assert.equal(report.failureCategories[0]?.count, 1);
 

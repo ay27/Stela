@@ -19,6 +19,9 @@ The benchmark path is intentionally product-faithful:
   Node workers running the same offline Pyodide, DuckDB, pandas, execution
   script, artifact authorization, timeout, and result limits as the desktop.
 - Dataset hints are enabled by default; pass `--no-hints` to disable them.
+- Product and evaluation runs keep a bounded in-memory analysis ledger. Repeated
+  query families receive a deterministic hint, and a stalled run gets at most
+  one tool-free strategy review from the current Agent model.
 
 ## Linux runner
 
@@ -68,6 +71,11 @@ endpoint hash plus both Git commits and tracked-dirty flags.
 Pyodide is required by default. Use `--pyodide-assets /path/to/assets` to point
 at a prepared offline closure. `--no-python` exists only to reproduce the older
 headless baseline and is recorded in the manifest.
+
+Strategy review is enabled by default and recorded in the manifest and each
+`final_agent.json`. Pass `--no-strategy-review` to build a same-commit A/B
+baseline. The reviewer has no tools, never blocks the main Agent, uses the
+active eval model, and its tokens are included in total usage.
 
 Generate the static analysis dashboard from any completed result directory:
 

@@ -40,6 +40,34 @@ const history: AgentHistorySession = {
       finishedAt: null,
       events: [
         {
+          type: "strategy_review",
+          runId: "run_1",
+          status: "completed",
+          trigger: "query_churn",
+          checkpoint: {
+            runId: "run_1",
+            version: 1,
+            trigger: "query_churn",
+            createdAt: 1,
+            metrics: {
+              queryFamilyPeak: 2,
+              strategyHints: 0,
+              reviewTriggered: true,
+              reviewTrigger: "query_churn",
+              runQueryCallsAtReview: 20,
+              postReviewRunQueryCalls: 0,
+              reviewStatus: "completed",
+            },
+            advice: {
+              assessment: "change",
+              diagnosis: "Too many probes.",
+              nextActions: ["Use one aggregate."],
+              avoid: "More probes.",
+              successCondition: "One exact result.",
+            },
+          },
+        },
+        {
           type: "canvas_updated",
           runId: "run_1",
           path: "revenue.stela.canvas",
@@ -75,10 +103,11 @@ assert.equal(
     resource.kind === "canvas" && resource.path === "reports/revenue.stela.canvas"),
   true,
 );
-assert.equal(timeline[1]?.kind, "canvas");
-assert.equal(timeline[2]?.kind, "proposal");
-assert.equal(timeline[2]?.kind === "proposal" && timeline[2].resolution, "expired");
-assert.equal(timeline[3]?.kind, "interrupted");
+assert.equal(timeline[1]?.kind, "strategy");
+assert.equal(timeline[2]?.kind, "canvas");
+assert.equal(timeline[3]?.kind, "proposal");
+assert.equal(timeline[3]?.kind === "proposal" && timeline[3].resolution, "expired");
+assert.equal(timeline[4]?.kind, "interrupted");
 
 const localRef: AgentHistoryRef = { sessionId: "sess_1", deviceSlug: "laptop" };
 assert.equal(

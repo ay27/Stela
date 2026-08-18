@@ -140,10 +140,12 @@ def validate(query_dir, llm_answer, reason=None):
     answer: string;
     valid: boolean;
     toolCalls: number;
+    efficiency: { reviewTriggered: boolean };
   };
   assert.equal(final.answer, "one");
   assert.equal(final.valid, true);
   assert.equal(final.toolCalls, 2);
+  assert.equal(final.efficiency.reviewTriggered, false);
   assert.equal(modelCalls, 2);
   const followUpMessages = modelRequests[1]?.messages ?? [];
   const toolRequestIndex = followUpMessages.findIndex((message) =>
@@ -168,9 +170,11 @@ def validate(query_dir, llm_answer, reason=None):
   const manifest = JSON.parse(await fs.readFile(path.join(output, "manifest.json"), "utf-8")) as {
     concurrency: number;
     bridgeTimeoutMs: number;
+    strategyReview: boolean;
   };
   assert.equal(manifest.concurrency, 2);
   assert.equal(manifest.bridgeTimeoutMs, 10_000);
+  assert.equal(manifest.strategyReview, true);
 } finally {
   server.close();
   await fs.rm(root, { recursive: true, force: true });

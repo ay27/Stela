@@ -139,6 +139,25 @@ function asAgentEvent(value: unknown): AgentEvent | null {
         ? event as AgentEvent
         : null;
     }
+    case "strategy_review": {
+      const validTrigger = event.trigger === "query_family_fanout" ||
+        event.trigger === "query_churn" || event.trigger === "failure_cluster";
+      if (!validTrigger) return null;
+      if (event.status === "started") return event as AgentEvent;
+      if (event.status === "failed") {
+        return typeof event.message === "string" ? event as AgentEvent : null;
+      }
+      const checkpoint = asRecord(event.checkpoint);
+      const advice = asRecord(checkpoint?.advice);
+      return event.status === "completed" && checkpoint && advice &&
+        checkpoint.runId === event.runId && typeof checkpoint.version === "number" &&
+        (advice.assessment === "continue" || advice.assessment === "change") &&
+        typeof advice.diagnosis === "string" && Array.isArray(advice.nextActions) &&
+        advice.nextActions.every((item) => typeof item === "string") &&
+        typeof advice.avoid === "string" && typeof advice.successCondition === "string"
+        ? event as AgentEvent
+        : null;
+    }
     case "tool_call": {
       const call = asRecord(event.call);
       return call &&
