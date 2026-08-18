@@ -1,6 +1,7 @@
 import { defineConfig } from "electron-vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
+import { normalizePath } from "vite";
 import { viteStaticCopy } from "vite-plugin-static-copy";
 
 /**
@@ -67,7 +68,8 @@ export default defineConfig({
       viteStaticCopy({
         targets: [
           {
-            src: path.resolve(__dirname, "node_modules/.cache/stela-pyodide/*"),
+            // tinyglobby expects forward slashes, including on Windows runners.
+            src: normalizePath(path.resolve(__dirname, "node_modules/.cache/stela-pyodide/*")),
             dest: "pyodide",
           },
         ],
