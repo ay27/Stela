@@ -33,9 +33,12 @@ flowchart LR
     SQL["⚡ SQLite\n.stela.sqlite\n(query cache)"]
     IDX["🧠 In-memory\nvault-index / sql-index"]
     UI["⚛️ React State\nZustand stores"]
+    AGENT["🤖 Agent Harness\nsemantic refresh"]
 
     MD -->|"RunSQL execute"| SQL
-    CANVAS -->|"explicit source refresh"| SQL
+    CANVAS -->|"refresh request"| AGENT
+    AGENT -->|"audited run_query"| SQL
+    AGENT -->|"one atomic update"| CANVAS
     SQL -->|"appendRun"| JSONL
     MD -->|"detail round-trip"| MD
     JSONL -->|"importIncremental"| SQL
@@ -50,6 +53,7 @@ flowchart LR
     style SQL fill:#fff3cd,stroke:#ffc107,color:#000
     style IDX fill:#cce5ff,stroke:#004085,color:#000
     style UI fill:#e2e3e5,stroke:#6c757d,color:#000
+    style AGENT fill:#e2e3e5,stroke:#6c757d,color:#000
 ```
 
 #### Invariants
@@ -250,13 +254,14 @@ cards use the same natural-size, scrollable scene geometry as HTML export for
 their inline read view; the expanded layout editor mounts React Flow for
 zooming, panning, and optional node adjustment. Canvas Markdown does not execute Mermaid.
 
-Canvas creation, reads, source refresh, and Flow layout updates cross dedicated
-typed IPC methods.
-Writes are path-confined, atomic, and etag-protected. The Agent may update a
-Canvas without an edit proposal, but Stela replaces every new or changed SQL
-source with SQL and connection metadata from a successful query in that Agent
-run. Users explicitly refresh one source or all sources; a failed refresh keeps
-the previous run reference and records the latest error. Standalone HTML export
+Canvas creation, reads, and Flow layout updates cross dedicated typed IPC
+methods. Whole-Canvas and single-source refresh actions instead start a
+dedicated Agent run with typed target metadata. The update tool permits that run
+one atomic commit only after every targeted current source is rebound to a
+successful audited query from the same run. The Agent re-evaluates affected
+KPI, chart, table, Markdown, and Flow semantics; an unresolved target failure
+leaves the Canvas unchanged while query and Agent histories retain the failure.
+Writes remain path-confined, atomic, and etag-protected. Standalone HTML export
 embeds the current result data, Stela-compiled chart options, and an offline
 ECharts runtime so charts retain tooltip, legend, hover, and responsive resize
 behavior. Tables and Flow diagrams are frozen snapshots, and collapsed source
@@ -265,7 +270,8 @@ dependency. A user may drag Flow nodes or request deterministic
 Dagre TB/LR auto-layout; the etag-protected layout write changes only direction
 and existing node coordinates. Agent updates preserve that user-owned layout by
 stable ids. See [ADR-0056](./adr/0056-user-adjustable-react-flow-cards.md) and
-[ADR-0057](./adr/0057-bounded-mark-encoding-visualizations.md).
+[ADR-0057](./adr/0057-bounded-mark-encoding-visualizations.md), plus
+[ADR-0070](./adr/0070-agent-led-atomic-canvas-refresh.md) for refresh semantics.
 
 ## Connector Architecture
 
@@ -342,9 +348,21 @@ Stela AI is **search-first and provider-backed**, not on-device RAG. Retrieval u
 | Chat / agent transport | `@earendil-works/pi-ai` — built-in provider factories by `vendorId`, or `createProvider` + `openAICompletionsApi` for `custom` ([ADR-0022](./adr/0022-ai-multi-provider-profiles.md)) |
 | Agent loop | `@earendil-works/pi-agent-core` `AgentHarness` + in-memory `Session` |
 | API key | `{vault}/.stela/secrets/ai_{deviceSlug}_{profileId}.json` via `safeStorage` (injected into pi `CredentialStore`; not pi `auth.json`) |
-| Settings | vault `.stela/settings.json` → shared `ai.profiles`, chat/agent `activeProfileId`, independent inline `completionProfileId` (+ policy flags); keys never in settings |
+| Settings | vault `.stela/settings.json` → shared `ai.profiles` (including requested reasoning effort), chat/agent `activeProfileId`, independent inline `completionProfileId` (+ policy flags); keys never in settings |
 
-Agent Panel and Settings share `activeProfileId`. SQL inline completion independently selects `completionProfileId` from the same profiles and simulates FIM over pi-ai `streamSimple`; changing the active chat profile does not change completion. Inline schema context reads the connection's local `schemaDir` plus columns the renderer already cached, and never issues connector calls from the completion path itself ([ADR-0028](./adr/0028-inline-completion-schema-and-note-context.md)). Vendor dropdown lists every pi built-in provider (no Stela allowlist) plus Custom.
+Agent Panel and Settings share `activeProfileId`. Each Profile requests one
+reasoning effort; the main Harness, its compaction calls, and strategy review
+use the model-supported effective level. Built-in model catalogs constrain the
+selector and stale settings clamp visibly. A non-`off` Custom selection sends
+standard `reasoning_effort` and surfaces endpoint rejection without silent
+downgrade. Missing settings migrate to `medium`. SQL inline completion
+independently selects `completionProfileId` from the same profiles and remains
+reasoning-off; changing the active chat profile does not change completion.
+Inline schema context reads the connection's local `schemaDir` plus columns the
+renderer already cached, and never issues connector calls from the completion
+path itself ([ADR-0028](./adr/0028-inline-completion-schema-and-note-context.md),
+[ADR-0072](./adr/0072-profile-scoped-agent-reasoning-effort.md)). Vendor dropdown
+lists every pi built-in provider (no Stela allowlist) plus Custom.
 
 ### Agent, inline completion, and one translator
 
@@ -496,11 +514,16 @@ The Session view joins device-local Agent History with Metrics by Agent run id:
 History remains authoritative for Session and user-Turn order, while Metrics
 provides model steps, child tool/maintenance runs, timing, tokens, cache usage,
 and redacted payloads. It does not persist a second Session model in Metrics.
-Each user Turn can be inspected as a conversation or as an ordered trajectory;
-the latter includes a Model/Tools waterfall and per-event payload, result, and
-timing details. Missing or expired Metrics leave the conversation readable and
-show an unavailable trace. Refresh is explicit rather than polled. See
-[ADR-0065](./adr/0065-session-oriented-agent-observability.md).
+Each user Turn can be inspected as a conversation or as an action-oriented
+trajectory. The trajectory contains only causal work: model calls, tool
+executions, user approvals, strategy reviews, and context compactions. Turn
+input stays in a compact header; model context-window/token gauges, timing,
+plans, Canvas updates, and raw metric events attach to the action that produced
+them. Post-answer Skill maintenance has a separate background section. Missing
+or expired Metrics leave the conversation readable and show an unavailable
+trace. Refresh is explicit rather than polled. See
+[ADR-0065](./adr/0065-session-oriented-agent-observability.md) and
+[ADR-0071](./adr/0071-action-oriented-agent-execution-traces.md).
 
 The Overview reports surface-specific completion/error/cancellation funnels,
 p50/p95 latency, token usage, provider-reported prompt-cache hit rate, tool rankings, maintenance outcomes, daily
@@ -519,10 +542,14 @@ lookup context because it means the maintenance model was not called, not that
 a maintenance write succeeded. Recent traces use cursor pagination with ten
 rows per UI page.
 
-New Harness runs also record model-request start, first-token arrival,
-assistant-message completion, and Agent-step boundaries with a stable step
-index. This provides direct timing for new Session trajectories; legacy events
-remain readable, with missing timing shown as unavailable rather than invented.
+New Harness runs also record provider-neutral model context, requested and
+effective reasoning effort, final provider payload, first-token arrival,
+assistant-message completion, and Agent-step
+boundaries with a stable step index. Dedicated `context` and
+`before_provider_payload` hooks provide model input; ordinary Agent
+subscriptions remain reserved for lifecycle events. This provides direct input,
+usage, and timing for new Session trajectories. Legacy events remain readable,
+with missing values shown as unavailable rather than invented.
 
 `{vault}/.stela/agent-metrics.local.sqlite` is gitignored, retains 90 days, and
 caps each trace JSON payload at 256 KiB. Full SQL result rows and API keys are
@@ -541,7 +568,7 @@ All retrieval is lexical and in-process — no embeddings, no FTS5 index ([ADR-0
 - Agent `run_query` records SQL text or canonical structured-query JSON plus `queryLanguage` to `result-store` and `history-journal` under `blockId` `agent:<runId>`, so Agent executions remain auditable. Old history defaults to SQL.
 - Retrieval quality is measured by `npm run eval:retrieval` against mechanically labelled slices; labels never share a signal with the ranker. That eval calls the ranking functions directly, so it says nothing about whether the model picks the right tool or writes a usable query.
 - Ask discipline (`ask_user`) is measured by `npm run eval:agent-ask`, which drives the real `AgentHarness` with the real system prompt and tools. Tasks are generated in pairs from same-family table names in the vault: one version names the table, one leaves ≥3 used candidates open. Asking on the open version and not asking on the named one are both counted, so an agent that always asks cannot score well. Only `connector.execute`, `recordRun`, and `sqlIndex.query` are stubbed — answer correctness needs a live connection and is out of scope. `--self-check` verifies the whole rig without a model call.
-- End-to-end answer quality is measured by `npm run eval:data-agent-bench` against DataAgentBench on the Linux host that owns its PostgreSQL, MongoDB, SQLite, and DuckDB environments. The runner reuses Stela's real system prompt, `AgentHarness`, provider transport, and Agent tools without starting Electron. A thin stdio bridge maps SQL and structured MongoDB find to DAB's official `QueryDBTool`; safe aggregation uses the same dataset MongoDB service directly because upstream has no pipeline input. The existing `execute_python` tool runs the shared offline Pyodide/DuckDB/pandas core in isolated evaluation Node workers and consumes the normal session query artifacts, never system Python. The runner may process distinct datasets concurrently while serializing runs within each dataset; datasets backed by the shared MongoDB service are mutually exclusive, and Python worker concurrency is bounded separately. A fatal bridge timeout aborts the Agent and preserves its root error, while validation runs through an independent bridge. Task/bridge timeouts terminate the complete Python process group so blocking database calls cannot outlive a run. Large file-backed datasets should live on the Linux host's local disk rather than NFS. Linux headless results are authoritative; a temporary Mac subprocess connector may tunnel the same bridge over SSH for desktop parity smoke tests only. ([ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md), [ADR-0068](./adr/0068-headless-pyodide-agent-evaluation.md))
+- End-to-end answer quality is measured by `npm run eval:data-agent-bench` against DataAgentBench on the Linux host that owns its PostgreSQL, MongoDB, SQLite, and DuckDB environments. The runner reuses Stela's real system prompt, `AgentHarness`, provider transport, and Agent tools without starting Electron. Its requested/effective reasoning effort defaults to `medium`, is overrideable by CLI or environment, is recorded in every result/manifest/report, and participates in resume compatibility so unlike conditions cannot be mixed. A thin stdio bridge maps SQL and structured MongoDB find to DAB's official `QueryDBTool`; safe aggregation uses the same dataset MongoDB service directly because upstream has no pipeline input. The existing `execute_python` tool runs the shared offline Pyodide/DuckDB/pandas core in isolated evaluation Node workers and consumes the normal session query artifacts, never system Python. The runner may process distinct datasets concurrently while serializing runs within each dataset; datasets backed by the shared MongoDB service are mutually exclusive, and Python worker concurrency is bounded separately. A fatal bridge timeout aborts the Agent and preserves its root error, while validation runs through an independent bridge. Task/bridge timeouts terminate the complete Python process group so blocking database calls cannot outlive a run. Large file-backed datasets should live on the Linux host's local disk rather than NFS. Linux headless results are authoritative; a temporary Mac subprocess connector may tunnel the same bridge over SSH for desktop parity smoke tests only. ([ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md), [ADR-0068](./adr/0068-headless-pyodide-agent-evaluation.md), [ADR-0072](./adr/0072-profile-scoped-agent-reasoning-effort.md))
 
 ### Prompt cache boundary
 
@@ -606,7 +633,7 @@ window.stela.dialog.*       — pick vault / directory / file
 window.stela.settings.*       — load / patch AppSettings
 window.stela.connections.*    — CRUD connection map
 window.stela.storage.*        — SQLite run store
-window.stela.canvas.*         — read/create/refresh Canvas artifacts + update Flow layout
+window.stela.canvas.*         — read/create Canvas artifacts + update Flow layout
 window.stela.connector.*      — execute + plugin management
 window.stela.search.*         — vault search + file list
 window.stela.git.*            — Git operations

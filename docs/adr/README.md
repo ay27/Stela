@@ -122,3 +122,6 @@ proposed → active → superseded
 | [0067](0067-safe-mongodb-aggregation-queries.md) | Safe MongoDB aggregation queries | active |
 | [0068](0068-headless-pyodide-agent-evaluation.md) | Headless Pyodide Agent evaluation | active |
 | [0069](0069-adaptive-agent-strategy-review.md) | Adaptive Agent strategy review | active |
+| [0070](0070-agent-led-atomic-canvas-refresh.md) | Agent-led atomic Canvas refresh | active |
+| [0071](0071-action-oriented-agent-execution-traces.md) | Action-oriented Agent execution traces | active |
+| [0072](0072-profile-scoped-agent-reasoning-effort.md) | Profile-scoped Agent reasoning effort | active |

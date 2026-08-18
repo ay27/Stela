@@ -159,6 +159,17 @@ export function respondToProposal(response: AgentProposalResponse): boolean {
   const resolver = pending?.get(response.callId);
   if (!resolver) return false;
   historyResponses.get(response.runId)?.push(response);
+  if (agentMetrics.isOpen()) {
+    agentMetrics.addEvent(`agent:${response.runId}`, {
+      type: "proposal_resolved",
+      name: response.callId,
+      payload: {
+        callId: response.callId,
+        approve: response.approve,
+        answer: response.answer,
+      },
+    });
+  }
   pending!.delete(response.callId);
   resolver(response.approve && response.answer !== undefined ? response.answer : response.approve);
   return true;
@@ -701,7 +712,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       : null;
     const skills = await loadAgentSkills(vaultPath);
     const promptSkills = rankAgentSkills(skills.loaded, request.prompt, SKILL_PROMPT_LIMIT);
-    const { models, model } = createTransportForProfile(settings.ai, apiKey, profile.id);
+    const { models, model, reasoning } = createTransportForProfile(settings.ai, apiKey, profile.id);
     const contextWindow = model.contextWindow;
     const systemPrompt = buildSystemPrompt(AGENT_SKILL_LIMITS_PROMPT);
     const skillMetadata = formatSkillsForSystemPrompt(promptSkills.map((item) => item.skill));
@@ -744,12 +755,13 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       await emitUsage(true);
     };
 
+    const harnessThinkingLevel = reasoning.effective;
     harness = new AgentHarness({
       env: new NodeExecutionEnv({ cwd: vaultPath }),
       session,
       models,
       model,
-      thinkingLevel: "off",
+      thinkingLevel: harnessThinkingLevel,
       systemPrompt,
       streamOptions: { cacheRetention: "short" },
       resources: { skills: promptSkills.map((item) => item.skill) },
@@ -820,6 +832,11 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           },
           run: { runId, sessionId: request.sessionId, notePath: request.notePath ?? null, questionsAsked: 0 },
           chartRuns: new Map(),
+          canvasRefresh: request.canvasRefresh ? {
+            path: request.canvasRefresh.path,
+            sourceId: request.canvasRefresh.sourceId ?? null,
+            committed: false,
+          } : undefined,
           resolveChartRun: async (chartRunId) => {
             if (!resultStore.runExists(chartRunId)) await journal.importRun(vaultPath, chartRunId);
             return resultStore.getRun(chartRunId);
@@ -885,6 +902,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         const reviewed = await runStrategyReview({
           models,
           model,
+          reasoningEffort: harnessThinkingLevel,
           signal,
           sessionId: `stela-strategy-review:${profile.id}`,
           review: {
@@ -955,6 +973,36 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
     let harnessStepIndex = 0;
     let harnessStepStartedAt = metricStartedAt;
     let modelRequestStartedAt: number | null = null;
+    const contextUnsubscribe = harness.on("context", (event) => {
+      if (agentMetrics.isOpen()) {
+        agentMetrics.addEvent(metricRunId, {
+          type: "model_context",
+          name: `step:${harnessStepIndex}`,
+          payload: {
+            stepIndex: harnessStepIndex,
+            contextWindow,
+            model: { provider: model.provider, id: model.id },
+            thinkingLevel: harnessThinkingLevel,
+            requestedReasoningEffort: reasoning.requested,
+            effectiveReasoningEffort: reasoning.effective,
+            messages: event.messages,
+          },
+        });
+      }
+      return undefined;
+    });
+    const providerPayloadUnsubscribe = harness.on("before_provider_payload", (event) => {
+      modelRequestStartedAt = Date.now();
+      if (agentMetrics.isOpen()) {
+        agentMetrics.addEvent(metricRunId, {
+          type: "provider_payload",
+          name: `step:${harnessStepIndex}`,
+          occurredAt: modelRequestStartedAt,
+          payload: event.payload,
+        });
+      }
+      return undefined;
+    });
     const unsubscribe = harness.subscribe(async (event) => {
       if (event.type === "turn_start") {
         harnessStepIndex += 1;
@@ -1075,15 +1123,6 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           payload: event.message,
         });
         return;
-      }
-      if (event.type === "before_provider_payload" && agentMetrics.isOpen()) {
-        modelRequestStartedAt = Date.now();
-        agentMetrics.addEvent(metricRunId, {
-          type: "provider_payload",
-          name: `step:${harnessStepIndex}`,
-          occurredAt: modelRequestStartedAt,
-          payload: event.payload,
-        });
       }
     });
 
@@ -1253,6 +1292,8 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       }
     } finally {
       strategyUnsubscribe();
+      contextUnsubscribe();
+      providerPayloadUnsubscribe();
       unsubscribe();
     }
   } catch (err) {

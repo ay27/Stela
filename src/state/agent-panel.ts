@@ -10,6 +10,7 @@ import type { EditorState } from "@milkdown/prose/state";
 
 import type {
   AgentEntryPoint,
+  AgentCanvasRefreshRequest,
   AgentEvent,
   AgentHistoryRef,
   AgentHistorySession,
@@ -143,6 +144,7 @@ interface AgentPanelState {
     entryPoint: AgentEntryPoint;
     title: string;
     message: AgentMessageContent;
+    canvasRefresh?: AgentCanvasRefreshRequest;
     connectionName?: string | null;
     locale?: "zh" | "en";
     autoSend: boolean;
@@ -157,6 +159,7 @@ interface AgentPanelState {
     notePath?: string | null;
     locale?: "zh" | "en";
     entryPoint?: AgentEntryPoint;
+    canvasRefresh?: AgentCanvasRefreshRequest;
   }) => Promise<void>;
   cancel: () => Promise<void>;
   respondProposal: (
@@ -540,6 +543,7 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
         connectionName: input.connectionName,
         locale: input.locale,
         entryPoint: input.entryPoint,
+        canvasRefresh: input.canvasRefresh,
       });
     }
   },
@@ -582,7 +586,7 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
     }));
     useLayout.getState().focusAgentPanel();
   },
-  async start({ message, connectionName, notePath, locale, entryPoint }) {
+  async start({ message, connectionName, notePath, locale, entryPoint, canvasRefresh }) {
     const state = get();
     const tab = state.tabs.find((item) => item.id === state.activeTabId);
     if (!tab || tab.status === "running") return;
@@ -615,6 +619,7 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
         message,
         workspaceContext: currentWorkspaceContext(),
         entryPoint: entryPoint ?? tab.entryPoint,
+        canvasRefresh,
         connectionName,
         notePath,
         locale,

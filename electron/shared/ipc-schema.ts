@@ -49,6 +49,9 @@ const aiContextWindowSchema = z.union([
   z.literal(256_000),
   z.literal(1_000_000),
 ]);
+const aiReasoningEffortSchema = z.enum([
+  "off", "minimal", "low", "medium", "high", "xhigh", "max",
+]);
 const aiProviderProfileSchema = z
   .object({
     id: z.string().min(1).max(128),
@@ -57,6 +60,7 @@ const aiProviderProfileSchema = z
     model: z.string().min(1).max(256),
     baseUrl: z.string().max(2048),
     contextWindow: aiContextWindowSchema,
+    reasoningEffort: aiReasoningEffortSchema,
     hasApiKey: z.boolean(),
   })
   .strict();
@@ -245,7 +249,6 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
   }),
   [IPC.CANVAS_READ]: z.object({ path: stringPath }).strict(),
   [IPC.CANVAS_CREATE]: z.object({ directory: stringPath, title: z.string().trim().min(1).max(200) }).strict(),
-  [IPC.CANVAS_REFRESH_SOURCE]: z.object({ path: stringPath, etag: z.string().regex(/^[a-f0-9]{64}$/), sourceId: agentHistorySegment }).strict(),
   [IPC.CANVAS_UPDATE_FLOW_LAYOUT]: z.object({ path: stringPath, etag: z.string().regex(/^[a-f0-9]{64}$/), cardId: agentHistorySegment, patch: analysisCanvasFlowLayoutPatchSchema }).strict(),
 
   [IPC.CONNECTOR_LIST_KINDS]: z.object({}).strict(),
@@ -429,7 +432,12 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
             "runsql-rewrite",
             "runsql-ask",
             "schema-explain",
+            "canvas-refresh",
           ]).optional(),
+          canvasRefresh: z.object({
+            path: stringPath,
+            sourceId: agentHistorySegment.optional(),
+          }).strict().optional(),
           message: z.object({
             version: z.literal(1),
             segments: z.array(z.discriminatedUnion("kind", [
@@ -534,7 +542,15 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
           locale: z.enum(["zh", "en"]).optional(),
           profileId: z.string().min(1).max(128).nullable().optional(),
         })
-        .strict(),
+        .strict()
+        .superRefine((request, context) => {
+          if (request.entryPoint === "canvas-refresh" && !request.canvasRefresh) {
+            context.addIssue({ code: z.ZodIssueCode.custom, path: ["canvasRefresh"], message: "canvas-refresh requires a Canvas refresh scope." });
+          }
+          if (request.canvasRefresh && request.entryPoint !== "canvas-refresh") {
+            context.addIssue({ code: z.ZodIssueCode.custom, path: ["entryPoint"], message: "Canvas refresh scope requires the canvas-refresh entry point." });
+          }
+        }),
     })
     .strict(),
   [IPC.AI_AGENT_CANCEL]: z.object({ runId: stringMin1.max(128) }),

@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { readCompleted } from "../run-data-agent-bench";
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../../..");
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "stela-dab-runner-"));
@@ -18,7 +20,10 @@ const write = async (relative: string, content: string): Promise<void> => {
 };
 
 let modelCalls = 0;
-const modelRequests: Array<{ messages?: Array<{ role?: string; content?: unknown; tool_calls?: unknown[] }> }> = [];
+const modelRequests: Array<{
+  messages?: Array<{ role?: string; content?: unknown; tool_calls?: unknown[] }>;
+  reasoning_effort?: string;
+}> = [];
 const server = http.createServer(async (request, response) => {
   let requestBody = "";
   for await (const chunk of request) requestBody += String(chunk);
@@ -141,12 +146,19 @@ def validate(query_dir, llm_answer, reason=None):
     valid: boolean;
     toolCalls: number;
     efficiency: { reviewTriggered: boolean };
+    requestedReasoningEffort: string;
+    effectiveReasoningEffort: string;
   };
   assert.equal(final.answer, "one");
   assert.equal(final.valid, true);
   assert.equal(final.toolCalls, 2);
   assert.equal(final.efficiency.reviewTriggered, false);
+  assert.equal(final.requestedReasoningEffort, "medium");
+  assert.equal(final.effectiveReasoningEffort, "medium");
+  assert.ok(await readCompleted(finalPath, "medium", "medium"));
+  assert.equal(await readCompleted(finalPath, "off", "off"), null);
   assert.equal(modelCalls, 2);
+  assert.ok(modelRequests.every((request) => request.reasoning_effort === "medium"));
   const followUpMessages = modelRequests[1]?.messages ?? [];
   const toolRequestIndex = followUpMessages.findIndex((message) =>
     message.role === "assistant" && message.tool_calls?.length === 2

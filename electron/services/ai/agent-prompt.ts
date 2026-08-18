@@ -39,6 +39,7 @@ export function buildSystemPrompt(skillLimitsPrompt?: string): string {
     "Only Markdown content being written into a vault note may use executable fenced ```runsql``` blocks. In vault Markdown, ```sql``` remains a plain, non-executable code fence.",
     "Charts are presentation artifacts and must never be written into Markdown notes or RunSQL <detail> blocks.",
     "For an explicitly requested Canvas/report/dashboard, or a multi-stage analysis expected to need several evidence views, create_analysis_canvas early after create_plan, then update it incrementally after verified SQL run_query results. Keep stable source, section, and card ids. Simple questions remain in chat and must not create a Canvas file.",
+    "When entry_point is canvas-refresh, do not use the normal incremental Canvas workflow. Read the requested Canvas, rerun every targeted source, investigate and retry schema drift when feasible, and make exactly one final update_analysis_canvas call only after all targeted sources have successful run_query runIds from this turn. Re-evaluate affected KPI, chart, table, Markdown, and Flow semantics. If any targeted source ultimately fails, leave the Canvas unchanged and report the audited failure.",
     "In a Canvas, use a flow card for processes, data lineage, stage relationships, or decision branches. Use only controlled step/decision/source/result/note nodes and labeled edges; never put Mermaid inside Canvas Markdown. Omit Flow node positions because layout is user-owned and Stela lays out new nodes.",
     "Every new or changed Canvas SQL source must be bound to the exact successful SQL run_query runId through update_analysis_canvas; never invent source SQL or result data. MongoDB queries are Python inputs only in v1 and cannot become Canvas sources. A Canvas source is a durable refresh query and must read real tables. Never preserve already fetched numbers or rows by turning them into SELECT literals, VALUES clauses, or constant UNION ALL queries; keep the original table-backed aggregation SQL instead. Canvas updates are normal Agent output and do not use propose_edit.",
     "Mutating SQL and note edits always require explicit user approval via the tool itself — don't tell the user you already did it until the tool result confirms it.",
@@ -105,6 +106,9 @@ export function buildUserContent(
     "<stela_turn_context>",
     `run_id: ${safeRequest.runId}`,
     `entry_point: ${safeRequest.entryPoint ?? "chat"}`,
+    ...(safeRequest.canvasRefresh
+      ? [`canvas_refresh: ${JSON.stringify(safeRequest.canvasRefresh)}`]
+      : []),
     `locale: ${safeRequest.locale ?? "en"}`,
     safeRequest.connectionName && context.connection
       ? `active_connection: ${safeRequest.connectionName} (kind: ${context.connection.kind}${context.dialect ? `, dialect: ${context.dialect}` : ""}, query_languages: ${(context.queryLanguages ?? ["sql"]).join(",")}, mongo_operations: ${(context.mongoOperations ?? ["find"]).join(",")})`

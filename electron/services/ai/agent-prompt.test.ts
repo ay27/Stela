@@ -16,6 +16,8 @@ assert.match(prompt, /strategy-review checkpoint may appear/);
 assert.match(prompt, /Use preset trend/);
 assert.match(prompt, /use a flow card for processes/);
 assert.match(prompt, /Omit Flow node positions because layout is user-owned/);
+assert.match(prompt, /When entry_point is canvas-refresh/);
+assert.match(prompt, /exactly one final update_analysis_canvas call/);
 assert.match(prompt, /prefer one database-side aggregation over repeated preview probes/);
 assert.match(prompt, /Preserve source values exactly/);
 assert.match(prompt, /connector-declared safe aggregate requests/);
@@ -66,5 +68,15 @@ assert.match(user, /Execution error:/);
 assert.match(user, /"kind":"resource","resourceId":"resource_table_/);
 assert.match(user, /<user_request>\n\n\{"version":1,"segments":/);
 assert.match(user, /<\/user_request>$/);
+
+const canvasRefreshUser = buildUserContent({
+  runId: "canvas-refresh-test",
+  prompt: "Refresh the Canvas",
+  entryPoint: "canvas-refresh",
+  canvasRefresh: { path: "reports/revenue.stela.canvas", sourceId: "daily" },
+  locale: "en",
+});
+assert.match(canvasRefreshUser, /entry_point: canvas-refresh/);
+assert.match(canvasRefreshUser, /canvas_refresh: \{"path":"reports\/revenue\.stela\.canvas","sourceId":"daily"\}/);
 
 console.log("agent prompt cache-boundary tests passed.");

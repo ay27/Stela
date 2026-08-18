@@ -7,14 +7,17 @@
  */
 
 import {
+  clampThinkingLevel,
   createModels,
   createProvider,
+  getSupportedThinkingLevels,
   type Credential,
   type CredentialStore,
   type Model,
   type Models,
   type Provider,
   type AssistantMessage,
+  type ModelThinkingLevel,
 } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
@@ -23,6 +26,7 @@ import { AppError, isAppError } from "@shared/errors";
 import type {
   AiProviderProfile,
   AiProviderStatus,
+  AiReasoningEffort,
   AiSettings,
   AiVendorInfo,
   PartialAppSettings,
@@ -88,6 +92,7 @@ export function listAiVendors(): AiVendorInfo[] {
       id: model.id,
       name: model.name,
       contextWindow: model.contextWindow,
+      supportedReasoningEfforts: getSupportedThinkingLevels(model),
     })),
   }));
   return [
@@ -269,6 +274,7 @@ export async function upsertProfile(
     model: profile.model.trim(),
     baseUrl: profile.baseUrl.trim(),
     contextWindow: profile.contextWindow,
+    reasoningEffort: profile.reasoningEffort,
     hasApiKey,
   };
   const profiles = current.ai.profiles.some((p) => p.id === id)
@@ -320,6 +326,12 @@ export async function deleteProfile(
 export async function getProviderStatus(vaultPath: string): Promise<AiProviderStatus> {
   const settings = await settingsStore.loadAppSettings(vaultPath);
   const active = getActiveProfile(settings.ai);
+  const statusModel = active.vendorId === CUSTOM_VENDOR_ID
+    ? buildCustomModel(active)
+    : resolvePiProvider(active.vendorId)?.getModels().find((model) => model.id === active.model);
+  const reasoning = statusModel
+    ? resolveReasoningEffort(statusModel, active.reasoningEffort)
+    : { requested: active.reasoningEffort, effective: "off" as const };
   return {
     enabled: settings.ai.providerMode !== "disabled",
     providerMode: settings.ai.providerMode,
@@ -328,6 +340,8 @@ export async function getProviderStatus(vaultPath: string): Promise<AiProviderSt
     hasApiKey: active.hasApiKey,
     credentialBackend: secrets.isAvailable() ? "safeStorage" : "plain",
     activeProfileId: active.id,
+    requestedReasoningEffort: reasoning.requested,
+    effectiveReasoningEffort: reasoning.effective,
     profiles: settings.ai.profiles,
     vendors: listAiVendors(),
   };
@@ -381,15 +395,37 @@ function buildCustomModel(profile: AiProviderProfile): Model<"openai-completions
     api: "openai-completions",
     provider: CUSTOM_PROVIDER_ID,
     baseUrl: profile.baseUrl.replace(/\/+$/, ""),
-    reasoning: false,
+    reasoning: profile.reasoningEffort !== "off",
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow,
     maxTokens: Math.min(16_384, Math.max(1_024, Math.floor(contextWindow / 8))),
+    thinkingLevelMap: {
+      xhigh: "xhigh",
+      max: "max",
+    },
     compat: {
       supportsDeveloperRole: false,
-      supportsReasoningEffort: false,
+      supportsReasoningEffort: true,
     },
+  };
+}
+
+export interface ReasoningEffortResolution {
+  requested: AiReasoningEffort;
+  effective: AiReasoningEffort;
+  supported: AiReasoningEffort[];
+}
+
+export function resolveReasoningEffort(
+  model: Model,
+  requested: AiReasoningEffort,
+): ReasoningEffortResolution {
+  const supported = getSupportedThinkingLevels(model) as AiReasoningEffort[];
+  return {
+    requested,
+    effective: clampThinkingLevel(model, requested as ModelThinkingLevel) as AiReasoningEffort,
+    supported,
   };
 }
 
@@ -402,6 +438,7 @@ export function createTransportForProfile(
   models: Models;
   model: Model;
   profile: AiProviderProfile;
+  reasoning: ReasoningEffortResolution;
 } {
   if (ai.providerMode === "disabled") {
     throw new AppError("ai_disabled", "AI provider is disabled.");
@@ -422,7 +459,8 @@ export function createTransportForProfile(
       throw new AppError("ai_missing_base_url", "AI provider base URL is not configured.");
     }
     models.setProvider(createCustomProvider());
-    return { models, model: buildCustomModel(profile), profile };
+    const model = buildCustomModel(profile);
+    return { models, model, profile, reasoning: resolveReasoningEffort(model, profile.reasoningEffort) };
   }
 
   const provider = resolvePiProvider(profile.vendorId);
@@ -440,7 +478,7 @@ export function createTransportForProfile(
       `Model "${profile.model}" is not in the ${provider.name} catalog.`,
     );
   }
-  return { models, model, profile };
+  return { models, model, profile, reasoning: resolveReasoningEffort(model, profile.reasoningEffort) };
 }
 
 /** @deprecated use createTransportForProfile */
@@ -489,7 +527,7 @@ export async function callChatCompletions({
         },
       ],
     },
-    { cacheRetention: "short", ...(sessionId ? { sessionId } : {}) },
+    { reasoning: "off", cacheRetention: "short", ...(sessionId ? { sessionId } : {}) },
   );
   onMessage?.(message);
 
@@ -545,6 +583,7 @@ export async function streamChatCompletions({
         signal,
         temperature: 0.2,
         maxTokens: 48,
+        reasoning: "off",
         cacheRetention: "short",
         ...(sessionId ? { sessionId } : {}),
       },

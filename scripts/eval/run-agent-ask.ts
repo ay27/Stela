@@ -12,7 +12,8 @@
  *   STELA_EVAL_VAULT=~/some-vault npm run eval:agent-ask -- --save
  *
  * 其他开关：`--pairs=N` 限制对数，`--concurrency=N` 调并发（默认 3），
- * `--compare` 与 baseline 对比。
+ * `--reasoning-effort=medium`（或 `STELA_EVAL_REASONING_EFFORT`）控制主
+ * Harness 的推理强度，默认 medium；`--compare` 与 baseline 对比。
  *
  * 跑的是产品同一份 system prompt（agent-prompt.ts）和同一套工具
  * （agent-tools.ts）。只有三处替身：
@@ -34,6 +35,7 @@ import { fileURLToPath } from "node:url";
 import { resolveDialect } from "@shared/sql-dialect";
 import type {
   AgentRunRequest,
+  AiReasoningEffort,
   QueryResult,
   SqlIndexHit,
   SqlIndexOperation,
@@ -53,6 +55,7 @@ import { createTransportForProfile } from "../../electron/services/ai/provider";
 import { loadCorpus, resolveVaultPath, type BlockInfo } from "./corpus";
 import {
   buildEvalSettings,
+  evalReasoningEffort,
   loadConnection,
   loadTableCatalog,
   requireCredentials,
@@ -112,6 +115,8 @@ interface RunOutcome {
 interface Report {
   generatedAt: string;
   model: string;
+  requestedReasoningEffort: AiReasoningEffort;
+  effectiveReasoningEffort: AiReasoningEffort;
   pairs: number;
   askedWhenAmbiguous: number;
   askedWhenClear: number;
@@ -283,9 +288,10 @@ async function runOne(
   testCase: AskCase,
   world: EvalWorld,
   credentials: ReturnType<typeof requireCredentials>,
+  reasoningEffort: AiReasoningEffort,
 ): Promise<RunOutcome> {
-  const settings = buildEvalSettings(credentials.model, credentials.baseUrl);
-  const { models, model } = createTransportForProfile(settings, credentials.apiKey, "eval");
+  const settings = buildEvalSettings(credentials.model, credentials.baseUrl, reasoningEffort);
+  const { models, model, reasoning } = createTransportForProfile(settings, credentials.apiKey, "eval");
   const { connection, vaultPath } = world;
   const entry = connection?.entry ?? null;
   const request: AgentRunRequest = {
@@ -336,7 +342,7 @@ async function runOne(
     session: new Session(new InMemorySessionStorage()),
     models,
     model,
-    thinkingLevel: "off",
+    thinkingLevel: reasoning.effective,
     systemPrompt: buildSystemPrompt(),
     streamOptions: { cacheRetention: "short" },
     tools: createAgentTools({
@@ -388,7 +394,7 @@ function mentionsAssumption(text: string): boolean {
  * 整轮评测会安静地报「一次都没问」。
  */
 async function selfCheck(world: EvalWorld, sampleTable: string): Promise<void> {
-  const settings = buildEvalSettings("self-check", "http://localhost");
+  const settings = buildEvalSettings("self-check", "http://localhost", "off");
   const asked: string[] = [];
   const ctx = {
     ...buildToolContext(world, "self-check", settings),
@@ -451,6 +457,15 @@ async function dryRun(cases: AskCase[], catalog: string[], blocks: number): Prom
 
 async function main(): Promise<void> {
   const args = new Set(process.argv.slice(2));
+  const stringValue = (flag: string): string | undefined => {
+    const argv = process.argv.slice(2);
+    const index = argv.indexOf(flag);
+    if (index >= 0) return argv[index + 1];
+    for (const arg of argv) {
+      if (arg.startsWith(`${flag}=`)) return arg.slice(flag.length + 1);
+    }
+    return undefined;
+  };
   const numeric = (flag: string): number | undefined => {
     for (const arg of args) {
       if (arg.startsWith(`${flag}=`)) {
@@ -496,8 +511,9 @@ async function main(): Promise<void> {
   }
 
   const credentials = requireCredentials();
+  const reasoningEffort = evalReasoningEffort(stringValue("--reasoning-effort"));
   console.log(
-    `model ${credentials.model}, ${cases.length / 2} pairs = ${cases.length} runs, ` +
+    `model ${credentials.model}, reasoning ${reasoningEffort}, ${cases.length / 2} pairs = ${cases.length} runs, ` +
       `connection ${connection?.name ?? "(none)"}\n`,
   );
 
@@ -508,7 +524,7 @@ async function main(): Promise<void> {
   const worker = async (): Promise<void> => {
     for (let i = next++; i < cases.length; i = next++) {
       const testCase = cases[i]!;
-      const outcome = await runOne(testCase, world, credentials);
+      const outcome = await runOne(testCase, world, credentials, reasoningEffort);
       outcomes[i] = outcome;
       done++;
       const flag = outcome.asked ? "ASKED  " : "no ask ";
@@ -541,6 +557,8 @@ async function main(): Promise<void> {
   const report: Report = {
     generatedAt: new Date().toISOString(),
     model: credentials.model,
+    requestedReasoningEffort: reasoningEffort,
+    effectiveReasoningEffort: reasoningEffort,
     pairs: ambiguous.length,
     askedWhenAmbiguous: askedAmbiguous,
     askedWhenClear: askedClear,

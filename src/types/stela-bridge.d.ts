@@ -22,7 +22,6 @@ import type {
   AgentMetricTrace,
   AgentMetricsDashboard,
   AnalysisCanvasFile,
-  AnalysisCanvasRefreshResult,
   AiInlineCompletionEvent,
   AiInlineCompletionRequest,
   AiParseSqlQueryRequest,
@@ -179,7 +178,6 @@ interface StelaBridge {
   canvas: {
     read: (path: string) => Promise<AnalysisCanvasFile>;
     create: (directory: string, title: string) => Promise<AnalysisCanvasFile>;
-    refreshSource: (path: string, etag: string, sourceId: string) => Promise<AnalysisCanvasRefreshResult>;
     updateFlowLayout: (path: string, etag: string, cardId: string, patch: AnalysisCanvasFlowLayoutPatch) => Promise<AnalysisCanvasFile>;
   };
   connector: {

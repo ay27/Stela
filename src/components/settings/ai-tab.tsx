@@ -12,6 +12,7 @@ import type {
   AiContextWindow,
   AiProviderProfile,
   AiProviderStatus,
+  AiReasoningEffort,
 } from "@shared/types";
 import { useT } from "@/i18n/use-t";
 import { useSettings } from "@/state/settings";
@@ -22,6 +23,24 @@ import { FormHint, Row, Section, TabContainer, Toggle } from "./atoms";
 const CONTEXT_WINDOWS: AiContextWindow[] = [
   64_000, 128_000, 200_000, 256_000, 1_000_000,
 ];
+const REASONING_EFFORTS: AiReasoningEffort[] = [
+  "off", "minimal", "low", "medium", "high", "xhigh", "max",
+];
+
+function clampReasoningEffort(
+  requested: AiReasoningEffort,
+  supported: AiReasoningEffort[],
+): AiReasoningEffort {
+  if (supported.includes(requested)) return requested;
+  const index = REASONING_EFFORTS.indexOf(requested);
+  for (let i = index; i < REASONING_EFFORTS.length; i += 1) {
+    if (supported.includes(REASONING_EFFORTS[i]!)) return REASONING_EFFORTS[i]!;
+  }
+  for (let i = index - 1; i >= 0; i -= 1) {
+    if (supported.includes(REASONING_EFFORTS[i]!)) return REASONING_EFFORTS[i]!;
+  }
+  return "off";
+}
 
 const fieldClass =
   "w-full rounded-md border border-border bg-background px-2 py-1.5 text-[12px]";
@@ -38,6 +57,7 @@ function emptyProfile(vendorId: string, vendorName: string): AiProviderProfile {
     model: "",
     baseUrl: vendorId === "custom" ? "https://api.openai.com/v1" : "",
     contextWindow: 128_000,
+    reasoningEffort: "medium",
     hasApiKey: false,
   };
 }
@@ -94,6 +114,15 @@ export function AiTab() {
     if (!draft) return [];
     return vendors.find((v) => v.id === draft.vendorId)?.models ?? [];
   }, [draft, vendors]);
+  const reasoningOptions = useMemo<AiReasoningEffort[]>(() => {
+    if (!draft || draft.vendorId === "custom") return REASONING_EFFORTS;
+    return vendorModels.find((model) => model.id === draft.model)
+      ?.supportedReasoningEfforts ?? ["off"];
+  }, [draft, vendorModels]);
+  const requestedReasoningEffort = draft?.reasoningEffort ?? "medium";
+  const effectiveReasoningEffort = draft
+    ? clampReasoningEffort(requestedReasoningEffort, reasoningOptions)
+    : "off";
 
   const listItems = useMemo(() => {
     const items = [...profiles];
@@ -481,6 +510,7 @@ export function AiTab() {
                     <span className="w-full truncate text-[10px]">
                       {vendorLabel(vendors, profile.vendorId)}
                       {profile.model ? ` · ${profile.model}` : ""}
+                      {` · ${profile.reasoningEffort ?? "medium"}`}
                       {!profile.hasApiKey && !unsaved
                         ? ` · ${t("ai.profile.noKey")}`
                         : ""}
@@ -560,6 +590,37 @@ export function AiTab() {
                       placeholder="gpt-4o-mini"
                     />
                   )}
+                </Field>
+
+                <Field
+                  label={t("ai.reasoningEffort.label")}
+                  hint={
+                    isCustom
+                      ? t("ai.reasoningEffort.customDescription")
+                      : t("ai.reasoningEffort.description")
+                  }
+                >
+                  <select
+                    value={effectiveReasoningEffort}
+                    onChange={(e) => updateDraft({
+                      reasoningEffort: e.target.value as AiReasoningEffort,
+                    })}
+                    className={fieldClass}
+                  >
+                    {reasoningOptions.map((effort) => (
+                      <option key={effort} value={effort}>
+                        {t(`ai.reasoningEffort.level.${effort}`)}
+                      </option>
+                    ))}
+                  </select>
+                  {requestedReasoningEffort !== effectiveReasoningEffort ? (
+                    <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-400">
+                      {t("ai.reasoningEffort.clamped", {
+                        requested: requestedReasoningEffort,
+                        effective: effectiveReasoningEffort,
+                      })}
+                    </p>
+                  ) : null}
                 </Field>
 
                 <Field

@@ -18,7 +18,12 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import type { AgentMessageContent, AgentMessageResource, AgentPlanSnapshot } from "@shared/types";
+import type {
+  AgentMessageContent,
+  AgentMessageResource,
+  AgentPlanSnapshot,
+  AiProviderStatus,
+} from "@shared/types";
 import { withAgentResourceId } from "@shared/agent-message";
 
 import { ProposalLineDiff } from "./proposal-diff";
@@ -148,6 +153,7 @@ export function AgentPanel() {
   const focusToken = useLayout((s) => s.agentFocusToken);
   const aiSettings = useSettings((s) => s.settings.ai);
   const patchSettings = useSettings((s) => s.patch);
+  const [providerStatus, setProviderStatus] = useState<AiProviderStatus | null>(null);
   const switchTab = useAgentPanel((s) => s.switchTab);
   const start = useAgentPanel((s) => s.start);
   const cancel = useAgentPanel((s) => s.cancel);
@@ -179,6 +185,12 @@ export function AgentPanel() {
   useEffect(() => {
     if (!connectionsLoaded) void reloadConnections();
   }, [connectionsLoaded, reloadConnections]);
+
+  useEffect(() => {
+    void window.stela.ai.getStatus().then(setProviderStatus).catch(() => {
+      setProviderStatus(null);
+    });
+  }, [aiSettings.activeProfileId, aiSettings.profiles]);
 
   useEffect(() => {
     void bindVault(vaultPath);
@@ -511,6 +523,14 @@ export function AgentPanel() {
                   <option key={profile.id} value={profile.id}>
                     {profile.name}
                     {profile.model ? ` · ${profile.model}` : ""}
+                    {` · ${
+                      profile.id === providerStatus?.activeProfileId
+                        ? (providerStatus.requestedReasoningEffort ?? "medium") ===
+                            (providerStatus.effectiveReasoningEffort ?? "medium")
+                          ? providerStatus.effectiveReasoningEffort ?? "medium"
+                          : `${providerStatus.requestedReasoningEffort ?? "medium"}→${providerStatus.effectiveReasoningEffort ?? "medium"}`
+                        : profile.reasoningEffort ?? "medium"
+                    }`}
                   </option>
                 ))}
               </select>

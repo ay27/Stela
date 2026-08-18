@@ -250,6 +250,8 @@ export interface AgentToolContext {
   /** 本次 Agent 会话内 run_query 的真实结果，只供 create_chart 校验。 */
   chartRuns?: Map<string, { sql: string; columns: ColumnDef[]; rows: unknown[][] }>;
   resolveChartRun?: (runId: string) => Promise<RunRecord | null>;
+  /** Dedicated Canvas refresh runs may commit their target exactly once. */
+  canvasRefresh?: { path: string; sourceId: string | null; committed: boolean };
   onCanvasUpdated?: (event: { path: string; title: string; action: "created" | "updated" }) => void;
   /**
    * 单次 run 的可变状态：`runId` / `notePath` 用于给执行历史生成
@@ -429,7 +431,7 @@ export function createAgentTools(options: {
     },
     {
       name: "update_analysis_canvas", label: "Update analysis Canvas",
-      description: "Replace a Canvas with a validated structured version. Bind every new or changed SQL source to a successful SQL run_query runId; Stela copies the audited SQL and connection metadata. Canvas sources must be refreshable table-backed queries: never turn fetched values into SELECT literals, VALUES, or constant UNION rows. Preserve stable source, section, card, Flow node, and Flow edge ids across updates. Flow direction and existing node positions are user-owned and will be preserved; omit node positions.",
+      description: "Replace a Canvas with a validated structured version. Bind every new or changed SQL source to a successful SQL run_query runId; Stela copies the audited SQL and connection metadata. Canvas sources must be refreshable table-backed queries: never turn fetched values into SELECT literals, VALUES, or constant UNION rows. Preserve stable source, section, card, Flow node, and Flow edge ids across updates. Flow direction and existing node positions are user-owned and will be preserved; omit node positions. In a canvas-refresh entry point, this is the one final atomic commit: every targeted source must be bound to a successful query from this run, and a second successful update is forbidden.",
       parameters: Type.Object({
         path: Type.String(), etag: Type.String(), content: Type.String({ description: "Complete version 1 .stela.canvas JSON." }),
         sourceRuns: Type.Array(Type.Object({ sourceId: Type.String(), runId: Type.String() })),
@@ -1156,6 +1158,7 @@ function runCreateChart(args: Record<string, unknown>, ctx: AgentToolContext): T
 }
 
 async function runCreateAnalysisCanvas(args: Record<string, unknown>, ctx: AgentToolContext): Promise<ToolOutcome> {
+  if (ctx.canvasRefresh) return fail("A Canvas refresh run cannot create another Canvas.");
   if (typeof args.title !== "string" || !args.title.trim()) return fail("title must be a non-empty string.");
   const directory = typeof args.directory === "string" && args.directory.trim()
     ? resolveVaultTarget(ctx.vaultPath, args.directory)
@@ -1179,6 +1182,15 @@ async function runReadAnalysisCanvas(args: Record<string, unknown>, ctx: AgentTo
 async function runUpdateAnalysisCanvas(args: Record<string, unknown>, ctx: AgentToolContext): Promise<ToolOutcome> {
   if (typeof args.path !== "string" || typeof args.etag !== "string" || typeof args.content !== "string") return fail("path, etag, and content are required.");
   const target = resolveVaultTarget(ctx.vaultPath, args.path);
+  if (ctx.canvasRefresh) {
+    const refreshTarget = resolveVaultTarget(ctx.vaultPath, ctx.canvasRefresh.path);
+    if (path.resolve(target) !== path.resolve(refreshTarget)) {
+      return fail("This Canvas refresh run may update only its requested Canvas.");
+    }
+    if (ctx.canvasRefresh.committed) {
+      return fail("This Canvas refresh has already committed its one atomic update.");
+    }
+  }
   const currentFile = await analysisCanvasService.readAnalysisCanvas(ctx.vaultPath, target);
   const current = parseAnalysisCanvas(currentFile.content);
   let desired: AnalysisCanvas;
@@ -1197,6 +1209,22 @@ async function runUpdateAnalysisCanvas(args: Record<string, unknown>, ctx: Agent
     const item = raw as Record<string, unknown>;
     if (typeof item.sourceId !== "string" || typeof item.runId !== "string") return fail("Each sourceRuns entry needs sourceId and runId.");
     bindings.set(item.sourceId, item.runId);
+  }
+  if (ctx.canvasRefresh) {
+    const targetSourceIds = ctx.canvasRefresh.sourceId
+      ? [ctx.canvasRefresh.sourceId]
+      : current.sources.map((source) => source.id);
+    for (const sourceId of targetSourceIds) {
+      if (!current.sources.some((source) => source.id === sourceId)) {
+        return fail(`Atomic Canvas refresh target source does not exist: ${sourceId}`);
+      }
+      if (!desired.sources.some((source) => source.id === sourceId)) {
+        return fail(`Atomic Canvas refresh must preserve target source ${sourceId}.`);
+      }
+      if (!bindings.has(sourceId)) {
+        return fail(`Atomic Canvas refresh requires a successful run binding for target source ${sourceId}.`);
+      }
+    }
   }
   const sources = [] as AnalysisCanvas["sources"];
   for (const source of desired.sources) {
@@ -1235,6 +1263,7 @@ async function runUpdateAnalysisCanvas(args: Record<string, unknown>, ctx: Agent
   }));
   const nextDesired = { ...desired, sources, sections };
   const updated = await analysisCanvasService.updateAnalysisCanvas(ctx.vaultPath, target, args.etag, () => nextDesired);
+  if (ctx.canvasRefresh) ctx.canvasRefresh.committed = true;
   ctx.onCanvasUpdated?.({ path: vaultRelativePath(ctx.vaultPath, updated.path), title: desired.title, action: "updated" });
   return ok({ path: updated.path, etag: updated.etag, status: desired.status, sections: desired.sections.length, cards: desired.sections.reduce((sum, section) => sum + section.cards.length, 0) });
 }

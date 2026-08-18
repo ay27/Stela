@@ -31,6 +31,8 @@ async function writeRun(dataset: string, query: number, valid: boolean): Promise
     terminateReason: "final_answer",
     error: null,
     model: "mock-model",
+    requestedReasoningEffort: "high",
+    effectiveReasoningEffort: "medium",
     hints: true,
     startedAt: "2026-08-16T00:00:00.000Z",
     elapsedMs: valid ? 1_000 : 2_000,
@@ -85,7 +87,11 @@ try {
   await writeRun("demo", 1, true);
   await writeRun("mongo_demo", 2, false);
   await fs.writeFile(path.join(input, "summary.json"), JSON.stringify({ generatedAt: "2026-08-16T00:00:00.000Z" }));
-  await fs.writeFile(path.join(input, "manifest.json"), JSON.stringify({ model: "mock-model" }));
+  await fs.writeFile(path.join(input, "manifest.json"), JSON.stringify({
+    model: "mock-model",
+    requestedReasoningEffort: "high",
+    effectiveReasoningEffort: "medium",
+  }));
 
   const report = await buildDataAgentBenchReport(input);
   assert.equal(report.totals.cases, 2);
@@ -95,6 +101,8 @@ try {
   assert.equal(report.totals.strategyReviewsCompleted, 1);
   assert.equal(report.totals.queryFamilyPeak, 8);
   assert.equal(report.cases[0]?.question, "Question 1?");
+  assert.equal(report.cases[0]?.requestedReasoningEffort, "high");
+  assert.equal(report.cases[0]?.effectiveReasoningEffort, "medium");
   assert.equal(report.cases[1]?.failureCategory, "mongodb_unavailable");
   assert.equal(report.cases[1]?.efficiency.reviewStatus, "not_triggered");
   assert.equal(report.cases[1]?.trace[1]?.toolName, "run_sql");

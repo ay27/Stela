@@ -1,4 +1,5 @@
 import type { AssistantMessage, Model, Models, TextContent } from "@earendil-works/pi-ai";
+import type { AiReasoningEffort } from "@shared/types";
 
 export const STRATEGY_CHECKPOINT_ENTRY = "analysis_strategy_checkpoint";
 export const QUERY_FAMILY_HINT_THRESHOLD = 4;
@@ -392,6 +393,7 @@ export function parseStrategyReview(text: string): StrategyReviewAdvice {
 export async function runStrategyReview(input: {
   models: Models;
   model: Model;
+  reasoningEffort: AiReasoningEffort;
   signal: AbortSignal;
   sessionId: string;
   review: StrategyReviewInput;
@@ -406,6 +408,7 @@ export async function runStrategyReview(input: {
       signal: input.signal,
       temperature: 0.1,
       maxTokens: 500,
+      reasoning: input.reasoningEffort,
       cacheRetention: "short",
       sessionId: input.sessionId,
     },

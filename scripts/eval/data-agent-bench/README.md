@@ -38,6 +38,8 @@ export DAB_ROOT=/root/data_agent_bench
 export STELA_EVAL_API_KEY=...
 export STELA_EVAL_BASE_URL=...
 export STELA_EVAL_MODEL=deepseek-v4-flash
+# Optional; defaults to medium. CLI --reasoning-effort takes precedence.
+export STELA_EVAL_REASONING_EFFORT=medium
 
 npm run test:eval:data-agent-bench
 npm run eval:data-agent-bench -- --dab-root "$DAB_ROOT" --self-check
@@ -54,6 +56,7 @@ npm run eval:data-agent-bench -- \
   --runs 1 \
   --concurrency 3 \
   --python-concurrency 2 \
+  --reasoning-effort medium \
   --bridge-timeout-ms 600000 \
   --resume
 ```
@@ -71,6 +74,13 @@ endpoint hash plus both Git commits and tracked-dirty flags.
 Pyodide is required by default. Use `--pyodide-assets /path/to/assets` to point
 at a prepared offline closure. `--no-python` exists only to reproduce the older
 headless baseline and is recorded in the manifest.
+
+Reasoning effort defaults to `medium`. `--reasoning-effort` overrides
+`STELA_EVAL_REASONING_EFFORT`; both accept
+`off|minimal|low|medium|high|xhigh|max`. Custom eval endpoints are treated as
+supporting the selected standard `reasoning_effort`, and rejection is a run
+error rather than a silent retry. Requested and effective values are written to
+the manifest, each `final_agent.json`, the summary, and generated report.
 
 Strategy review is enabled by default and recorded in the manifest and each
 `final_agent.json`. Pass `--no-strategy-review` to build a same-commit A/B
@@ -145,5 +155,6 @@ this smoke is a parity check and is not included in benchmark scores.
   cannot express.
 - `--python-concurrency` defaults to 2 independently isolated runtimes; lower it
   to 1 on memory-constrained hosts.
-- `--resume` reuses only a complete `final_agent.json`; interrupted runs are
-  rerun.
+- `--resume` reuses only a complete `final_agent.json` with matching requested
+  and effective reasoning effort; interrupted or incompatible runs are rerun.
+  Legacy results without effort metadata are treated as `off`.

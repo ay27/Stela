@@ -30,7 +30,7 @@ The built-in **Try Demo Vault** follows one complete commerce review: Northstar 
 
 - **AI-assisted data analysis** — The Data Agent understands your database schema, searches past queries and notes, and helps you write SQL, interpret results, and spot anomalies. Use `@table` to reference database objects and `[[note]]` to link your analysis notes—the Agent reads them as context.
 
-- **Analysis Canvas** — Turn audited query results into a structured, Git-trackable `*.stela.canvas` with KPI, chart, table, narrative, and flow cards. Refresh sources explicitly, adjust flow layout, or export the whole canvas as HTML.
+- **Analysis Canvas** — Turn audited query results into a structured, Git-trackable `*.stela.canvas` with KPI, chart, table, narrative, and flow cards. Ask the Agent to atomically re-analyze current data, adjust flow layout, or export the whole canvas as HTML.
 
 - **Reusable SQL templates** — Keep parameterized SQL as ordinary Markdown files inside the vault. Insert a template with `Mod+Alt+T`; repeated `{{variables}}` edit together and move with `Tab` / `Shift+Tab`.
 
@@ -158,7 +158,7 @@ For system design and contributor information, see [Architecture](./docs/ARCHITE
 
 - **原生 Markdown 兼容** — 所有笔记都是标准 `*.md` 文件，可用任意笔记软件或 IDE 打开，数据永不锁定。
 
-- **分析画布** — 把可审计的查询结果组织成 `*.stela.canvas`，在同一画布展示 KPI、图表、表格、说明文字和流程图；支持刷新数据源、调整流程布局和导出 HTML。
+- **分析画布** — 把可审计的查询结果组织成 `*.stela.canvas`，在同一画布展示 KPI、图表、表格、说明文字和流程图；支持 Agent 基于最新数据原子重分析、调整流程布局和导出 HTML。
 
 - **SQL 模板** — 参数化 SQL 以普通 Markdown 文件保存在 Vault 中。按 `Mod+Alt+T` 插入模板；同名 `{{变量}}` 会联动编辑，并可用 `Tab` / `Shift+Tab` 依次跳转。
 

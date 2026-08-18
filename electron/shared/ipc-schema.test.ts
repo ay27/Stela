@@ -30,6 +30,7 @@ const profileSwitchPatch = {
         model: "deepseek-chat",
         baseUrl: "",
         contextWindow: 128_000 as const,
+        reasoningEffort: "medium" as const,
         hasApiKey: true,
       }],
     },
@@ -39,6 +40,16 @@ assert.deepEqual(
   parseInput(IPC.SETTINGS_PATCH, profileSwitchPatch),
   profileSwitchPatch,
   "settings.patch must preserve AI profile selection fields",
+);
+assert.throws(
+  () => parseInput(IPC.SETTINGS_PATCH, {
+    patch: {
+      ai: {
+        profiles: [{ ...profileSwitchPatch.patch.ai.profiles[0], reasoningEffort: "turbo" }],
+      },
+    },
+  }),
+  /reasoningEffort/,
 );
 
 assert.deepEqual(parseInput(IPC.AI_AGENT_HISTORY_LIST, {}), {});
@@ -92,6 +103,42 @@ const orderedAgentRequest = {
 };
 assert.deepEqual(parseInput(IPC.AI_AGENT_RUN, orderedAgentRequest), orderedAgentRequest);
 
+const canvasRefreshRequest = {
+  request: {
+    runId: "run_canvas_refresh",
+    entryPoint: "canvas-refresh" as const,
+    prompt: "Refresh the Canvas",
+    canvasRefresh: {
+      path: "reports/revenue.stela.canvas",
+      sourceId: "revenue_daily",
+    },
+  },
+};
+assert.deepEqual(parseInput(IPC.AI_AGENT_RUN, canvasRefreshRequest), canvasRefreshRequest);
+assert.throws(() => parseInput(IPC.AI_AGENT_RUN, {
+  request: {
+    runId: "run_canvas_refresh_invalid",
+    entryPoint: "canvas-refresh",
+    prompt: "Refresh the Canvas",
+    canvasRefresh: { path: "reports/revenue.stela.canvas", sourceId: "../escape" },
+  },
+}));
+assert.throws(() => parseInput(IPC.AI_AGENT_RUN, {
+  request: {
+    runId: "run_canvas_refresh_missing_scope",
+    entryPoint: "canvas-refresh",
+    prompt: "Refresh the Canvas",
+  },
+}));
+assert.throws(() => parseInput(IPC.AI_AGENT_RUN, {
+  request: {
+    runId: "run_canvas_refresh_wrong_entry",
+    entryPoint: "chat",
+    prompt: "Refresh the Canvas",
+    canvasRefresh: { path: "reports/revenue.stela.canvas" },
+  },
+}));
+
 assert.deepEqual(
   parseInput(IPC.CANVAS_CREATE, {
     directory: "/vault/reports",
@@ -102,23 +149,6 @@ assert.deepEqual(
     title: "Revenue",
   },
 );
-assert.deepEqual(
-  parseInput(IPC.CANVAS_REFRESH_SOURCE, {
-    path: "/vault/reports/revenue.stela.canvas",
-    etag: "a".repeat(64),
-    sourceId: "revenue_daily",
-  }),
-  {
-    path: "/vault/reports/revenue.stela.canvas",
-    etag: "a".repeat(64),
-    sourceId: "revenue_daily",
-  },
-);
-assert.throws(() => parseInput(IPC.CANVAS_REFRESH_SOURCE, {
-  path: "/vault/reports/revenue.stela.canvas",
-  etag: "stale",
-  sourceId: "../escape",
-}));
 assert.deepEqual(parseInput(IPC.CANVAS_UPDATE_FLOW_LAYOUT, {
   path: "/vault/reports/revenue.stela.canvas",
   etag: "b".repeat(64),

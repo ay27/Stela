@@ -206,7 +206,7 @@ interface AnalysisCanvasSource {
   id: string;
   title: string;
   connectionName: string;
-  sql: string;                 // read-only, table-backed refresh definition
+  sql: string;                 // read-only, table-backed re-analysis definition
   lastRunId: string | null;    // exact run in SQLite/JSONL, never result rows
   lastRunAt: number | null;
   lastError: { message: string; attemptedAt: number } | null;
@@ -247,15 +247,18 @@ Source, section, and card ids are unique and stable; every data-backed card must
 reference an existing source. Canvas services enforce Vault confinement, atomic
 writes, and etag conflicts. A source must be a table-backed `SELECT`/`WITH`
 query; constant `SELECT`, `VALUES`, and literal `UNION` snapshots are rejected
-because refreshing them cannot observe source-data changes. Source refresh
-records the run in normal execution history and changes
-`lastRunId` only on success. Users may refresh, export, drag Flow nodes, switch
-TB/LR direction, and auto-layout, but cannot edit graph semantics. Layout writes
-are a narrow typed IPC mutation with etag conflict detection. Agent updates
-replace the complete validated artifact without an edit proposal, preserve
-existing Flow layout by stable ids, and require new or changed SQL sources to be
-rebound to a successful query from the same Agent run
-([ADR-0056](./adr/0056-user-adjustable-react-flow-cards.md)).
+because rerunning them cannot observe source-data changes. Whole-Canvas and
+single-source refresh actions immediately start a dedicated Agent run. The
+Agent may commit the complete validated artifact once, only after every target
+source is rebound to a successful query from that same run; otherwise the
+Canvas remains byte-for-byte unchanged and the failure stays in execution and
+Agent history. Successful updates preserve existing Flow layout by stable ids.
+Users may export, drag Flow nodes, switch TB/LR direction, and auto-layout, but
+cannot edit graph semantics. Layout writes remain a narrow typed IPC mutation
+with etag conflict detection. The version 1 `lastError` field remains readable
+for compatibility and is cleared when its source is successfully rebound
+([ADR-0056](./adr/0056-user-adjustable-react-flow-cards.md),
+[ADR-0070](./adr/0070-agent-led-atomic-canvas-refresh.md)).
 
 ### JSONL execution history (authoritative)
 
@@ -509,6 +512,7 @@ Canonical types live in `electron/shared/types.ts`. Secrets and HTTP stay in `el
 
 ```typescript
 type AiProviderMode = "disabled" | "openai-compatible" | "cloud";
+type AiReasoningEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 interface AiProviderProfile {
   id: string;
@@ -517,6 +521,7 @@ interface AiProviderProfile {
   model: string;
   baseUrl: string;                 // required for custom; unused for builtins
   contextWindow: 64_000 | 128_000 | 200_000 | 256_000 | 1_000_000;
+  reasoningEffort: AiReasoningEffort; // requested main-Agent effort; default medium
   hasApiKey: boolean;              // never the raw key
 }
 
@@ -549,6 +554,14 @@ the Panel, while local metrics record the same request as a
 authority is introduced.
 
 API key shard: `{vault}/.stela/secrets/ai_{deviceSlug}_{profileId}.json` (safeStorage-wrapped). Transport: pi-ai built-in provider for `vendorId`, or `createProvider` for `custom` ([ADR-0022](./adr/0022-ai-multi-provider-profiles.md)); agent loop: `AgentHarness` ([ADR-0018](./adr/0018-pi-ai-agent-harness.md)). Inline completion is enabled only when `completionProfileId` names an existing profile.
+
+`reasoningEffort` is the requested Profile policy. The transport resolves it to
+the model's effective supported level before constructing the main Harness;
+built-in catalogs expose their supported levels, while Custom non-`off`
+selection explicitly declares standard `reasoning_effort` support. Missing
+Profile fields migrate to `medium`. Context compaction and strategy review
+inherit the effective level; inline completion, quick actions, and Skill
+maintenance remain `off` ([ADR-0072](./adr/0072-profile-scoped-agent-reasoning-effort.md)).
 
 ### SQL inline completion
 
@@ -848,8 +861,22 @@ authority. It contains the authoritative `AgentHistorySession`, one-based user
 Turns in history order, and an optional `AgentMetricRunTree` for every history
 run. A run tree contains the root Agent trace and every descendant tool or
 maintenance trace. The tree is `null` when local Metrics have expired or been
-cleared. Harness model requests, first-token arrival, assistant completion, and
-step completion use a shared `step:<index>` event name for trajectory timing.
+cleared. Harness model context, provider requests, first-token arrival,
+assistant completion, and step completion use a shared `step:<index>` event
+name. The renderer projects these records into action nodes rather than a raw
+event list: model, tool, approval, strategy review, and compaction form the main
+trajectory, while Skill maintenance is post-answer work. User/system/business
+context, `context_usage`, token counters, plan/Canvas side effects, and
+lifecycle records are details of those actions or Turn-level diagnostics.
+
+`model_context` is a local metric event containing the provider-neutral message
+list, model identity, requested and effective reasoning effort, and configured
+context-window capacity. The legacy-compatible `thinkingLevel` field mirrors
+the effective effort. It is captured by the Harness `context` hook; `provider_payload` is
+captured by the `before_provider_payload` hook. Neither event is a public
+`AgentEvent` or a new
+IPC contract. Unknown metric events remain readable as diagnostics and never
+become execution nodes implicitly.
 
 Dashboard token usage exposes `promptTokens = inputTokens + cacheReadTokens +
 cacheWriteTokens` and `cacheHitRate = cacheReadTokens / promptTokens`. The rate
@@ -909,7 +936,7 @@ interface NoteSearchResult {
 | RunSQL fix / rewrite / ask | `codeblock-nodeview` → new Agent tab; rewrite returns to the block diff | `ai:agent-run` + `runsql_rewrite` proposal |
 | Schema explanation | `SchemaBrowserPanel` → new Agent tab | `ai:agent-run` + events |
 | Agent chat | `AgentSidebar` / `agent-panel` | `ai:agent-run` + events |
-| Analysis Canvas | `AnalysisCanvasView` | `canvas:read` / `canvas:refresh-source` / `canvas:update-flow-layout` |
+| Analysis Canvas | `AnalysisCanvasView` | `canvas:read` / `canvas:update-flow-layout`; refresh uses `ai:agent-run` with typed Canvas scope |
 | Inline resources | Agent composer `@` picker / add-resource button | ordered `message.segments` + deduplicated `message.resources` |
 | Current Workspace tab | active note / Canvas at send time | implicit `workspaceContext` on `ai:agent-run`; no composer/timeline pill |
 | Add to Chat | editor context menu / `Mod+I` | inserts a RunSQL/selection resource at the saved composer caret |

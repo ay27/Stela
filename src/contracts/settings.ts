@@ -76,6 +76,7 @@ export interface GitSettings {
 export type AiProviderMode = "disabled" | "openai-compatible" | "cloud";
 
 export type AiContextWindow = 64_000 | 128_000 | 200_000 | 256_000 | 1_000_000;
+export type AiReasoningEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface AiProviderProfile {
   id: string;
@@ -84,6 +85,7 @@ export interface AiProviderProfile {
   model: string;
   baseUrl: string;
   contextWindow: AiContextWindow;
+  reasoningEffort: AiReasoningEffort;
   hasApiKey: boolean;
 }
 
@@ -150,6 +152,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
         model: "gpt-4o-mini",
         baseUrl: "https://api.openai.com/v1",
         contextWindow: 128_000,
+        reasoningEffort: "medium",
         hasApiKey: false,
       },
     ],

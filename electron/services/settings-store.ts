@@ -23,6 +23,7 @@ import type {
   ThemeMode,
   EditorWidth,
   AiProviderProfile,
+  AiReasoningEffort,
 } from "@shared/types";
 
 import { atomicWriteFile } from "./atomic-write";
@@ -50,6 +51,15 @@ const GIT_DEFAULT: GitSettings = {
 const AI_CONTEXT_WINDOWS = new Set([64_000, 128_000, 200_000, 256_000, 1_000_000]);
 
 const DEFAULT_PROFILE_ID = "default";
+const AI_REASONING_EFFORTS = new Set<AiReasoningEffort>([
+  "off", "minimal", "low", "medium", "high", "xhigh", "max",
+]);
+
+function sanitizeReasoningEffort(value: unknown): AiReasoningEffort {
+  return typeof value === "string" && AI_REASONING_EFFORTS.has(value as AiReasoningEffort)
+    ? value as AiReasoningEffort
+    : "medium";
+}
 
 function snapContextWindow(value: unknown, fallback: AiSettings["contextWindow"]): AiSettings["contextWindow"] {
   if (typeof value === "number" && AI_CONTEXT_WINDOWS.has(Math.floor(value))) {
@@ -90,6 +100,7 @@ function sanitizeProfile(input: unknown, fallbackHasKey: boolean): AiProviderPro
     model: model || "gpt-4o-mini",
     baseUrl: baseUrl || (vendorId === "custom" ? "https://api.openai.com/v1" : ""),
     contextWindow: snapContextWindow(r.contextWindow, 128_000),
+    reasoningEffort: sanitizeReasoningEffort(r.reasoningEffort),
     hasApiKey: r.hasApiKey === true || fallbackHasKey,
   };
 }
@@ -114,6 +125,7 @@ function syncActiveMirrors(ai: Omit<AiSettings, "baseUrl" | "model" | "hasApiKey
             model: "gpt-4o-mini",
             baseUrl: "https://api.openai.com/v1",
             contextWindow: 128_000 as AiSettings["contextWindow"],
+            reasoningEffort: "medium",
             hasApiKey: false,
           },
         ];
@@ -140,6 +152,7 @@ const AI_DEFAULT: AiSettings = syncActiveMirrors({
       model: "gpt-4o-mini",
       baseUrl: "https://api.openai.com/v1",
       contextWindow: 128_000,
+      reasoningEffort: "medium",
       hasApiKey: false,
     },
   ],
@@ -214,6 +227,7 @@ function sanitizeAi(input: unknown): AiSettings {
         model,
         baseUrl: vendorId === "custom" ? baseUrl : baseUrl,
         contextWindow: snapContextWindow(r.contextWindow, AI_DEFAULT.contextWindow),
+        reasoningEffort: "medium",
         hasApiKey: legacyHasKey,
       },
     ];

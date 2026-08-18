@@ -868,7 +868,67 @@ Inspect the live schema first.`;
     );
     assert.equal(rejectedConstant.ok, false);
     assert.match(rejectedConstant.text, /must read a real table/i);
-    assert.deepEqual(events.map((event) => event.action), ["created", "updated", "updated"]);
+
+    const beforeAtomic = await readFile(createdPayload.path, "utf8");
+    const refreshCtx = {
+      ...canvasCtx,
+      canvasRefresh: { path: createdPayload.path, sourceId: null, committed: false },
+    };
+    const missingAtomicBinding = await dispatchTool(
+      "update_analysis_canvas",
+      JSON.stringify({
+        path: createdPayload.path,
+        etag: agentUpdatedPayload.etag,
+        content: beforeAtomic,
+        sourceRuns: [],
+      }),
+      refreshCtx,
+    );
+    assert.equal(missingAtomicBinding.ok, false);
+    assert.match(missingAtomicBinding.text, /requires a successful run binding for target source overview/i);
+    assert.equal(await readFile(createdPayload.path, "utf8"), beforeAtomic, "failed atomic refresh must not write");
+
+    const wrongAtomicTarget = await dispatchTool(
+      "update_analysis_canvas",
+      JSON.stringify({
+        path: join(root, "different.stela.canvas"),
+        etag: agentUpdatedPayload.etag,
+        content: beforeAtomic,
+        sourceRuns: [{ sourceId: "overview", runId: "canvas-run" }],
+      }),
+      refreshCtx,
+    );
+    assert.equal(wrongAtomicTarget.ok, false);
+    assert.match(wrongAtomicTarget.text, /only its requested Canvas/i);
+
+    const atomicUpdated = await dispatchTool(
+      "update_analysis_canvas",
+      JSON.stringify({
+        path: createdPayload.path,
+        etag: agentUpdatedPayload.etag,
+        content: beforeAtomic,
+        sourceRuns: [{ sourceId: "overview", runId: "canvas-run" }],
+      }),
+      refreshCtx,
+    );
+    assert.equal(atomicUpdated.ok, true, atomicUpdated.text);
+    assert.equal(refreshCtx.canvasRefresh.committed, true);
+    const atomicPayload = JSON.parse(atomicUpdated.text) as { etag: string };
+    const afterAtomic = await readFile(createdPayload.path, "utf8");
+    const secondAtomicUpdate = await dispatchTool(
+      "update_analysis_canvas",
+      JSON.stringify({
+        path: createdPayload.path,
+        etag: atomicPayload.etag,
+        content: afterAtomic,
+        sourceRuns: [{ sourceId: "overview", runId: "canvas-run" }],
+      }),
+      refreshCtx,
+    );
+    assert.equal(secondAtomicUpdate.ok, false);
+    assert.match(secondAtomicUpdate.text, /already committed/i);
+    assert.equal(await readFile(createdPayload.path, "utf8"), afterAtomic, "second atomic update must not write");
+    assert.deepEqual(events.map((event) => event.action), ["created", "updated", "updated", "updated"]);
   }
 
   {

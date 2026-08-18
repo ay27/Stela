@@ -9,7 +9,13 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import type { AiSettings, ConnectionEntry, ConnectionMap } from "@shared/types";
+import {
+  AI_REASONING_EFFORTS,
+  type AiReasoningEffort,
+  type AiSettings,
+  type ConnectionEntry,
+  type ConnectionMap,
+} from "@shared/types";
 
 export interface EvalCredentials {
   apiKey: string;
@@ -48,7 +54,26 @@ export async function loadConnection(vaultPath: string): Promise<EvalConnection>
   }
 }
 
-export function buildEvalSettings(model: string, baseUrl: string): AiSettings {
+export function parseReasoningEffort(value: string | undefined, fallback: AiReasoningEffort = "medium"): AiReasoningEffort {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return fallback;
+  if ((AI_REASONING_EFFORTS as readonly string[]).includes(normalized)) {
+    return normalized as AiReasoningEffort;
+  }
+  throw new Error(
+    `reasoning effort must be one of: ${AI_REASONING_EFFORTS.join(", ")}; received ${JSON.stringify(value)}`,
+  );
+}
+
+export function evalReasoningEffort(cliValue?: string): AiReasoningEffort {
+  return parseReasoningEffort(cliValue ?? process.env.STELA_EVAL_REASONING_EFFORT, "medium");
+}
+
+export function buildEvalSettings(
+  model: string,
+  baseUrl: string,
+  reasoningEffort: AiReasoningEffort = "medium",
+): AiSettings {
   const profile = {
     id: "eval",
     name: "eval",
@@ -56,6 +81,7 @@ export function buildEvalSettings(model: string, baseUrl: string): AiSettings {
     model,
     baseUrl,
     contextWindow: 128_000 as AiSettings["contextWindow"],
+    reasoningEffort,
     hasApiKey: true,
   };
   return {

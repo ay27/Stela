@@ -12,6 +12,7 @@ import {
 import type { StelaChartSpec } from "@shared/chart-spec";
 import { formatValue } from "@shared/value-format";
 import { StelaChart } from "@/components/charts/stela-chart";
+import { openCanvasRefreshTask } from "@/components/ai/agent-quick-actions";
 import { renderMarkdown } from "@/components/ai/markdown-renderer";
 import { i18n } from "@/i18n";
 import { electronStorage } from "@/services/storage/electron-storage";
@@ -33,7 +34,6 @@ export function AnalysisCanvasView({ tabId, path }: { tabId: string; path: strin
   const [canvas, setCanvas] = useState<AnalysisCanvas | null>(null);
   const [etag, setEtag] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [exportedFile, setExportedFile] = useState<{ path: string; revealToken: string } | null>(null);
   const loadGeneration = useRef(0);
@@ -63,35 +63,6 @@ export function AnalysisCanvasView({ tabId, path }: { tabId: string; path: strin
     void load().catch(() => {});
     return () => { loadGeneration.current += 1; };
   }, [path, reloadToken]);
-
-  const refresh = async (sourceId: string) => {
-    setBusy(sourceId);
-    try {
-      const result = await window.stela.canvas.refreshSource(path, etag, sourceId);
-      setCanvas(parseAnalysisCanvas(result.content));
-      setEtag(result.etag);
-      setError(null);
-      scheduleAutoGit("canvas-refresh");
-    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
-    finally { setBusy(null); }
-  };
-
-  const refreshAll = async () => {
-    if (!canvas) return;
-    let currentEtag = etag;
-    setBusy("all");
-    try {
-      for (const source of canvas.sources) {
-        const result = await window.stela.canvas.refreshSource(path, currentEtag, source.id);
-        currentEtag = result.etag;
-        setCanvas(parseAnalysisCanvas(result.content));
-        setEtag(result.etag);
-      }
-      setError(null);
-      scheduleAutoGit("canvas-refresh-all");
-    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
-    finally { setBusy(null); }
-  };
 
   const saveFlowLayout = async (cardId: string, patch: AnalysisCanvasFlowLayoutPatch) => {
     try {
@@ -126,9 +97,9 @@ export function AnalysisCanvasView({ tabId, path }: { tabId: string; path: strin
       {error ? <div className="mb-4 flex items-center justify-between rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive"><span>{error}</span><button className="rounded border border-destructive/30 px-2 py-1" onClick={() => void load()}>{t("common.retry")}</button></div> : null}
       <header className="mb-5 flex items-start justify-between gap-4">
         <div><div className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("analysisCanvas.label")} · {t(`analysisCanvas.status.${canvas.status}`)}</div><h1 className="mt-0.5 text-xl font-semibold">{canvas.title}</h1><div className="mt-0.5 text-[11px] text-muted-foreground">{t("analysisCanvas.updated", { time: new Date(canvas.updatedAt).toLocaleString() })}{canvas.sources.some((source) => source.lastError) ? ` · ${t("analysisCanvas.sourceErrors", { count: canvas.sources.filter((source) => source.lastError).length })}` : ""}</div></div>
-        <div className="flex gap-2"><button className="rounded-md border px-3 py-1.5 text-xs" onClick={() => setSourcesOpen(!sourcesOpen)}><Database className="mr-1 inline h-3.5 w-3.5" />{t("analysisCanvas.sources")}</button><button className="rounded-md border px-3 py-1.5 text-xs" disabled={busy !== null} onClick={() => void refreshAll()}>{busy === "all" ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 inline h-3.5 w-3.5" />}{t("analysisCanvas.refreshAll")}</button><button className="rounded-md border px-3 py-1.5 text-xs" onClick={() => void exportHtml()}><Download className="mr-1 inline h-3.5 w-3.5" />{t("analysisCanvas.exportHtml")}</button></div>
+        <div className="flex gap-2"><button className="rounded-md border px-3 py-1.5 text-xs" onClick={() => setSourcesOpen(!sourcesOpen)}><Database className="mr-1 inline h-3.5 w-3.5" />{t("analysisCanvas.sources")}</button><button className="rounded-md border px-3 py-1.5 text-xs" onClick={() => openCanvasRefreshTask({ canvasPath: path, canvasTitle: canvas.title })}><RefreshCw className="mr-1 inline h-3.5 w-3.5" />{t("analysisCanvas.refreshWithAgent")}</button><button className="rounded-md border px-3 py-1.5 text-xs" onClick={() => void exportHtml()}><Download className="mr-1 inline h-3.5 w-3.5" />{t("analysisCanvas.exportHtml")}</button></div>
       </header>
-      {sourcesOpen ? <div className="mb-4 space-y-2 rounded-md border bg-background p-3"><h2 className="text-sm font-medium">{t("analysisCanvas.dataSources")}</h2>{canvas.sources.map((source) => <SourceRow key={source.id} source={source} busy={busy === source.id} onRefresh={() => void refresh(source.id)} />)}</div> : null}
+      {sourcesOpen ? <div className="mb-4 space-y-2 rounded-md border bg-background p-3"><h2 className="text-sm font-medium">{t("analysisCanvas.dataSources")}</h2>{canvas.sources.map((source) => <SourceRow key={source.id} source={source} onRefresh={() => openCanvasRefreshTask({ canvasPath: path, canvasTitle: canvas.title, source })} />)}</div> : null}
       <div className="space-y-6">{canvas.sections.map((section) => <section key={section.id}><h2 className="mb-0.5 text-base font-semibold">{section.title}</h2>{section.description ? <p className="mb-2 text-xs text-muted-foreground">{section.description}</p> : null}<div className="grid grid-cols-6 gap-2.5">{section.cards.map((card) => <CanvasCard key={card.id} card={card} sources={canvas.sources} onSaveFlowLayout={(patch) => saveFlowLayout(card.id, patch)} />)}</div></section>)}</div>
     </div>
     {exportedFile ? (
@@ -158,10 +129,10 @@ export function AnalysisCanvasView({ tabId, path }: { tabId: string; path: strin
   </div>;
 }
 
-function SourceRow({ source, busy, onRefresh }: { source: AnalysisCanvasSource; busy: boolean; onRefresh: () => void }) {
+function SourceRow({ source, onRefresh }: { source: AnalysisCanvasSource; onRefresh: () => void }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
-  return <details className="rounded-sm border px-2.5 py-1.5"><summary className="cursor-pointer text-xs font-medium">{source.title} <span className="font-normal text-muted-foreground">· {source.connectionName}</span></summary><pre className="mt-1.5 overflow-auto rounded-sm bg-muted p-2 text-xs">{source.sql}</pre><div className="mt-1.5 flex items-center justify-between text-[11px] text-muted-foreground"><span>{source.lastRunAt ? new Date(source.lastRunAt).toLocaleString() : t("analysisCanvas.neverRun")}{source.lastError ? ` · ${source.lastError.message}` : ""}</span><div className="flex gap-2"><button title={t("analysisCanvas.copySql")} onClick={() => { window.stela.shell.writeClipboardText(source.sql); setCopied(true); setTimeout(() => setCopied(false), 1200); }}>{copied ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}</button><button title={t("analysisCanvas.refreshSource")} disabled={busy} onClick={onRefresh}>{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}</button></div></div></details>;
+  return <details className="rounded-sm border px-2.5 py-1.5"><summary className="cursor-pointer text-xs font-medium">{source.title} <span className="font-normal text-muted-foreground">· {source.connectionName}</span></summary><div className="mt-1.5 flex items-center justify-end gap-2"><button title={t("analysisCanvas.copySql")} onClick={() => { window.stela.shell.writeClipboardText(source.sql); setCopied(true); setTimeout(() => setCopied(false), 1200); }}>{copied ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}</button><button className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] text-muted-foreground" title={t("analysisCanvas.refreshSourceWithAgent")} onClick={onRefresh}><RefreshCw className="h-3 w-3" />{t("analysisCanvas.refreshSourceWithAgent")}</button></div><pre className="mt-1.5 overflow-auto rounded-sm bg-muted p-2 text-xs">{source.sql}</pre><div className="mt-1.5 text-[11px] text-muted-foreground">{source.lastRunAt ? new Date(source.lastRunAt).toLocaleString() : t("analysisCanvas.neverRun")}{source.lastError ? ` · ${source.lastError.message}` : ""}</div></details>;
 }
 
 function CanvasCard({ card, sources, onSaveFlowLayout }: { card: AnalysisCanvasCard; sources: AnalysisCanvasSource[]; onSaveFlowLayout: (patch: AnalysisCanvasFlowLayoutPatch) => Promise<void> }) {

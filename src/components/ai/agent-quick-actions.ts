@@ -1,4 +1,9 @@
-import type { AgentEntryPoint, AgentMessageContent, AgentMessageResourceInput } from "@shared/types";
+import type {
+  AgentCanvasRefreshRequest,
+  AgentEntryPoint,
+  AgentMessageContent,
+  AgentMessageResourceInput,
+} from "@shared/types";
 
 import { getRunContext } from "@/editor/runsql/run-context";
 import { i18n } from "@/i18n";
@@ -23,6 +28,7 @@ function open(input: {
   entryPoint: AgentEntryPoint;
   title: string;
   message: AgentMessageContent;
+  canvasRefresh?: AgentCanvasRefreshRequest;
   connectionName?: string | null;
   autoSend: boolean;
 }): void {
@@ -109,4 +115,38 @@ export function openSchemaExplainTask(table: string, connectionName: string | nu
     connectionName,
     autoSend: true,
   });
+}
+
+export function canvasRefreshTaskInput(input: {
+  canvasPath: string;
+  canvasTitle: string;
+  source?: { id: string; title: string };
+}) {
+  const canvasPath = relativeToVault(input.canvasPath) ?? input.canvasPath;
+  const sourceId = input.source?.id;
+  const prompt = sourceId
+    ? i18n.t("ai.quick.canvasRefreshSourcePrompt", {
+        sourceTitle: input.source?.title ?? sourceId,
+        sourceId,
+      })
+    : i18n.t("ai.quick.canvasRefreshAllPrompt");
+  return {
+    entryPoint: "canvas-refresh",
+    title: i18n.t(
+      sourceId ? "ai.quick.canvasRefreshSourceTitle" : "ai.quick.canvasRefreshAllTitle",
+      sourceId ? { sourceTitle: input.source?.title ?? sourceId } : { canvasTitle: input.canvasTitle },
+    ),
+    message: composeAgentMessage(`${prompt}\n\n`, {
+      kind: "canvas",
+      label: input.canvasTitle,
+      path: canvasPath,
+    }),
+    canvasRefresh: { path: canvasPath, ...(sourceId ? { sourceId } : {}) },
+    connectionName: null,
+    autoSend: true,
+  } satisfies Parameters<typeof open>[0];
+}
+
+export function openCanvasRefreshTask(input: Parameters<typeof canvasRefreshTaskInput>[0]): void {
+  open(canvasRefreshTaskInput(input));
 }

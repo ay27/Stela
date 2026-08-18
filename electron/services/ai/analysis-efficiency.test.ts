@@ -217,6 +217,7 @@ const baseReview = {
   const result = await runStrategyReview({
     models,
     model: {} as Model,
+    reasoningEffort: "medium",
     signal: new AbortController().signal,
     sessionId: "strategy:run-1",
     review: baseReview,
@@ -227,6 +228,7 @@ const baseReview = {
     signal: receivedOptions && (receivedOptions as { signal: AbortSignal }).signal,
     temperature: 0.1,
     maxTokens: 500,
+    reasoning: "medium",
     cacheRetention: "short",
     sessionId: "strategy:run-1",
   });
@@ -243,6 +245,7 @@ const baseReview = {
   const error = await runStrategyReview({
       models,
       model: {} as Model,
+      reasoningEffort: "off",
       signal: new AbortController().signal,
       sessionId: "strategy:run-1",
       review: baseReview,
@@ -262,6 +265,7 @@ const baseReview = {
   const error = await runStrategyReview({
     models,
     model: {} as Model,
+    reasoningEffort: "high",
     signal: new AbortController().signal,
     sessionId: "strategy:run-1",
     review: baseReview,

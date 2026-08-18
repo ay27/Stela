@@ -535,7 +535,7 @@ async function main(): Promise<void> {
       `note context ${withNoteContext}, cut ${cutMode}\n`,
   );
 
-  const settings = buildEvalSettings(model, baseUrl);
+  const settings = buildEvalSettings(model, baseUrl, "off");
   const cache = await readCache();
   let cacheHits = 0;
 

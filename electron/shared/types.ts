@@ -55,13 +55,6 @@ export interface AnalysisCanvasFile {
   etag: string;
 }
 
-export interface AnalysisCanvasRefreshResult extends AnalysisCanvasFile {
-  sourceId: string;
-  ok: boolean;
-  runId: string | null;
-  message: string | null;
-}
-
 // ---------- Connectors ----------
 
 export interface ConnectorKindMeta {
@@ -335,6 +328,11 @@ export const AI_CONTEXT_WINDOW_OPTIONS = [
 ] as const;
 export type AiContextWindow = (typeof AI_CONTEXT_WINDOW_OPTIONS)[number];
 
+export const AI_REASONING_EFFORTS = [
+  "off", "minimal", "low", "medium", "high", "xhigh", "max",
+] as const;
+export type AiReasoningEffort = (typeof AI_REASONING_EFFORTS)[number];
+
 /** One configured LLM endpoint / vendor (pi builtin id or custom). */
 export interface AiProviderProfile {
   id: string;
@@ -345,6 +343,8 @@ export interface AiProviderProfile {
   /** Used when vendorId is custom; ignored for builtins. */
   baseUrl: string;
   contextWindow: AiContextWindow;
+  /** Requested Agent reasoning effort. Runtime may clamp this to model support. */
+  reasoningEffort: AiReasoningEffort;
   hasApiKey: boolean;
 }
 
@@ -352,6 +352,7 @@ export interface AiVendorModelInfo {
   id: string;
   name: string;
   contextWindow: number;
+  supportedReasoningEfforts: AiReasoningEffort[];
 }
 
 export interface AiVendorInfo {
@@ -751,6 +752,8 @@ export interface AiProviderStatus {
   hasApiKey: boolean;
   credentialBackend: "safeStorage" | "plain";
   activeProfileId: string;
+  requestedReasoningEffort: AiReasoningEffort;
+  effectiveReasoningEffort: AiReasoningEffort;
   profiles: AiProviderProfile[];
   vendors: AiVendorInfo[];
 }
@@ -958,7 +961,16 @@ export type AgentEntryPoint =
   | "runsql-fix"
   | "runsql-rewrite"
   | "runsql-ask"
-  | "schema-explain";
+  | "schema-explain"
+  | "canvas-refresh";
+
+/** Atomic semantic refresh requested from an Analysis Canvas UI action. */
+export interface AgentCanvasRefreshRequest {
+  /** Vault-relative or absolute path of the one Canvas this run may update. */
+  path: string;
+  /** Missing means every source present when the Agent attempts the commit. */
+  sourceId?: string;
+}
 
 export interface AgentRunRequest {
   /** 用于关联流式事件；renderer 生成一个即可（uuid 或时间戳皆可）。 */
@@ -971,6 +983,8 @@ export interface AgentRunRequest {
   sessionId?: string;
   /** Product entry point for history titles and local observability. */
   entryPoint?: AgentEntryPoint;
+  /** Machine-readable scope used to enforce one atomic Canvas refresh commit. */
+  canvasRefresh?: AgentCanvasRefreshRequest;
   /** Ordered message is authoritative for new requests. */
   message?: AgentMessageContent;
   /** Derived plain-text fallback retained for old sessions and evaluation scripts. */

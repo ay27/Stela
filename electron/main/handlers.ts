@@ -32,7 +32,6 @@ import type {
   AgentMetricTrace,
   AgentMetricsDashboard,
   AnalysisCanvasFile,
-  AnalysisCanvasRefreshResult,
   AiInlineCompletionEvent,
   AiInlineCompletionRequest,
   AiParseSqlQueryRequest,
@@ -437,29 +436,6 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
   registerHandler<{ directory: string; title: string }, AnalysisCanvasFile>(
     IPC.CANVAS_CREATE,
     ({ directory, title }) => analysisCanvas.createAnalysisCanvas(requireVault(), directory, title, null),
-  );
-  registerHandler<{ path: string; etag: string; sourceId: string }, AnalysisCanvasRefreshResult>(
-    IPC.CANVAS_REFRESH_SOURCE,
-    async ({ path: filePath, etag, sourceId }) => {
-      const vaultPath = requireVault();
-      const profile = await deviceProfile.loadDeviceProfile();
-      return analysisCanvas.refreshAnalysisCanvasSource(vaultPath, filePath, etag, sourceId, {
-        execute: async (connectionName, sql) => {
-          const entries = await connectionsStore.loadConnections(vaultPath, profile.slug);
-          const connection = entries[connectionName];
-          if (!connection) throw new AppError("connection_not_found", `Connection not found: ${connectionName}`);
-          return connectorRegistry.execute(connection.kind, connection.config, sql);
-        },
-        record: async (record, result) => {
-          resultStore.saveRun(record);
-          if (result?.kind === "query") {
-            resultStore.saveSchema(record.runId, result.columns);
-            resultStore.saveRows(record.runId, result.rows);
-          }
-          await journal.appendRunById(vaultPath, record.runId, profile);
-        },
-      });
-    },
   );
   registerHandler<{ path: string; etag: string; cardId: string; patch: AnalysisCanvasFlowLayoutPatch }, AnalysisCanvasFile>(
     IPC.CANVAS_UPDATE_FLOW_LAYOUT,

@@ -20,6 +20,8 @@ const vaultPath = await mkdtemp(path.join(os.tmpdir(), "stela-agent-history-"));
 const request: AgentRunRequest = {
   runId: "run_1",
   sessionId: "session_1",
+  entryPoint: "canvas-refresh",
+  canvasRefresh: { path: "reports/revenue.stela.canvas", sourceId: "revenue_daily" },
   prompt: "Show daily revenue",
   workspaceContext: { kind: "note", path: "reports/revenue.md" },
   message: {
@@ -99,6 +101,8 @@ try {
   assert.equal(history.runs[0]?.finishedAt !== null, true);
   assert.deepEqual(history.runs[0]?.request.attachments, request.attachments);
   assert.equal(history.runs[0]?.request.canvasPath, request.canvasPath);
+  assert.equal(history.runs[0]?.request.entryPoint, request.entryPoint);
+  assert.deepEqual(history.runs[0]?.request.canvasRefresh, request.canvasRefresh);
   assert.deepEqual(history.runs[0]?.request.message, request.message);
   assert.deepEqual(history.runs[0]?.request.workspaceContext, request.workspaceContext);
   assert.deepEqual(history.runs[0]?.events, [

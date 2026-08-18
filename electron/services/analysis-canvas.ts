@@ -12,7 +12,7 @@ import {
   type AnalysisCanvasFlowLayoutPatch,
 } from "@shared/analysis-canvas";
 import { AppError } from "@shared/errors";
-import type { AnalysisCanvasFile, AnalysisCanvasRefreshResult, QueryResult, RunRecord } from "@shared/types";
+import type { AnalysisCanvasFile } from "@shared/types";
 
 import { atomicWriteFile } from "./atomic-write";
 import { extractSqlSymbols } from "./ai/sql-symbols";
@@ -138,40 +138,4 @@ export async function updateAnalysisCanvasFlowLayout(
     if (!found) throw new AppError("canvas_card_not_found", `Unknown Canvas card: ${cardId}`);
     return { ...canvas, sections };
   });
-}
-
-export interface CanvasRefreshDeps {
-  execute(connectionName: string, sql: string): Promise<QueryResult>;
-  record(record: RunRecord, result: QueryResult | null): Promise<void>;
-}
-
-export async function refreshAnalysisCanvasSource(
-  vaultPath: string,
-  filePath: string,
-  expectedEtag: string,
-  sourceId: string,
-  deps: CanvasRefreshDeps,
-): Promise<AnalysisCanvasRefreshResult> {
-  const loaded = await readAnalysisCanvas(vaultPath, filePath);
-  if (loaded.etag !== expectedEtag) throw new AppError("canvas_conflict", "The Canvas changed on disk. Reload it before refreshing.");
-  const canvas = parseAnalysisCanvas(loaded.content);
-  const source = canvas.sources.find((item) => item.id === sourceId);
-  if (!source) throw new AppError("canvas_source_not_found", `Unknown Canvas source: ${sourceId}`);
-  const sqlIssue = analysisCanvasSqlIssue(source.sql);
-  if (sqlIssue) throw new AppError("canvas_sql_blocked", sqlIssue);
-  const runId = `canvas_${randomUUID()}`;
-  const startedAt = Date.now();
-  try {
-    const result = await deps.execute(source.connectionName, source.sql);
-    const record: RunRecord = { runId, blockId: `canvas:${canvas.id}:${source.id}`, sql: source.sql, status: "ok", message: null, startedAt, elapsedMs: result.elapsedMs, rowCount: result.kind === "query" ? result.rows.length : 0, connectionName: source.connectionName, notePath: loaded.path };
-    await deps.record(record, result);
-    const next = await updateAnalysisCanvas(vaultPath, loaded.path, loaded.etag, (value) => ({ ...value, sources: value.sources.map((item) => item.id === sourceId ? { ...item, lastRunId: runId, lastRunAt: startedAt, lastError: null } : item) }));
-    return { ...next, sourceId, ok: true, runId, message: null };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const record: RunRecord = { runId, blockId: `canvas:${canvas.id}:${source.id}`, sql: source.sql, status: "err", message, startedAt, elapsedMs: Date.now() - startedAt, rowCount: 0, connectionName: source.connectionName, notePath: loaded.path };
-    await deps.record(record, null).catch(() => {});
-    const next = await updateAnalysisCanvas(vaultPath, loaded.path, loaded.etag, (value) => ({ ...value, sources: value.sources.map((item) => item.id === sourceId ? { ...item, lastError: { message, attemptedAt: Date.now() } } : item) }));
-    return { ...next, sourceId, ok: false, runId, message };
-  }
 }

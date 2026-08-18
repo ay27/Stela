@@ -301,12 +301,21 @@ function asRunRequest(value: unknown): AgentRunRequest | null {
   const parsedAttachments = attachments(request.attachments);
   const message = asAgentMessage(request.message);
   const workspaceContext = asWorkspaceContext(request.workspaceContext);
+  const rawCanvasRefresh = asRecord(request.canvasRefresh);
+  const canvasRefresh = rawCanvasRefresh && typeof rawCanvasRefresh.path === "string" &&
+    (rawCanvasRefresh.sourceId === undefined || typeof rawCanvasRefresh.sourceId === "string")
+    ? {
+        path: rawCanvasRefresh.path,
+        ...(typeof rawCanvasRefresh.sourceId === "string" ? { sourceId: rawCanvasRefresh.sourceId } : {}),
+      }
+    : undefined;
   return {
     runId: request.runId,
     prompt: request.prompt,
-    ...(["chat", "runsql-fix", "runsql-rewrite", "runsql-ask", "schema-explain"].includes(String(request.entryPoint))
+    ...(["chat", "runsql-fix", "runsql-rewrite", "runsql-ask", "schema-explain", "canvas-refresh"].includes(String(request.entryPoint))
       ? { entryPoint: request.entryPoint as AgentRunRequest["entryPoint"] }
       : {}),
+    ...(canvasRefresh ? { canvasRefresh } : {}),
     ...(typeof request.sessionId === "string" ? { sessionId: request.sessionId } : {}),
     ...(message ? { message } : {}),
     ...(workspaceContext ? { workspaceContext } : {}),

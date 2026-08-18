@@ -497,6 +497,9 @@ function renderDetail(item) {
     ["耗时", formatDuration(item.elapsedMs)],
     ["首次结果", item.firstResultMs == null ? "—" : formatDuration(item.firstResultMs)],
     ["模型轮次", String(item.modelTurns)],
+    ["Reasoning", item.requestedReasoningEffort === item.effectiveReasoningEffort
+      ? item.effectiveReasoningEffort
+      : `${item.requestedReasoningEffort} -> ${item.effectiveReasoningEffort}`],
     ["工具调用", String(item.toolCalls)],
     ["同族查询峰值", String(item.efficiency?.queryFamilyPeak ?? 0)],
     ["策略复盘", item.efficiency?.reviewStatus ?? "not_triggered"],
@@ -624,9 +627,14 @@ function refreshFilters() {
 
 function updateReportMeta() {
   const model = state.data.manifest.model ?? state.data.cases[0]?.model ?? "unknown model";
+  const requestedReasoning = state.data.manifest.requestedReasoningEffort ?? state.data.cases[0]?.requestedReasoningEffort ?? "off";
+  const effectiveReasoning = state.data.manifest.effectiveReasoningEffort ?? state.data.cases[0]?.effectiveReasoningEffort ?? "off";
+  const reasoning = requestedReasoning === effectiveReasoning
+    ? effectiveReasoning
+    : `${requestedReasoning} -> ${effectiveReasoning}`;
   const generated = state.data.sourceGeneratedAt ? new Date(state.data.sourceGeneratedAt).toLocaleString("zh-CN") : "未知时间";
   const label = currentHistoryRun()?.label;
-  document.getElementById("report-meta").textContent = `${label ? `${label} · ` : ""}${model} · ${state.data.totals.cases} cases · 完成于 ${generated}`;
+  document.getElementById("report-meta").textContent = `${label ? `${label} · ` : ""}${model} · reasoning ${reasoning} · ${state.data.totals.cases} cases · 完成于 ${generated}`;
 }
 
 function renderAll() {

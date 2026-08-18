@@ -12,6 +12,7 @@ import {
 } from "./agent-panel";
 import { composeAgentMessage } from "@/lib/agent-message";
 import { agentComposerStateToMessage } from "@/lib/agent-composer";
+import { canvasRefreshTaskInput } from "@/components/ai/agent-quick-actions";
 
 const history: AgentHistorySession = {
   summary: {
@@ -194,5 +195,31 @@ assert.equal(
     : null,
   "target_closed_panel",
 );
+
+const fullCanvasRefresh = canvasRefreshTaskInput({
+  canvasPath: "/vault/reports/live.stela.canvas",
+  canvasTitle: "Live report",
+});
+assert.equal(fullCanvasRefresh.entryPoint, "canvas-refresh");
+assert.equal(fullCanvasRefresh.autoSend, true);
+assert.deepEqual(fullCanvasRefresh.canvasRefresh, { path: "reports/live.stela.canvas" });
+assert.equal(fullCanvasRefresh.message.resources[0]?.kind, "canvas");
+assert.equal(
+  fullCanvasRefresh.message.resources[0]?.kind === "canvas"
+    ? fullCanvasRefresh.message.resources[0].path
+    : null,
+  "reports/live.stela.canvas",
+);
+
+const sourceCanvasRefresh = canvasRefreshTaskInput({
+  canvasPath: "/vault/reports/live.stela.canvas",
+  canvasTitle: "Live report",
+  source: { id: "revenue_daily", title: "Daily revenue" },
+});
+assert.deepEqual(sourceCanvasRefresh.canvasRefresh, {
+  path: "reports/live.stela.canvas",
+  sourceId: "revenue_daily",
+});
+assert.match(sourceCanvasRefresh.message.segments[0]?.kind === "text" ? sourceCanvasRefresh.message.segments[0].text : "", /revenue_daily/);
 
 console.log("agent history replay tests passed.");

@@ -41,6 +41,8 @@ interface RawRun {
   terminateReason: string;
   error: string | null;
   model: string;
+  requestedReasoningEffort?: string;
+  effectiveReasoningEffort?: string;
   hints: boolean;
   startedAt: string;
   elapsedMs: number;
@@ -95,6 +97,8 @@ export interface ReportCase {
   terminateReason: string;
   error: string;
   model: string;
+  requestedReasoningEffort: string;
+  effectiveReasoningEffort: string;
   hints: boolean;
   startedAt: string;
   elapsedMs: number;
@@ -332,6 +336,8 @@ export async function buildDataAgentBenchReport(input: string): Promise<DataAgen
     terminateReason: run.terminateReason,
     error: truncate(run.error ?? "", 8_000),
     model: run.model,
+    requestedReasoningEffort: run.requestedReasoningEffort ?? "off",
+    effectiveReasoningEffort: run.effectiveReasoningEffort ?? "off",
     hints: run.hints,
     startedAt: run.startedAt,
     elapsedMs: run.elapsedMs,

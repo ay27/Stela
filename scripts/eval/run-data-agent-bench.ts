@@ -28,6 +28,7 @@ import type {
   QueryResult,
   RunRecord,
   AgentStrategyCheckpoint,
+  AiReasoningEffort,
 } from "@shared/types";
 import {
   assistantText,
@@ -62,7 +63,7 @@ import {
   type AnalysisEfficiencyMetrics,
 } from "../../electron/services/ai/analysis-efficiency";
 import { createTransportForProfile } from "../../electron/services/ai/provider";
-import { buildEvalSettings, requireCredentials } from "./env";
+import { buildEvalSettings, evalReasoningEffort, requireCredentials } from "./env";
 import {
   appendJsonl,
   buildDabUserPrompt,
@@ -109,6 +110,7 @@ interface CliOptions {
   pyodideAssets: string;
   noPython: boolean;
   strategyReview: boolean;
+  reasoningEffort: AiReasoningEffort;
   condaEnv: string;
   python: string | null;
 }
@@ -131,6 +133,8 @@ interface FinalRun {
   terminateReason: string;
   error: string | null;
   model: string;
+  requestedReasoningEffort: AiReasoningEffort;
+  effectiveReasoningEffort: AiReasoningEffort;
   hints: boolean;
   startedAt: string;
   elapsedMs: number;
@@ -183,6 +187,7 @@ function parseArgs(argv: string[]): CliOptions {
     ),
     noPython: argv.includes("--no-python"),
     strategyReview: !argv.includes("--no-strategy-review"),
+    reasoningEffort: evalReasoningEffort(value("--reasoning-effort")),
     condaEnv: value("--conda-env") ?? "dabench",
     python: value("--python") ?? null,
   };
@@ -335,7 +340,7 @@ async function runTask(input: {
     connectionName: "dab",
     notePath: null,
   };
-  const { models, model } = createTransportForProfile(settings, credentials.apiKey, "eval");
+  const { models, model, reasoning } = createTransportForProfile(settings, credentials.apiKey, "eval");
   const session = new Session(new InMemorySessionStorage(), {
     entryProjectors: {
       [EXECUTION_PLAN_ENTRY]: (entry) => {
@@ -408,7 +413,7 @@ async function runTask(input: {
     session,
     models,
     model,
-    thinkingLevel: "off",
+    thinkingLevel: reasoning.effective,
     systemPrompt: buildSystemPrompt(AGENT_SKILL_LIMITS_PROMPT),
     streamOptions: { cacheRetention: "short" },
     resources: { skills: [] },
@@ -486,6 +491,7 @@ async function runTask(input: {
       const reviewed = await runStrategyReview({
         models,
         model,
+        reasoningEffort: reasoning.effective,
         signal: reviewAbort.signal,
         sessionId: `stela-dab-strategy-review:${credentials.model}`,
         review: {
@@ -645,6 +651,8 @@ async function runTask(input: {
     terminateReason: forcedStop ?? (error ? "error" : "final_answer"),
     error,
     model: credentials.model,
+    requestedReasoningEffort: reasoning.requested,
+    effectiveReasoningEffort: reasoning.effective,
     hints: options.hints,
     startedAt: new Date(started).toISOString(),
     elapsedMs: Date.now() - started,
@@ -662,10 +670,20 @@ async function runTask(input: {
   }
 }
 
-async function readCompleted(filePath: string): Promise<FinalRun | null> {
+export async function readCompleted(
+  filePath: string,
+  requestedReasoningEffort: AiReasoningEffort,
+  effectiveReasoningEffort: AiReasoningEffort,
+): Promise<FinalRun | null> {
   try {
     const value = JSON.parse(await fs.readFile(filePath, "utf-8")) as FinalRun;
-    return value.complete === true ? value : null;
+    const requested = value.requestedReasoningEffort ?? "off";
+    const effective = value.effectiveReasoningEffort ?? "off";
+    return value.complete === true &&
+      requested === requestedReasoningEffort &&
+      effective === effectiveReasoningEffort
+      ? value
+      : null;
   } catch {
     return null;
   }
@@ -707,6 +725,8 @@ async function writeSummary(output: string, results: FinalRun[]): Promise<void> 
     valid,
     total: results.length,
     validRate: results.length > 0 ? valid / results.length : 0,
+    requestedReasoningEffort: results[0]?.requestedReasoningEffort ?? null,
+    effectiveReasoningEffort: results[0]?.effectiveReasoningEffort ?? null,
     byDataset,
     capabilityFailures,
     efficiency,
@@ -726,6 +746,10 @@ async function writeSummary(output: string, results: FinalRun[]): Promise<void> 
     "# Stela DataAgentBench internal baseline",
     "",
     `- Valid rate: ${valid}/${results.length} (${(summary.validRate * 100).toFixed(1)}%)`,
+    `- Reasoning effort: ${summary.requestedReasoningEffort ?? "n/a"}` +
+      (summary.requestedReasoningEffort !== summary.effectiveReasoningEffort
+        ? ` -> ${summary.effectiveReasoningEffort}`
+        : ""),
     `- Cache hit rate: ${summary.usage.cacheHitRate === null ? "n/a" : `${(summary.usage.cacheHitRate * 100).toFixed(1)}%`}`,
     `- Average elapsed: ${(summary.averageElapsedMs / 1000).toFixed(1)}s`,
     `- Strategy reviews: ${efficiency.reviewCompleted}/${efficiency.reviewTriggered} completed`,
@@ -755,7 +779,11 @@ async function main(): Promise<void> {
   }
 
   const credentials = requireCredentials();
-  const settings = buildEvalSettings(credentials.model, credentials.baseUrl);
+  const settings = buildEvalSettings(
+    credentials.model,
+    credentials.baseUrl,
+    options.reasoningEffort,
+  );
   const output = options.output ?? path.join(
     path.dirname(options.dabRoot),
     "dab-results",
@@ -784,6 +812,8 @@ async function main(): Promise<void> {
     stela: stelaGit,
     dab: dabGit,
     model: credentials.model,
+    requestedReasoningEffort: options.reasoningEffort,
+    effectiveReasoningEffort: options.reasoningEffort,
     endpointHash: endpointHash(credentials.baseUrl),
     hints: options.hints,
     runs: options.runs,
@@ -823,7 +853,11 @@ async function main(): Promise<void> {
         const runDir = path.join(output, `query_${task.dataset}`, `query${task.queryId}`, `run_${runNumber}`);
         const finalPath = path.join(runDir, "final_agent.json");
         if (options.resume) {
-          const completed = await readCompleted(finalPath);
+          const completed = await readCompleted(
+            finalPath,
+            options.reasoningEffort,
+            options.reasoningEffort,
+          );
           if (completed) {
             groupResults.push(completed);
             console.log(`SKIP ${task.dataset}/query${task.queryId}/run_${runNumber}`);
@@ -853,6 +887,8 @@ async function main(): Promise<void> {
             terminateReason: "runner_error",
             error: message,
             model: credentials.model,
+            requestedReasoningEffort: options.reasoningEffort,
+            effectiveReasoningEffort: options.reasoningEffort,
             hints: options.hints,
             startedAt: new Date().toISOString(),
             elapsedMs: 0,

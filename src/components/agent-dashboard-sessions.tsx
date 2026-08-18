@@ -13,10 +13,12 @@ import type {
   AgentHistorySummary,
   AgentMetricRange,
   AgentMetricSessionTrace,
+  AgentMetricSessionTurn,
 } from "@shared/types";
 
 import {
   buildAgentSessionWaterfall,
+  buildAgentTurnTrace,
   buildAgentTurnTraceItems,
   type AgentTraceItem,
   type AgentTraceItemKind,
@@ -31,7 +33,13 @@ interface AgentDashboardSessionsProps {
 }
 
 type SessionView = "conversation" | "trace";
-type DetailTab = "payload" | "result" | "timing";
+type DetailTab = "input" | "output" | "raw";
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
 
 function rangeStart(range: AgentMetricRange): number {
   const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
@@ -58,24 +66,23 @@ function formatJson(value: unknown): string {
   }
 }
 
+function formatCost(value: number): string {
+  if (value === 0) return "$0";
+  if (value < 0.01) return `$${value.toFixed(4)}`;
+  return `$${value.toFixed(2)}`;
+}
+
 function CopyDataButton({ value }: { value: unknown }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
   const text = typeof value === "string" ? value : formatJson(value);
-
   const onCopy = () => {
     window.stela.shell.writeClipboardText(text);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1_500);
   };
-
   return (
-    <button
-      type="button"
-      onClick={onCopy}
-      title={copied ? t("common.copied") : t("common.copy")}
-      className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
-    >
+    <button type="button" onClick={onCopy} title={copied ? t("common.copied") : t("common.copy")} className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground">
       {copied ? <Check className="h-3 w-3" /> : <Clipboard className="h-3 w-3" />}
       {copied ? t("common.copied") : t("common.copy")}
     </button>
@@ -86,12 +93,8 @@ function DataDetails({ value }: { value: unknown }) {
   const isText = typeof value === "string";
   return (
     <div className="overflow-hidden rounded-md border border-border/60 bg-background/60">
-      <div className="flex justify-end border-b border-border/60 px-2 py-1">
-        <CopyDataButton value={value} />
-      </div>
-      <pre className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] p-3 font-mono text-[11px] leading-5 text-foreground">
-        <code>{isText ? value : formatJson(value)}</code>
-      </pre>
+      <div className="flex justify-end border-b border-border/60 px-2 py-1"><CopyDataButton value={value} /></div>
+      <pre className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] p-3 font-mono text-[11px] leading-5 text-foreground"><code>{isText ? value : formatJson(value)}</code></pre>
     </div>
   );
 }
@@ -102,15 +105,35 @@ function sessionKey(ref: AgentHistoryRef): string {
 
 function traceKindClass(kind: AgentTraceItemKind): string {
   switch (kind) {
-    case "system": return "bg-slate-500/15 text-slate-700 dark:text-slate-300";
-    case "user": return "bg-blue-500/15 text-blue-700 dark:text-blue-300";
-    case "context": return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300";
     case "model": return "bg-violet-500/15 text-violet-700 dark:text-violet-300";
     case "tool": return "bg-amber-500/15 text-amber-700 dark:text-amber-300";
-    case "review": return "bg-violet-500/15 text-violet-700 dark:text-violet-300";
+    case "approval": return "bg-blue-500/15 text-blue-700 dark:text-blue-300";
+    case "review": return "bg-fuchsia-500/15 text-fuchsia-700 dark:text-fuchsia-300";
+    case "compaction": return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300";
     case "maintenance": return "bg-cyan-500/15 text-cyan-700 dark:text-cyan-300";
-    default: return "bg-muted text-muted-foreground";
   }
+}
+
+function TraceKindLabel({ kind }: { kind: AgentTraceItemKind }) {
+  const t = useT();
+  const labels: Record<AgentTraceItemKind, string> = {
+    model: t("agentDashboard.kind.model"),
+    tool: t("agentDashboard.kind.tool"),
+    approval: t("agentDashboard.kind.approval"),
+    review: t("agentDashboard.kind.review"),
+    compaction: t("agentDashboard.kind.compaction"),
+    maintenance: t("agentDashboard.kind.maintenance"),
+  };
+  return <>{labels[kind]}</>;
+}
+
+function itemLabel(item: AgentTraceItem, modelStepLabel: (count: number) => string, compactionLabel: string): string {
+  if (item.kind === "model") {
+    const step = Number(item.label.match(/\d+$/)?.[0] ?? 0);
+    return modelStepLabel(step);
+  }
+  if (item.kind === "compaction") return compactionLabel;
+  return item.label;
 }
 
 function statusDotClass(item: AgentTraceItem): string {
@@ -121,44 +144,22 @@ function statusDotClass(item: AgentTraceItem): string {
 }
 
 function SessionSummaryMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[9px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="truncate text-[12px] font-semibold tabular-nums text-foreground">{value}</div>
-    </div>
-  );
+  return <div className="min-w-0"><div className="text-[9px] uppercase tracking-wide text-muted-foreground">{label}</div><div className="truncate text-[12px] font-semibold tabular-nums text-foreground">{value}</div></div>;
 }
 
-function SessionWaterfall({
-  session,
-  onSelect,
-}: {
-  session: AgentMetricSessionTrace;
-  onSelect: (item: AgentTraceItem) => void;
-}) {
+function SessionWaterfall({ session, onSelect }: { session: AgentMetricSessionTrace; onSelect: (item: AgentTraceItem) => void }) {
   const t = useT();
   const items = useMemo(() => session.turns.flatMap(buildAgentTurnTraceItems), [session]);
   const itemById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
   const segments = useMemo(() => buildAgentSessionWaterfall(session), [session]);
   const first = Math.min(...segments.map((segment) => segment.startedAt), session.history.summary.createdAt);
-  const last = Math.max(
-    ...segments.map((segment) => segment.startedAt + segment.durationMs),
-    session.history.summary.updatedAt,
-    first + 1,
-  );
+  const last = Math.max(...segments.map((segment) => segment.startedAt + segment.durationMs), session.history.summary.updatedAt, first + 1);
   const span = Math.max(1, last - first);
-  const lanes = ["input", "model", "tool"] as const;
-  const laneLabels = {
-    input: t("agentDashboard.input"),
-    model: t("agentDashboard.model"),
-    tool: t("agentDashboard.tools"),
-  };
+  const lanes = ["model", "tool", "control"] as const;
+  const laneLabels = { model: t("agentDashboard.model"), tool: t("agentDashboard.tools"), control: t("agentDashboard.control") };
   return (
     <div className="border-b border-border bg-muted/10 px-4 py-3">
-      <div className="mb-2 flex items-center justify-between text-[10px] text-muted-foreground">
-        <span>{t("agentDashboard.timeline")}</span>
-        <span>{formatDuration(span)}</span>
-      </div>
+      <div className="mb-2 flex items-center justify-between text-[10px] text-muted-foreground"><span>{t("agentDashboard.timeline")}</span><span>{formatDuration(span)}</span></div>
       <div className="space-y-1">
         {lanes.map((lane) => (
           <div key={lane} className="grid grid-cols-[46px_1fr] items-center gap-2">
@@ -168,22 +169,7 @@ function SessionWaterfall({
                 const left = ((segment.startedAt - first) / span) * 100;
                 const width = Math.max(0.7, (segment.durationMs / span) * 100);
                 const failed = segment.status === "error" || segment.status === "timeout";
-                return (
-                  <button
-                    key={segment.id}
-                    type="button"
-                    title={`${segment.label} · ${formatDuration(segment.durationMs)}`}
-                    onClick={() => {
-                      const item = itemById.get(segment.id);
-                      if (item) onSelect(item);
-                    }}
-                    className={cn(
-                      "absolute top-0 h-3 rounded-[2px] opacity-85 hover:opacity-100",
-                      failed ? "bg-destructive" : lane === "model" ? "bg-violet-500" : lane === "tool" ? "bg-amber-500" : "bg-emerald-500",
-                    )}
-                    style={{ left: `${left}%`, width: `${Math.min(100 - left, width)}%` }}
-                  />
-                );
+                return <button key={segment.id} type="button" title={`${segment.label} · ${formatDuration(segment.durationMs)}`} onClick={() => { const item = itemById.get(segment.id); if (item) onSelect(item); }} className={cn("absolute top-0 h-3 rounded-[2px] opacity-85 hover:opacity-100", failed ? "bg-destructive" : lane === "model" ? "bg-violet-500" : lane === "tool" ? "bg-amber-500" : "bg-blue-500")} style={{ left: `${left}%`, width: `${Math.min(100 - left, width)}%` }} />;
               })}
             </div>
           </div>
@@ -195,163 +181,167 @@ function SessionWaterfall({
 
 function ConversationView({ session }: { session: AgentMetricSessionTrace }) {
   const t = useT();
+  return <div className="space-y-5 p-5">{session.history.runs.map((run, index) => {
+    const final = run.events.findLast((event) => event.type === "final");
+    const error = run.events.findLast((event) => event.type === "error");
+    const cancelled = run.events.some((event) => event.type === "cancelled");
+    return <section key={run.request.runId} className="space-y-2.5">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{t("agentDashboard.turn", { count: index + 1 })}</div>
+      <div className="flex justify-end"><div className="max-w-[82%] rounded-lg bg-muted px-3 py-2 text-sm text-foreground"><AgentUserMessage message={requestAgentMessage(run.request)} /></div></div>
+      {final?.type === "final" ? <div className="rounded-lg border border-border bg-card/40 p-3"><AssistantMessage content={final.content} /></div> : error?.type === "error" ? <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error.message}</div> : cancelled ? <div className="text-xs italic text-muted-foreground">{t("agentDashboard.cancelled")}</div> : <div className="flex items-center gap-2 text-xs text-muted-foreground"><RefreshCw className="h-3 w-3" />{run.finishedAt === null ? t("agentDashboard.running") : t("agentDashboard.traceUnavailable")}</div>}
+    </section>;
+  })}</div>;
+}
+
+function TurnInputDetails({ turn }: { turn: AgentMetricSessionTurn }) {
+  const t = useT();
+  const projection = buildAgentTurnTrace(turn);
   return (
-    <div className="space-y-5 p-5">
-      {session.history.runs.map((run, index) => {
-        const final = run.events.findLast((event) => event.type === "final");
-        const error = run.events.findLast((event) => event.type === "error");
-        const cancelled = run.events.some((event) => event.type === "cancelled");
-        return (
-          <section key={run.request.runId} className="space-y-2.5">
-            <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-              {t("agentDashboard.turn", { count: index + 1 })}
-            </div>
-            <div className="flex justify-end">
-              <div className="max-w-[82%] rounded-lg bg-muted px-3 py-2 text-sm text-foreground">
-                <AgentUserMessage message={requestAgentMessage(run.request)} />
-              </div>
-            </div>
-            {final?.type === "final" ? (
-              <div className="rounded-lg border border-border bg-card/40 p-3">
-                <AssistantMessage content={final.content} />
-              </div>
-            ) : error?.type === "error" ? (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-                {error.message}
-              </div>
-            ) : cancelled ? (
-              <div className="text-xs italic text-muted-foreground">{t("agentDashboard.cancelled")}</div>
-            ) : (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <RefreshCw className="h-3 w-3" />
-                {run.finishedAt === null ? t("agentDashboard.running") : t("agentDashboard.traceUnavailable")}
-              </div>
-            )}
-          </section>
-        );
-      })}
-    </div>
+    <details className="border-b border-border/60 bg-muted/5 px-4 py-2">
+      <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground">{t("agentDashboard.turnInput")}</summary>
+      <div className="mt-2 grid gap-2 text-[10px]">
+        <div><div className="mb-1 font-medium text-muted-foreground">{t("agentDashboard.userRequest")}</div><DataDetails value={projection.input.user} /></div>
+        {projection.input.context ? <div><div className="mb-1 font-medium text-muted-foreground">{t("agentDashboard.context")}</div><DataDetails value={projection.input.context} /></div> : null}
+        {projection.input.skills.length > 0 ? <div><div className="mb-1 font-medium text-muted-foreground">{t("agentDashboard.skills")}</div><DataDetails value={projection.input.skills} /></div> : null}
+        {projection.input.systemPrompt ? <details><summary className="cursor-pointer font-medium text-muted-foreground">{t("agentDashboard.systemPrompt")}</summary><div className="mt-1"><DataDetails value={projection.input.systemPrompt} /></div></details> : null}
+        {projection.latestPlan ? <details><summary className="cursor-pointer font-medium text-muted-foreground">{t("agentDashboard.latestPlan")}</summary><div className="mt-1"><DataDetails value={projection.latestPlan} /></div></details> : null}
+        {projection.analysisEfficiency ? <details><summary className="cursor-pointer font-medium text-muted-foreground">{t("agentDashboard.diagnostics")}</summary><div className="mt-1"><DataDetails value={projection.analysisEfficiency} /></div></details> : null}
+      </div>
+    </details>
   );
 }
 
-function TraceView({
-  session,
-  selectedId,
-  onSelect,
-}: {
-  session: AgentMetricSessionTrace;
-  selectedId: string | null;
-  onSelect: (item: AgentTraceItem) => void;
-}) {
+function TraceItemButton({ item, selected, onSelect }: { item: AgentTraceItem; selected: boolean; onSelect: (item: AgentTraceItem) => void }) {
   const t = useT();
+  const label = itemLabel(item, (count) => t("agentDashboard.modelStep", { count }), t("agentDashboard.contextCompaction"));
   return (
-    <div className="divide-y divide-border">
-      {session.turns.map((turn) => {
-        const items = buildAgentTurnTraceItems(turn);
-        return (
-          <section key={turn.history.request.runId}>
-            <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-background/95 px-4 py-2 backdrop-blur">
-              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
-                {t("agentDashboard.turn", { count: turn.index })}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
-                {turn.history.request.prompt}
-              </span>
-              <span className="text-[10px] tabular-nums text-muted-foreground">
-                {formatDuration(turn.trace?.root.run.durationMs ?? null)}
-              </span>
-            </div>
-            {!turn.trace ? (
-              <div className="flex items-center gap-2 px-4 py-4 text-xs text-muted-foreground">
-                <AlertTriangle className="h-3.5 w-3.5" />
-                {t("agentDashboard.traceUnavailable")}
-              </div>
-            ) : null}
-            <div>
-              {items.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => onSelect(item)}
-                  className={cn(
-                    "grid w-full grid-cols-[76px_1fr_82px] items-center gap-3 border-b border-border/60 px-4 py-2 text-left text-[11px] last:border-b-0 hover:bg-accent/50",
-                    selectedId === item.id && "bg-accent",
-                    (item.kind === "tool" || item.kind === "review" || item.kind === "maintenance") && "pl-8",
-                  )}
-                >
-                  <span className={cn("w-fit rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase", traceKindClass(item.kind))}>
-                    {item.kind}
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block truncate font-medium text-foreground">{item.label}</span>
-                    <span className="block truncate text-muted-foreground">{item.summary}</span>
-                  </span>
-                  <span className="flex items-center justify-end gap-1.5 tabular-nums text-muted-foreground">
-                    <span className={cn("h-1.5 w-1.5 rounded-full", statusDotClass(item))} />
-                    {formatDuration(item.durationMs)}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </section>
-        );
-      })}
-    </div>
+    <button type="button" onClick={() => onSelect(item)} className={cn("grid w-full grid-cols-[82px_1fr_82px] items-center gap-3 border-b border-border/60 px-4 py-2 text-left text-[11px] last:border-b-0 hover:bg-accent/50", selected && "bg-accent", (item.kind === "tool" || item.kind === "review") && "pl-8")}>
+      <span className={cn("w-fit rounded px-1.5 py-0.5 text-[9px] font-semibold", traceKindClass(item.kind))}><TraceKindLabel kind={item.kind} /></span>
+      <span className="min-w-0"><span className="block truncate font-medium text-foreground">{label}</span><span className="block truncate text-muted-foreground">{item.summary}</span></span>
+      <span className="flex items-center justify-end gap-1.5 tabular-nums text-muted-foreground"><span className={cn("h-1.5 w-1.5 rounded-full", statusDotClass(item))} />{formatDuration(item.durationMs)}</span>
+    </button>
   );
+}
+
+function TraceView({ session, selectedId, onSelect }: { session: AgentMetricSessionTrace; selectedId: string | null; onSelect: (item: AgentTraceItem) => void }) {
+  const t = useT();
+  return <div className="divide-y divide-border">{session.turns.map((turn) => {
+    const projection = buildAgentTurnTrace(turn);
+    return <section key={turn.history.request.runId}>
+      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-background/95 px-4 py-2 backdrop-blur">
+        <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">{t("agentDashboard.turn", { count: turn.index })}</span>
+        <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">{turn.history.request.prompt}</span>
+        <span className="text-[10px] tabular-nums text-muted-foreground">{formatDuration(turn.trace?.root.run.durationMs ?? null)}</span>
+      </div>
+      <TurnInputDetails turn={turn} />
+      {!turn.trace ? <div className="flex items-center gap-2 px-4 py-4 text-xs text-muted-foreground"><AlertTriangle className="h-3.5 w-3.5" />{t("agentDashboard.traceUnavailable")}</div> : null}
+      {projection.errorMessage ? <div className="flex items-center gap-2 border-b border-destructive/20 bg-destructive/5 px-4 py-2 text-[10px] text-destructive"><AlertTriangle className="h-3.5 w-3.5" />{projection.errorMessage}</div> : null}
+      <div>{projection.main.map((item) => <TraceItemButton key={item.id} item={item} selected={selectedId === item.id} onSelect={onSelect} />)}</div>
+      {projection.maintenance.length > 0 ? <div className="border-t border-border bg-cyan-500/5"><div className="px-4 py-2 text-[9px] font-semibold uppercase tracking-wide text-cyan-700 dark:text-cyan-300">{t("agentDashboard.backgroundMaintenance")}</div>{projection.maintenance.map((item) => <TraceItemButton key={item.id} item={item} selected={selectedId === item.id} onSelect={onSelect} />)}</div> : null}
+      {projection.diagnostics.length > 0 ? <details className="border-t border-border/60 px-4 py-2"><summary className="cursor-pointer text-[10px] text-muted-foreground">{t("agentDashboard.diagnostics")} · {projection.diagnostics.length}</summary><div className="mt-2"><DataDetails value={projection.diagnostics} /></div></details> : null}
+    </section>;
+  })}</div>;
+}
+
+function MessageContent({ value }: { value: unknown }) {
+  const message = record(value);
+  if (!message) return <DataDetails value={value} />;
+  const content = message.content;
+  if (typeof content === "string") return <div className="whitespace-pre-wrap text-[11px] leading-5">{content}</div>;
+  if (!Array.isArray(content)) return <DataDetails value={value} />;
+  return <div className="space-y-2">{content.map((block, index) => {
+    const item = record(block);
+    if (!item) return <DataDetails key={index} value={block} />;
+    if (item.type === "text" && typeof item.text === "string") return <div key={index} className="rounded-md border border-border/60 bg-background p-3"><AssistantMessage content={item.text} /></div>;
+    if (item.type === "thinking" && typeof item.thinking === "string") return <details key={index} className="rounded-md border border-border/60 bg-background"><summary className="cursor-pointer px-3 py-2 text-[10px] font-medium text-muted-foreground">thinking</summary><pre className="whitespace-pre-wrap border-t border-border/60 p-3 text-[10px]">{item.thinking}</pre></details>;
+    if (item.type === "toolCall") return <div key={index} className="rounded-md border border-amber-500/20 bg-amber-500/5 p-3"><div className="mb-2 text-[10px] font-semibold text-amber-700 dark:text-amber-300">{typeof item.name === "string" ? item.name : "tool call"}</div><DataDetails value={item.arguments ?? item} /></div>;
+    if (item.type === "image") return <div key={index} className="rounded-md border border-border/60 bg-muted/20 p-3 text-[10px] text-muted-foreground">image · {typeof item.mimeType === "string" ? item.mimeType : "unknown"}</div>;
+    return <DataDetails key={index} value={block} />;
+  })}</div>;
+}
+
+function ModelInput({ value }: { value: unknown }) {
+  const t = useT();
+  if (!Array.isArray(value)) return value === null ? <div className="text-[11px] text-muted-foreground">{t("agentDashboard.noModelInput")}</div> : <DataDetails value={value} />;
+  return <div className="space-y-2">{value.map((message, index) => {
+    const role = record(message)?.role;
+    return <div key={index} className="rounded-md border border-border/60 bg-background/60 p-3"><div className="mb-2 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">{typeof role === "string" ? role : "message"}</div><MessageContent value={message} /></div>;
+  })}</div>;
+}
+
+function HeaderMetric({ label, value, title }: { label: string; value: string; title?: string }) {
+  return <div className="min-w-[54px] text-right" title={title}><div className="text-[8px] uppercase tracking-wide text-muted-foreground">{label}</div><div className="mt-0.5 whitespace-nowrap text-[10px] font-semibold tabular-nums text-foreground">{value}</div></div>;
+}
+
+function TraceHeaderMetrics({ item }: { item: AgentTraceItem }) {
+  const t = useT();
+  const usage = item.usage;
+  const contextPercent = usage && item.contextWindow && item.contextWindow > 0
+    ? Math.round((usage.totalTokens / item.contextWindow) * 100)
+    : null;
+  const effectiveThinking = item.thinkingLevel === "off"
+    ? t("agentDashboard.thinkingOff")
+    : item.thinkingLevel ?? "—";
+  const thinking = item.requestedThinkingLevel &&
+    item.thinkingLevel &&
+    item.requestedThinkingLevel !== item.thinkingLevel
+    ? `${item.requestedThinkingLevel} → ${effectiveThinking}`
+    : effectiveThinking;
+  return <div className="flex max-w-[68%] flex-wrap items-start justify-end gap-x-4 gap-y-2">
+    <HeaderMetric label={t("agentDashboard.started")} value={new Date(item.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })} title={new Date(item.startedAt).toLocaleString()} />
+    <HeaderMetric label={t("agentDashboard.duration")} value={formatDuration(item.durationMs)} />
+    {item.kind === "model" ? <HeaderMetric label={t("agentDashboard.firstToken")} value={formatDuration(item.firstTokenMs)} /> : null}
+    {item.kind === "model" ? <HeaderMetric label={t("agentDashboard.thinkingMode")} value={thinking} /> : null}
+    {usage ? <>
+      <HeaderMetric label={t("agentDashboard.contextUsed")} value={`${formatNumber(usage.totalTokens)}${item.contextWindow ? ` / ${formatNumber(item.contextWindow)}` : ""}${contextPercent === null ? "" : ` · ${contextPercent}%`}`} />
+      <HeaderMetric label={t("agentDashboard.tokensIn")} value={formatNumber(usage.inputTokens)} />
+      <HeaderMetric label={t("agentDashboard.tokensOut")} value={formatNumber(usage.outputTokens)} />
+      <HeaderMetric label={t("agentDashboard.tokensCached")} value={formatNumber(usage.cacheReadTokens)} />
+      {usage.cacheWriteTokens > 0 ? <HeaderMetric label={t("agentDashboard.tokensCacheWrite")} value={formatNumber(usage.cacheWriteTokens)} /> : null}
+      {(usage.reasoningTokens ?? 0) > 0 ? <HeaderMetric label={t("agentDashboard.reasoningTokens")} value={formatNumber(usage.reasoningTokens!)} /> : null}
+      {(usage.cost?.total ?? 0) > 0 ? <HeaderMetric label={t("agentDashboard.cost")} value={formatCost(usage.cost!.total)} /> : null}
+    </> : null}
+  </div>;
+}
+
+function hasThinkingContent(value: unknown): boolean {
+  const content = record(value)?.content;
+  return Array.isArray(content) && content.some((block) => record(block)?.type === "thinking");
+}
+
+function ModelOutput({ item }: { item: AgentTraceItem }) {
+  const t = useT();
+  return <div className="space-y-2">
+    {item.thinkingLevel === "off" && !hasThinkingContent(item.result) ? <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-[10px] text-muted-foreground">{t("agentDashboard.thinkingDisabledNotice")}</div> : null}
+    <MessageContent value={item.result} />
+  </div>;
 }
 
 function TraceDetails({ item }: { item: AgentTraceItem }) {
   const t = useT();
-  const [tab, setTab] = useState<DetailTab>("payload");
-  useEffect(() => setTab("payload"), [item.id]);
+  const [tab, setTab] = useState<DetailTab>("input");
+  useEffect(() => setTab("input"), [item.id]);
   const tabs: Array<{ id: DetailTab; label: string }> = [
-    { id: "payload", label: t("agentDashboard.payload") },
-    { id: "result", label: t("agentDashboard.result") },
-    { id: "timing", label: t("agentDashboard.timing") },
+    { id: "input", label: t("agentDashboard.input") },
+    { id: "output", label: t("agentDashboard.output") },
+    { id: "raw", label: t("agentDashboard.rawData") },
   ];
+  const label = itemLabel(item, (count) => t("agentDashboard.modelStep", { count }), t("agentDashboard.contextCompaction"));
   return (
     <aside className="flex min-w-0 flex-1 flex-col border-l border-border bg-muted/10">
-      <div className="border-b border-border px-4 py-3">
-        <div className="flex items-center gap-2">
-          <span className={cn("rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase", traceKindClass(item.kind))}>{item.kind}</span>
-          <span className="min-w-0 flex-1 truncate text-xs font-semibold">{item.label}</span>
+      <div className="flex items-start gap-6 border-b border-border px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2"><span className={cn("rounded px-1.5 py-0.5 text-[9px] font-semibold", traceKindClass(item.kind))}><TraceKindLabel kind={item.kind} /></span><span className="min-w-0 flex-1 truncate text-xs font-semibold">{label}</span></div>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground"><span>{t("agentDashboard.turn", { count: item.turnIndex })}</span><span className="inline-flex items-center gap-1.5"><span className={cn("h-1.5 w-1.5 rounded-full", statusDotClass(item))} />{item.status}</span></div>
+          {item.effects.length > 0 ? <div className="mt-2 flex flex-wrap gap-1">{item.effects.map((effect, index) => <span key={`${effect.type}:${index}`} className="rounded bg-primary/10 px-1.5 py-0.5 text-[9px] text-primary">{effect.type === "plan_updated" ? t("agentDashboard.effect.planUpdated") : t("agentDashboard.effect.canvasUpdated")}</span>)}</div> : null}
         </div>
-        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
-          <span>{t("agentDashboard.turn", { count: item.turnIndex })}</span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className={cn("h-1.5 w-1.5 rounded-full", statusDotClass(item))} />
-            {item.status}
-          </span>
-          <span className="tabular-nums">{formatDuration(item.durationMs)}</span>
-        </div>
+        <TraceHeaderMetrics item={item} />
       </div>
-      <div className="flex border-b border-border px-2">
-        {tabs.map((candidate) => (
-          <button
-            key={candidate.id}
-            type="button"
-            onClick={() => setTab(candidate.id)}
-            className={cn(
-              "border-b-2 px-2 py-2 text-[10px]",
-              tab === candidate.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground",
-            )}
-          >
-            {candidate.label}
-          </button>
-        ))}
-      </div>
+      <div className="flex border-b border-border px-2">{tabs.map((candidate) => <button key={candidate.id} type="button" onClick={() => setTab(candidate.id)} className={cn("border-b-2 px-2 py-2 text-[10px]", tab === candidate.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground")}>{candidate.label}</button>)}</div>
       <div className="min-h-0 flex-1 overflow-auto p-4">
-        {tab === "timing" ? (
-          <div className="space-y-3 text-[11px]">
-            <div><span className="text-muted-foreground">{t("agentDashboard.started")}</span><div className="mt-0.5 font-mono">{new Date(item.startedAt).toLocaleString()}</div></div>
-            <div><span className="text-muted-foreground">{t("agentDashboard.duration")}</span><div className="mt-0.5 font-mono">{formatDuration(item.durationMs)}</div></div>
-            <div><span className="text-muted-foreground">{t("agentDashboard.firstToken")}</span><div className="mt-0.5 font-mono">{formatDuration(item.firstTokenMs)}</div></div>
-          </div>
-        ) : tab === "payload" ? (
-          <DataDetails value={item.payload} />
-        ) : (
-          <DataDetails value={item.result} />
-        )}
+        {tab === "input" ? item.kind === "model" ? <ModelInput value={item.payload} /> : <DataDetails value={item.payload} />
+          : tab === "output" ? item.kind === "model" ? <ModelOutput item={item} /> : <DataDetails value={item.result} />
+            : <DataDetails value={{ rawType: item.rawType, data: item.raw, effects: item.effects }} />}
       </div>
     </aside>
   );
@@ -371,21 +361,12 @@ export function AgentDashboardSessions({ range, refreshToken }: AgentDashboardSe
     let active = true;
     setLoading(true);
     setError(null);
-    void window.stela.agent.listHistory()
-      .then((history) => {
-        if (!active) return;
-        const filtered = history.filter((item) => item.isLocal && item.updatedAt >= rangeStart(range));
-        setSessions(filtered);
-        setSelectedKey((current) => current && filtered.some((item) => sessionKey(item) === current)
-          ? current
-          : filtered[0] ? sessionKey(filtered[0]) : null);
-      })
-      .catch((err: unknown) => {
-        if (active) setError(err instanceof Error ? err.message : String(err));
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
+    void window.stela.agent.listHistory().then((history) => {
+      if (!active) return;
+      const filtered = history.filter((item) => item.isLocal && item.updatedAt >= rangeStart(range));
+      setSessions(filtered);
+      setSelectedKey((current) => current && filtered.some((item) => sessionKey(item) === current) ? current : filtered[0] ? sessionKey(filtered[0]) : null);
+    }).catch((err: unknown) => { if (active) setError(err instanceof Error ? err.message : String(err)); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [range, refreshToken]);
 
@@ -399,10 +380,7 @@ export function AgentDashboardSessions({ range, refreshToken }: AgentDashboardSe
     setError(null);
     const loadSessionTrace = async () => {
       try {
-        const result = await window.stela.agentMetrics.getSessionTrace({
-          sessionId: selectedSummary.sessionId,
-          deviceSlug: selectedSummary.deviceSlug,
-        });
+        const result = await window.stela.agentMetrics.getSessionTrace({ sessionId: selectedSummary.sessionId, deviceSlug: selectedSummary.deviceSlug });
         if (!active) return;
         setSession(result);
         const latestTurn = result.turns.at(-1);
@@ -418,83 +396,25 @@ export function AgentDashboardSessions({ range, refreshToken }: AgentDashboardSe
     return () => { active = false; };
   }, [selectedKey, refreshToken]);
 
+  const totalTokens = session ? session.totals.promptTokens + session.totals.outputTokens : 0;
   return (
     <div className="flex min-h-0 flex-1">
       <aside className="w-[220px] flex-none overflow-auto border-r border-border bg-muted/10 p-2">
-        <div className="px-2 pb-2 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-          {t("agentDashboard.localSessions")}
-        </div>
-        {sessions.map((item) => (
-          <button
-            key={sessionKey(item)}
-            type="button"
-            onClick={() => setSelectedKey(sessionKey(item))}
-            className={cn(
-              "mb-1 w-full rounded-md px-2.5 py-2 text-left hover:bg-accent",
-              selectedKey === sessionKey(item) && "bg-accent",
-            )}
-          >
-            <span className="block truncate text-[11px] font-medium text-foreground">{item.title}</span>
-            <span className="mt-0.5 block truncate text-[9px] text-muted-foreground">{new Date(item.updatedAt).toLocaleString()}</span>
-          </button>
-        ))}
+        <div className="px-2 pb-2 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{t("agentDashboard.localSessions")}</div>
+        {sessions.map((item) => <button key={sessionKey(item)} type="button" onClick={() => setSelectedKey(sessionKey(item))} className={cn("mb-1 w-full rounded-md px-2.5 py-2 text-left hover:bg-accent", selectedKey === sessionKey(item) && "bg-accent")}><span className="block truncate text-[11px] font-medium text-foreground">{item.title}</span><span className="mt-0.5 block truncate text-[9px] text-muted-foreground">{new Date(item.updatedAt).toLocaleString()}</span></button>)}
         {!loading && sessions.length === 0 ? <div className="px-2 py-6 text-center text-[11px] text-muted-foreground">{t("agentDashboard.noSessions")}</div> : null}
       </aside>
-
       <div className="flex min-w-0 flex-1 flex-col">
         {error ? <div className="m-4 flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"><AlertTriangle className="h-4 w-4" />{error}</div> : null}
         {loading && !session ? <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground"><RefreshCw className="mr-2 h-3.5 w-3.5 animate-spin" />{t("agentDashboard.loadingSession")}</div> : null}
-        {session ? (
-          <>
-            <header className="border-b border-border px-4 py-3">
-              <div className="flex items-start gap-3">
-                <div className="min-w-0 flex-1">
-                  <h3 className="truncate text-sm font-semibold">{session.history.summary.title}</h3>
-                  <div className="mt-1 truncate font-mono text-[9px] text-muted-foreground">{session.history.summary.sessionId}</div>
-                </div>
-                <div className="grid grid-cols-5 gap-5">
-                  <SessionSummaryMetric label={t("agentDashboard.turns")} value={formatNumber(session.totals.turnCount)} />
-                  <SessionSummaryMetric label={t("agentDashboard.modelSteps")} value={formatNumber(session.totals.modelStepCount)} />
-                  <SessionSummaryMetric label={t("agentDashboard.calls")} value={formatNumber(session.totals.toolCallCount)} />
-                  <SessionSummaryMetric label={t("agentDashboard.duration")} value={formatDuration(session.totals.durationMs)} />
-                  <SessionSummaryMetric label={t("agentDashboard.cacheHitRate")} value={session.totals.cacheHitRate === null ? "—" : `${Math.round(session.totals.cacheHitRate * 100)}%`} />
-                </div>
-              </div>
-              <div className="mt-3 flex gap-1">
-                {(["conversation", "trace"] as const).map((candidate) => (
-                  <button
-                    key={candidate}
-                    type="button"
-                    onClick={() => setView(candidate)}
-                    className={cn("rounded px-2.5 py-1 text-[10px]", view === candidate ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:bg-accent")}
-                  >
-                    {candidate === "conversation" ? t("agentDashboard.conversation") : t("agentDashboard.trajectory")}
-                  </button>
-                ))}
-              </div>
-            </header>
-            {view === "trace" ? <SessionWaterfall session={session} onSelect={setSelectedItem} /> : null}
-            <div className="min-h-0 flex-1 overflow-hidden">
-              {view === "conversation" ? (
-                <div className="h-full overflow-auto">
-                  <ConversationView session={session} />
-                </div>
-              ) : (
-                <div className="flex h-full min-h-0">
-                  <div className="w-[42%] min-w-[360px] max-w-[520px] flex-none overflow-auto">
-                    <TraceView session={session} selectedId={selectedItem?.id ?? null} onSelect={setSelectedItem} />
-                  </div>
-                  {selectedItem ? <TraceDetails item={selectedItem} /> : null}
-                </div>
-              )}
-            </div>
-          </>
-        ) : !loading && !error ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-xs text-muted-foreground">
-            <MessageSquareText className="h-5 w-5" />
-            {t("agentDashboard.selectSession")}
-          </div>
-        ) : null}
+        {session ? <>
+          <header className="border-b border-border px-4 py-3">
+            <div className="flex items-start gap-3"><div className="min-w-0 flex-1"><h3 className="truncate text-sm font-semibold">{session.history.summary.title}</h3><div className="mt-1 truncate font-mono text-[9px] text-muted-foreground">{session.history.summary.sessionId}</div></div><div className="grid grid-cols-6 gap-5"><SessionSummaryMetric label={t("agentDashboard.turns")} value={formatNumber(session.totals.turnCount)} /><SessionSummaryMetric label={t("agentDashboard.modelSteps")} value={formatNumber(session.totals.modelStepCount)} /><SessionSummaryMetric label={t("agentDashboard.calls")} value={formatNumber(session.totals.toolCallCount)} /><SessionSummaryMetric label={t("agentDashboard.tokens")} value={formatNumber(totalTokens)} /><SessionSummaryMetric label={t("agentDashboard.duration")} value={formatDuration(session.totals.durationMs)} /><SessionSummaryMetric label={t("agentDashboard.cacheHitRate")} value={session.totals.cacheHitRate === null ? "—" : `${Math.round(session.totals.cacheHitRate * 100)}%`} /></div></div>
+            <div className="mt-3 flex gap-1">{(["conversation", "trace"] as const).map((candidate) => <button key={candidate} type="button" onClick={() => setView(candidate)} className={cn("rounded px-2.5 py-1 text-[10px]", view === candidate ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:bg-accent")}>{candidate === "conversation" ? t("agentDashboard.conversation") : t("agentDashboard.trajectory")}</button>)}</div>
+          </header>
+          {view === "trace" ? <SessionWaterfall session={session} onSelect={setSelectedItem} /> : null}
+          <div className="min-h-0 flex-1 overflow-hidden">{view === "conversation" ? <div className="h-full overflow-auto"><ConversationView session={session} /></div> : <div className="flex h-full min-h-0"><div className="w-[42%] min-w-[360px] max-w-[520px] flex-none overflow-auto"><TraceView session={session} selectedId={selectedItem?.id ?? null} onSelect={setSelectedItem} /></div>{selectedItem ? <TraceDetails item={selectedItem} /> : null}</div>}</div>
+        </> : !loading && !error ? <div className="flex flex-1 flex-col items-center justify-center gap-2 text-xs text-muted-foreground"><MessageSquareText className="h-5 w-5" />{t("agentDashboard.selectSession")}</div> : null}
       </div>
     </div>
   );
