@@ -80,6 +80,7 @@ import {
 import { addFocusedContextToChat } from "@/components/ai/add-to-chat";
 import { i18n } from "@/i18n";
 import { formatHotkey } from "@/lib/hotkeys";
+import { blockSelectionPlugin } from "./block-selection";
 
 // Crepe 内置 frame 主题（@milkdown/crepe/theme/frame.css）会把 14 个 --crepe-color-* token
 // 硬编码写到 .milkdown 上（白底 / 黑字 / Noto Serif），特异性高于外层 host，会反向覆盖
@@ -432,6 +433,7 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     crepe.editor.use(headingAnchorPlugin);
     crepe.editor.use(wikiLinkPlugins);
     crepe.editor.use(searchHighlightPlugin);
+    crepe.editor.use(blockSelectionPlugin);
 
     // 视图捕获插件：闭包持有本组件的 viewRef / lineMapRef，PM `view()` 钩子触发后
     // 把当前 EditorView 暂存到 ref；同时立即基于 initialBody 构建 LineMap。

@@ -143,6 +143,13 @@ export function flushAllRunsqlEditors(): void {
   }
 }
 
+/** 离开 RunSQL 内部编辑模式时，收拢仍由 CodeMirror 绘制的范围选区。 */
+export function collapseAllRunsqlSelections(): void {
+  for (const view of activeRunsqlViews) {
+    view.collapseCmSelection();
+  }
+}
+
 export function openTemplatePickerInFocusedRunsql(): boolean {
   const active = document.activeElement;
   const focused = [...activeRunsqlViews].find(
@@ -411,6 +418,16 @@ export class CodeBlockNodeView implements NodeView {
     }
     this.updating = true;
     this.cm.dispatch({ selection: { anchor, head } });
+    this.updating = false;
+  }
+
+  collapseCmSelection(): void {
+    const selection = this.cm.state.selection.main;
+    if (selection.empty && this.cm.state.selection.ranges.length === 1) return;
+    this.updating = true;
+    this.cm.dispatch({
+      selection: EditorSelection.cursor(selection.head),
+    });
     this.updating = false;
   }
 

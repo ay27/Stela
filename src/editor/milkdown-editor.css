@@ -154,6 +154,7 @@
  * ========================================================================== */
 
 .milkdown {
+  position: relative;
   font-family: var(--crepe-font-default);
   font-size: 14px;
   line-height: 1.65;
@@ -405,9 +406,27 @@
 .milkdown .ProseMirror *::selection {
   background: hsl(var(--primary) / 0.18);
 }
+.milkdown .ProseMirror.ProseMirror-hideselection *::selection {
+  background: transparent;
+}
 .milkdown .ProseMirror .ProseMirror-selectednode {
   background: hsl(var(--accent));
   outline: none;
+}
+
+/* 左右留白起拖产生的完整 block 选区。用覆盖首尾 block 联合高度的单个蒙版绘制，
+ * 因此段落 margin、列表和 RunSQL NodeView 之间不会断层，也不受 NodeView 背景影响。 */
+.milkdown .stela-block-selection-overlay {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: 5px;
+  background: hsl(var(--primary) / 0.11);
+}
+
+.stela-milkdown-host[data-stela-block-selecting="true"] {
+  cursor: default;
+  user-select: none;
 }
 
 /* ---- 表格 ----
