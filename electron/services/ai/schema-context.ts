@@ -14,6 +14,7 @@ import type { SqlSymbols } from "./sql-symbols";
 const log = getLogger("ai.schema-context");
 const MAX_SCHEMA_TARGETS = 5;
 const MAX_DDL_CHARS = 4_000;
+const CONNECTOR_CATALOG_CONCURRENCY = 4;
 /**
  * schemaDir 里的表数量上限。真实 vault 已有 900+ 张表，旧上限 500 会按 readdir
  * 顺序静默切掉近一半——和「搜索满 cap 就 return」是同一类任意截断 bug。
@@ -61,6 +62,27 @@ interface SchemaCatalogEntry {
 interface RankedSchemaEntry extends SchemaCatalogEntry {
   score: number;
   reasons: string[];
+}
+
+async function mapConcurrent<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(Math.max(1, concurrency), items.length) },
+    async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await fn(items[index] as T, index);
+      }
+    },
+  );
+  await Promise.all(workers);
+  return results;
 }
 
 export interface SchemaResolverDeps {
@@ -357,14 +379,23 @@ async function loadConnectorCatalog(
   const dbs = await listDatabases(connection.kind, connection.config).catch(() => [] as string[]);
   const fallbackDbs = dbs.length > 0 ? dbs : [null];
   const entries: SchemaCatalogEntry[] = [];
-  for (const db of fallbackDbs.slice(0, 30)) {
-    const tables = await deps.listTables(connection.kind, connection.config, db).catch(() => [] as string[]);
+  const tableGroups = await mapConcurrent(
+    fallbackDbs.slice(0, 30),
+    CONNECTOR_CATALOG_CONCURRENCY,
+    async (database) => ({
+      database,
+      tables: await deps
+        .listTables!(connection.kind, connection.config, database)
+        .catch(() => [] as string[]),
+    }),
+  );
+  for (const { database, tables } of tableGroups) {
     for (const table of tables.slice(0, 200)) {
       entries.push({
         connectionName,
-        database: db,
+        database,
         table,
-        qualifiedName: qualifiedName(db, table),
+        qualifiedName: qualifiedName(database, table),
         columns: [],
         ddlSnippet: null,
         source: "connector",
@@ -803,10 +834,15 @@ export async function resolveNamedTableSchemas(
           options.connection.schemaDir,
           deps,
         );
+  const needsConnectorCatalog =
+    schemaDirCatalog.length === 0 &&
+    uniqueNames.some((name) => splitQualifiedName(name).database === null);
   const connectorCatalog =
     schemaDirCatalog.length > 0
       ? schemaDirCatalog
-      : await loadConnectorCatalog(options.connectionName, options.connection, deps);
+      : needsConnectorCatalog
+        ? await loadConnectorCatalog(options.connectionName, options.connection, deps)
+        : [];
 
   // 先尝试 connector 直出的 describeTables：单次往返、可拿到 COMMENT 全文。
   // 没接口或失败时回退到原本的 SHOW CREATE / DESCRIBE / LIMIT 0 拼装。
@@ -827,8 +863,7 @@ export async function resolveNamedTableSchemas(
     ]),
   );
 
-  const out: AiSchemaTargetContext[] = [];
-  for (const name of uniqueNames) {
+  return Promise.all(uniqueNames.map(async (name): Promise<AiSchemaTargetContext> => {
     const parsed = splitQualifiedName(name);
     const entry = findCatalogEntry(schemaDirCatalog, name);
     let source: AiSchemaTargetContext["source"] = "schema-dir";
@@ -865,7 +900,7 @@ export async function resolveNamedTableSchemas(
       source = "connector";
     }
 
-    out.push({
+    return {
       connectionName: options.connectionName,
       database,
       table,
@@ -874,9 +909,8 @@ export async function resolveNamedTableSchemas(
       source: entry && isSchemaEntryValid(entry) ? "schema-dir" : source,
       matchReason: options.matchReason,
       score: options.score ?? 100,
-    });
-  }
-  return out;
+    };
+  }));
 }
 
 export interface ResolveMentionedSchemaContextOptions {

@@ -613,12 +613,19 @@ Agent schema tools have one authority: the selected live connector (the current
 note connection by default, or an explicit listed `connectionName`). `search_tables`
 enumerates that catalog and `get_table_schema` fetches current DDL or columns;
 they do not read the optional connection `schemaDir` dump ([ADR-0041](./adr/0041-agent-live-schema-authority.md)).
+Catalog enumeration uses at most four concurrent `listTables` calls and is not
+cached. A qualified `database.table` passed to `get_table_schema` is fetched
+directly; only an unqualified name enumerates the catalog to resolve its database.
+When several qualified tables are requested, their fallback probes run concurrently.
 
 When the connector implements `describeTables(kind, config, tables)` the schema
 resolver calls it once per lookup and uses the returned `TableDescriptor`
 columns (with `comment`) directly. Otherwise it falls back to `SHOW CREATE TABLE`
 → `DESCRIBE` → `SELECT ... LIMIT 0` ladder; old plugins keep working
-([ADR-0042](./adr/0042-connector-describe-tables-api.md)).
+([ADR-0042](./adr/0042-connector-describe-tables-api.md)). The public HTTP
+gateway sample implements the optional API with concurrent `SHOW FULL COLUMNS`
+requests capped at four in flight, while gateway-specific private plugins may
+provide a true batch endpoint.
 
 ```typescript
 type AgentToolName =

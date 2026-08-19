@@ -14,6 +14,7 @@ import {
   type Connector,
   type ConnectorKindMeta,
   type QueryResult,
+  type TableDescriptor,
   type TestResult,
 } from "@stela/connector-plugin-sdk";
 
@@ -32,6 +33,7 @@ interface GatewayEnvelope {
 
 const DEFAULT_ENDPOINT = "http://127.0.0.1:7777/query";
 const DEFAULT_TIMEOUT_MS = 30_000;
+const DESCRIBE_CONCURRENCY = 4;
 
 function parseConfig(raw: unknown): HttpSampleConfig {
   const v = (raw ?? {}) as Record<string, unknown>;
@@ -152,6 +154,74 @@ async function postSql(cfg: HttpSampleConfig, sql: string): Promise<QueryResult>
   }
 }
 
+function quoteIdentifier(value: string): string {
+  return `\`${value.replace(/`/g, "``")}\``;
+}
+
+function columnIndex(columns: ColumnDef[], candidates: string[]): number {
+  const names = new Set(candidates.map((candidate) => candidate.toLowerCase()));
+  return columns.findIndex((column) => names.has(column.name.toLowerCase()));
+}
+
+async function describeTable(
+  cfg: HttpSampleConfig,
+  database: string | null,
+  table: string,
+): Promise<TableDescriptor | null> {
+  const tableRef = database
+    ? `${quoteIdentifier(database)}.${quoteIdentifier(table)}`
+    : quoteIdentifier(table);
+  try {
+    const result = await postSql(cfg, `SHOW FULL COLUMNS FROM ${tableRef}`);
+    if (result.kind !== "query") return null;
+    const nameIndex = columnIndex(result.columns, ["field", "column", "column_name", "name"]);
+    const typeIndex = columnIndex(result.columns, ["type", "data_type", "typename", "type_name"]);
+    const commentIndex = columnIndex(result.columns, ["comment", "column_comment"]);
+    if (nameIndex < 0) return null;
+    return {
+      database,
+      table,
+      columns: result.rows.flatMap((row) => {
+        const name = row[nameIndex];
+        if (typeof name !== "string" || name.length === 0) return [];
+        const typeName = typeIndex >= 0 ? row[typeIndex] : null;
+        const comment = commentIndex >= 0 ? row[commentIndex] : null;
+        return [{
+          name,
+          typeName: typeof typeName === "string" && typeName ? typeName : "UNKNOWN",
+          ...(typeof comment === "string" && comment ? { comment } : {}),
+        }];
+      }),
+      ddlSnippet: null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function describeTablesConcurrent(
+  cfg: HttpSampleConfig,
+  tables: Array<{ database: string | null; table: string }>,
+): Promise<TableDescriptor[]> {
+  const results = new Array<TableDescriptor | null>(tables.length);
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(DESCRIBE_CONCURRENCY, tables.length) },
+    async () => {
+      while (nextIndex < tables.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        const target = tables[index];
+        results[index] = target
+          ? await describeTable(cfg, target.database, target.table)
+          : null;
+      }
+    },
+  );
+  await Promise.all(workers);
+  return results.filter((table): table is TableDescriptor => table !== null);
+}
+
 class HttpSampleConnector implements Connector {
   meta(): ConnectorKindMeta {
     return {
@@ -207,6 +277,13 @@ class HttpSampleConnector implements Connector {
 
   async listTables(): Promise<string[]> {
     return [];
+  }
+
+  async describeTables(
+    cfg: unknown,
+    tables: Array<{ database: string | null; table: string }>,
+  ): Promise<TableDescriptor[]> {
+    return describeTablesConcurrent(parseConfig(cfg), tables);
   }
 }
 

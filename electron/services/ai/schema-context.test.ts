@@ -220,6 +220,9 @@ try {
   assert.equal(fallback[0]?.table, "orders");
   assert.ok(fallback[0]?.columns?.some((column) => column.name === "amount"));
 
+  let qualifiedListDatabaseCalls = 0;
+  let qualifiedListTableCalls = 0;
+  const qualifiedExecuteSql: string[] = [];
   const liveAgentSchema = await resolveNamedTableSchemas({
     tableNames: ["dw.users"],
     connectionName: "prod",
@@ -235,19 +238,67 @@ try {
     matchReason: "agent get_table_schema",
     preferLocalSchemaDir: false,
     deps: {
-      listDatabases: async () => ["dw"],
-      listTables: async () => ["users"],
-      execute: async () => ({
-        kind: "query",
-        columns: [{ name: "Create Table", typeName: "varchar" }],
-        rows: [[
-          "CREATE TABLE `dw`.`users` (\n  `live_id` bigint,\n  `live_email` varchar(255)\n)",
-        ]],
-      }),
+      listDatabases: async () => {
+        qualifiedListDatabaseCalls += 1;
+        return ["dw"];
+      },
+      listTables: async () => {
+        qualifiedListTableCalls += 1;
+        return ["users"];
+      },
+      execute: async (_kind, _config, sql) => {
+        qualifiedExecuteSql.push(sql);
+        return {
+          kind: "query",
+          columns: [{ name: "Create Table", typeName: "varchar" }],
+          rows: [[
+            "CREATE TABLE `dw`.`users` (\n  `live_id` bigint,\n  `live_email` varchar(255)\n)",
+          ]],
+        };
+      },
     },
   });
   assert.equal(liveAgentSchema[0]?.source, "connector");
   assert.ok(liveAgentSchema[0]?.columns?.some((column) => column.name === "live_id"));
+  assert.equal(qualifiedListDatabaseCalls, 0);
+  assert.equal(qualifiedListTableCalls, 0);
+  assert.deepEqual(qualifiedExecuteSql, ["SHOW CREATE TABLE `dw`.`users`"]);
+
+  let unqualifiedListDatabaseCalls = 0;
+  let unqualifiedListTableCalls = 0;
+  const unqualifiedSchema = await resolveNamedTableSchemas({
+    tableNames: ["users"],
+    connectionName: "prod",
+    connection,
+    request: {
+      action: "explain-table",
+      context: {
+        source: "schema",
+        connectionName: "prod",
+        connector: { kind: "mysql", displayName: "MySQL", dialect: "MySQL" },
+      },
+    },
+    matchReason: "agent get_table_schema",
+    preferLocalSchemaDir: false,
+    deps: {
+      listDatabases: async () => {
+        unqualifiedListDatabaseCalls += 1;
+        return ["dw"];
+      },
+      listTables: async (_kind, _config, database) => {
+        unqualifiedListTableCalls += 1;
+        return database === "dw" ? ["users"] : [];
+      },
+      execute: async () => ({
+        kind: "query",
+        columns: [{ name: "Create Table", typeName: "varchar" }],
+        rows: [["CREATE TABLE `dw`.`users` (\n  `id` bigint\n)"]],
+      }),
+    },
+  });
+  assert.equal(unqualifiedSchema[0]?.database, "dw");
+  assert.equal(unqualifiedListDatabaseCalls, 1);
+  assert.equal(unqualifiedListTableCalls, 1);
 
   const describeFallbackSchema = await resolveNamedTableSchemas({
     tableNames: ["dw.users"],
@@ -296,6 +347,65 @@ try {
   });
   assert.equal(liveAgentSearch[0]?.table, "newly_added");
   assert.equal(liveAgentSearch[0]?.source, "connector");
+
+  let activeCatalogCalls = 0;
+  let maxActiveCatalogCalls = 0;
+  const catalogDatabases = Array.from({ length: 8 }, (_, index) => `db_${index}`);
+  const concurrentCatalogSearch = await searchTables({
+    connectionName: "prod",
+    connection,
+    keywords: ["shared_table"],
+    preferLocalSchemaDir: false,
+    deps: {
+      listDatabases: async () => catalogDatabases,
+      listTables: async (_kind, _config, database) => {
+        activeCatalogCalls += 1;
+        maxActiveCatalogCalls = Math.max(maxActiveCatalogCalls, activeCatalogCalls);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        activeCatalogCalls -= 1;
+        return [`shared_table_${database}`];
+      },
+    },
+  });
+  assert.equal(concurrentCatalogSearch.length, 5);
+  assert.equal(maxActiveCatalogCalls, 4);
+
+  let activeSchemaCalls = 0;
+  let maxActiveSchemaCalls = 0;
+  const concurrentQualifiedSchemas = await resolveNamedTableSchemas({
+    tableNames: ["dw.users", "dw.orders"],
+    connectionName: "prod",
+    connection,
+    request: {
+      action: "explain-table",
+      context: {
+        source: "schema",
+        connectionName: "prod",
+        connector: { kind: "mysql", displayName: "MySQL", dialect: "MySQL" },
+      },
+    },
+    matchReason: "agent get_table_schema",
+    preferLocalSchemaDir: false,
+    deps: {
+      execute: async (_kind, _config, sql) => {
+        activeSchemaCalls += 1;
+        maxActiveSchemaCalls = Math.max(maxActiveSchemaCalls, activeSchemaCalls);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        activeSchemaCalls -= 1;
+        const table = sql.includes("`orders`") ? "orders" : "users";
+        return {
+          kind: "query",
+          columns: [{ name: "Create Table", typeName: "varchar" }],
+          rows: [[`CREATE TABLE \`dw\`.\`${table}\` (\n  \`id\` bigint\n)`]],
+        };
+      },
+    },
+  });
+  assert.deepEqual(
+    concurrentQualifiedSchemas.map((entry) => entry.table),
+    ["users", "orders"],
+  );
+  assert.equal(maxActiveSchemaCalls, 2);
 
   // describeTables 提供 COMMENT 时，searchTables 与 resolveNamedTableSchemas
   // 都能拿到结构化列（不再走 SHOW CREATE/DESCRIBE 探测链）。
