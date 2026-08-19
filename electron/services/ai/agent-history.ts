@@ -312,7 +312,7 @@ function asRunRequest(value: unknown): AgentRunRequest | null {
   return {
     runId: request.runId,
     prompt: request.prompt,
-    ...(["chat", "runsql-fix", "runsql-rewrite", "runsql-ask", "schema-explain", "canvas-refresh"].includes(String(request.entryPoint))
+    ...(["chat", "runsql-fix", "runsql-rewrite", "runsql-ask", "schema-explain", "knowledge-maintenance", "canvas-refresh"].includes(String(request.entryPoint))
       ? { entryPoint: request.entryPoint as AgentRunRequest["entryPoint"] }
       : {}),
     ...(canvasRefresh ? { canvasRefresh } : {}),

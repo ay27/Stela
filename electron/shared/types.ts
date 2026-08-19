@@ -505,6 +505,8 @@ export interface AgentMetricDailyPoint {
 export interface AgentMetricsDashboard {
   range: AgentMetricRange;
   generatedAt: number;
+  /** Most recent real knowledge-maintenance attempt retained by the local metrics store. */
+  latestKnowledgeMaintenanceAt: number | null;
   overview: AgentMetricBreakdown;
   usage: AgentMetricUsage;
   surfaces: AgentMetricBreakdown[];
@@ -962,6 +964,7 @@ export type AgentEntryPoint =
   | "runsql-rewrite"
   | "runsql-ask"
   | "schema-explain"
+  | "knowledge-maintenance"
   | "canvas-refresh";
 
 /** Atomic semantic refresh requested from an Analysis Canvas UI action. */

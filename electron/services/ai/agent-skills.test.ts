@@ -8,6 +8,7 @@ import {
   loadAgentSkills,
   rankAgentSkills,
   rankAgentSkillsForRequest,
+  selectPromptAgentSkills,
   saveAgentSkill,
 } from "./agent-skills";
 
@@ -129,6 +130,33 @@ Compare the source total.`,
       8,
     ).map((item) => item.metadata.name),
     ["sourced-metric"],
+  );
+  assert.deepEqual(
+    await selectPromptAgentSkills(
+      allLoaded,
+      {
+        runId: "maintenance-no-prompt-skills",
+        prompt: "Maintain metric knowledge",
+        entryPoint: "knowledge-maintenance",
+        mentionedTables: ["threed.metric_source"],
+      },
+      8,
+      async () => true,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    (await selectPromptAgentSkills(
+      allLoaded,
+      {
+        runId: "routine-fresh-only",
+        prompt: "Explain this table",
+        mentionedTables: ["threed.metric_source"],
+      },
+      8,
+      async (skill) => skill.metadata.name !== "sourced-metric",
+    )).map((item) => item.metadata.name),
+    [],
   );
   await assert.rejects(
     saveAgentSkill(

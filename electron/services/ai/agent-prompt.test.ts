@@ -120,6 +120,20 @@ const canvasWorkspaceUser = buildUserContent(
 );
 assert.match(canvasWorkspaceUser, /active_guidance: \[\{"id":"canvas_context"/);
 
+const knowledgeMaintenanceUser = buildUserContent({
+  runId: "knowledge-maintenance-test",
+  prompt: "Maintain experience knowledge",
+  entryPoint: "knowledge-maintenance",
+});
+assert.match(knowledgeMaintenanceUser, /entry_point: knowledge-maintenance/);
+assert.match(knowledgeMaintenanceUser, /\{"id":"knowledge_maintenance"/);
+assert.match(knowledgeMaintenanceUser, /Start with search_skills\(\{offset:0,limit:20\}\) and omit query/);
+assert.match(knowledgeMaintenanceUser, /Do not load every Skill body/);
+assert.match(knowledgeMaintenanceUser, /pass only sourcePaths and sourceTables that directly support that Skill/);
+assert.match(knowledgeMaintenanceUser, /at most three high-impact Skills/);
+assert.match(knowledgeMaintenanceUser, /never edit Vault notes/);
+assert.doesNotMatch(routineUser, /knowledge_maintenance/);
+
 const mongoUser = buildUserContent(
   { runId: "mongo-test", prompt: "Count documents" },
   { connection: null, dialect: null, queryLanguages: ["mongodb"], mongoOperations: ["find", "aggregate"] },

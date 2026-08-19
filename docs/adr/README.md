@@ -102,7 +102,7 @@ proposed → active → superseded
 | [0047](0047-bounded-device-agent-history-retention.md) | Bounded device Agent history retention | active |
 | [0048](0048-vault-markdown-sql-template-library.md) | Vault Markdown SQL template library | active |
 | [0049](0049-independent-bounded-skill-maintenance.md) | Independent bounded Skill maintenance | active |
-| [0050](0050-source-tracked-template-driven-skills.md) | Source-tracked template-driven Skills | active |
+| [0050](0050-source-tracked-template-driven-skills.md) | Source-tracked template-driven Skills | superseded → [0073](0073-three-state-skill-freshness.md) |
 | [0051](0051-local-agent-observability-store.md) | Local Agent observability store | superseded → [0052](0052-signal-focused-agent-observability.md) |
 | [0052](0052-signal-focused-agent-observability.md) | Signal-focused Agent observability | active |
 | [0053](0053-declarative-result-bound-analytical-charts.md) | Declarative result-bound analytical charts | superseded → [0054](0054-runsql-owned-analytical-charts.md) |
@@ -125,3 +125,4 @@ proposed → active → superseded
 | [0070](0070-agent-led-atomic-canvas-refresh.md) | Agent-led atomic Canvas refresh | active |
 | [0071](0071-action-oriented-agent-execution-traces.md) | Action-oriented Agent execution traces | active |
 | [0072](0072-profile-scoped-agent-reasoning-effort.md) | Profile-scoped Agent reasoning effort | active |
+| [0073](0073-three-state-skill-freshness.md) | Three-state Skill freshness and maintenance inspection | active |

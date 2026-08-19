@@ -471,10 +471,12 @@ required `description`. Skill bodies are concise reusable guidance: scope, rule,
 and a minimal verification or exception. They do not contain analysis narration,
 result rows, or one-off SQL.
 
-Local ranking injects only the eight metadata records with a positive lexical
-match to the user's request; the model uses `search_skills` to find further
-candidates and `load_skill` to read a body on demand. Invalid on-disk Skills are
-excluded using the same validation as writes. The bottom-bar **Experience Knowledge** entry opens an
+Routine local ranking injects at most eight fresh Skills with a positive lexical
+match to the user's request; explicit knowledge-maintenance turns inject none, so
+their first `search_skills` page is not biased by the active document. The model
+uses `search_skills` to browse or find further candidates and `load_skill` to read
+a body on demand. Invalid on-disk Skills are excluded using the same validation as
+writes. The bottom-bar **Experience Knowledge** entry opens an
 on-demand application dialog with active and archived Skill metadata through
 `window.stela.agent.listSkills()`. A confirmed `window.stela.agent.removeSkill()`
 operation can move only a listed Skill directory to the system trash; Skill bodies
@@ -494,16 +496,29 @@ can call SQL, edit notes, or write elsewhere through this capability, and writes
 appear as a compact status indicator inside the final-answer bubble; hover/click
 reveals the maintenance summary and any changes. An explicit successful write is the
 final answer's update result and skips the redundant post-run maintenance call.
+The empty Agent Panel exposes subtle, centered one-click text actions. A note
+offers Canvas creation, content summary, and read-only data auditing; a Canvas
+offers atomic refresh, briefing, and read-only auditing. Both also offer explicit
+experience knowledge maintenance under the `knowledge-maintenance` entry point.
+That turn starts with an unfiltered metadata page through `search_skills`, then
+uses targeted search and loads only candidate bodies. It may change at most three
+evidence-backed Skills and never edits Vault notes. With no active document, only
+that Vault-level knowledge task remains. Each click reuses the current empty Agent
+conversation.
 Automatically maintained Skills record up to three source-note paths and content
-hashes plus up to eight table retrieval anchors. `load_skill` checks those hashes
-and the current newest SQL-usage notes; a stale Skill is refreshed before use or
-skipped in favor of live retrieval. Source-less legacy Skills are recovered from
-qualified tables in their content when possible. Automatic creation uses strict
+hashes plus up to eight table retrieval anchors. Explicit maintenance saves select
+supporting notes and tables from an enforced set actually read or inspected in
+that run; invented provenance is rejected. Freshness has
+three states: `fresh` matches tracked sources, `stale` conflicts with or has lost a
+tracked source, and `untracked` has no source hashes. Routine prompt injection uses
+only fresh Skills; routine search omits stale results, while explicit maintenance
+can inspect stale or untracked bodies as untrusted drafts before rebuilding them
+from live evidence. Automatic creation uses strict
 templates for dialect, metric, glossary, or lineage knowledge; analysis runbooks
 require an explicit user request, while an already source-tracked runbook may be
 refreshed. Live connector schema overrides any conflicting Skill. See
 [ADR-0049](./adr/0049-independent-bounded-skill-maintenance.md),
-[ADR-0050](./adr/0050-source-tracked-template-driven-skills.md),
+[ADR-0073](./adr/0073-three-state-skill-freshness.md),
 [ADR-0036](./adr/0036-user-deletion-of-experience-knowledge.md).
 
 ### Agent Dashboard
@@ -513,6 +528,8 @@ through typed `window.stela.agentMetrics.*` methods. One-shot AI actions, SQL
 query parsing, Harness Agent turns, tool calls, and Skill maintenance use
 correlated run/event records. Inline completion deliberately emits no metrics
 or traces because its high-frequency requests obscure Agent diagnostics. The
+dashboard DTO also exposes the latest retained real knowledge-maintenance attempt
+for the Agent Panel empty-state hint; disabled and dropped jobs do not advance it.
 Dashboard keeps an aggregate Overview and a Session-oriented execution view.
 The Session view joins device-local Agent History with Metrics by Agent run id:
 History remains authoritative for Session and user-Turn order, while Metrics

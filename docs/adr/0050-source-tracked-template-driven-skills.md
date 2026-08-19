@@ -2,8 +2,9 @@
 type: ADR
 id: "0050"
 title: "Source-tracked template-driven Skills"
-status: active
+status: superseded
 date: 2026-08-03
+superseded_by: "0073"
 ---
 
 ## Context

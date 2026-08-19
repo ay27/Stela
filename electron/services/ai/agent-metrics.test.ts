@@ -70,11 +70,13 @@ try {
     payload: { category: "metric-definition", source: "load" },
   });
 
+  const maintenanceStartedAt = Date.now() - 75;
   startRun({
     runId: "maintenance-1",
     parentRunId: "agent-1",
     surface: "skill_maintenance",
     operation: "post_run_create",
+    startedAt: maintenanceStartedAt,
   });
   addEvent("maintenance-1", {
     type: "skill_action",
@@ -84,6 +86,7 @@ try {
   finishRun("maintenance-1", { status: "completed", outcome: "saved" });
 
   const dashboard = getDashboard("7d");
+  assert.equal(dashboard.latestKnowledgeMaintenanceAt, maintenanceStartedAt);
   assert.equal(dashboard.overview.total, 1);
   assert.equal(dashboard.usage.cacheReadTokens, 7);
   assert.equal(dashboard.usage.promptTokens, 19);
@@ -114,6 +117,7 @@ try {
     parentRunId: "agent-1",
     surface: "skill_maintenance",
     operation: "post_run_create",
+    startedAt: maintenanceStartedAt - 10,
     request: { evidence: [{ type: "tool_result" }] },
   });
   finishRun("legacy-no-source", { status: "completed", outcome: "no_source" });
@@ -204,6 +208,32 @@ try {
   assert.equal(last.nextCursor, null);
 
   startRun({
+    runId: "maintenance-disabled",
+    surface: "skill_maintenance",
+    operation: "post_run_create",
+    startedAt: maintenanceStartedAt + 10,
+  });
+  finishRun("maintenance-disabled", { status: "completed", outcome: "disabled" });
+  startRun({
+    runId: "maintenance-dropped",
+    surface: "skill_maintenance",
+    operation: "post_run_create",
+    startedAt: maintenanceStartedAt + 20,
+  });
+  finishRun("maintenance-dropped", { status: "dropped", outcome: "dropped" });
+  assert.equal(getDashboard("7d").latestKnowledgeMaintenanceAt, maintenanceStartedAt);
+
+  const manualMaintenanceStartedAt = maintenanceStartedAt + 30;
+  startRun({
+    runId: "manual-maintenance",
+    surface: "agent",
+    operation: "knowledge-maintenance",
+    startedAt: manualMaintenanceStartedAt,
+  });
+  finishRun("manual-maintenance", { status: "completed", outcome: "no_change" });
+  assert.equal(getDashboard("7d").latestKnowledgeMaintenanceAt, manualMaintenanceStartedAt);
+
+  startRun({
     runId: "too-old",
     surface: "agent",
     operation: "chat",
@@ -229,6 +259,7 @@ try {
 
   clear();
   assert.equal(getDashboard("90d").overview.total, 0);
+  assert.equal(getDashboard("90d").latestKnowledgeMaintenanceAt, null);
 } finally {
   __resetForTests();
   await rm(root, { recursive: true, force: true });

@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
 import type { EditorState } from "@milkdown/prose/state";
 import {
+  BarChart3,
   Bot,
   Brain,
   CheckCircle2,
   ChevronDown,
   Circle,
+  ClipboardCheck,
+  FileText,
   HelpCircle,
   History,
   Loader2,
   MinusCircle,
   Plus,
+  RefreshCw,
   Send,
   Sparkles,
   ShieldAlert,
@@ -56,6 +60,13 @@ import {
 import { renderMarkdown } from "./markdown-renderer";
 import { isAgentMessageEmpty } from "@/lib/agent-message";
 import { agentComposerStateToMessage, agentResourceDisplay } from "@/lib/agent-composer";
+import {
+  buildAgentEmptyActions,
+  formatMaintenanceRecency,
+  type AgentEmptyAction,
+  type AgentEmptyActionId,
+  type AgentEmptyWorkspace,
+} from "./agent-empty-state";
 
 function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
@@ -150,10 +161,21 @@ export function AgentPanel() {
   const history = useAgentPanel((s) => s.history);
   const historyLoaded = useAgentPanel((s) => s.historyLoaded);
   const vaultPath = useWorkspace((s) => s.vaultPath);
+  const workspaceTabs = useWorkspace((s) => s.tabs);
+  const workspaceActiveTabId = useWorkspace((s) => s.activeTabId);
   const focusToken = useLayout((s) => s.agentFocusToken);
   const aiSettings = useSettings((s) => s.settings.ai);
   const patchSettings = useSettings((s) => s.patch);
   const [providerStatus, setProviderStatus] = useState<AiProviderStatus | null>(null);
+  const [emptyStateMaintenance, setEmptyStateMaintenance] = useState<{
+    latestMaintenanceAt: number | null;
+    loading: boolean;
+    metricsFailed: boolean;
+  }>({
+    latestMaintenanceAt: null,
+    loading: false,
+    metricsFailed: false,
+  });
   const switchTab = useAgentPanel((s) => s.switchTab);
   const start = useAgentPanel((s) => s.start);
   const cancel = useAgentPanel((s) => s.cancel);
@@ -170,6 +192,18 @@ export function AgentPanel() {
   const promptInputRef = useRef<AiPromptInputHandle>(null);
   const canvasMentionPathsRef = useRef<string[]>([]);
   const busy = status === "running";
+  const empty = timeline.length === 0;
+  const activeWorkspaceTab = workspaceTabs.find((tab) => tab.id === workspaceActiveTabId) ?? null;
+  const emptyWorkspace = useMemo<AgentEmptyWorkspace | null>(() => {
+    if (!activeWorkspaceTab?.path) return null;
+    const relativePath = relativeToVault(activeWorkspaceTab.path, vaultPath);
+    if (!relativePath) return null;
+    return {
+      kind: activeWorkspaceTab.kind === "analysis" ? "canvas" : "note",
+      path: relativePath,
+      title: activeWorkspaceTab.title || relativePath.split("/").pop() || relativePath,
+    };
+  }, [activeWorkspaceTab, vaultPath]);
   // 连续的 tool entries 就地合成一条 ToolActivity：执行记录跟随产生它的那一轮，
   // 不再跨轮次汇总到最底部。pending 的 question 从 timeline 摘出，固定到输入框上方。
   const timelineItems = useMemo(() => groupTimeline(timeline), [timeline]);
@@ -195,6 +229,24 @@ export function AgentPanel() {
   useEffect(() => {
     void bindVault(vaultPath);
   }, [vaultPath, bindVault]);
+
+  useEffect(() => {
+    if (!empty || !vaultPath) return;
+    let active = true;
+    setEmptyStateMaintenance((current) => ({ ...current, loading: true }));
+    void window.stela.agentMetrics.getDashboard("90d").then((dashboard) => {
+      if (!active) return;
+      setEmptyStateMaintenance({
+        latestMaintenanceAt: dashboard.latestKnowledgeMaintenanceAt,
+        loading: false,
+        metricsFailed: false,
+      });
+    }).catch(() => {
+      if (!active) return;
+      setEmptyStateMaintenance({ latestMaintenanceAt: null, loading: false, metricsFailed: true });
+    });
+    return () => { active = false; };
+  }, [empty, vaultPath]);
 
   // 当前文档的连接 > 默认连接（isDefault 标记 / 名称首个）> 空。与
   // EditorView 的 frontmatter 兜底规则保持一致，避免多连接时每次都要手选。
@@ -327,6 +379,49 @@ export function AgentPanel() {
       locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
     });
   };
+
+  const emptyActions = useMemo(
+    () => buildAgentEmptyActions({
+      workspace: emptyWorkspace,
+      copy: {
+        canvasCreatePrompt: t("agent.panel.emptyActions.canvasCreate.prompt"),
+        canvasRefreshPrompt: t("ai.quick.canvasRefreshAllPrompt"),
+        documentSummaryPrompt: t("agent.panel.emptyActions.documentSummary.prompt"),
+        canvasSummaryPrompt: t("agent.panel.emptyActions.canvasSummary.prompt"),
+        dataAuditPrompt: t("agent.panel.emptyActions.dataAudit.prompt"),
+        canvasAuditPrompt: t("agent.panel.emptyActions.canvasAudit.prompt"),
+        knowledgeMaintenancePrompt: t("agent.panel.emptyActions.knowledgeMaintenance.prompt"),
+      },
+    }),
+    [emptyWorkspace, t],
+  );
+
+  const knowledgeMeta = useMemo(() => {
+    if (emptyStateMaintenance.loading) return t("agent.panel.emptyActions.knowledgeMaintenance.loading");
+    return emptyStateMaintenance.metricsFailed
+      ? t("agent.panel.emptyActions.knowledgeMaintenance.timeUnavailable")
+      : emptyStateMaintenance.latestMaintenanceAt === null
+        ? t("agent.panel.emptyActions.knowledgeMaintenance.noRecentRun")
+        : t("agent.panel.emptyActions.knowledgeMaintenance.lastRun", {
+            time: formatMaintenanceRecency(
+              emptyStateMaintenance.latestMaintenanceAt,
+              Date.now(),
+              i18n.resolvedLanguage ?? "en",
+            ),
+          });
+  }, [emptyStateMaintenance, t]);
+
+  const runEmptyAction = useCallback((action: AgentEmptyAction) => {
+    if (busy) return;
+    void start({
+      message: action.message,
+      connectionName,
+      notePath: emptyWorkspace?.kind === "note" ? activeWorkspaceTab?.path ?? null : null,
+      locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
+      entryPoint: action.entryPoint,
+      canvasRefresh: action.canvasRefresh,
+    });
+  }, [activeWorkspaceTab?.path, busy, connectionName, emptyWorkspace?.kind, start]);
 
   const updatePromptDraft = useCallback(
     (editorState: EditorState, isEmpty: boolean) => {
@@ -465,9 +560,23 @@ export function AgentPanel() {
         <ConnectionPicker value={connectionName} onChange={setConnectionName} />
       </div>
 
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-2.5 overflow-auto px-3.5 py-2.5">
+      <div
+        ref={scrollRef}
+        className={cn(
+          "min-h-0 flex-1 space-y-2.5 overflow-auto px-3.5 py-2.5",
+          timeline.length === 0 && vaultPath && "flex items-center justify-center",
+        )}
+      >
         {timeline.length === 0 ? (
-          <div className="text-[12px] text-muted-foreground">{t("agent.panel.empty")}</div>
+          vaultPath ? (
+            <AgentPanelEmptyState
+              actions={emptyActions}
+              knowledgeMeta={knowledgeMeta}
+              onRun={runEmptyAction}
+            />
+          ) : (
+            <div className="text-[12px] text-muted-foreground">{t("agent.panel.empty")}</div>
+          )
         ) : (
           timelineItems.map((item) =>
             item.kind === "tools" ? (
@@ -557,6 +666,90 @@ export function AgentPanel() {
             </button>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function EmptyActionIcon({ id }: { id: AgentEmptyActionId }) {
+  switch (id) {
+    case "canvas-create":
+      return <BarChart3 className="h-3.5 w-3.5" />;
+    case "canvas-refresh":
+      return <RefreshCw className="h-3.5 w-3.5" />;
+    case "document-summary":
+    case "canvas-summary":
+      return <FileText className="h-3.5 w-3.5" />;
+    case "data-audit":
+    case "canvas-audit":
+      return <ClipboardCheck className="h-3.5 w-3.5" />;
+    case "knowledge-maintenance":
+      return <Brain className="h-3.5 w-3.5" />;
+  }
+}
+
+function AgentBlankIllustration() {
+  return (
+    <svg
+      viewBox="0 0 64 48"
+      className="h-12 w-16 text-muted-foreground/30"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      aria-hidden="true"
+    >
+      <rect x="13" y="8" width="34" height="32" rx="4" />
+      <path d="M20 17h20M20 23h14M20 29h17" strokeLinecap="round" />
+      <path d="m48 27 1.5 3.5L53 32l-3.5 1.5L48 37l-1.5-3.5L43 32l3.5-1.5L48 27Z" />
+    </svg>
+  );
+}
+
+function AgentPanelEmptyState({
+  actions,
+  knowledgeMeta,
+  onRun,
+}: {
+  actions: AgentEmptyAction[];
+  knowledgeMeta: string;
+  onRun: (action: AgentEmptyAction) => void;
+}) {
+  const t = useT();
+  const labels: Record<AgentEmptyActionId, string> = {
+    "canvas-create": t("agent.panel.emptyActions.canvasCreate.title"),
+    "canvas-refresh": t("agent.panel.emptyActions.canvasRefresh.title"),
+    "document-summary": t("agent.panel.emptyActions.documentSummary.title"),
+    "canvas-summary": t("agent.panel.emptyActions.canvasSummary.title"),
+    "data-audit": t("agent.panel.emptyActions.dataAudit.title"),
+    "canvas-audit": t("agent.panel.emptyActions.canvasAudit.title"),
+    "knowledge-maintenance": t("agent.panel.emptyActions.knowledgeMaintenance.title"),
+  };
+
+  return (
+    <div className="flex max-w-[280px] flex-col items-center py-6 text-center">
+      <AgentBlankIllustration />
+      <p className="mt-2 text-[12px] leading-5 text-muted-foreground">
+        {t("agent.panel.emptyActions.hint")}
+      </p>
+      <div className="mt-3 flex w-full flex-col items-start gap-2 text-left">
+        {actions.map((action) => {
+          return (
+            <button
+              key={action.id}
+              type="button"
+              onClick={() => onRun(action)}
+              className="inline-flex w-full items-center justify-start gap-1.5 text-left text-[12px] text-primary/80 transition-colors hover:text-primary"
+            >
+              <span className="flex-none opacity-80">
+                <EmptyActionIcon id={action.id} />
+              </span>
+              <span className="underline-offset-2 hover:underline">{labels[action.id]}</span>
+              {action.id === "knowledge-maintenance" ? (
+                <span className="text-[10px] text-muted-foreground/70">· {knowledgeMeta}</span>
+              ) : null}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

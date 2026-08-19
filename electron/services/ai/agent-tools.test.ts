@@ -82,6 +82,21 @@ try {
       "object",
       "function providers require run_query parameters to have a top-level object schema",
     );
+    const searchSkills = tools.find((tool) => tool.name === "search_skills");
+    const required = (searchSkills?.parameters as { required?: string[] } | undefined)?.required ?? [];
+    assert.equal(required.includes("query"), false, "search_skills query must remain optional for browsing");
+  }
+  {
+    const emptySkills = await dispatchTool("search_skills", "{}", baseCtx);
+    assert.equal(emptySkills.ok, true);
+    assert.deepEqual(JSON.parse(emptySkills.text), {
+      skills: [],
+      totalSkills: 0,
+      totalMatches: 0,
+      nextOffset: null,
+      truncated: false,
+      omittedStale: 0,
+    });
   }
   {
     const r = await dispatchTool(
@@ -205,8 +220,11 @@ try {
   {
     const received: unknown[] = [];
     const recorded: Array<{ queryLanguage?: string; sql: string }> = [];
+    const skillEvidence = { notePaths: new Set<string>(), tables: new Set<string>() };
     const ctx = {
       ...withConnection,
+      explicitSkillMaintenance: true,
+      skillEvidence,
       connection: { kind: "mongodb", config: {} },
       connector: {
         ...fakeConnector,
@@ -252,6 +270,7 @@ try {
     }]);
     assert.equal(recorded[0]?.queryLanguage, "mongodb");
     assert.match(recorded[0]?.sql ?? "", /\"collection\":\"books\"/);
+    assert.deepEqual([...skillEvidence.tables], ["catalog.books"]);
 
     const aggregate = await dispatchTool("run_query", JSON.stringify({
       language: "mongodb",
@@ -667,6 +686,20 @@ Inspect the live schema first.`;
       usageCtx,
     );
     assert.equal(searched.ok, true);
+    assert.deepEqual(JSON.parse(searched.text), {
+      skills: [{
+        name: "verified-gotcha",
+        description: "Verified reusable SQL gotcha.",
+        category: "sql-dialect",
+        tags: ["sql", "gotcha"],
+        freshness: "fresh",
+      }],
+      totalSkills: 1,
+      totalMatches: 1,
+      nextOffset: null,
+      truncated: false,
+      omittedStale: 0,
+    });
     const loaded = await dispatchTool(
       "load_skill",
       JSON.stringify({ name: "verified-gotcha" }),
@@ -677,6 +710,163 @@ Inspect the live schema first.`;
       { type: "candidate", source: "search", name: "verified-gotcha" },
       { type: "loaded", source: "load", name: "verified-gotcha" },
     ]);
+    const verifiedSkill = maintenanceCtx.skills[0]!;
+    const browseUsage: typeof skillUsage = [];
+    const browseCtx = {
+      ...usageCtx,
+      skills: ["zeta-rule", "alpha-rule", "middle-rule"].map((name) => ({
+        ...verifiedSkill,
+        metadata: { ...verifiedSkill.metadata, name, description: `${name} description` },
+      })),
+      onSkillUsage: (record: typeof browseUsage[number]) => browseUsage.push(record),
+    };
+    const firstPage = await dispatchTool(
+      "search_skills",
+      JSON.stringify({ limit: 2 }),
+      browseCtx,
+    );
+    assert.equal(firstPage.ok, true);
+    assert.deepEqual(JSON.parse(firstPage.text), {
+      skills: [
+        { name: "alpha-rule", description: "alpha-rule description", category: "sql-dialect", tags: ["sql", "gotcha"], freshness: "fresh" },
+        { name: "middle-rule", description: "middle-rule description", category: "sql-dialect", tags: ["sql", "gotcha"], freshness: "fresh" },
+      ],
+      totalSkills: 3,
+      totalMatches: 3,
+      nextOffset: 2,
+      truncated: true,
+      omittedStale: 0,
+    });
+    const lastPage = await dispatchTool(
+      "search_skills",
+      JSON.stringify({ offset: 2, limit: 2 }),
+      browseCtx,
+    );
+    assert.deepEqual(JSON.parse(lastPage.text), {
+      skills: [
+        { name: "zeta-rule", description: "zeta-rule description", category: "sql-dialect", tags: ["sql", "gotcha"], freshness: "fresh" },
+      ],
+      totalSkills: 3,
+      totalMatches: 3,
+      nextOffset: null,
+      truncated: false,
+      omittedStale: 0,
+    });
+    assert.deepEqual(browseUsage, [], "browsing metadata must not record every row as a candidate");
+
+    const routineStaleCtx = {
+      ...usageCtx,
+      getSkillFreshness: async () => "stale" as const,
+    };
+    const hiddenStale = await dispatchTool(
+      "search_skills",
+      JSON.stringify({ query: "verified gotcha" }),
+      routineStaleCtx,
+    );
+    assert.deepEqual(JSON.parse(hiddenStale.text), {
+      skills: [],
+      totalSkills: 1,
+      totalMatches: 1,
+      nextOffset: null,
+      truncated: false,
+      omittedStale: 1,
+    });
+    const rejectedStaleLoad = await dispatchTool(
+      "load_skill",
+      JSON.stringify({ name: "verified-gotcha" }),
+      routineStaleCtx,
+    );
+    assert.equal(rejectedStaleLoad.ok, false);
+    assert.match(rejectedStaleLoad.text, /stale_skill_unavailable/);
+
+    const maintenanceStaleCtx = {
+      ...routineStaleCtx,
+      explicitSkillMaintenance: true,
+    };
+    const visibleStale = await dispatchTool(
+      "search_skills",
+      JSON.stringify({ limit: 20, offset: 0 }),
+      maintenanceStaleCtx,
+    );
+    const visibleStaleValue = JSON.parse(visibleStale.text) as {
+      skills: Array<{ name: string; freshness: string }>;
+      omittedStale: number;
+    };
+    assert.deepEqual(visibleStaleValue.skills.map(({ name, freshness }) => ({ name, freshness })), [
+      { name: "verified-gotcha", freshness: "stale" },
+    ]);
+    assert.equal(visibleStaleValue.omittedStale, 0);
+    const inspectStale = await dispatchTool(
+      "load_skill",
+      JSON.stringify({ name: "verified-gotcha" }),
+      maintenanceStaleCtx,
+    );
+    assert.equal(inspectStale.ok, true);
+    assert.match(inspectStale.text, /"freshness": "stale"/);
+    assert.match(inspectStale.text, /"usableForFacts": false/);
+    assert.match(inspectStale.text, /inspection-only/);
+
+    const inspectUntracked = await dispatchTool(
+      "load_skill",
+      JSON.stringify({ name: "verified-gotcha" }),
+      { ...usageCtx, getSkillFreshness: async () => "untracked" as const },
+    );
+    assert.equal(inspectUntracked.ok, true);
+    assert.match(inspectUntracked.text, /"freshness": "untracked"/);
+    assert.match(inspectUntracked.text, /no source hashes/);
+
+    const skillEvidence = { notePaths: new Set<string>(), tables: new Set<string>(["threed.verified"]) };
+    const explicitCtx = {
+      ...usageCtx,
+      explicitSkillMaintenance: true,
+      skillEvidence,
+    };
+    const evidenceRead = await dispatchTool("read_note", JSON.stringify({ path: "note.md" }), explicitCtx);
+    assert.equal(evidenceRead.ok, true);
+    assert.deepEqual([...skillEvidence.notePaths], ["note.md"]);
+    const provenanceName = "explicit-provenance";
+    const provenanceSave = await dispatchTool(
+      "save_skill",
+      JSON.stringify({
+        name: provenanceName,
+        content: content.replaceAll("verified-gotcha", provenanceName),
+        reason: "Bind evidence read during explicit maintenance.",
+        sourcePaths: ["note.md"],
+        sourceTables: ["threed.verified"],
+      }),
+      explicitCtx,
+    );
+    assert.equal(provenanceSave.ok, true, provenanceSave.text);
+    const provenanceFile = await readFile(join(root, ".stela", "skills", provenanceName, "SKILL.md"), "utf-8");
+    assert.match(provenanceFile, /sources: \[\{"path":"note\.md","sha256":"[a-f0-9]{64}"\}\]/);
+    assert.match(provenanceFile, /source_tables: \["threed\.verified"\]/);
+    const fakeSource = await dispatchTool(
+      "save_skill",
+      JSON.stringify({
+        name: "fake-source",
+        content: content.replaceAll("verified-gotcha", "fake-source"),
+        reason: "Must reject invented provenance.",
+        sourcePaths: ["not-read.md"],
+      }),
+      explicitCtx,
+    );
+    assert.equal(fakeSource.ok, false);
+    assert.match(fakeSource.text, /was not read/);
+
+    const largeBrowse = await dispatchTool(
+      "search_skills",
+      JSON.stringify({ limit: 999 }),
+      {
+        ...browseCtx,
+        skills: Array.from({ length: 60 }, (_, index) => ({
+          ...verifiedSkill,
+          metadata: { ...verifiedSkill.metadata, name: `skill-${String(index).padStart(2, "0")}` },
+        })),
+      },
+    );
+    const largeBrowseValue = JSON.parse(largeBrowse.text) as { skills: unknown[]; nextOffset: number | null };
+    assert.equal(largeBrowseValue.skills.length, 50);
+    assert.equal(largeBrowseValue.nextOffset, 50);
     const overwrite = await dispatchTool(
       "save_skill",
       JSON.stringify({ name: "verified-gotcha", content, reason: "Must not overwrite automatically." }),

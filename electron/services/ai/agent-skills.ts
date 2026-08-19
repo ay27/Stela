@@ -299,6 +299,22 @@ export function rankAgentSkillsForRequest(
   return rankAgentSkills(skills, automaticSkillQuery(request), limit);
 }
 
+export async function selectPromptAgentSkills(
+  skills: LoadedAgentSkill[],
+  request: AgentRunRequest,
+  limit: number,
+  isFresh: (skill: LoadedAgentSkill) => Promise<boolean>,
+): Promise<LoadedAgentSkill[]> {
+  if (request.entryPoint === "knowledge-maintenance") return [];
+  const selected: LoadedAgentSkill[] = [];
+  for (const candidate of rankAgentSkillsForRequest(skills, request, skills.length)) {
+    if (!(await isFresh(candidate))) continue;
+    selected.push(candidate);
+    if (selected.length >= limit) break;
+  }
+  return selected;
+}
+
 function assertSkillName(name: string): string {
   const normalized = name.trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(normalized)) {

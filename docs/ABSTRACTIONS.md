@@ -813,8 +813,9 @@ An Agent Skill is an internal, Vault-maintained pi-compatible `SKILL.md` below
 non-empty `description`, a `category` from `sql-dialect`, `metric-definition`,
 `business-glossary`, `data-lineage`, or `analysis-runbook`, and a non-empty inline
 `tags` list; `name` defaults to the parent directory name. Loading applies the
-same validation as writes and local lexical ranking selects at most eight
-positive-match metadata records for the current turn's bounded context envelope.
+same validation as writes. Routine lexical ranking selects at most eight fresh
+positive matches for the bounded context envelope; `knowledge-maintenance` turns
+receive no automatic Skill candidates.
 
 Its body is a bounded reusable knowledge unit governed by a category template:
 dialect uses Scope/Rule/Valid Pattern/Verify, metrics use
@@ -827,14 +828,23 @@ at most 160 characters; its body has at most 80 lines and two code examples of a
 most 20 lines each. Analysis narration, result rows, and one-off SQL belong to run
 history or Vault notes instead.
 
-The model calls `search_skills(query)` for further metadata and
-`load_skill(name)` to add a matching Markdown body to the current tool loop.
+The model calls `search_skills(query)` for ranked metadata or omits `query` to
+browse active metadata in stable name-ordered pages. Search pages default to eight
+and cap at 20; browse pages default to 20 and cap at 50. Both return `nextOffset`
+and a freshness state. Routine calls omit stale page rows; explicit knowledge
+maintenance includes them for repair. Browsing does not mark every returned item
+as a usage candidate.
 Automatically maintained files may add single-line flow-style `sources` metadata
 with at most three `{path, sha256}` records and `source_tables` with at most eight
 qualified table anchors. Paths are Vault-relative and server-injected only from
-notes actually retrieved for the maintenance job. Before loading, Stela compares
-source hashes and the current newest SQL-usage note set; stale knowledge must be
-refreshed successfully or is withheld from the Agent.
+notes actually retrieved for the maintenance job. Explicit maintenance supplies
+per-Skill `sourcePaths` and `sourceTables`; runtime accepts only a subset of notes
+read and tables inspected in its current turn. `fresh` means tracked
+sources still match, `stale` means a tracked source changed, disappeared, or was
+superseded by the current SQL-usage note set, and `untracked` means no source hash
+exists. Routine `load_skill` refreshes or rejects stale content and warns on
+untracked content. Explicit maintenance may read stale or untracked bodies only as
+untrusted drafts and must verify their rules before saving.
 
 After a normal completion with successful tool evidence, an independent bounded
 maintenance job receives the complete current-task conversation, structured
@@ -854,6 +864,16 @@ confirmation, `agent.removeSkill(relativePath)` may move only that listed Skill
 directory to the system trash; it cannot read bodies or mutate other Vault paths.
 Skill bodies have no renderer edit or slash-command contract; Settings exposes
 only the automatic-maintenance policy toggle.
+
+An empty Agent conversation renders centered, low-emphasis executable text actions
+instead of prompt examples. Note and Canvas actions bind the active artifact as a
+message resource and call the existing Agent start path immediately. The explicit
+`knowledge-maintenance` entry point receives no bulk Skill metadata in its message;
+it starts by omitting `query` from `search_skills`, follows `nextOffset`, and uses
+targeted searches only after a broad inventory. It loads only selected candidate
+bodies, permits at most three evidence-backed Skill changes, and forbids note edits.
+No active document means only this Vault-level action is shown; a click reuses the
+current empty conversation ([ADR-0073](./adr/0073-three-state-skill-freshness.md)).
 
 ### Agent observability
 
@@ -921,6 +941,10 @@ so the dashboard can report generated-category counts and shares. A no-source
 run contains a structured response explaining why no verified Vault Markdown
 source matched; it exits before invoking the maintenance model
 ([ADR-0052](./adr/0052-signal-focused-agent-observability.md)).
+`AgentMetricsDashboard.latestKnowledgeMaintenanceAt` is the most recent retained
+manual `knowledge-maintenance` run or background maintenance attempt, excluding
+disabled and dropped jobs. It is `null` after Metrics are cleared or when the
+90-day local retention window contains no such run.
 
 Retrieval results ([ADR-0026](./adr/0026-ranked-lexical-retrieval-for-agent.md)):
 

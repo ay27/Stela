@@ -83,7 +83,7 @@ export interface AgentTurnPromptContext {
 }
 
 interface ActiveGuidance {
-  id: "canvas_refresh" | "canvas_context" | "runsql_rewrite" | "skills" | "mongodb";
+  id: "canvas_refresh" | "canvas_context" | "runsql_rewrite" | "knowledge_maintenance" | "skills" | "mongodb";
   instructions: string[];
 }
 
@@ -122,6 +122,18 @@ function buildActiveGuidance(
       instructions: [
         "Finish an accepted fix or rewrite by calling propose_edit with the exact attached targetId and complete replacement SQL without Markdown fences.",
         "Do not mix RunSQL target parameters with note-edit parameters.",
+      ],
+    });
+  }
+  if (request.entryPoint === "knowledge-maintenance") {
+    guidance.push({
+      id: "knowledge_maintenance",
+      instructions: [
+        "This click explicitly requests maintenance of reusable experience Skills. Start with search_skills({offset:0,limit:20}) and omit query (do not pass null) to browse an unbiased first page; use nextOffset for more pages and targeted queries only after the broad inventory.",
+        "Do not load every Skill body. Use Vault notes, live schema, and SQL usage as factual evidence, and stop once the highest-impact safe changes are identified.",
+        "For each save_skill call, pass only sourcePaths and sourceTables that directly support that Skill; the tool accepts only notes read and tables inspected in this turn.",
+        "Create, update, or archive at most three high-impact Skills. Archive only when duplication or supersession is supported, and never edit Vault notes in this run.",
+        "If no safe durable change is supported, make no Skill mutation and report that the knowledge is already maintained.",
       ],
     });
   }

@@ -115,6 +115,17 @@ const canvasRefreshRequest = {
   },
 };
 assert.deepEqual(parseInput(IPC.AI_AGENT_RUN, canvasRefreshRequest), canvasRefreshRequest);
+const knowledgeMaintenanceRequest = {
+  request: {
+    runId: "run_knowledge_maintenance",
+    entryPoint: "knowledge-maintenance" as const,
+    prompt: "Maintain experience knowledge",
+  },
+};
+assert.deepEqual(
+  parseInput(IPC.AI_AGENT_RUN, knowledgeMaintenanceRequest),
+  knowledgeMaintenanceRequest,
+);
 assert.throws(() => parseInput(IPC.AI_AGENT_RUN, {
   request: {
     runId: "run_canvas_refresh_invalid",

@@ -14,6 +14,7 @@ export interface SkillSourceNote {
 }
 
 export type SkillSourceQuery = (filter: SqlIndexFilter) => Promise<SqlIndexHit[]>;
+export type AgentSkillFreshness = "fresh" | "stale" | "untracked";
 
 export function tablesFromSkill(skill: LoadedAgentSkill): string[] {
   if (skill.metadata.sourceTables.length > 0) return skill.metadata.sourceTables;
@@ -62,25 +63,34 @@ export async function collectSkillSourceNotes(
     .slice(0, maxNotes);
 }
 
+export async function getSkillFreshness(
+  vaultPath: string,
+  skill: LoadedAgentSkill,
+  query: SkillSourceQuery,
+): Promise<AgentSkillFreshness> {
+  if (skill.metadata.sources.length === 0) return "untracked";
+  for (const source of skill.metadata.sources) {
+    try {
+      const raw = await fs.readFile(path.join(vaultPath, source.path), "utf-8");
+      if (skillSourceSha256(raw) !== source.sha256) return "stale";
+    } catch {
+      return "stale";
+    }
+  }
+  const tables = tablesFromSkill(skill);
+  if (tables.length === 0) return "fresh";
+  const current = await collectSkillSourceNotes(vaultPath, tables, query);
+  const recorded = new Set(skill.metadata.sources.map((source) => source.path));
+  const currentPaths = new Set(current.map((source) => source.path));
+  const sourceSetChanged = currentPaths.size !== recorded.size
+    || Array.from(currentPaths).some((sourcePath) => !recorded.has(sourcePath));
+  return sourceSetChanged ? "stale" : "fresh";
+}
+
 export async function isSkillStale(
   vaultPath: string,
   skill: LoadedAgentSkill,
   query: SkillSourceQuery,
 ): Promise<boolean> {
-  if (skill.metadata.sources.length === 0) return true;
-  for (const source of skill.metadata.sources) {
-    try {
-      const raw = await fs.readFile(path.join(vaultPath, source.path), "utf-8");
-      if (skillSourceSha256(raw) !== source.sha256) return true;
-    } catch {
-      return true;
-    }
-  }
-  const tables = tablesFromSkill(skill);
-  if (tables.length === 0) return false;
-  const current = await collectSkillSourceNotes(vaultPath, tables, query);
-  const recorded = new Set(skill.metadata.sources.map((source) => source.path));
-  const currentPaths = new Set(current.map((source) => source.path));
-  return currentPaths.size !== recorded.size
-    || Array.from(currentPaths).some((sourcePath) => !recorded.has(sourcePath));
+  return await getSkillFreshness(vaultPath, skill, query) === "stale";
 }

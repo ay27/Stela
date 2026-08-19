@@ -15,6 +15,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 
 import { AppError } from "@shared/errors";
 import { parseAnalysisCanvas, type AnalysisCanvas } from "@shared/analysis-canvas";
+import { extractSqlFacts } from "@shared/sql-facts";
 import {
   asMongoAggregationPipeline,
   containsForbiddenMongoOperator,
@@ -65,6 +66,7 @@ import {
   type AgentSkillMaintenanceRecord,
   type LoadedAgentSkill,
 } from "./agent-skills";
+import type { AgentSkillFreshness } from "./skill-source-context";
 
 /**
  * Connector registry 的最小依赖面。用注入而不是静态 `import registry.ts`——
@@ -239,6 +241,9 @@ export interface AgentToolContext {
   sqlIndex: AgentSqlIndexOps;
   skills: LoadedAgentSkill[];
   mode: "normal" | "maintenance" | "refresh";
+  explicitSkillMaintenance?: boolean;
+  skillEvidence?: { notePaths: Set<string>; tables: Set<string> };
+  getSkillFreshness?: (skill: LoadedAgentSkill) => Promise<AgentSkillFreshness>;
   ensureSkillFresh?: (skill: LoadedAgentSkill) => Promise<LoadedAgentSkill | null>;
   onSkillMaintenance?: (record: AgentSkillMaintenanceRecord) => void;
   onSkillUsage?: (record: {
@@ -556,7 +561,7 @@ export function createAgentTools(options: {
     {
       name: "load_skill",
       label: "Load Skill",
-      description: "Load the concise reusable guidance for one available Agent Skill by its exact name.",
+      description: "Load one Skill by exact name. Fresh content is usable guidance; untracked content carries a verification warning, and explicit knowledge maintenance may inspect stale content only to repair it.",
       parameters: Type.Object({ name: Type.String({ description: "Exact Skill name from search_skills or the available Skills list." }) }),
       executionMode: "parallel",
       execute: (toolCallId, params) => runTool("load_skill", toolCallId, params, ctx, requestProposal),
@@ -565,10 +570,11 @@ export function createAgentTools(options: {
       name: "search_skills",
       label: "Search Skills",
       description:
-        "Search reusable business, metric, lineage, or SQL-dialect knowledge after nearer evidence is insufficient. Returns metadata; load an exact name before relying on its content.",
+        "Browse or search reusable business, metric, lineage, or SQL-dialect metadata with freshness. Omit query to page by name; provide query for ranked matches. Routine calls omit stale rows; explicit knowledge maintenance includes them for repair.",
       parameters: Type.Object({
-        query: Type.String({ description: "Keywords describing the knowledge you need." }),
-        limit: Type.Optional(Type.Number({ description: "Max candidates to return. Defaults to 8." })),
+        query: Type.Optional(Type.String({ description: "Optional keywords. Omit to browse all active Skill metadata by name." })),
+        offset: Type.Optional(Type.Number({ description: "Zero-based metadata offset. Defaults to 0." })),
+        limit: Type.Optional(Type.Number({ description: "Page size. Search defaults to 8 (max 20); browse defaults to 20 (max 50)." })),
       }),
       executionMode: "parallel",
       execute: (toolCallId, params) => runTool("search_skills", toolCallId, params, ctx, requestProposal),
@@ -588,6 +594,14 @@ export function createAgentTools(options: {
           }),
         ),
         reason: Type.String({ description: "Required short factual reason for saving or archiving." }),
+        sourcePaths: Type.Optional(Type.Array(Type.String(), {
+          description: "For explicit knowledge maintenance, up to three supporting Vault note paths actually read in this turn.",
+          maxItems: 3,
+        })),
+        sourceTables: Type.Optional(Type.Array(Type.String(), {
+          description: "For explicit knowledge maintenance, up to eight supporting tables actually inspected in this turn.",
+          maxItems: 8,
+        })),
       }),
       executionMode: "sequential",
       execute: (toolCallId, params) => runTool("save_skill", toolCallId, params, ctx, requestProposal),
@@ -703,6 +717,16 @@ function boundedInt(value: unknown, fallback: number, min: number, max: number):
 
 function resolveVaultTarget(vaultPath: string, target: string): string {
   return path.isAbsolute(target) ? target : path.join(vaultPath, target);
+}
+
+function recordSkillTableEvidence(ctx: AgentToolContext, tables: string[]): void {
+  if (!ctx.explicitSkillMaintenance || !ctx.skillEvidence) return;
+  for (const table of tables) {
+    const normalized = table.trim().toLowerCase();
+    if (/^[a-z0-9_]+(?:\.[a-z0-9_]+)?$/.test(normalized)) {
+      ctx.skillEvidence.tables.add(normalized);
+    }
+  }
 }
 
 function vaultRelativePath(vaultPath: string, target: string): string {
@@ -826,6 +850,10 @@ async function runGetTableSchema(args: { tables?: unknown; connectionName?: unkn
     },
   });
   if (targets.length === 0) return fail(`No schema found for: ${tables.join(", ")}`);
+  recordSkillTableEvidence(
+    ctx,
+    targets.map((target) => target.database ? `${target.database}.${target.table}` : target.table),
+  );
   return ok(
     targets.map((t) => ({
       database: t.database,
@@ -1044,6 +1072,15 @@ async function runQuery(
     rowCount: totalRowCount,
     queryLanguage: query.language,
   });
+  if (query.language === "sql") {
+    const tables = extractSqlFacts(query.query).flatMap((facts) => [
+      ...facts.readTables,
+      ...facts.writeTables,
+    ]).map((table) => table.db ? `${table.db}.${table.table}` : table.table);
+    recordSkillTableEvidence(ctx, tables);
+  } else {
+    recordSkillTableEvidence(ctx, [query.database ? `${query.database}.${query.collection}` : query.collection]);
+  }
   if (result.kind === "query" && query.language === "sql") {
     ctx.chartRuns?.set(runId, {
       sql: auditText,
@@ -1482,6 +1519,9 @@ async function runReadNote(args: { path?: unknown; offset?: unknown; maxChars?: 
     return fail("Automatic maintenance may read at most three notes returned by its SQL-usage search.");
   }
   const content = await vaultFs.readFile(target);
+  if (ctx.explicitSkillMaintenance && ctx.skillEvidence) {
+    ctx.skillEvidence.notePaths.add(relativePath.split(path.sep).join("/"));
+  }
   const offset = boundedInt(args.offset, 0, 0, content.length);
   const fullRead = args.maxChars === 0 && ctx.mode !== "maintenance";
   const maxChars = fullRead
@@ -1503,11 +1543,13 @@ async function runLoadSkill(args: { name?: unknown }, ctx: AgentToolContext): Pr
   const name = typeof args.name === "string" ? args.name.trim() : "";
   let skill = ctx.skills.find((item) => item.metadata.name === name);
   if (!skill) return fail(`No installed Skill named '${name}'. Use only names in the available Skills list.`);
-  if (ctx.ensureSkillFresh) {
-    skill = await ctx.ensureSkillFresh(skill) ?? undefined;
+  let freshness = ctx.getSkillFreshness ? await ctx.getSkillFreshness(skill) : "fresh";
+  if (freshness === "stale" && !ctx.explicitSkillMaintenance) {
+    skill = ctx.ensureSkillFresh ? await ctx.ensureSkillFresh(skill) ?? undefined : undefined;
     if (!skill) {
       return fail(`stale_skill_unavailable: '${name}' could not be refreshed from current Vault documents. Use live schema and note retrieval instead.`);
     }
+    freshness = ctx.getSkillFreshness ? await ctx.getSkillFreshness(skill) : "fresh";
   }
   ctx.onSkillUsage?.({
     type: "loaded",
@@ -1519,34 +1561,75 @@ async function runLoadSkill(args: { name?: unknown }, ctx: AgentToolContext): Pr
   const truncated = content.length > MAX_AGENT_SKILL_CHARS;
   return ok({
     name: skill.metadata.name,
+    freshness,
+    usableForFacts: freshness === "fresh",
+    ...(freshness === "stale"
+      ? { warning: "Stale Skill body is inspection-only. Verify every retained rule against live evidence before saving." }
+      : freshness === "untracked"
+        ? { warning: "Untracked Skill has no source hashes. Treat it as guidance and verify material facts before use." }
+        : {}),
     content: truncated ? `${content.slice(0, MAX_AGENT_SKILL_CHARS)}\n\n[truncated: compact this Skill before updating it]` : content,
     truncated,
   }, MAX_AGENT_SKILL_CHARS + 100);
 }
 
-function runSearchSkills(args: { query?: unknown; limit?: unknown }, ctx: AgentToolContext): ToolOutcome {
+async function runSearchSkills(
+  args: { query?: unknown; offset?: unknown; limit?: unknown },
+  ctx: AgentToolContext,
+): Promise<ToolOutcome> {
   const query = typeof args.query === "string" ? args.query.trim() : "";
-  if (!query) return fail("query must be a non-empty string.");
-  const limit = boundedInt(args.limit, 8, 1, 20);
-  const skills = rankAgentSkills(ctx.skills, query, limit).map(({ metadata }) => ({
+  const browsing = query.length === 0;
+  const limit = boundedInt(args.limit, browsing ? 20 : 8, 1, browsing ? 50 : 20);
+  const ranked = browsing
+    ? [...ctx.skills].sort((a, b) => a.metadata.name.localeCompare(b.metadata.name))
+    : rankAgentSkills(ctx.skills, query, ctx.skills.length);
+  const offset = boundedInt(args.offset, 0, 0, ranked.length);
+  const page = ranked.slice(offset, offset + limit);
+  const checked = await Promise.all(page.map(async (skill) => ({
+    skill,
+    freshness: ctx.getSkillFreshness ? await ctx.getSkillFreshness(skill) : "fresh" as const,
+  })));
+  const visible = ctx.explicitSkillMaintenance
+    ? checked
+    : checked.filter((item) => item.freshness !== "stale");
+  const skills = visible.map(({ skill: { metadata }, freshness }) => ({
     name: metadata.name,
     description: metadata.description,
     category: metadata.category,
     tags: metadata.tags,
+    freshness,
   }));
-  for (const skill of skills) {
-    ctx.onSkillUsage?.({
-      type: "candidate",
-      source: "search",
-      name: skill.name,
-      category: skill.category,
-    });
+  if (!browsing) {
+    for (const skill of skills) {
+      ctx.onSkillUsage?.({
+        type: "candidate",
+        source: "search",
+        name: skill.name,
+        category: skill.category,
+      });
+    }
   }
-  return ok({ skills, totalSkills: ctx.skills.length, truncated: skills.length < ctx.skills.length });
+  const consumed = offset + page.length;
+  const nextOffset = consumed < ranked.length ? consumed : null;
+  return ok({
+    skills,
+    totalSkills: ctx.skills.length,
+    totalMatches: ranked.length,
+    nextOffset,
+    truncated: nextOffset !== null,
+    omittedStale: checked.length - visible.length,
+  });
 }
 
 async function runSaveSkill(
-  args: { action?: unknown; name?: unknown; content?: unknown; reason?: unknown },
+  args: {
+    action?: unknown;
+    name?: unknown;
+    content?: unknown;
+    reason?: unknown;
+    sourcePaths?: unknown;
+    sourceTables?: unknown;
+  },
   ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
   const action = args.action ?? "save";
@@ -1557,6 +1640,20 @@ async function runSaveSkill(
   if (ctx.mode === "refresh" && ctx.maintenanceRefreshName !== name) {
     return fail(`Refresh may update only '${ctx.maintenanceRefreshName ?? "the selected Skill"}'.`);
   }
+  const requestedSourcePaths = stringList(args.sourcePaths).slice(0, 3);
+  const requestedSourceTables = stringList(args.sourceTables).map((table) => table.toLowerCase()).slice(0, 8);
+  if (ctx.explicitSkillMaintenance) {
+    const unknownPath = requestedSourcePaths.find((sourcePath) => !ctx.skillEvidence?.notePaths.has(sourcePath));
+    if (unknownPath) {
+      return fail(`sourcePaths may contain only Vault notes read in this maintenance turn: '${unknownPath}' was not read.`);
+    }
+    const unknownTable = requestedSourceTables.find((table) => !ctx.skillEvidence?.tables.has(table));
+    if (unknownTable) {
+      return fail(`sourceTables may contain only tables inspected in this maintenance turn: '${unknownTable}' was not inspected.`);
+    }
+  } else if (requestedSourcePaths.length > 0 || requestedSourceTables.length > 0) {
+    return fail("sourcePaths and sourceTables are available only during explicit knowledge maintenance.");
+  }
   const record =
     action === "save"
       ? typeof args.content === "string"
@@ -1565,8 +1662,12 @@ async function runSaveSkill(
           dialect: ctx.mode === "maintenance" || ctx.mode === "refresh" ? ctx.maintenanceDialect : null,
           automatic: ctx.mode === "maintenance",
           templateDriven: ctx.mode === "maintenance" || ctx.mode === "refresh",
-          sourcePaths: ctx.maintenanceSourcePaths,
-          sourceTables: ctx.maintenanceTables,
+          sourcePaths: ctx.explicitSkillMaintenance
+            ? requestedSourcePaths
+            : ctx.maintenanceSourcePaths,
+          sourceTables: ctx.explicitSkillMaintenance
+            ? requestedSourceTables
+            : ctx.maintenanceTables,
         })
         : null
       : action === "archive"
@@ -1811,7 +1912,7 @@ export async function dispatchTool(
       case "load_skill":
         return await runLoadSkill(args, ctx);
       case "search_skills":
-        return runSearchSkills(args, ctx);
+        return await runSearchSkills(args, ctx);
       case "save_skill":
         return await runSaveSkill(args, ctx);
       case "propose_edit":

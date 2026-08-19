@@ -381,6 +381,17 @@ function localDay(timestamp: number): string {
 export function getDashboard(range: AgentMetricRange): AgentMetricsDashboard {
   cleanupIfDue();
   const db = ensureOpen();
+  const latestKnowledgeRow = db.prepare(`
+    SELECT MAX(started_at) AS started_at
+    FROM metric_runs
+    WHERE
+      (surface = 'agent' AND operation = 'knowledge-maintenance' AND status <> 'running')
+      OR (
+        surface = 'skill_maintenance'
+        AND status <> 'running'
+        AND COALESCE(outcome, '') NOT IN ('disabled', 'dropped')
+      )
+  `).get() as { started_at: number | null };
   const rows = db.prepare("SELECT * FROM metric_runs WHERE started_at >= ? ORDER BY started_at DESC")
     .all(rangeStart(range)) as RunRow[];
   const rootRuns = rows.filter((row) => row.parent_run_id === null);
@@ -476,6 +487,7 @@ export function getDashboard(range: AgentMetricRange): AgentMetricsDashboard {
   return {
     range,
     generatedAt: Date.now(),
+    latestKnowledgeMaintenanceAt: latestKnowledgeRow.started_at,
     overview: breakdown("all", rootRuns),
     usage: {
       inputTokens,

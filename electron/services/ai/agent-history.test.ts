@@ -116,6 +116,20 @@ try {
     { type: "final", runId: "run_1", content: "Revenue is 42." },
   ]);
 
+  const maintenanceRequest: AgentRunRequest = {
+    runId: "run_2",
+    sessionId: "session_1",
+    entryPoint: "knowledge-maintenance",
+    prompt: "Maintain experience knowledge",
+  };
+  await appendAgentHistoryStarted(storage, maintenanceRequest);
+  await appendAgentHistoryFinished(storage, maintenanceRequest.runId);
+  const historyWithMaintenance = await loadAgentHistory(
+    vaultPath,
+    { sessionId: "session_1", deviceSlug: "laptop" },
+  );
+  assert.equal(historyWithMaintenance.runs[1]?.request.entryPoint, "knowledge-maintenance");
+
   const outside = await mkdtemp(path.join(os.tmpdir(), "stela-agent-history-outside-"));
   try {
     await symlink(

@@ -432,6 +432,7 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
             "runsql-rewrite",
             "runsql-ask",
             "schema-explain",
+            "knowledge-maintenance",
             "canvas-refresh",
           ]).optional(),
           canvasRefresh: z.object({

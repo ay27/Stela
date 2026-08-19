@@ -56,7 +56,7 @@ import {
 import {
   AGENT_SKILL_LIMITS_PROMPT,
   loadAgentSkills,
-  rankAgentSkillsForRequest,
+  selectPromptAgentSkills,
   type AgentSkillMaintenanceRecord,
   type LoadedAgentSkill,
 } from "./agent-skills";
@@ -91,8 +91,9 @@ import {
 } from "./agent-history";
 import {
   collectSkillSourceNotes,
-  isSkillStale,
+  getSkillFreshness,
   tablesFromSkill,
+  type AgentSkillFreshness,
   type SkillSourceNote,
 } from "./skill-source-context";
 import {
@@ -711,7 +712,22 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       ? available.dialects[request.connectionName] ?? null
       : null;
     const skills = await loadAgentSkills(vaultPath);
-    const promptSkills = rankAgentSkillsForRequest(skills.loaded, request, SKILL_PROMPT_LIMIT);
+    const explicitSkillMaintenance = request.entryPoint === "knowledge-maintenance";
+    const skillEvidence = { notePaths: new Set<string>(), tables: new Set<string>() };
+    const freshnessCache = new WeakMap<LoadedAgentSkill, Promise<AgentSkillFreshness>>();
+    const resolveSkillFreshness = (skill: LoadedAgentSkill): Promise<AgentSkillFreshness> => {
+      const cached = freshnessCache.get(skill);
+      if (cached) return cached;
+      const pending = getSkillFreshness(vaultPath, skill, sqlIndex.query);
+      freshnessCache.set(skill, pending);
+      return pending;
+    };
+    const promptSkills = await selectPromptAgentSkills(
+      skills.loaded,
+      request,
+      SKILL_PROMPT_LIMIT,
+      async (skill) => await resolveSkillFreshness(skill) === "fresh",
+    );
     const { models, model, reasoning } = createTransportForProfile(settings.ai, apiKey, profile.id);
     const contextWindow = model.contextWindow;
     const systemPrompt = buildSystemPrompt();
@@ -796,8 +812,11 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           sqlIndex: { query: sqlIndex.query },
           skills: skills.loaded,
           mode: "normal",
+          explicitSkillMaintenance,
+          skillEvidence,
+          getSkillFreshness: resolveSkillFreshness,
           ensureSkillFresh: async (skill) => {
-            if (!(await isSkillStale(vaultPath, skill, sqlIndex.query))) return skill;
+            if (await resolveSkillFreshness(skill) !== "stale") return skill;
             if (!settings.ai.automaticSkillMaintenanceEnabled) return null;
             if (skill.metadata.category === "analysis-runbook" && skill.metadata.sources.length === 0) {
               return null;
