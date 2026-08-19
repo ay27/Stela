@@ -582,13 +582,30 @@ function renderExplorer() {
 
 function renderToolStats() {
   const target = document.getElementById("tool-stats");
-  target.replaceChildren(...state.data.toolStats.map((item) => {
+  const current = new Map((state.data.toolStats ?? []).map((item) => [item.tool, item]));
+  const previous = new Map((state.comparisonData?.toolStats ?? []).map((item) => [item.tool, item]));
+  const rows = [...new Set([...current.keys(), ...previous.keys()])]
+    .map((tool) => ({
+      tool,
+      current: current.get(tool) ?? { tool, calls: 0, passCalls: 0, failCalls: 0 },
+      previous: previous.get(tool) ?? null,
+    }))
+    .sort((left, right) => right.current.calls - left.current.calls || left.tool.localeCompare(right.tool));
+  const currentCases = Math.max(state.data.totals.cases, 1);
+  const previousCases = Math.max(state.comparisonData?.totals.cases ?? 0, 1);
+  target.replaceChildren(...rows.map((row) => {
+    const item = row.current;
     const card = element("article", "stela-tool-card");
     const counts = element("div", "stela-tool-counts");
+    const currentRate = item.calls / currentCases;
+    const rateNote = row.previous
+      ? `${currentRate.toFixed(2)} / case · 对照 ${(row.previous.calls / previousCases).toFixed(2)} · ${signed(currentRate - row.previous.calls / previousCases, 2)}`
+      : `${currentRate.toFixed(2)} / case`;
     counts.append(
       element("span", "stela-status-pass", `${item.passCalls} pass`),
       element("span", "stela-status-fail", `${item.failCalls} fail`),
       element("span", "stela-tool-total", formatNumber(item.calls)),
+      element("span", "stela-tool-rate", rateNote),
     );
     card.append(element("div", "stela-tool-name", item.tool), counts);
     return card;

@@ -110,8 +110,10 @@ python3 -m http.server 8765 --directory /path/to/dab-results/analysis
 History mode discovers completed child directories, writes a small
 `history.json` index, and stores each run's truncated analysis separately below
 `analysis/runs/`. The browser loads only the selected current and comparison
-runs. Re-run the same command after copying in a new result directory; existing
-history remains available by directory identity and completion timestamp.
+runs. Tool cards show calls per case and the delta from the selected comparison,
+so prompt changes can be checked for unnecessary planning or retrieval calls.
+Re-run the same command after copying in a new result directory; existing history
+remains available by directory identity and completion timestamp.
 
 One internal run per query reports a **valid rate**, not leaderboard Pass@1.
 For a leaderboard-shaped result, run `--all --runs 5`; `submission.json` uses

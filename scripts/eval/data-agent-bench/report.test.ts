@@ -136,6 +136,9 @@ try {
     const stat = await fs.stat(path.join(historyOutput, name));
     assert.ok(stat.size > 0, `${name} must be generated in history mode`);
   }
+  const historyApp = await fs.readFile(path.join(historyOutput, "app.js"), "utf-8");
+  assert.match(historyApp, /comparisonData\?\.toolStats/);
+  assert.match(historyApp, /\/ case · 对照/);
   for (const run of history.runs) {
     const stat = await fs.stat(path.join(historyOutput, run.dataFile));
     assert.ok(stat.size > 0, `${run.dataFile} must be generated`);

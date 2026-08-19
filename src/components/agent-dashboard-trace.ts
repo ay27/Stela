@@ -53,6 +53,10 @@ export interface AgentTraceItem {
   thinkingLevel: string | null;
   requestedThinkingLevel?: string | null;
   usage: AgentTraceModelUsage | null;
+  contextUsedTokens?: number | null;
+  modelOutputText?: string;
+  modelThinking?: string[];
+  requestedTools?: string[];
   effects: AgentTraceEffect[];
 }
 
@@ -93,11 +97,24 @@ function number(value: unknown): number | null {
 
 function assistantText(payload: unknown): string {
   const message = record(payload);
-  if (!message || !Array.isArray(message.content)) return "";
+  if (!message) return "";
+  if (typeof message.content === "string") return message.content.trim();
+  if (!Array.isArray(message.content)) return "";
   return message.content.flatMap((item) => {
     const content = record(item);
     return content?.type === "text" && typeof content.text === "string" ? [content.text] : [];
   }).join("\n").trim();
+}
+
+function assistantThinking(payload: unknown): string[] {
+  const message = record(payload);
+  if (!message || !Array.isArray(message.content)) return [];
+  return message.content.flatMap((item) => {
+    const content = record(item);
+    return content?.type === "thinking" && typeof content.thinking === "string"
+      ? [content.thinking]
+      : [];
+  });
 }
 
 function assistantToolNames(payload: unknown): string[] {
@@ -231,6 +248,7 @@ export function buildAgentTurnTrace(turn: AgentMetricSessionTurn): AgentTurnTrac
   const providers = events.filter((event) => event.type === "provider_payload");
   const firstTokens = events.filter((event) => event.type === "model_first_token");
   const assistants = events.filter((event) => event.type === "assistant_message");
+  const contextUsages = events.filter((event) => event.type === "context_usage");
   const legacyContextWindow = fallbackContextWindow(events);
 
   assistants.forEach((event, index) => {
@@ -241,6 +259,12 @@ export function buildAgentTurnTrace(turn: AgentMetricSessionTurn): AgentTurnTrac
     const contextRecord = record(modelContext?.payload);
     const text = assistantText(event.payload);
     const toolNames = assistantToolNames(event.payload);
+    const thinking = assistantThinking(event.payload);
+    const usage = parseModelUsage(event.payload);
+    const nextContext = eventForStep(contexts, step + 1, index + 1);
+    const stepContextUsages = contextUsages.filter((candidate) =>
+      candidate.occurredAt >= (modelContext?.occurredAt ?? event.occurredAt) &&
+      (nextContext === undefined || candidate.occurredAt < nextContext.occurredAt));
     main.push({
       id: `turn:${turn.index}:model:${event.id}`,
       turnIndex: turn.index,
@@ -259,6 +283,7 @@ export function buildAgentTurnTrace(turn: AgentMetricSessionTurn): AgentTurnTrac
         context: modelContext?.payload ?? null,
         providerPayload: provider?.payload ?? null,
         assistantMessage: event.payload,
+        contextUsage: stepContextUsages.map((candidate) => candidate.payload),
       },
       rawType: "assistant_message",
       contextWindow: number(contextRecord?.contextWindow) ?? legacyContextWindow,
@@ -274,7 +299,11 @@ export function buildAgentTurnTrace(turn: AgentMetricSessionTurn): AgentTurnTrac
           : typeof contextRecord?.thinkingLevel === "string"
             ? contextRecord.thinkingLevel
             : null,
-      usage: parseModelUsage(event.payload),
+      usage,
+      contextUsedTokens: usage?.promptTokens ?? null,
+      modelOutputText: text,
+      modelThinking: thinking,
+      requestedTools: toolNames,
       effects: [],
     });
   });

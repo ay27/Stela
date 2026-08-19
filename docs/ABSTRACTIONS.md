@@ -778,9 +778,10 @@ inside isolated Node workers, without changing the desktop runtime or exposing
 a second model tool. ([ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md),
 [ADR-0068](./adr/0068-headless-pyodide-agent-evaluation.md))
 
-`search_sql_usage({ table })` finds a table in either read or write position.
-`readTable` and `writeTable` remain available when the caller needs only one
-direction.
+`search_sql_usage({ table })` finds a table in either read or write position;
+the Agent uses it when established joins, filters, write direction, or business
+conventions matter, not merely because a table name is known. `readTable` and
+`writeTable` remain available when the caller needs only one direction.
 
 Safety ([ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md)):
 
@@ -790,12 +791,13 @@ Safety ([ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md)):
 - Read tools and `run_query` may execute in parallel. `execute_python`, plan mutations, chart creation, Canvas creation/update, and `propose_edit` are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md)). NodeExecutionEnv is harness cwd only (not exposed as model tools)
 - Compaction uses `ai.contextWindow` + one overflow recovery ([ADR-0018](./adr/0018-pi-ai-agent-harness.md))
 - Execution plans are bounded and linear. Their active store is main-process runtime state; every versioned `AgentPlanSnapshot` is appended immutably to the pi session, and only the highest version for the current run is active ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md), [ADR-0046](./adr/0046-device-sharded-agent-session-history.md))
-- The Agent system prompt and tool list are request-invariant. Dynamic context, including explicit availability states for Vault notes, Skills, SQL history, Canvas, and clarification, is bounded, redacted, and appended in the user turn immediately before the request; pi-ai uses short cache retention and session affinity ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md))
+- The Agent system prompt and tool list are request-invariant. The compact stable prompt defines grounding, evidence order, planning threshold, mutation approval, rendering, and answer policy. Dynamic context, including explicit availability states and deterministic current-run guidance for Canvas, RunSQL rewrite, Skills, and MongoDB, is bounded, redacted, and appended in the user turn immediately before the request; pi-ai uses short cache retention and session affinity ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md))
+- Data analysis is driven by material uncertainty rather than a mandatory checklist. Locate runs only when the source is unknown, Ground only when semantic ambiguity affects correctness, Verify only when plausible interpretations would change the answer, and Challenge only when evidence contradicts the working conclusion. Every tool call must compute a requested result or resolve such an uncertainty; the Agent stops once the requested conclusion is supported. Physical semantics prefer current context, live schema/DDL, small samples, then SQL usage; business semantics prefer current definitions, SQL usage, Vault notes, Skills, then clarification. Routine locate-schema-query lookups do not create execution plans.
 - RunSQL fix/schema quick actions auto-submit in a new Agent tab; rewrite/question actions open editable drafts. `runsql_rewrite` proposals are bound to the original SQL snapshot and renderer target, then reuse the inline diff accept/discard UI ([ADR-0059](./adr/0059-agent-panel-quick-actions.md))
-- Note references are paths only; the agent should call `read_note` before relying on note contents
-- Selection / RunSQL attachments are bounded and included only on the user turn that added them
+- Note and Canvas references are paths only; the Agent reads them only when the task relies on their contents
+- Selection / RunSQL attachments are bounded current-turn evidence. Surrounding notes or live schema are retrieved only when missing context could materially change the answer
 - `ask_user` blocks on the same handshake with `kind: "question"`, resolving to the answer string; ≤3 questions per run, enforced in the tool ([ADR-0027](./adr/0027-agent-ask-user-clarification.md))
-- Final answers are concise: direct answer + key numbers in 1–3 sentences, one compact evidence line (table · column · SQL logic); assumptions / uncertainty sections only when an ambiguity was actually resolved or remains open ([ADR-0039](./adr/0039-concise-agent-final-answers.md))
+- Final answers are complexity-aware and concise: simple facts lead with the answer in 1–3 sentences, while analytical questions include only the findings needed in priority order. Query-backed answers end with one compact data-basis line (table · fields · calculation); assumptions or uncertainty appear only when material ([ADR-0039](./adr/0039-concise-agent-final-answers.md))
 
 ### Agent Skills
 
@@ -878,11 +880,20 @@ captured by the `before_provider_payload` hook. Neither event is a public
 IPC contract. Unknown metric events remain readable as diagnostics and never
 become execution nodes implicitly.
 
+Model detail separates visible output, current-call reasoning, compact model
+input, and bounded Raw data. Historical thinking and tool arguments stay
+collapsed in model input; tool request names may be summarized in model output,
+while full arguments and results remain on the causal tool node. Reasoning
+content is optional even when reasoning effort or reasoning-token usage is
+reported.
+
 Dashboard token usage exposes `promptTokens = inputTokens + cacheReadTokens +
 cacheWriteTokens` and `cacheHitRate = cacheReadTokens / promptTokens`. The rate
 uses provider-reported counters, excludes output tokens, and is `null` when no
 prompt usage was reported. Surface breakdowns expose the same derived rate, and
-individual traces retain their raw token counters.
+individual traces retain their raw token counters. Model context-window
+occupancy is `promptTokens / contextWindow`, not total tokens, so the current
+step's output and reasoning are not counted as input context.
 
 The renderer can only call `agentMetrics.getDashboard`, `listRuns`, `getTrace`,
 `getSessionTrace`, and `clear`. `getSessionTrace` accepts an `AgentHistoryRef`;

@@ -6,8 +6,9 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { loadSkills, type Skill } from "@earendil-works/pi-agent-core";
 
 import { AppError } from "@shared/errors";
+import { requestAgentMessage } from "@shared/agent-message";
 import { parseFrontmatterField, splitFrontmatter } from "@shared/frontmatter";
-import type { AgentSkillListItem } from "@shared/types";
+import type { AgentRunRequest, AgentSkillListItem } from "@shared/types";
 
 import * as vaultFs from "../vault-fs";
 import { notifyFileChanged } from "../vault-watcher";
@@ -230,6 +231,8 @@ function scoreSkill(skill: LoadedAgentSkill, terms: string[]): number {
     skill.metadata.description,
     skill.metadata.category ?? "",
     ...skill.metadata.tags,
+    ...skill.metadata.sourceTables,
+    ...skill.metadata.sources.map((source) => source.path),
   ].join(" ").toLowerCase();
   return terms.reduce((score, term) => score + (haystack.includes(term) ? 1 : 0), 0);
 }
@@ -242,6 +245,58 @@ export function rankAgentSkills(skills: LoadedAgentSkill[], query: string, limit
     .sort((a, b) => b.score - a.score || a.skill.metadata.name.localeCompare(b.skill.metadata.name))
     .slice(0, limit)
     .map(({ skill }) => skill);
+}
+
+const AUTO_SKILL_GENERIC_TERMS = new Set([
+  "and",
+  "as",
+  "block",
+  "by",
+  "from",
+  "group",
+  "join",
+  "limit",
+  "on",
+  "or",
+  "order",
+  "runsql",
+  "select",
+  "sql",
+  "where",
+]);
+
+function automaticSkillQuery(request: AgentRunRequest): string {
+  const message = requestAgentMessage(request);
+  const referenced = new Set(
+    message.segments.flatMap((segment) => segment.kind === "resource" ? [segment.resourceId] : []),
+  );
+  const parts = message.segments.flatMap((segment) => segment.kind === "text" ? [segment.text] : []);
+  for (const resource of message.resources) {
+    if (!referenced.has(resource.id)) continue;
+    switch (resource.kind) {
+      case "table":
+        parts.push(resource.table);
+        break;
+      case "note":
+      case "canvas":
+        parts.push(resource.path);
+        break;
+      case "runsql":
+      case "selection":
+        break;
+    }
+  }
+  return normalizeQuery(parts.join(" "))
+    .filter((term) => !AUTO_SKILL_GENERIC_TERMS.has(term))
+    .join(" ");
+}
+
+export function rankAgentSkillsForRequest(
+  skills: LoadedAgentSkill[],
+  request: AgentRunRequest,
+  limit: number,
+): LoadedAgentSkill[] {
+  return rankAgentSkills(skills, automaticSkillQuery(request), limit);
 }
 
 function assertSkillName(name: string): string {

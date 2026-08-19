@@ -307,8 +307,9 @@ button, input, select { font: inherit; }
 .stela-tool-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
 .stela-tool-card { padding: 12px; border: 1px solid var(--stela-line-soft); border-radius: 10px; background: white; }
 .stela-tool-name { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 650; }
-.stela-tool-counts { display: flex; gap: 10px; margin-top: 8px; color: var(--stela-muted); font-size: 11px; }
+.stela-tool-counts { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 8px; color: var(--stela-muted); font-size: 11px; }
 .stela-tool-total { margin-left: auto; color: var(--stela-text); font-weight: 700; }
+.stela-tool-rate { flex-basis: 100%; font-variant-numeric: tabular-nums; }
 
 .stela-error { margin: 40px auto; max-width: 720px; padding: 20px; border: 1px solid var(--stela-fail); border-radius: 12px; background: var(--stela-fail-soft); color: var(--stela-fail); white-space: pre-wrap; }
 

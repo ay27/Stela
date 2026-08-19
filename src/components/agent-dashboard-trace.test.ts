@@ -73,7 +73,7 @@ const session: AgentMetricSessionTrace = {
           { id: 2, runId: "agent:run-1", type: "model_context", occurredAt: 1_090, durationMs: null, ok: null, name: "step:1", payload: { contextWindow: 128_000, thinkingLevel: "low", requestedReasoningEffort: "high", effectiveReasoningEffort: "low", messages: [{ role: "user", content: "Count orders" }] }, truncated: false },
           { id: 3, runId: "agent:run-1", type: "provider_payload", occurredAt: 1_100, durationMs: null, ok: null, name: "step:1", payload: { messages: [{ role: "user", content: "Count orders" }] }, truncated: false },
           { id: 4, runId: "agent:run-1", type: "model_first_token", occurredAt: 1_200, durationMs: 100, ok: null, name: "step:1", payload: { stepIndex: 1 }, truncated: false },
-          { id: 5, runId: "agent:run-1", type: "assistant_message", occurredAt: 1_400, durationMs: 300, ok: null, name: "step:1", payload: { role: "assistant", content: [{ type: "text", text: "I will query." }], usage: { input: 10, output: 4, cacheRead: 5, cacheWrite: 1, reasoning: 2, totalTokens: 20, cost: { input: 0.01, output: 0.02, cacheRead: 0.001, cacheWrite: 0.002, total: 0.033 } }, stopReason: "toolUse" }, truncated: false },
+          { id: 5, runId: "agent:run-1", type: "assistant_message", occurredAt: 1_400, durationMs: 300, ok: null, name: "step:1", payload: { role: "assistant", content: [{ type: "thinking", thinking: "I need the exact count." }, { type: "text", text: "I will query." }, { type: "toolCall", name: "run_sql", arguments: { sql: "select count(*) from orders" } }], usage: { input: 10, output: 4, cacheRead: 5, cacheWrite: 1, reasoning: 2, totalTokens: 20, cost: { input: 0.01, output: 0.02, cacheRead: 0.001, cacheWrite: 0.002, total: 0.033 } }, stopReason: "toolUse" }, truncated: false },
           { id: 6, runId: "agent:run-1", type: "plan_updated", occurredAt: 1_450, durationMs: null, ok: null, name: null, payload: { type: "plan_updated", plan: { steps: [] } }, truncated: false },
           { id: 7, runId: "agent:run-1", type: "context_usage", occurredAt: 1_460, durationMs: null, ok: null, name: null, payload: { usedTokens: 20, contextWindow: 128_000, estimated: false }, truncated: false },
           { id: 8, runId: "agent:run-1", type: "compaction", occurredAt: 1_800, durationMs: null, ok: null, name: null, payload: { phase: "started" }, truncated: false },
@@ -183,6 +183,11 @@ assert.equal(model?.requestedThinkingLevel, "high");
 assert.equal(model?.usage?.promptTokens, 16);
 assert.equal(model?.usage?.totalTokens, 20);
 assert.equal(model?.usage?.reasoningTokens, 2);
+assert.equal(model?.contextUsedTokens, 16);
+assert.equal(model?.modelOutputText, "I will query.");
+assert.deepEqual(model?.modelThinking, ["I need the exact count."]);
+assert.deepEqual(model?.requestedTools, ["run_sql"]);
+assert.deepEqual((model?.raw as { contextUsage: unknown[] }).contextUsage, [{ usedTokens: 20, contextWindow: 128_000, estimated: false }]);
 assert.deepEqual(model?.effects.map((effect) => effect.type), ["plan_updated"]);
 assert.equal(projection.main.find((item) => item.kind === "tool")?.label, "run_sql");
 assert.equal(projection.main.find((item) => item.kind === "review")?.label, "query_churn");

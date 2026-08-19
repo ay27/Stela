@@ -404,9 +404,13 @@ flowchart TB
    bind to same-run audited SQL and do not use a note-edit proposal. Flow cards
    use controlled graph semantics and Agent updates preserve user layout. Plan state is
    persisted into pi session context so compaction cannot discard the active step
-   or evidence. The system prompt and tool list stay invariant; locale, connection,
-   matched Skill metadata, the implicit current Workspace tab, and a versioned ordered
-   message are appended in a bounded, redacted user-turn envelope. The current note or
+   or evidence. The compact system prompt and tool list stay invariant. It defines
+   conditional evidence policy, source hierarchy, planning threshold, mutation boundary, and
+   output contract; locale, connection, matched Skill metadata, the implicit current
+   Workspace tab, deterministic current-run capability guidance, and a versioned ordered
+   message are appended in a bounded, redacted user-turn envelope. Capability guidance
+   is derived only from structured context (Canvas refresh/workspace, RunSQL rewrite
+   target, available Skills, and MongoDB support), never from keyword classification. The current note or
    Canvas is execution context and is not rendered as user-authored content. Text segments retain their position around typed table,
    note, Canvas, RunSQL, and selection references, while resource bodies are deduplicated.
    Plan versions are immutable appended session
@@ -519,7 +523,12 @@ trajectory. The trajectory contains only causal work: model calls, tool
 executions, user approvals, strategy reviews, and context compactions. Turn
 input stays in a compact header; model context-window/token gauges, timing,
 plans, Canvas updates, and raw metric events attach to the action that produced
-them. Post-answer Skill maintenance has a separate background section. Missing
+them. A model action defaults to its visible output, exposes only that action's
+reasoning in a dedicated tab, keeps prior context messages collapsed, and leaves
+the complete provider payload in Raw data. Tool arguments and results belong to
+their tool action instead of being duplicated in model output. Context-window
+occupancy uses provider-reported prompt tokens and therefore excludes the current
+step's output. Post-answer Skill maintenance has a separate background section. Missing
 or expired Metrics leave the conversation readable and show an unavailable
 trace. Refresh is explicit rather than polled. See
 [ADR-0065](./adr/0065-session-oriented-agent-observability.md) and
@@ -565,6 +574,7 @@ All retrieval is lexical and in-process — no embeddings, no FTS5 index ([ADR-0
 - `search_vault` calls `searchVaultNotes`, which scans every note, then sorts, then truncates. Results are note-level (`path`, `title`, `score`, `matchCount`, `matchedKeywords`, `matchedHeadings`, `bestSnippet`) and report `scannedNotes / totalMatchedNotes / returned / truncated`. Scoring: title or path 40, heading 12 (≤3 per keyword), body line 1 (≤10 per keyword), multiplied by distinct keywords matched. The line-level `searchVault` remains for the UI.
 - `search_tables` ranks the live connector catalog by table name plus column COMMENT, the latter via the connector's optional `describeTables` API (one batched call per lookup, see [ADR-0042](./adr/0042-connector-describe-tables-api.md)). CJK runs are expanded into bigrams so Chinese business terms match. Each candidate also carries `vaultUsage` (notes, blocks, last run date) as information for the model — usage never enters the score. The agent retrieves live DDL or columns with `get_table_schema` when it needs structure ([ADR-0041](./adr/0041-agent-live-schema-authority.md)).
 - `search_sql_usage` queries `sql-index` in-process for exact table→block facts. Its `table` input unions read and write uses; `readTable` / `writeTable` are directional filters. `INSERT ... SELECT` indexes both its target write and source reads. `sql-index.query()` sorts by `runDate` descending before truncating.
+- Automatic Skill candidates are ranked conservatively from user-authored text plus explicit table, note, or Canvas identifiers, including tracked source tables and paths. RunSQL and selection bodies are evidence rather than retrieval queries, so they do not trigger automatic Skill injection. Synthetic resource labels and generic SQL syntax terms are removed before ranking; an explicit `search_skills` query remains unchanged.
 - Agent `run_query` records SQL text or canonical structured-query JSON plus `queryLanguage` to `result-store` and `history-journal` under `blockId` `agent:<runId>`, so Agent executions remain auditable. Old history defaults to SQL.
 - Retrieval quality is measured by `npm run eval:retrieval` against mechanically labelled slices; labels never share a signal with the ranker. That eval calls the ranking functions directly, so it says nothing about whether the model picks the right tool or writes a usable query.
 - Ask discipline (`ask_user`) is measured by `npm run eval:agent-ask`, which drives the real `AgentHarness` with the real system prompt and tools. Tasks are generated in pairs from same-family table names in the vault: one version names the table, one leaves ≥3 used candidates open. Asking on the open version and not asking on the named one are both counted, so an agent that always asks cannot score well. Only `connector.execute`, `recordRun`, and `sqlIndex.query` are stubbed — answer correctness needs a live connection and is out of scope. `--self-check` verifies the whole rig without a model call.
@@ -575,9 +585,12 @@ All retrieval is lexical and in-process — no embeddings, no FTS5 index ([ADR-0
 The Agent system prompt and tool declarations are request-invariant. Per-turn
 locale, active connection/dialect/query languages, up to 50 named connection
 summaries, source-availability states, table and note references, Canvas path,
-matched Skill metadata, and attachments are bounded and passed through `redactForPrompt` in a
+matched Skill metadata, attachments, and deterministic `active_guidance` are
+bounded and passed through `redactForPrompt` in a
 `<stela_turn_context>` user-message envelope; the user's actual request is the
-last segment. Plan versions are appended as immutable run/version snapshots.
+last segment. `active_guidance` is app-generated and applies only to its current
+run; resource bodies and the user request remain untrusted data. Plan versions
+are appended as immutable run/version snapshots.
 Agent, inline completion, and SQL query parsing use pi-ai short cache retention;
 the Agent session id supplies session affinity ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md)).
 

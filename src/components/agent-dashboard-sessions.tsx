@@ -33,7 +33,7 @@ interface AgentDashboardSessionsProps {
 }
 
 type SessionView = "conversation" | "trace";
-type DetailTab = "input" | "output" | "raw";
+type DetailTab = "input" | "output" | "reasoning" | "raw";
 
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -243,30 +243,58 @@ function TraceView({ session, selectedId, onSelect }: { session: AgentMetricSess
   })}</div>;
 }
 
-function MessageContent({ value }: { value: unknown }) {
+function compactInputMessage(value: unknown): unknown {
   const message = record(value);
-  if (!message) return <DataDetails value={value} />;
-  const content = message.content;
-  if (typeof content === "string") return <div className="whitespace-pre-wrap text-[11px] leading-5">{content}</div>;
-  if (!Array.isArray(content)) return <DataDetails value={value} />;
-  return <div className="space-y-2">{content.map((block, index) => {
+  if (!message || !Array.isArray(message.content)) return value;
+  return {
+    ...message,
+    content: message.content.map((block) => {
+      const item = record(block);
+      if (!item) return block;
+      if (item.type === "thinking" && typeof item.thinking === "string") {
+        return { type: "thinking", hidden: true, characterCount: item.thinking.length };
+      }
+      if (item.type === "toolCall") {
+        return { type: "toolCall", name: typeof item.name === "string" ? item.name : null };
+      }
+      return block;
+    }),
+  };
+}
+
+function inputMessageSummary(value: unknown): string {
+  const message = record(value);
+  if (!message) return "message";
+  if (typeof message.content === "string") return message.content.replace(/\s+/g, " ").slice(0, 120);
+  if (!Array.isArray(message.content)) return "message";
+  const summaries = message.content.flatMap((block) => {
     const item = record(block);
-    if (!item) return <DataDetails key={index} value={block} />;
-    if (item.type === "text" && typeof item.text === "string") return <div key={index} className="rounded-md border border-border/60 bg-background p-3"><AssistantMessage content={item.text} /></div>;
-    if (item.type === "thinking" && typeof item.thinking === "string") return <details key={index} className="rounded-md border border-border/60 bg-background"><summary className="cursor-pointer px-3 py-2 text-[10px] font-medium text-muted-foreground">thinking</summary><pre className="whitespace-pre-wrap border-t border-border/60 p-3 text-[10px]">{item.thinking}</pre></details>;
-    if (item.type === "toolCall") return <div key={index} className="rounded-md border border-amber-500/20 bg-amber-500/5 p-3"><div className="mb-2 text-[10px] font-semibold text-amber-700 dark:text-amber-300">{typeof item.name === "string" ? item.name : "tool call"}</div><DataDetails value={item.arguments ?? item} /></div>;
-    if (item.type === "image") return <div key={index} className="rounded-md border border-border/60 bg-muted/20 p-3 text-[10px] text-muted-foreground">image · {typeof item.mimeType === "string" ? item.mimeType : "unknown"}</div>;
-    return <DataDetails key={index} value={block} />;
-  })}</div>;
+    if (!item) return [];
+    if (item.type === "text" && typeof item.text === "string") return [item.text.replace(/\s+/g, " ").slice(0, 120)];
+    if (item.type === "toolCall") return [typeof item.name === "string" ? `tool · ${item.name}` : "tool call"];
+    if (item.type === "toolResult") return [typeof item.toolName === "string" ? `result · ${item.toolName}` : "tool result"];
+    if (item.type === "image") return ["image"];
+    return [];
+  });
+  return summaries.join(" · ").slice(0, 160) || "context message";
 }
 
 function ModelInput({ value }: { value: unknown }) {
   const t = useT();
   if (!Array.isArray(value)) return value === null ? <div className="text-[11px] text-muted-foreground">{t("agentDashboard.noModelInput")}</div> : <DataDetails value={value} />;
-  return <div className="space-y-2">{value.map((message, index) => {
+  return <div className="space-y-2">
+    <div className="text-[10px] text-muted-foreground">{t("agentDashboard.modelMessages", { count: value.length })}</div>
+    {value.map((message, index) => {
     const role = record(message)?.role;
-    return <div key={index} className="rounded-md border border-border/60 bg-background/60 p-3"><div className="mb-2 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">{typeof role === "string" ? role : "message"}</div><MessageContent value={message} /></div>;
-  })}</div>;
+    return <details key={index} className="rounded-md border border-border/60 bg-background/60">
+      <summary className="flex cursor-pointer items-center gap-3 px-3 py-2 text-[10px]">
+        <span className="shrink-0 font-semibold uppercase tracking-wide text-muted-foreground">{typeof role === "string" ? role : "message"}</span>
+        <span className="min-w-0 flex-1 truncate text-foreground">{inputMessageSummary(message)}</span>
+      </summary>
+      <div className="border-t border-border/60 p-3"><DataDetails value={compactInputMessage(message)} /></div>
+    </details>;
+  })}
+  </div>;
 }
 
 function HeaderMetric({ label, value, title }: { label: string; value: string; title?: string }) {
@@ -276,9 +304,13 @@ function HeaderMetric({ label, value, title }: { label: string; value: string; t
 function TraceHeaderMetrics({ item }: { item: AgentTraceItem }) {
   const t = useT();
   const usage = item.usage;
-  const contextPercent = usage && item.contextWindow && item.contextWindow > 0
-    ? Math.round((usage.totalTokens / item.contextWindow) * 100)
+  const contextUsedTokens = item.contextUsedTokens ?? usage?.promptTokens ?? null;
+  const rawContextPercent = contextUsedTokens !== null && item.contextWindow && item.contextWindow > 0
+    ? (contextUsedTokens / item.contextWindow) * 100
     : null;
+  const contextPercent = rawContextPercent === null
+    ? null
+    : rawContextPercent < 10 ? rawContextPercent.toFixed(1) : Math.round(rawContextPercent).toString();
   const effectiveThinking = item.thinkingLevel === "off"
     ? t("agentDashboard.thinkingOff")
     : item.thinkingLevel ?? "—";
@@ -293,39 +325,62 @@ function TraceHeaderMetrics({ item }: { item: AgentTraceItem }) {
     {item.kind === "model" ? <HeaderMetric label={t("agentDashboard.firstToken")} value={formatDuration(item.firstTokenMs)} /> : null}
     {item.kind === "model" ? <HeaderMetric label={t("agentDashboard.thinkingMode")} value={thinking} /> : null}
     {usage ? <>
-      <HeaderMetric label={t("agentDashboard.contextUsed")} value={`${formatNumber(usage.totalTokens)}${item.contextWindow ? ` / ${formatNumber(item.contextWindow)}` : ""}${contextPercent === null ? "" : ` · ${contextPercent}%`}`} />
+      <HeaderMetric label={t("agentDashboard.contextUsed")} value={`${formatNumber(contextUsedTokens ?? usage.promptTokens)}${item.contextWindow ? ` / ${formatNumber(item.contextWindow)}` : ""}${contextPercent === null ? "" : ` · ${contextPercent}%`}`} title={t("agentDashboard.contextUsedHelp")} />
       <HeaderMetric label={t("agentDashboard.tokensIn")} value={formatNumber(usage.inputTokens)} />
-      <HeaderMetric label={t("agentDashboard.tokensOut")} value={formatNumber(usage.outputTokens)} />
+      <HeaderMetric label={t("agentDashboard.tokensOut")} value={formatNumber(usage.outputTokens)} title={t("agentDashboard.reasoningTokensHelp")} />
       <HeaderMetric label={t("agentDashboard.tokensCached")} value={formatNumber(usage.cacheReadTokens)} />
       {usage.cacheWriteTokens > 0 ? <HeaderMetric label={t("agentDashboard.tokensCacheWrite")} value={formatNumber(usage.cacheWriteTokens)} /> : null}
-      {(usage.reasoningTokens ?? 0) > 0 ? <HeaderMetric label={t("agentDashboard.reasoningTokens")} value={formatNumber(usage.reasoningTokens!)} /> : null}
+      {(usage.reasoningTokens ?? 0) > 0 ? <HeaderMetric label={t("agentDashboard.reasoningTokens")} value={formatNumber(usage.reasoningTokens!)} title={t("agentDashboard.reasoningTokensHelp")} /> : null}
       {(usage.cost?.total ?? 0) > 0 ? <HeaderMetric label={t("agentDashboard.cost")} value={formatCost(usage.cost!.total)} /> : null}
     </> : null}
   </div>;
 }
 
-function hasThinkingContent(value: unknown): boolean {
-  const content = record(value)?.content;
-  return Array.isArray(content) && content.some((block) => record(block)?.type === "thinking");
-}
-
 function ModelOutput({ item }: { item: AgentTraceItem }) {
   const t = useT();
   return <div className="space-y-2">
-    {item.thinkingLevel === "off" && !hasThinkingContent(item.result) ? <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-[10px] text-muted-foreground">{t("agentDashboard.thinkingDisabledNotice")}</div> : null}
-    <MessageContent value={item.result} />
+    {item.modelOutputText ? <div className="rounded-md border border-border/60 bg-background p-3"><AssistantMessage content={item.modelOutputText} /></div> : null}
+    {(item.requestedTools?.length ?? 0) > 0 ? <div className="rounded-md border border-amber-500/20 bg-amber-500/5 p-3">
+      <div className="mb-2 text-[10px] font-semibold text-amber-700 dark:text-amber-300">{t("agentDashboard.requestedTools")}</div>
+      <div className="flex flex-wrap gap-1.5">{item.requestedTools!.map((name, index) => <span key={`${name}:${index}`} className="rounded bg-amber-500/10 px-2 py-1 font-mono text-[10px] text-amber-800 dark:text-amber-200">{name}</span>)}</div>
+    </div> : null}
+    {!item.modelOutputText && (item.requestedTools?.length ?? 0) === 0 ? <div className="text-[11px] text-muted-foreground">{t("agentDashboard.noVisibleModelOutput")}</div> : null}
   </div>;
+}
+
+function ModelReasoning({ item }: { item: AgentTraceItem }) {
+  const t = useT();
+  if ((item.modelThinking?.length ?? 0) > 0) {
+    return <div className="space-y-2">{item.modelThinking!.map((thinking, index) => <DataDetails key={index} value={thinking} />)}</div>;
+  }
+  const message = item.thinkingLevel === "off"
+    ? t("agentDashboard.thinkingDisabledNotice")
+    : t("agentDashboard.reasoningUnavailableNotice");
+  return <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-[10px] text-muted-foreground">{message}</div>;
 }
 
 function TraceDetails({ item }: { item: AgentTraceItem }) {
   const t = useT();
-  const [tab, setTab] = useState<DetailTab>("input");
-  useEffect(() => setTab("input"), [item.id]);
-  const tabs: Array<{ id: DetailTab; label: string }> = [
-    { id: "input", label: t("agentDashboard.input") },
-    { id: "output", label: t("agentDashboard.output") },
-    { id: "raw", label: t("agentDashboard.rawData") },
-  ];
+  const defaultTab: DetailTab = item.kind === "model" ? "output" : "input";
+  const [tab, setTab] = useState<DetailTab>(defaultTab);
+  useEffect(() => setTab(item.kind === "model" ? "output" : "input"), [item.id, item.kind]);
+  const showReasoning = item.kind === "model" && (
+    item.thinkingLevel !== "off" ||
+    (item.modelThinking?.length ?? 0) > 0 ||
+    (item.usage?.reasoningTokens ?? 0) > 0
+  );
+  const tabs: Array<{ id: DetailTab; label: string }> = item.kind === "model"
+    ? [
+      { id: "output", label: t("agentDashboard.output") },
+      ...(showReasoning ? [{ id: "reasoning" as const, label: t("agentDashboard.reasoning") }] : []),
+      { id: "input", label: t("agentDashboard.input") },
+      { id: "raw", label: t("agentDashboard.rawData") },
+    ]
+    : [
+      { id: "input", label: t("agentDashboard.input") },
+      { id: "output", label: t("agentDashboard.output") },
+      { id: "raw", label: t("agentDashboard.rawData") },
+    ];
   const label = itemLabel(item, (count) => t("agentDashboard.modelStep", { count }), t("agentDashboard.contextCompaction"));
   return (
     <aside className="flex min-w-0 flex-1 flex-col border-l border-border bg-muted/10">
@@ -341,7 +396,8 @@ function TraceDetails({ item }: { item: AgentTraceItem }) {
       <div className="min-h-0 flex-1 overflow-auto p-4">
         {tab === "input" ? item.kind === "model" ? <ModelInput value={item.payload} /> : <DataDetails value={item.payload} />
           : tab === "output" ? item.kind === "model" ? <ModelOutput item={item} /> : <DataDetails value={item.result} />
-            : <DataDetails value={{ rawType: item.rawType, data: item.raw, effects: item.effects }} />}
+            : tab === "reasoning" ? <ModelReasoning item={item} />
+              : <DataDetails value={{ rawType: item.rawType, data: item.raw, effects: item.effects }} />}
       </div>
     </aside>
   );

@@ -306,7 +306,7 @@ export function createAgentTools(options: {
       name: "search_tables",
       label: "Search tables",
       description:
-        "Fuzzy-search for candidate tables by keywords (business terms, partial table names). Use this when you don't know the exact table name yet — it scores table names, column names, and Chinese/English DDL column comments. Each candidate also reports vaultUsage (how many notes and SQL blocks actually query it, and the last run date): prefer tables that are actually used over ones that merely look similar, and if the top candidates all have zero usage, say so rather than guessing.",
+        "Find candidate tables when the exact table is unknown. It ranks table, column, and DDL-comment matches and reports Vault usage as supporting evidence, not proof.",
       parameters: Type.Object({
         keywords: Type.Array(Type.String(), {
           description: 'Keywords to match against table/column names and DDL, e.g. ["quarter", "revenue", "order"].',
@@ -358,7 +358,7 @@ export function createAgentTools(options: {
       name: "execute_python",
       label: "Execute Python",
       description:
-        "Run bounded Python in Stela's local Pyodide sandbox. DuckDB, pandas, con, and tables are preloaded. inputs maps aliases to successful run_query runIds from this local Agent session. Use DuckDB SQL for joins/aggregations and assign the final value to result. No network, host files, subprocesses, or package installation are available.",
+        "Run bounded local Python over successful run_query artifacts for cross-source joins or transformations. DuckDB, pandas, con, and tables are preloaded; assign the final value to result.",
       parameters: Type.Object({
         code: Type.String({ description: "Python code. Assign the final scalar, DataFrame, or DuckDB relation to result." }),
         inputs: Type.Record(Type.String(), Type.String(), {
@@ -372,7 +372,7 @@ export function createAgentTools(options: {
       name: "create_chart",
       label: "Create chart",
       description:
-        "Validate a Stela v2 chart against a successful SQL run_query result. Choose a preset, declare semantic fields, and map 1-2 controlled layers through encoding channels. Presets: trend, ranking, composition, distribution, correlation, funnel, retention, comparison, custom. Marks: bar, line, area, point, arc, rect, rule, histogram, boxplot, funnel. Use only real result columns and keep business aggregation in SQL.",
+        "Validate a Stela chart against one successful SQL run_query. Declare exact result columns as fields and reference their ids from 1-2 layer encodings; keep business aggregation in SQL.",
       parameters: Type.Object({
         runId: Type.String({ description: "Exact runId returned by a SQL run_query in this Agent run." }),
         title: Type.Optional(Type.String()),
@@ -415,7 +415,7 @@ export function createAgentTools(options: {
       name: "create_analysis_canvas",
       label: "Create analysis Canvas",
       description:
-        "Create a structured .stela.canvas analysis artifact. Agent-authored analysis content is validated and users may adjust Flow layout without editing graph semantics. Use early for a multi-stage analysis with several evidence views, or whenever the user asks for a Canvas, report, or dashboard. Updates do not require edit approval.",
+        "Create a structured .stela.canvas artifact for an explicitly requested Canvas/report/dashboard or a genuinely multi-view analysis. Simple answers stay in chat.",
       parameters: Type.Object({
         title: Type.String(),
         directory: Type.Optional(Type.String({ description: "Vault-relative directory. Defaults to the current note directory or vault root." })),
@@ -431,10 +431,13 @@ export function createAgentTools(options: {
     },
     {
       name: "update_analysis_canvas", label: "Update analysis Canvas",
-      description: "Replace a Canvas with a validated structured version. Bind every new or changed SQL source to a successful SQL run_query runId; Stela copies the audited SQL and connection metadata. Canvas sources must be refreshable table-backed queries: never turn fetched values into SELECT literals, VALUES, or constant UNION rows. Preserve stable source, section, card, Flow node, and Flow edge ids across updates. Flow direction and existing node positions are user-owned and will be preserved; omit node positions. In a canvas-refresh entry point, this is the one final atomic commit: every targeted source must be bound to a successful query from this run, and a second successful update is forbidden.",
+      description: "Replace a Canvas with validated complete JSON. Keep existing semantic ids, bind each new or changed SQL source through sourceRuns, and omit Flow positions; Stela audits runs and preserves user-owned layout. Canvas refresh runs permit one final atomic update.",
       parameters: Type.Object({
         path: Type.String(), etag: Type.String(), content: Type.String({ description: "Complete version 1 .stela.canvas JSON." }),
-        sourceRuns: Type.Array(Type.Object({ sourceId: Type.String(), runId: Type.String() })),
+        sourceRuns: Type.Array(Type.Object({
+          sourceId: Type.String({ description: "Canvas source id being created, changed, or refreshed." }),
+          runId: Type.String({ description: "Successful SQL run_query id from this Agent run." }),
+        })),
       }), executionMode: "sequential",
       execute: (toolCallId, params) => runTool("update_analysis_canvas", toolCallId, params, ctx, requestProposal),
     },
@@ -459,7 +462,7 @@ export function createAgentTools(options: {
       name: "search_sql_usage",
       label: "Search SQL usage",
       description:
-        "Find which notes use a table, from Stela's SQL AST index. Use table for any read or write usage; use readTable or writeTable only when direction matters. This is an exact structural lookup — prefer it over search_vault when you already know a table name and want the notes that query it, or to learn how a table is normally joined and filtered.",
+        "Find exact table usage in the Vault SQL AST index when established joins, filters, write direction, or business conventions matter. Use table for either direction and readTable/writeTable only when direction matters.",
       parameters: Type.Object({
         table: Type.Optional(
           Type.String({ description: "Table used by the SQL in either a read or write role, as table or db.table." }),
@@ -514,7 +517,7 @@ export function createAgentTools(options: {
       name: "create_plan",
       label: "Create execution plan",
       description:
-        "Create a concise linear execution plan before starting a multi-step analysis. Use 2-8 steps, each with a stable id, intent, and observable acceptance condition.",
+        "Create a concise 2-8 step plan for multiple analytical branches, multiple datasets/connections, several verification cycles, or a multi-view Canvas/report. Skip routine locate-schema-query lookups.",
       parameters: Type.Object({
         steps: Type.Array(
           Type.Object({
@@ -562,7 +565,7 @@ export function createAgentTools(options: {
       name: "search_skills",
       label: "Search Skills",
       description:
-        "Search the internal data-knowledge Skill library by business terms, tables, metrics, or SQL dialect. Returns concise metadata only; use load_skill with an exact name to read instructions.",
+        "Search reusable business, metric, lineage, or SQL-dialect knowledge after nearer evidence is insufficient. Returns metadata; load an exact name before relying on its content.",
       parameters: Type.Object({
         query: Type.String({ description: "Keywords describing the knowledge you need." }),
         limit: Type.Optional(Type.Number({ description: "Max candidates to return. Defaults to 8." })),
@@ -574,7 +577,7 @@ export function createAgentTools(options: {
       name: "save_skill",
       label: "Save Skill",
       description:
-        `Save a compact validated data-knowledge SKILL.md or archive an obsolete Skill. Save only reusable, verified rules with their scope and minimal check; never copy an analysis, result rows, or one-off SQL. analysis-runbook is explicit-user-save only and must describe a repeatable flow with ordered steps, decision branches, and success criteria. ${AGENT_SKILL_LIMITS_PROMPT} For a save, call once with name, content, and reason; action defaults to save. content must include YAML frontmatter with description, category, and inline tags. For archive, set action to archive and omit content. Automatic maintenance may create only a new Skill; it cannot overwrite or archive existing knowledge. Never use it for user notes or arbitrary files.`,
+        "Save one compact verified data-knowledge Skill or archive an obsolete one when explicitly requested. Never store result rows, snapshots, one-off SQL, or user notes.",
       parameters: Type.Object({
         action: Type.Optional(Type.Union([Type.Literal("save"), Type.Literal("archive")])),
         name: Type.String({ description: "Required lowercase Skill directory name, e.g. postgresql-demo-tasks." }),
@@ -593,7 +596,7 @@ export function createAgentTools(options: {
       name: "propose_edit",
       label: "Propose edit",
       description:
-        "Propose one user-reviewed edit. To replace the attached RunSQL block, pass its exact targetId plus the complete replacement sql. To edit a note, pass path plus either newContent, or oldText/newText for one exact local replacement. Choose the target explicitly; never mix RunSQL and note parameters. This never applies a change directly — it shows the appropriate diff and waits for approval. Executable SQL in notes must use ```runsql``` fences (not ```sql```). Do not invent, delete, or rewrite trailing <detail> blocks unless the user explicitly asks.",
+        "Propose one user-reviewed RunSQL or note edit. Use targetId/sql for an attached RunSQL target, or path plus full/local note replacement parameters; never mix the two forms. Leave trailing <detail> blocks unchanged unless explicitly asked.",
       parameters: Type.Object({
         targetId: Type.Optional(
           Type.String({ description: "Exact rewrite target id from the attached RunSQL block." }),
@@ -618,7 +621,7 @@ export function createAgentTools(options: {
       name: "ask_user",
       label: "Ask the user",
       description:
-        `Ask the user one short question and wait for the answer. Use this instead of guessing when a business term maps to several plausible columns, when a metric definition is ambiguous, or when the vault gives contradictory definitions. First exhaust what you can check yourself (schemas, DDL comments, notes, a small GROUP BY sample); only ask what data cannot answer. At most ${MAX_QUESTIONS_PER_RUN} questions per run — spend them on the one thing that would change your answer.`,
+        `Ask one short material question after available evidence and cheap discriminating checks cannot resolve the answer. At most ${MAX_QUESTIONS_PER_RUN} questions per run.`,
       parameters: Type.Object({
         question: Type.String({ description: "One specific question, in the user's language." }),
         options: Type.Optional(

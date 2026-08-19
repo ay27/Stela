@@ -56,7 +56,7 @@ import {
 import {
   AGENT_SKILL_LIMITS_PROMPT,
   loadAgentSkills,
-  rankAgentSkills,
+  rankAgentSkillsForRequest,
   type AgentSkillMaintenanceRecord,
   type LoadedAgentSkill,
 } from "./agent-skills";
@@ -448,7 +448,7 @@ async function runSkillMaintenance(options: {
     return false;
   };
   const actions: AgentSkillMaintenanceRecord[] = [];
-  const promptSkills = rankAgentSkills(skills.loaded, request.prompt, SKILL_PROMPT_LIMIT);
+  const promptSkills = rankAgentSkillsForRequest(skills.loaded, request, SKILL_PROMPT_LIMIT);
   const maintenanceTables = refreshSkill
     ? tablesFromSkill(refreshSkill)
     : Array.from(new Set(evidence.flatMap((item) => item.tables ?? []))).slice(0, 8);
@@ -711,10 +711,10 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       ? available.dialects[request.connectionName] ?? null
       : null;
     const skills = await loadAgentSkills(vaultPath);
-    const promptSkills = rankAgentSkills(skills.loaded, request.prompt, SKILL_PROMPT_LIMIT);
+    const promptSkills = rankAgentSkillsForRequest(skills.loaded, request, SKILL_PROMPT_LIMIT);
     const { models, model, reasoning } = createTransportForProfile(settings.ai, apiKey, profile.id);
     const contextWindow = model.contextWindow;
-    const systemPrompt = buildSystemPrompt(AGENT_SKILL_LIMITS_PROMPT);
+    const systemPrompt = buildSystemPrompt();
     const skillMetadata = formatSkillsForSystemPrompt(promptSkills.map((item) => item.skill));
     if (agentMetrics.isOpen()) {
       agentMetrics.addEvent(metricRunId, { type: "system_prompt", payload: systemPrompt });

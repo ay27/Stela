@@ -35,7 +35,6 @@ import {
   buildSystemPrompt,
   buildUserContent,
 } from "../../electron/services/ai/agent-prompt";
-import { AGENT_SKILL_LIMITS_PROMPT } from "../../electron/services/ai/agent-skills";
 import {
   createAgentTools,
   type ProposalRequest,
@@ -414,7 +413,7 @@ async function runTask(input: {
     models,
     model,
     thinkingLevel: reasoning.effective,
-    systemPrompt: buildSystemPrompt(AGENT_SKILL_LIMITS_PROMPT),
+    systemPrompt: buildSystemPrompt(),
     streamOptions: { cacheRetention: "short" },
     resources: { skills: [] },
     tools: createAgentTools({
