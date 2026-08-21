@@ -429,8 +429,16 @@ flowchart TB
    ProseMirror schema whose per-tab EditorState owns selection, undo history, IME,
    plain text, hard breaks, and atomic resource nodes; it serializes only at the
    existing ordered-message boundary. The user timeline reuses that exact ordered
-   message while assistant bubbles remain Markdown-only. Device-sharded session history restores timelines,
-   including Canvas artifact links. ([ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md),
+   message while assistant bubbles remain Markdown-only. Ordinary text from each
+   Harness model step streams into a bounded process bubble; structured thinking
+   and tool-call deltas remain private. Streaming snapshots are throttled and
+   ephemeral, while one completed snapshot per step enters device history. The
+   final step upgrades in place to the final answer, and earlier process narration
+   plus strategy-review details collapse by default after completion. Tool-only
+   steps do not manufacture narration. Device-sharded session history restores
+   timelines, including completed process narration and Canvas artifact links.
+   ([ADR-0074](./adr/0074-streamed-agent-process-narration.md),
+   [ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md),
    [ADR-0062](./adr/0062-implicit-workspace-context-explicit-inline-resources.md),
    [ADR-0063](./adr/0063-prosemirror-agent-composer.md),
    [ADR-0017](./adr/0017-user-cancelled-agent-runs.md),

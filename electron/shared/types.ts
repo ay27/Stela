@@ -1032,6 +1032,15 @@ export interface AgentProposalPayload {
 
 export type AgentEvent =
   | { type: "started"; runId: string }
+  | {
+      type: "assistant_progress";
+      runId: string;
+      /** One-based AgentHarness model step within this run. */
+      stepIndex: number;
+      /** Bounded visible text snapshot; never includes thinking or tool-call deltas. */
+      content: string;
+      phase: "streaming" | "completed";
+    }
   | { type: "canvas_updated"; runId: string; path: string; title: string; action: "created" | "updated" } // Vault-relative path
   | { type: "plan_updated"; runId: string; plan: AgentPlanSnapshot }
   | {
@@ -1101,7 +1110,13 @@ export type AgentEvent =
       summary: string;
     }
   | { type: "history_updated"; runId: string }
-  | { type: "final"; runId: string; content: string }
+  | {
+      type: "final";
+      runId: string;
+      content: string;
+      /** Present on new runs for progress-bubble promotion. */
+      stepIndex?: number;
+    }
   | { type: "error"; runId: string; message: string }
   | { type: "cancelled"; runId: string };
 

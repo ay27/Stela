@@ -126,3 +126,4 @@ proposed → active → superseded
 | [0071](0071-action-oriented-agent-execution-traces.md) | Action-oriented Agent execution traces | active |
 | [0072](0072-profile-scoped-agent-reasoning-effort.md) | Profile-scoped Agent reasoning effort | active |
 | [0073](0073-three-state-skill-freshness.md) | Three-state Skill freshness and maintenance inspection | active |
+| [0074](0074-streamed-agent-process-narration.md) | Streamed Agent process narration | active |

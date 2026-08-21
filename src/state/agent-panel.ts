@@ -94,6 +94,14 @@ export type AgentTimelineEntry =
         summary?: string;
       };
     }
+  | {
+      kind: "progress";
+      id: string;
+      runId: string;
+      stepIndex: number;
+      content: string;
+      phase: "streaming" | "completed";
+    }
   | { kind: "error"; id: string; message: string }
   | { kind: "cancelled"; id: string }
   | { kind: "interrupted"; id: string }
@@ -317,6 +325,22 @@ function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTim
             }
           : entry,
       );
+    case "assistant_progress": {
+      const index = timeline.findIndex(
+        (entry) => entry.kind === "progress" && entry.runId === event.runId && entry.stepIndex === event.stepIndex,
+      );
+      const existing = index >= 0 ? timeline[index] : null;
+      const next: Extract<AgentTimelineEntry, { kind: "progress" }> = {
+        kind: "progress",
+        id: existing?.kind === "progress" ? existing.id : nextId(),
+        runId: event.runId,
+        stepIndex: event.stepIndex,
+        content: event.content,
+        phase: event.phase,
+      };
+      if (index === -1) return [...timeline, next];
+      return timeline.map((entry, itemIndex) => itemIndex === index ? next : entry);
+    }
     case "tool_call":
       return [...timeline, toolCallEntry(event.call)];
     case "tool_result":
@@ -338,12 +362,36 @@ function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTim
           resolution: "pending",
         },
       ];
-    case "final":
-      return [...timeline, { kind: "final", id: nextId(), runId: event.runId, content: event.content }];
+    case "final": {
+      const progressIndex = event.stepIndex === undefined
+        ? -1
+        : timeline.findIndex(
+          (entry) => entry.kind === "progress" && entry.runId === event.runId && entry.stepIndex === event.stepIndex,
+        );
+      const existing = progressIndex >= 0 ? timeline[progressIndex] : null;
+      const finalEntry: Extract<AgentTimelineEntry, { kind: "final" }> = {
+        kind: "final",
+        id: existing?.id ?? nextId(),
+        runId: event.runId,
+        content: event.content,
+      };
+      if (progressIndex === -1) return [...timeline, finalEntry];
+      return timeline.map((entry, itemIndex) => itemIndex === progressIndex ? finalEntry : entry);
+    }
     case "error":
-      return [...timeline, { kind: "error", id: nextId(), message: event.message }];
+      return [
+        ...timeline.map((entry) => entry.kind === "progress" && entry.runId === event.runId && entry.phase === "streaming"
+          ? { ...entry, phase: "completed" as const }
+          : entry),
+        { kind: "error", id: nextId(), message: event.message },
+      ];
     case "cancelled":
-      return [...timeline, { kind: "cancelled", id: nextId() }];
+      return [
+        ...timeline.map((entry) => entry.kind === "progress" && entry.runId === event.runId && entry.phase === "streaming"
+          ? { ...entry, phase: "completed" as const }
+          : entry),
+        { kind: "cancelled", id: nextId() },
+      ];
   }
 }
 

@@ -1,6 +1,31 @@
 import assert from "node:assert/strict";
 
-import { buildSystemPrompt, buildUserContent } from "./agent-prompt";
+import { buildSystemPrompt, buildUserContent, visibleAssistantText } from "./agent-prompt";
+
+assert.equal(visibleAssistantText({
+  role: "assistant",
+  content: [
+    { type: "thinking", thinking: "private reasoning" },
+    { type: "text", text: "I will inspect the live schema." },
+    { type: "toolCall", id: "call_1", name: "get_table_schema", arguments: {} },
+  ],
+  api: "openai-responses",
+  provider: "openai",
+  model: "test",
+  usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+  stopReason: "toolUse",
+  timestamp: 1,
+}), "I will inspect the live schema.");
+assert.equal(visibleAssistantText({
+  role: "assistant",
+  content: "Visible.<thinking>private and unfinished",
+  timestamp: 1,
+}), "Visible.");
+assert.equal(visibleAssistantText({
+  role: "assistant",
+  content: "Before.<thinking>private</thinking>After.<details>public</details>",
+  timestamp: 1,
+}), "Before.After.<details>public</details>");
 
 const prompt = buildSystemPrompt();
 assert.equal(prompt, buildSystemPrompt());

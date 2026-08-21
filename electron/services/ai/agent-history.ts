@@ -173,6 +173,12 @@ function asAgentEvent(value: unknown): AgentEvent | null {
         typeof event.summary === "string"
         ? event as AgentEvent
         : null;
+    case "assistant_progress":
+      return Number.isInteger(event.stepIndex) && Number(event.stepIndex) > 0 &&
+        typeof event.content === "string" &&
+        (event.phase === "streaming" || event.phase === "completed")
+        ? event as AgentEvent
+        : null;
     case "canvas_updated":
       return typeof event.path === "string" &&
         typeof event.title === "string" &&
@@ -202,7 +208,10 @@ function asAgentEvent(value: unknown): AgentEvent | null {
         ? event as AgentEvent
         : null;
     case "final":
-      return typeof event.content === "string" ? event as AgentEvent : null;
+      return typeof event.content === "string" &&
+        (event.stepIndex === undefined || (Number.isInteger(event.stepIndex) && Number(event.stepIndex) > 0))
+        ? event as AgentEvent
+        : null;
     case "error":
       return typeof event.message === "string" ? event as AgentEvent : null;
     default:

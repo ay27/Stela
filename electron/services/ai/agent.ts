@@ -14,6 +14,7 @@ import {
   estimateContextTokens,
   shouldCompact,
   formatSkillsForSystemPrompt,
+  type AgentMessage,
 } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { isContextOverflow } from "@earendil-works/pi-ai";
@@ -44,7 +45,7 @@ import {
   resolveQueryArtifact,
   writeBufferedQueryArtifact,
 } from "../query-artifacts";
-import { assistantText, buildSystemPrompt, buildUserContent } from "./agent-prompt";
+import { assistantText, buildSystemPrompt, buildUserContent, visibleAssistantText } from "./agent-prompt";
 import {
   AnalysisEfficiencyLedger,
   efficiencyHintContent,
@@ -105,6 +106,8 @@ import {
 
 const log = getLogger("ai.agent");
 const TOOL_RESULT_SUMMARY_CHARS = 480;
+const AGENT_PROGRESS_EMIT_INTERVAL_MS = 80;
+const AGENT_PROGRESS_MAX_CHARS = 6_000;
 const EXECUTION_PLAN_ENTRY = "execution_plan";
 const OVERFLOW_CONTINUE_PROMPT =
   "The previous request exceeded the model context window. Continue from the compacted history and finish the user's last request.";
@@ -662,6 +665,10 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       agentMetrics.finishRun(metricRunId, { status: "cancelled", response: event });
     }
   };
+  const emitHistoryOnly = (event: AgentEvent) => {
+    historyEvents.push(event);
+    onEvent(event);
+  };
   activeProposals.set(runId, pending);
   historyResponses.set(runId, []);
 
@@ -992,6 +999,57 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
     let harnessStepIndex = 0;
     let harnessStepStartedAt = metricStartedAt;
     let modelRequestStartedAt: number | null = null;
+    let progressTimer: ReturnType<typeof setTimeout> | null = null;
+    let progressContent = "";
+    let progressLastEmittedAt = 0;
+    let progressLastSnapshot = "";
+    const clearProgressTimer = () => {
+      if (progressTimer !== null) clearTimeout(progressTimer);
+      progressTimer = null;
+    };
+    const boundedProgress = (message: AgentMessage): string => {
+      const content = visibleAssistantText(message).trim();
+      if (content.length <= AGENT_PROGRESS_MAX_CHARS) return content;
+      return `${content.slice(0, AGENT_PROGRESS_MAX_CHARS - 4).trimEnd()}\n\n…`;
+    };
+    const emitStreamingProgress = () => {
+      progressTimer = null;
+      if (!progressContent || progressContent === progressLastSnapshot) return;
+      progressLastSnapshot = progressContent;
+      progressLastEmittedAt = Date.now();
+      onEvent({
+        type: "assistant_progress",
+        runId,
+        stepIndex: harnessStepIndex,
+        content: progressContent,
+        phase: "streaming",
+      });
+    };
+    const scheduleStreamingProgress = (message: AgentMessage) => {
+      progressContent = boundedProgress(message);
+      if (!progressContent || progressContent === progressLastSnapshot) return;
+      const remaining = AGENT_PROGRESS_EMIT_INTERVAL_MS - (Date.now() - progressLastEmittedAt);
+      if (remaining <= 0) {
+        clearProgressTimer();
+        emitStreamingProgress();
+      } else if (progressTimer === null) {
+        progressTimer = setTimeout(emitStreamingProgress, remaining);
+      }
+    };
+    const completeProgress = (message: AgentMessage) => {
+      clearProgressTimer();
+      progressContent = boundedProgress(message);
+      if (progressContent) {
+        progressLastSnapshot = progressContent;
+        emitHistoryOnly({
+          type: "assistant_progress",
+          runId,
+          stepIndex: harnessStepIndex,
+          content: progressContent,
+          phase: "completed",
+        });
+      }
+    };
     const contextUnsubscribe = harness.on("context", (event) => {
       if (agentMetrics.isOpen()) {
         agentMetrics.addEvent(metricRunId, {
@@ -1024,6 +1082,10 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
     });
     const unsubscribe = harness.subscribe(async (event) => {
       if (event.type === "turn_start") {
+        clearProgressTimer();
+        progressContent = "";
+        progressLastSnapshot = "";
+        progressLastEmittedAt = 0;
         harnessStepIndex += 1;
         harnessStepStartedAt = Date.now();
         modelRequestStartedAt = null;
@@ -1131,16 +1193,23 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         });
         return;
       }
-      if (event.type === "message_end" && event.message.role === "assistant" && agentMetrics.isOpen()) {
-        const now = Date.now();
-        agentMetrics.addUsage(metricRunId, event.message.usage);
-        agentMetrics.addEvent(metricRunId, {
-          type: "assistant_message",
-          name: `step:${harnessStepIndex}`,
-          occurredAt: now,
-          durationMs: modelRequestStartedAt === null ? null : now - modelRequestStartedAt,
-          payload: event.message,
-        });
+      if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+        scheduleStreamingProgress(event.message);
+        return;
+      }
+      if (event.type === "message_end" && event.message.role === "assistant") {
+        completeProgress(event.message);
+        if (agentMetrics.isOpen()) {
+          const now = Date.now();
+          agentMetrics.addUsage(metricRunId, event.message.usage);
+          agentMetrics.addEvent(metricRunId, {
+            type: "assistant_message",
+            name: `step:${harnessStepIndex}`,
+            occurredAt: now,
+            durationMs: modelRequestStartedAt === null ? null : now - modelRequestStartedAt,
+            payload: event.message,
+          });
+        }
         return;
       }
     });
@@ -1228,16 +1297,11 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         return;
       }
 
-      const finalAnswer = assistantText(result)
-        .replace(
-          /<\s*([A-Za-z][\w:.-]*(?:think|thinking|reasoning)[\w:.-]*)\b[^>]*>[\s\S]*?<\/\s*\1\s*>/gi,
-          "",
-        )
-        .trim();
+      const finalAnswer = visibleAssistantText(result).trim();
       if (agentMetrics.isOpen()) {
         agentMetrics.addEvent(metricRunId, { type: "analysis_efficiency", payload: efficiency.metrics() });
       }
-      emit({ type: "final", runId, content: finalAnswer });
+      emit({ type: "final", runId, content: finalAnswer, stepIndex: harnessStepIndex });
       if (normalSkillActions.length > 0) {
         emit({
           type: "skill_maintenance",
@@ -1310,6 +1374,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         }
       }
     } finally {
+      clearProgressTimer();
       strategyUnsubscribe();
       contextUnsubscribe();
       providerPayloadUnsubscribe();

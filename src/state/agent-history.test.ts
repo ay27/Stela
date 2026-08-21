@@ -13,6 +13,7 @@ import {
 import { composeAgentMessage } from "@/lib/agent-message";
 import { agentComposerStateToMessage } from "@/lib/agent-composer";
 import { canvasRefreshTaskInput } from "@/components/ai/agent-quick-actions";
+import { groupAgentTimeline } from "@/components/ai/agent-timeline";
 
 const history: AgentHistorySession = {
   summary: {
@@ -109,6 +110,66 @@ assert.equal(timeline[2]?.kind, "canvas");
 assert.equal(timeline[3]?.kind, "proposal");
 assert.equal(timeline[3]?.kind === "proposal" && timeline[3].resolution, "expired");
 assert.equal(timeline[4]?.kind, "interrupted");
+
+const completedProgressHistory: AgentHistorySession = {
+  summary: {
+    sessionId: "sess_progress",
+    deviceSlug: "laptop",
+    title: "Progress replay",
+    createdAt: 1,
+    updatedAt: 2,
+    isLocal: true,
+  },
+  runs: [{
+    request: { runId: "run_progress", sessionId: "sess_progress", prompt: "Inspect revenue" },
+    startedAt: 1,
+    finishedAt: 2,
+    events: [
+      {
+        type: "assistant_progress",
+        runId: "run_progress",
+        stepIndex: 1,
+        content: "I will inspect the source.",
+        phase: "streaming",
+      },
+      {
+        type: "assistant_progress",
+        runId: "run_progress",
+        stepIndex: 1,
+        content: "I will inspect the live source.",
+        phase: "completed",
+      },
+      {
+        type: "tool_call",
+        runId: "run_progress",
+        call: { callId: "call_progress", name: "run_query", arguments: { sql: "SELECT 42" } },
+      },
+      {
+        type: "tool_result",
+        runId: "run_progress",
+        callId: "call_progress",
+        ok: true,
+        summary: "42",
+      },
+      {
+        type: "assistant_progress",
+        runId: "run_progress",
+        stepIndex: 2,
+        content: "Revenue is 42.",
+        phase: "completed",
+      },
+      { type: "final", runId: "run_progress", content: "Revenue is 42.", stepIndex: 2 },
+    ],
+    proposalResponses: [],
+  }],
+};
+const progressTimeline = replayAgentHistory(completedProgressHistory);
+assert.deepEqual(progressTimeline.map((entry) => entry.kind), ["user", "progress", "tool", "final"]);
+assert.equal(progressTimeline[1]?.kind === "progress" && progressTimeline[1].content, "I will inspect the live source.");
+assert.equal(progressTimeline[3]?.kind === "final" && progressTimeline[3].content, "Revenue is 42.");
+const groupedProgress = groupAgentTimeline(progressTimeline, true);
+assert.deepEqual(groupedProgress.map((item) => item.kind), ["entry", "progress", "tools", "entry"]);
+assert.equal(groupedProgress[1]?.kind === "progress" && groupedProgress[1].entries.length, 1);
 
 const localRef: AgentHistoryRef = { sessionId: "sess_1", deviceSlug: "laptop" };
 assert.equal(

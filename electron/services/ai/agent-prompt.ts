@@ -50,6 +50,28 @@ export function assistantText(message: AssistantMessage | AgentMessage): string 
     .join("");
 }
 
+/** Ordinary assistant text for user-facing streaming; structured and tag-style reasoning stay hidden. */
+export function visibleAssistantText(message: AssistantMessage | AgentMessage): string {
+  const isReasoningTag = (name: string): boolean => /think|reasoning/i.test(name);
+  let visible = assistantText(message);
+  let searchFrom = 0;
+  while (searchFrom < visible.length) {
+    const openTag = /<\s*([A-Za-z][\w:.-]*)\b[^>]*>/gi;
+    openTag.lastIndex = searchFrom;
+    let match = openTag.exec(visible);
+    while (match && !isReasoningTag(match[1]!)) match = openTag.exec(visible);
+    if (!match) break;
+    const name = match[1]!;
+    const closeTag = new RegExp(`<\\/\\s*${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*>`, "i");
+    const remainder = visible.slice(openTag.lastIndex);
+    const close = closeTag.exec(remainder);
+    if (!close) return visible.slice(0, match.index);
+    visible = `${visible.slice(0, match.index)}${remainder.slice(close.index + close[0].length)}`;
+    searchFrom = match.index;
+  }
+  return visible;
+}
+
 function truncateForAgentContext(
   text: string,
   remainingBudget: number,

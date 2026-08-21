@@ -63,7 +63,14 @@ try {
     title: "Revenue",
     action: "created",
   });
-  await appendAgentHistoryEvent(storage, { type: "final", runId: "run_1", content: "Revenue is 42." });
+  await appendAgentHistoryEvent(storage, {
+    type: "assistant_progress",
+    runId: "run_1",
+    stepIndex: 1,
+    content: "I will verify the current revenue source.",
+    phase: "completed",
+  });
+  await appendAgentHistoryEvent(storage, { type: "final", runId: "run_1", content: "Revenue is 42.", stepIndex: 2 });
   await appendAgentHistoryFinished(storage, "run_1");
   const lastEntry = (await storage.getEntries()).at(-1);
   await appendFile(
@@ -80,6 +87,13 @@ try {
         runId: "run_1",
         actions: [{ action: "saved", name: 1, path: "bad", reason: "bad" }],
         summary: "bad",
+      },
+      {
+        type: "assistant_progress",
+        runId: "run_1",
+        stepIndex: 0,
+        content: "bad",
+        phase: "completed",
       },
     ]
       .map((event, index) =>
@@ -113,7 +127,14 @@ try {
       title: "Revenue",
       action: "created",
     },
-    { type: "final", runId: "run_1", content: "Revenue is 42." },
+    {
+      type: "assistant_progress",
+      runId: "run_1",
+      stepIndex: 1,
+      content: "I will verify the current revenue source.",
+      phase: "completed",
+    },
+    { type: "final", runId: "run_1", content: "Revenue is 42.", stepIndex: 2 },
   ]);
 
   const maintenanceRequest: AgentRunRequest = {
@@ -129,6 +150,27 @@ try {
     { sessionId: "session_1", deviceSlug: "laptop" },
   );
   assert.equal(historyWithMaintenance.runs[1]?.request.entryPoint, "knowledge-maintenance");
+
+  await appendAgentHistoryStarted(storage, {
+    runId: "run_legacy_final",
+    sessionId: "session_1",
+    prompt: "Legacy final",
+  });
+  await appendAgentHistoryEvent(storage, {
+    type: "final",
+    runId: "run_legacy_final",
+    content: "Legacy answer without a step index.",
+  });
+  await appendAgentHistoryFinished(storage, "run_legacy_final");
+  const historyWithLegacyFinal = await loadAgentHistory(
+    vaultPath,
+    { sessionId: "session_1", deviceSlug: "laptop" },
+  );
+  assert.deepEqual(historyWithLegacyFinal.runs[2]?.events, [{
+    type: "final",
+    runId: "run_legacy_final",
+    content: "Legacy answer without a step index.",
+  }]);
 
   const outside = await mkdtemp(path.join(os.tmpdir(), "stela-agent-history-outside-"));
   try {

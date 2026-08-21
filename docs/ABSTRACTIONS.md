@@ -709,6 +709,7 @@ interface AgentPlanSnapshot {
 
 type AgentEvent =
   | { type: "started"; runId: string }
+  | { type: "assistant_progress"; runId: string; stepIndex: number; content: string; phase: "streaming" | "completed" }
   | { type: "plan_updated"; runId: string; plan: AgentPlanSnapshot }
   | { type: "tool_call"; runId: string; call: AgentToolCallInfo }
   | { type: "tool_result"; runId: string; callId: string; ok: boolean; summary: string }
@@ -717,7 +718,7 @@ type AgentEvent =
   | { type: "compaction"; runId: string; phase: "started" | "completed" }
   | { type: "history_updated"; runId: string }
   | { type: "canvas_updated"; runId: string; path: string; title: string; action: "created" | "updated" }
-  | { type: "final"; runId: string; content: string }
+  | { type: "final"; runId: string; content: string; stepIndex?: number }
   | { type: "error"; runId: string; message: string }
   | { type: "cancelled"; runId: string };
 ```
@@ -741,6 +742,17 @@ session entries, Stela appends custom run entries that reconstruct the Agent
 Panel timeline. A history summary identifies its owner device and whether it is
 local; a remote session is read-only and a new prompt forks it to a local
 `sessionId`.
+`assistant_progress` is a bounded ordinary-text snapshot keyed by one-based
+Harness `stepIndex`. Main sends throttled `streaming` snapshots directly to the
+Renderer without Metrics or JSONL persistence, then appends exactly one
+`completed` snapshot when that model step ends. Thinking blocks, tag-style
+reasoning, and tool-call deltas are excluded. A new `final` event carries the
+matching step index so the Renderer replaces that process entry with the final
+answer; older final events without an index remain append-only compatible.
+While a run is active, process entries stay in causal order around tool groups.
+After settlement, prior process entries collect into one closed disclosure, and
+strategy-review entries are also closed by default
+([ADR-0074](./adr/0074-streamed-agent-process-narration.md)).
 Each device retains only its 20 most recently updated session files; cleanup
 never deletes another device's directory ([ADR-0047](./adr/0047-bounded-device-agent-history-retention.md)).
 

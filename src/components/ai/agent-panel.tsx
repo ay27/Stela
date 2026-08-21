@@ -5,6 +5,7 @@ import {
   Bot,
   Brain,
   CheckCircle2,
+  ChevronRight,
   ChevronDown,
   Circle,
   ClipboardCheck,
@@ -67,6 +68,10 @@ import {
   type AgentEmptyActionId,
   type AgentEmptyWorkspace,
 } from "./agent-empty-state";
+import {
+  groupAgentTimeline,
+  type AgentProgressTimelineEntry,
+} from "./agent-timeline";
 
 function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
@@ -204,9 +209,9 @@ export function AgentPanel() {
       title: activeWorkspaceTab.title || relativePath.split("/").pop() || relativePath,
     };
   }, [activeWorkspaceTab, vaultPath]);
-  // 连续的 tool entries 就地合成一条 ToolActivity：执行记录跟随产生它的那一轮，
-  // 不再跨轮次汇总到最底部。pending 的 question 从 timeline 摘出，固定到输入框上方。
-  const timelineItems = useMemo(() => groupTimeline(timeline), [timeline]);
+  // 执行中保持模型输出与 tool 的因果顺序；一轮结束后，仅在同一 run 内折叠过程气泡。
+  // 连续 tool entries 就地合成 ToolActivity。pending question 从 timeline 摘出，固定到输入框上方。
+  const timelineItems = useMemo(() => groupAgentTimeline(timeline, !busy), [busy, timeline]);
   const pendingQuestion = timeline.find(
     (entry): entry is Extract<AgentTimelineEntry, { kind: "proposal" }> =>
       entry.kind === "proposal" && entry.proposalKind === "question" && entry.resolution === "pending",
@@ -581,6 +586,8 @@ export function AgentPanel() {
           timelineItems.map((item) =>
             item.kind === "tools" ? (
               <ToolActivity key={item.id} entries={item.entries} />
+            ) : item.kind === "progress" ? (
+              <ProcessNarrationGroup key={item.id} entries={item.entries} />
             ) : (
               <TimelineItem key={item.entry.id} entry={item.entry} onRespond={respondProposal} />
             ),
@@ -755,35 +762,6 @@ function AgentPanelEmptyState({
   );
 }
 
-type ToolEntry = Extract<AgentTimelineEntry, { kind: "tool" }>;
-type TimelineRenderItem =
-  | { kind: "entry"; entry: AgentTimelineEntry }
-  | { kind: "tools"; id: string; entries: ToolEntry[] };
-
-/**
- * 把连续的 tool entries 合成一个 ToolActivity 组，位置保持在它们产生的轮次里。
- * pending 的 question 摘出 timeline（固定在输入框上方），回答/跳过后自然落回成气泡。
- */
-function groupTimeline(timeline: AgentTimelineEntry[]): TimelineRenderItem[] {
-  const items: TimelineRenderItem[] = [];
-  for (const entry of timeline) {
-    if (entry.kind === "proposal" && entry.proposalKind === "question" && entry.resolution === "pending") {
-      continue;
-    }
-    if (entry.kind === "tool") {
-      const last = items[items.length - 1];
-      if (last?.kind === "tools") {
-        last.entries.push(entry);
-      } else {
-        items.push({ kind: "tools", id: entry.id, entries: [entry] });
-      }
-      continue;
-    }
-    items.push({ kind: "entry", entry });
-  }
-  return items;
-}
-
 function TimelineItem({
   entry,
   onRespond,
@@ -808,6 +786,8 @@ function TimelineItem({
           {entry.maintenance ? <SkillMaintenanceIndicator maintenance={entry.maintenance} /> : null}
         </div>
       );
+    case "progress":
+      return <ProcessNarrationBubble entry={entry} />;
     case "error":
       return (
         <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
@@ -843,28 +823,72 @@ function StrategyReviewCard({
 }) {
   const t = useT();
   const advice = entry.checkpoint?.advice;
+  const title = entry.status === "working"
+    ? t("agent.panel.strategyReviewWorkingTitle")
+    : entry.status === "failed"
+      ? t("agent.panel.strategyReviewFailedTitle")
+      : t("agent.panel.strategyReviewCompletedTitle");
   return (
-    <div className="rounded-lg border border-violet-500/25 bg-violet-500/5 p-3 text-xs">
-      <div className="flex items-center gap-2 font-medium text-foreground">
+    <details className="group rounded-lg border border-violet-500/25 bg-violet-500/5 text-xs">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 font-medium text-foreground [&::-webkit-details-marker]:hidden">
         {entry.status === "working"
           ? <Loader2 className="h-3.5 w-3.5 animate-spin text-violet-500" />
           : <Sparkles className="h-3.5 w-3.5 text-violet-500" />}
-        {t("agent.panel.strategyReview")}
+        <span className="flex-1">{title}</span>
+        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
+      </summary>
+      <div className="border-t border-violet-500/15 px-3 py-2.5">
+        {entry.status === "working" ? (
+          <div className="text-muted-foreground">{t("agent.panel.strategyReviewWorking")}</div>
+        ) : entry.status === "failed" ? (
+          <div className="text-muted-foreground">{entry.message ?? t("agent.panel.strategyReviewFailed")}</div>
+        ) : advice ? (
+          <div className="space-y-1.5 text-muted-foreground">
+            <div>{advice.diagnosis}</div>
+            <ol className="list-decimal space-y-1 pl-4">
+              {advice.nextActions.map((action, index) => <li key={`${index}-${action}`}>{action}</li>)}
+            </ol>
+            <div><span className="font-medium text-foreground">{t("agent.panel.strategyReviewAvoid")}:</span> {advice.avoid}</div>
+          </div>
+        ) : null}
       </div>
-      {entry.status === "working" ? (
-        <div className="mt-1 text-muted-foreground">{t("agent.panel.strategyReviewWorking")}</div>
-      ) : entry.status === "failed" ? (
-        <div className="mt-1 text-muted-foreground">{entry.message ?? t("agent.panel.strategyReviewFailed")}</div>
-      ) : advice ? (
-        <div className="mt-2 space-y-1.5 text-muted-foreground">
-          <div>{advice.diagnosis}</div>
-          <ol className="list-decimal space-y-1 pl-4">
-            {advice.nextActions.map((action, index) => <li key={`${index}-${action}`}>{action}</li>)}
-          </ol>
-          <div><span className="font-medium text-foreground">{t("agent.panel.strategyReviewAvoid")}:</span> {advice.avoid}</div>
-        </div>
-      ) : null}
+    </details>
+  );
+}
+
+function ProcessNarrationBubble({ entry }: { entry: AgentProgressTimelineEntry }) {
+  const t = useT();
+  return (
+    <div className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2.5 text-sm">
+      <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+        {entry.phase === "streaming"
+          ? <Loader2 className="h-3 w-3 animate-spin text-primary" />
+          : <Sparkles className="h-3 w-3 text-primary" />}
+        {t("agent.panel.processNarration")}
+      </div>
+      <AssistantMessage content={entry.content} />
     </div>
+  );
+}
+
+function ProcessNarrationGroup({ entries }: { entries: AgentProgressTimelineEntry[] }) {
+  const t = useT();
+  if (entries.length === 0) return null;
+  return (
+    <details className="group rounded-lg border border-border/60 bg-muted/10 text-xs">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-muted-foreground [&::-webkit-details-marker]:hidden">
+        <Sparkles className="h-3.5 w-3.5 text-primary/70" />
+        <span className="flex-1">{t("agent.panel.processNarrationCount", { count: entries.length })}</span>
+        <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" />
+      </summary>
+      <div className="space-y-3 border-t border-border/50 px-3 py-2.5">
+        {entries.map((entry) => (
+          <div key={entry.id} className="border-l-2 border-primary/20 pl-2.5 text-sm">
+            <AssistantMessage content={entry.content} />
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 
