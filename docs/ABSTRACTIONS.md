@@ -634,6 +634,7 @@ type AgentToolName =
   | "create_analysis_canvas" | "read_analysis_canvas" | "update_analysis_canvas"
   | "search_vault" | "list_vault_files" | "read_note"
   | "create_plan" | "update_plan" | "get_plan"
+  | "finalize_analysis"
   | "search_skills" | "load_skill" | "save_skill"
   | "propose_edit" | "ask_user";
 
@@ -705,6 +706,31 @@ interface AgentPlanSnapshot {
   runId: string;
   version: number;
   steps: AgentPlanStep[];
+  analysis?: AgentPlanAnalysis;
+}
+
+interface AgentPlanAnalysis {
+  question?: string;
+  grain?: string;
+  measure?: string;
+  dimensions?: string[];
+  filters?: string[];
+  sources?: Array<{
+    connectionName?: string;
+    table: string;
+    columns: string[];
+    reason: string;
+  }>;
+  joins?: Array<{
+    left: string;
+    right: string;
+    normalization?: string;
+    cardinality?: string;
+  }>;
+  outputShape?: "scalar" | "percentage" | "ranked_list" | "table" | "narrative";
+  assumptions?: string[];
+  unresolved?: string[];
+  verificationChecks?: Array<{ id: string; description: string }>;
 }
 
 type AgentEvent =
@@ -810,6 +836,7 @@ Safety ([ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md)):
 - Read tools and `run_query` may execute in parallel. `execute_python`, plan mutations, chart creation, Canvas creation/update, and `propose_edit` are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md)). NodeExecutionEnv is harness cwd only (not exposed as model tools)
 - Compaction uses `ai.contextWindow` + one overflow recovery ([ADR-0018](./adr/0018-pi-ai-agent-harness.md))
 - Execution plans are bounded and linear. Their active store is main-process runtime state; every versioned `AgentPlanSnapshot` is appended immutably to the pi session, and only the highest version for the current run is active ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md), [ADR-0046](./adr/0046-device-sharded-agent-session-history.md))
+- A complex plan's optional `analysis` member begins partial and is replaced with the full current semantics after live discovery. `finalize_analysis` accepts only the current version after all steps are terminal, `unresolved` is empty, every declared check is bound, and answer evidence points to successful non-truncated outputs from the same Agent run. Python evidence retains its source run lineage. This registry is disposable runtime state: Stela does not pre-scan sources or persist a separate evidence catalog. No-plan tasks do not enter this gate ([ADR-0075](./adr/0075-analysis-semantics-in-execution-plans.md))
 - The Agent system prompt and tool list are request-invariant. The compact stable prompt defines grounding, evidence order, planning threshold, mutation approval, rendering, and answer policy. Dynamic context, including explicit availability states and deterministic current-run guidance for Canvas, RunSQL rewrite, Skills, and MongoDB, is bounded, redacted, and appended in the user turn immediately before the request; pi-ai uses short cache retention and session affinity ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md))
 - Data analysis is driven by material uncertainty rather than a mandatory checklist. Locate runs only when the source is unknown, Ground only when semantic ambiguity affects correctness, Verify only when plausible interpretations would change the answer, and Challenge only when evidence contradicts the working conclusion. Every tool call must compute a requested result or resolve such an uncertainty; the Agent stops once the requested conclusion is supported. Physical semantics prefer current context, live schema/DDL, small samples, then SQL usage; business semantics prefer current definitions, SQL usage, Vault notes, Skills, then clarification. Routine locate-schema-query lookups do not create execution plans.
 - RunSQL fix/schema quick actions auto-submit in a new Agent tab; rewrite/question actions open editable drafts. `runsql_rewrite` proposals are bound to the original SQL snapshot and renderer target, then reuse the inline diff accept/discard UI ([ADR-0059](./adr/0059-agent-panel-quick-actions.md))

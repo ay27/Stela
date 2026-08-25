@@ -45,6 +45,8 @@ assert.match(prompt, /Locate sources only when they are unknown/);
 assert.match(prompt, /Challenge the working conclusion only when evidence contradicts it/);
 assert.match(prompt, /Do not investigate adjacent questions or non-material limitations unless the user asks/);
 assert.match(prompt, /Do not plan a routine locate -> schema -> query lookup/);
+assert.match(prompt, /live planning, not a request to pre-scan or cache/);
+assert.match(prompt, /call finalize_analysis with the current plan version/);
 assert.match(prompt, /Use search_sql_usage only when established joins, filters, write direction, or business conventions matter/);
 assert.match(prompt, /In chat and final answers, show SQL only in fenced ```sql``` blocks/);
 assert.match(prompt, /In Vault Markdown, use ```runsql``` only for intentionally executable SQL/);

@@ -127,3 +127,4 @@ proposed → active → superseded
 | [0072](0072-profile-scoped-agent-reasoning-effort.md) | Profile-scoped Agent reasoning effort | active |
 | [0073](0073-three-state-skill-freshness.md) | Three-state Skill freshness and maintenance inspection | active |
 | [0074](0074-streamed-agent-process-narration.md) | Streamed Agent process narration | active |
+| [0075](0075-analysis-semantics-in-execution-plans.md) | Analysis semantics and current-run evidence finalization | active |

@@ -99,6 +99,38 @@ function isPlanStep(value: unknown): boolean {
     (step.runId === undefined || typeof step.runId === "string");
 }
 
+function isStringArray(value: unknown): boolean {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isPlanAnalysis(value: unknown): boolean {
+  const analysis = asRecord(value);
+  if (!analysis) return false;
+  if (!["question", "grain", "measure"].every((key) =>
+    analysis[key] === undefined || typeof analysis[key] === "string")) return false;
+  if (!["dimensions", "filters", "assumptions", "unresolved"].every((key) =>
+    analysis[key] === undefined || isStringArray(analysis[key]))) return false;
+  if (analysis.outputShape !== undefined &&
+    !["scalar", "percentage", "ranked_list", "table", "narrative"].includes(String(analysis.outputShape))) return false;
+  if (analysis.sources !== undefined && (!Array.isArray(analysis.sources) || !analysis.sources.every((value) => {
+    const source = asRecord(value);
+    return !!source && typeof source.table === "string" && typeof source.reason === "string" &&
+      isStringArray(source.columns) &&
+      (source.connectionName === undefined || typeof source.connectionName === "string");
+  }))) return false;
+  if (analysis.joins !== undefined && (!Array.isArray(analysis.joins) || !analysis.joins.every((value) => {
+    const join = asRecord(value);
+    return !!join && typeof join.left === "string" && typeof join.right === "string" &&
+      (join.normalization === undefined || typeof join.normalization === "string") &&
+      (join.cardinality === undefined || typeof join.cardinality === "string");
+  }))) return false;
+  return analysis.verificationChecks === undefined ||
+    (Array.isArray(analysis.verificationChecks) && analysis.verificationChecks.every((value) => {
+      const check = asRecord(value);
+      return !!check && typeof check.id === "string" && typeof check.description === "string";
+    }));
+}
+
 function isProposalPayload(value: unknown): boolean {
   const payload = asRecord(value);
   return !!payload &&
@@ -135,7 +167,8 @@ function asAgentEvent(value: unknown): AgentEvent | null {
         typeof plan.runId === "string" &&
         typeof plan.version === "number" &&
         Array.isArray(plan.steps) &&
-        plan.steps.every(isPlanStep)
+        plan.steps.every(isPlanStep) &&
+        (plan.analysis === undefined || isPlanAnalysis(plan.analysis))
         ? event as AgentEvent
         : null;
     }

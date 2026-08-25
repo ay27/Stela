@@ -68,6 +68,7 @@ import {
 } from "./execution-plan";
 import {
   createAgentTools,
+  type AgentAnalysisRunEvidence,
   type AgentRunRecorder,
   type ProposalRequest,
 } from "./agent-tools";
@@ -752,6 +753,8 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
     plan = new ExecutionPlanStore(runId, (snapshot) => {
       emit({ type: "plan_updated", runId, plan: snapshot });
     });
+    const analysisRuns = new Map<string, AgentAnalysisRunEvidence>();
+    const analysisFinalization = { version: null as number | null };
     const planPersistence = createPlanPersistenceBuffer((snapshot) =>
       appendPlanEntry(session!, snapshot).then(() => undefined)
     );
@@ -858,6 +861,8 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           },
           run: { runId, sessionId: request.sessionId, notePath: request.notePath ?? null, questionsAsked: 0 },
           chartRuns: new Map(),
+          analysisRuns,
+          analysisFinalization,
           canvasRefresh: request.canvasRefresh ? {
             path: request.canvasRefresh.path,
             sourceId: request.canvasRefresh.sourceId ?? null,
@@ -1295,6 +1300,37 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           message: result.errorMessage ?? "Agent run failed.",
         });
         return;
+      }
+
+      const currentPlan = plan.get();
+      if (currentPlan && analysisFinalization.version !== currentPlan.version) {
+        result = await harness.prompt(
+          "The current execution plan has not passed finalize_analysis. Do not answer yet. " +
+            "Complete or skip every remaining step, replace the analysis semantics with a complete current snapshot, " +
+            "run any missing checks, then call finalize_analysis with the current plan version and return only its accepted answer.",
+        );
+        await emitUsage(false);
+        if (signal.aborted || result.stopReason === "aborted") {
+          emit({ type: "cancelled", runId });
+          return;
+        }
+        if (result.stopReason === "error" || isContextOverflow(result, contextWindow)) {
+          emit({
+            type: "error",
+            runId,
+            message: result.errorMessage ?? "The planned analysis could not be finalized.",
+          });
+          return;
+        }
+        const refreshedPlan = plan.get();
+        if (refreshedPlan && analysisFinalization.version !== refreshedPlan.version) {
+          emit({
+            type: "error",
+            runId,
+            message: "The Agent stopped before the planned analysis passed evidence finalization.",
+          });
+          return;
+        }
       }
 
       const finalAnswer = visibleAssistantText(result).trim();

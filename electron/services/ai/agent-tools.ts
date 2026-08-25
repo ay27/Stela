@@ -27,6 +27,7 @@ import {
 } from "@shared/chart-spec";
 import type {
   AgentToolName,
+  AgentPlanAnalysis,
   AgentPlanSnapshot,
   AgentProposalKind,
   AgentProposalPayload,
@@ -53,7 +54,11 @@ import * as analysisCanvasService from "../analysis-canvas";
 import * as search from "../search";
 import * as vaultFs from "../vault-fs";
 import { notifyFileChanged } from "../vault-watcher";
-import { ExecutionPlanStore, type CreatePlanStep } from "./execution-plan";
+import {
+  analysisReadinessIssues,
+  ExecutionPlanStore,
+  type CreatePlanStep,
+} from "./execution-plan";
 import { resolveNamedTableSchemas, searchTables } from "./schema-context";
 import { classifySql } from "./sql-guard";
 import {
@@ -206,6 +211,16 @@ export interface ToolOutcome {
   terminate?: boolean;
 }
 
+export interface AgentAnalysisRunEvidence {
+  kind: "query" | "python";
+  connectionName?: string;
+  tables: string[];
+  columns: ColumnDef[];
+  rowCount: number;
+  truncated: boolean;
+  sourceRunIds: string[];
+}
+
 export interface ProposalRequest {
   kind: AgentProposalKind;
   payload: AgentProposalPayload;
@@ -254,6 +269,10 @@ export interface AgentToolContext {
   }) => void;
   /** 本次 Agent 会话内 run_query 的真实结果，只供 create_chart 校验。 */
   chartRuns?: Map<string, { sql: string; columns: ColumnDef[]; rows: unknown[][] }>;
+  /** Successful query/Python outputs created in this Agent run and eligible for final evidence. */
+  analysisRuns?: Map<string, AgentAnalysisRunEvidence>;
+  /** The plan version accepted by finalize_analysis, if any. */
+  analysisFinalization?: { version: number | null };
   resolveChartRun?: (runId: string) => Promise<RunRecord | null>;
   /** Dedicated Canvas refresh runs may commit their target exactly once. */
   canvasRefresh?: { path: string; sourceId: string | null; committed: boolean };
@@ -532,6 +551,32 @@ export function createAgentTools(options: {
             acceptance: Type.String(),
           }),
         ),
+        analysis: Type.Optional(Type.Object({
+          question: Type.Optional(Type.String()),
+          grain: Type.Optional(Type.String()),
+          measure: Type.Optional(Type.String()),
+          dimensions: Type.Optional(Type.Array(Type.String())),
+          filters: Type.Optional(Type.Array(Type.String())),
+          sources: Type.Optional(Type.Array(Type.Object({
+            connectionName: Type.Optional(Type.String()),
+            table: Type.String(),
+            columns: Type.Array(Type.String(), { minItems: 1 }),
+            reason: Type.String(),
+          }))),
+          joins: Type.Optional(Type.Array(Type.Object({
+            left: Type.String(),
+            right: Type.String(),
+            normalization: Type.Optional(Type.String()),
+            cardinality: Type.Optional(Type.String()),
+          }))),
+          outputShape: Type.Optional(Type.Union(["scalar", "percentage", "ranked_list", "table", "narrative"].map((value) => Type.Literal(value)))),
+          assumptions: Type.Optional(Type.Array(Type.String())),
+          unresolved: Type.Optional(Type.Array(Type.String())),
+          verificationChecks: Type.Optional(Type.Array(Type.Object({
+            id: Type.String(),
+            description: Type.String(),
+          }))),
+        })),
       }),
       executionMode: "sequential",
       execute: (toolCallId, params) => runTool("create_plan", toolCallId, params, ctx, requestProposal),
@@ -546,6 +591,32 @@ export function createAgentTools(options: {
         status: Type.Union([Type.Literal("completed"), Type.Literal("blocked"), Type.Literal("skipped")]),
         evidence: Type.Optional(Type.String()),
         runId: Type.Optional(Type.String()),
+        analysis: Type.Optional(Type.Object({
+          question: Type.Optional(Type.String()),
+          grain: Type.Optional(Type.String()),
+          measure: Type.Optional(Type.String()),
+          dimensions: Type.Optional(Type.Array(Type.String())),
+          filters: Type.Optional(Type.Array(Type.String())),
+          sources: Type.Optional(Type.Array(Type.Object({
+            connectionName: Type.Optional(Type.String()),
+            table: Type.String(),
+            columns: Type.Array(Type.String(), { minItems: 1 }),
+            reason: Type.String(),
+          }))),
+          joins: Type.Optional(Type.Array(Type.Object({
+            left: Type.String(),
+            right: Type.String(),
+            normalization: Type.Optional(Type.String()),
+            cardinality: Type.Optional(Type.String()),
+          }))),
+          outputShape: Type.Optional(Type.Union(["scalar", "percentage", "ranked_list", "table", "narrative"].map((value) => Type.Literal(value)))),
+          assumptions: Type.Optional(Type.Array(Type.String())),
+          unresolved: Type.Optional(Type.Array(Type.String())),
+          verificationChecks: Type.Optional(Type.Array(Type.Object({
+            id: Type.String(),
+            description: Type.String(),
+          }))),
+        })),
       }),
       executionMode: "sequential",
       execute: (toolCallId, params) => runTool("update_plan", toolCallId, params, ctx, requestProposal),
@@ -557,6 +628,27 @@ export function createAgentTools(options: {
       parameters: Type.Object({}),
       executionMode: "sequential",
       execute: (toolCallId) => runTool("get_plan", toolCallId, {}, ctx, requestProposal),
+    },
+    {
+      name: "finalize_analysis",
+      label: "Finalize analysis",
+      description:
+        "Validate a completed complex analysis against the current plan version and successful, non-truncated run_query/execute_python outputs from this Agent run. Call this immediately before the final answer; simple tasks without a plan do not use it.",
+      parameters: Type.Object({
+        planVersion: Type.Number(),
+        answer: Type.String({ description: "The exact concise answer to return after validation." }),
+        evidence: Type.Array(Type.Object({
+          runId: Type.String(),
+          fields: Type.Optional(Type.Array(Type.String())),
+          description: Type.Optional(Type.String()),
+        }), { minItems: 1 }),
+        checks: Type.Array(Type.Object({
+          id: Type.String(),
+          runId: Type.String(),
+        })),
+      }),
+      executionMode: "sequential",
+      execute: (toolCallId, params) => runTool("finalize_analysis", toolCallId, params, ctx, requestProposal),
     },
     {
       name: "load_skill",
@@ -1072,15 +1164,13 @@ async function runQuery(
     rowCount: totalRowCount,
     queryLanguage: query.language,
   });
-  if (query.language === "sql") {
-    const tables = extractSqlFacts(query.query).flatMap((facts) => [
+  const evidenceTables = query.language === "sql"
+    ? extractSqlFacts(query.query).flatMap((facts) => [
       ...facts.readTables,
       ...facts.writeTables,
-    ]).map((table) => table.db ? `${table.db}.${table.table}` : table.table);
-    recordSkillTableEvidence(ctx, tables);
-  } else {
-    recordSkillTableEvidence(ctx, [query.database ? `${query.database}.${query.collection}` : query.collection]);
-  }
+    ]).map((table) => table.db ? `${table.db}.${table.table}` : table.table)
+    : [query.database ? `${query.database}.${query.collection}` : query.collection];
+  recordSkillTableEvidence(ctx, evidenceTables);
   if (result.kind === "query" && query.language === "sql") {
     ctx.chartRuns?.set(runId, {
       sql: auditText,
@@ -1092,6 +1182,16 @@ async function runQuery(
     return ok({ runId, connectionName, language: query.language, result: formatQueryResult(result) });
   }
   const rowCount = totalRowCount ?? result.rows.length;
+  const previewTruncated = rowCount > Math.min(result.rows.length, SQL_PREVIEW_ROWS);
+  ctx.analysisRuns?.set(runId, {
+    kind: "query",
+    connectionName,
+    tables: evidenceTables,
+    columns: result.columns,
+    rowCount,
+    truncated: previewTruncated,
+    sourceRunIds: [],
+  });
   return ok({
     runId,
     connectionName,
@@ -1101,7 +1201,7 @@ async function runQuery(
       columns: result.columns,
       rowCount,
       rows: result.rows.slice(0, SQL_PREVIEW_ROWS),
-      previewTruncated: rowCount > Math.min(result.rows.length, SQL_PREVIEW_ROWS),
+      previewTruncated,
       artifactAvailable: artifact !== null,
       artifactMode: artifact?.mode ?? null,
       elapsedMs: result.elapsedMs,
@@ -1129,6 +1229,7 @@ async function runExecutePython(
     return fail(`inputs supports at most ${PYTHON_INPUT_MAX_COUNT} run_query results.`);
   }
   const artifacts: Record<string, QueryArtifactDescriptor> = {};
+  const sourceRunIds: string[] = [];
   for (const [alias, rawRunId] of entries) {
     if (!PYTHON_ALIAS_PATTERN.test(alias)) {
       return fail(`Invalid Python input alias '${alias}'. Use a valid identifier up to 64 characters.`);
@@ -1148,6 +1249,7 @@ async function runExecutePython(
       );
     }
     artifacts[alias] = artifact;
+    sourceRunIds.push(rawRunId.trim());
   }
   const result = await ctx.pythonExecutor.execute({
     vaultPath: ctx.vaultPath,
@@ -1162,7 +1264,17 @@ async function runExecutePython(
         (result.stdout ? `\nstdout:\n${result.stdout}` : ""),
     );
   }
-  return ok({ stdout: result.stdout, result: result.value, elapsedMs: result.elapsedMs });
+  const runId = `${ctx.run.runId}-python-${randomUUID()}`;
+  const value = result.value;
+  ctx.analysisRuns?.set(runId, {
+    kind: "python",
+    tables: [],
+    columns: value.kind === "table" ? value.columns : [],
+    rowCount: value.kind === "table" ? value.rowCount : value.kind === "scalar" ? 1 : 0,
+    truncated: value.kind === "table" && value.truncated,
+    sourceRunIds,
+  });
+  return ok({ runId, stdout: result.stdout, result: result.value, elapsedMs: result.elapsedMs });
 }
 
 function runCreateChart(args: Record<string, unknown>, ctx: AgentToolContext): ToolOutcome {
@@ -1822,16 +1934,22 @@ async function runAskUser(
   );
 }
 
-async function runCreatePlan(args: { steps?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
+async function runCreatePlan(
+  args: { steps?: unknown; analysis?: unknown },
+  ctx: AgentToolContext,
+): Promise<ToolOutcome> {
   if (!ctx.plan) return fail("Execution plans are unavailable for this run.");
   if (!Array.isArray(args.steps)) return fail("steps must be an array.");
-  const snapshot = ctx.plan.create(args.steps as CreatePlanStep[]);
+  const snapshot = ctx.plan.create(
+    args.steps as CreatePlanStep[],
+    args.analysis === undefined ? undefined : args.analysis as AgentPlanAnalysis,
+  );
   await ctx.persistPlan?.(snapshot);
   return ok(snapshot);
 }
 
 async function runUpdatePlan(
-  args: { stepId?: unknown; status?: unknown; evidence?: unknown; runId?: unknown },
+  args: { stepId?: unknown; status?: unknown; evidence?: unknown; runId?: unknown; analysis?: unknown },
   ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
   if (!ctx.plan) return fail("Execution plans are unavailable for this run.");
@@ -1844,6 +1962,7 @@ async function runUpdatePlan(
       status: args.status,
       ...(typeof args.evidence === "string" ? { evidence: args.evidence } : {}),
       ...(typeof args.runId === "string" ? { runId: args.runId } : {}),
+      ...(args.analysis === undefined ? {} : { analysis: args.analysis as AgentPlanAnalysis }),
     });
   await ctx.persistPlan?.(snapshot);
   return ok(snapshot);
@@ -1853,6 +1972,113 @@ function runGetPlan(ctx: AgentToolContext): ToolOutcome {
   if (!ctx.plan) return fail("Execution plans are unavailable for this run.");
   const snapshot = ctx.plan.get();
   return snapshot ? ok(snapshot) : ok({ plan: null, instruction: ctx.plan.formatForContext() });
+}
+
+function normalizedEvidenceName(value: string): string {
+  return value.trim().replace(/[`"']/g, "").toLowerCase();
+}
+
+function sameTable(left: string, right: string): boolean {
+  const a = normalizedEvidenceName(left);
+  const b = normalizedEvidenceName(right);
+  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+}
+
+function queryEvidenceLeaves(
+  runId: string,
+  runs: Map<string, AgentAnalysisRunEvidence>,
+  seen = new Set<string>(),
+): AgentAnalysisRunEvidence[] {
+  if (seen.has(runId)) return [];
+  seen.add(runId);
+  const run = runs.get(runId);
+  if (!run) return [];
+  if (run.kind === "query") return [run];
+  return run.sourceRunIds.flatMap((sourceRunId) => queryEvidenceLeaves(sourceRunId, runs, seen));
+}
+
+function runFinalizeAnalysis(args: Record<string, unknown>, ctx: AgentToolContext): ToolOutcome {
+  const snapshot = ctx.plan?.get();
+  if (!snapshot) return fail("Create and complete an execution plan before finalizing a complex analysis.");
+  if (!Number.isInteger(args.planVersion) || args.planVersion !== snapshot.version) {
+    return fail(`planVersion must match the current plan version ${snapshot.version}. Read get_plan and retry.`);
+  }
+  const readinessIssues = analysisReadinessIssues(snapshot);
+  if (readinessIssues.length > 0) {
+    return fail(`The analysis plan is not ready: ${readinessIssues.join("; ")}.`);
+  }
+  const unfinished = snapshot.steps.filter((step) => step.status !== "completed" && step.status !== "skipped");
+  if (unfinished.length > 0) {
+    return fail(`Every plan step must be completed or skipped before finalization: ${unfinished.map((step) => step.id).join(", ")}.`);
+  }
+  const answer = typeof args.answer === "string" ? args.answer.trim() : "";
+  if (!answer) return fail("answer must be a non-empty string.");
+  if (!Array.isArray(args.evidence) || args.evidence.length === 0) {
+    return fail("evidence must bind at least one successful run from this Agent run.");
+  }
+  if (!Array.isArray(args.checks)) return fail("checks must be an array.");
+  const runs = ctx.analysisRuns;
+  if (!runs) return fail("Analysis evidence tracking is unavailable for this run.");
+
+  const boundRunIds: string[] = [];
+  for (const [index, raw] of args.evidence.entries()) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return fail(`evidence[${index}] must be an object.`);
+    }
+    const binding = raw as Record<string, unknown>;
+    const runId = typeof binding.runId === "string" ? binding.runId.trim() : "";
+    const run = runs.get(runId);
+    if (!run) return fail(`evidence[${index}].runId must reference a successful run from this Agent run.`);
+    if (run.truncated) {
+      return fail(`Evidence run '${runId}' is truncated. Aggregate in the source or use execute_python over its full artifact.`);
+    }
+    const fields = stringList(binding.fields);
+    const available = new Set(run.columns.map((column) => column.name.toLowerCase()));
+    const missing = fields.filter((field) => !available.has(field.toLowerCase()));
+    if (missing.length > 0) {
+      return fail(`Evidence run '${runId}' does not contain fields: ${missing.join(", ")}.`);
+    }
+    boundRunIds.push(runId);
+  }
+
+  const requiredChecks = new Set(snapshot.analysis!.verificationChecks!.map((check) => check.id));
+  const seenChecks = new Set<string>();
+  for (const [index, raw] of args.checks.entries()) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return fail(`checks[${index}] must be an object.`);
+    const binding = raw as Record<string, unknown>;
+    const id = typeof binding.id === "string" ? binding.id.trim() : "";
+    const runId = typeof binding.runId === "string" ? binding.runId.trim() : "";
+    if (!requiredChecks.has(id)) return fail(`Unknown verification check id: ${id || "(empty)"}.`);
+    if (seenChecks.has(id)) return fail(`Duplicate verification check binding: ${id}.`);
+    const run = runs.get(runId);
+    if (!run) return fail(`Verification check '${id}' must reference a successful run from this Agent run.`);
+    if (run.truncated) return fail(`Verification check '${id}' references truncated run '${runId}'.`);
+    seenChecks.add(id);
+  }
+  const missingChecks = [...requiredChecks].filter((id) => !seenChecks.has(id));
+  if (missingChecks.length > 0) return fail(`Missing verification check bindings: ${missingChecks.join(", ")}.`);
+
+  const queryLeaves = boundRunIds.flatMap((runId) => queryEvidenceLeaves(runId, runs));
+  const uncoveredSources = snapshot.analysis!.sources!.filter((source) =>
+    !queryLeaves.some((run) =>
+      (!source.connectionName || run.connectionName === source.connectionName) &&
+      run.tables.some((table) => sameTable(table, source.table)),
+    ),
+  );
+  if (uncoveredSources.length > 0) {
+    return fail(
+      `Final evidence does not trace back to planned sources: ${uncoveredSources.map((source) =>
+        `${source.connectionName ? `${source.connectionName}:` : ""}${source.table}`).join(", ")}.`,
+    );
+  }
+
+  if (ctx.analysisFinalization) ctx.analysisFinalization.version = snapshot.version;
+  return ok({
+    answer,
+    planVersion: snapshot.version,
+    evidenceRunIds: [...new Set(boundRunIds)],
+    instruction: "Return answer verbatim as the user-facing final answer. Do not add unsupported values or claims.",
+  });
 }
 
 /** 把模型返回的 JSON 字符串参数安全 parse 成对象；失败时返回 `{}` 让工具自己报参数缺失。 */
@@ -1909,6 +2135,8 @@ export async function dispatchTool(
         return await runUpdatePlan(args, ctx);
       case "get_plan":
         return runGetPlan(ctx);
+      case "finalize_analysis":
+        return runFinalizeAnalysis(args, ctx);
       case "load_skill":
         return await runLoadSkill(args, ctx);
       case "search_skills":

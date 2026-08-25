@@ -414,7 +414,14 @@ flowchart TB
    Canvas is execution context and is not rendered as user-authored content. Text segments retain their position around typed table,
    note, Canvas, RunSQL, and selection references, while resource bodies are deduplicated.
    Plan versions are immutable appended session
-   entries, and pi-ai requests use short cache retention. Read tools may run in parallel;
+   entries. For analyses complex enough to create a plan, the snapshot also carries
+   the current question, grain, measure, dimensions, filters, sources/columns,
+   joins, output shape, assumptions, unresolved items, and verification checks.
+   Successful query/Python calls register disposable same-run evidence metadata;
+   `finalize_analysis` binds the current plan version and checks to those runs before
+   the final answer is emitted. No source pre-scan or durable evidence database is
+   involved, and no-plan questions retain the original fast path
+   ([ADR-0075](./adr/0075-analysis-semantics-in-execution-plans.md)). pi-ai requests use short cache retention. Read tools may run in parallel;
    plan tools, Python execution, chart creation, Canvas writes, and `propose_edit` are sequential.
    A bounded in-memory analysis ledger observes schema discovery, structured queries,
    and Python execution. Repeated query families receive a deterministic hint; structural

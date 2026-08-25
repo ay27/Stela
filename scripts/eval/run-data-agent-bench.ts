@@ -37,6 +37,7 @@ import {
 } from "../../electron/services/ai/agent-prompt";
 import {
   createAgentTools,
+  type AgentAnalysisRunEvidence,
   type ProposalRequest,
 } from "../../electron/services/ai/agent-tools";
 import {
@@ -362,6 +363,8 @@ async function runTask(input: {
     },
   });
   const plan = new ExecutionPlanStore(request.runId);
+  const analysisRuns = new Map<string, AgentAnalysisRunEvidence>();
+  const analysisFinalization = { version: null as number | null };
   const planPersistence = createPlanPersistenceBuffer(async (snapshot) => {
     await session.appendCustomEntry(EXECUTION_PLAN_ENTRY, {
       runId: snapshot.runId,
@@ -460,6 +463,8 @@ async function runTask(input: {
         mode: "normal",
         run: { runId: request.runId, sessionId: request.runId, notePath: null, questionsAsked: 0 },
         chartRuns: new Map(),
+        analysisRuns,
+        analysisFinalization,
         resolveChartRun: async (runId) => runRecords.get(runId) ?? null,
         plan,
         persistPlan: planPersistence.enqueue,
@@ -586,7 +591,7 @@ async function runTask(input: {
   });
 
   try {
-    const result = await harness.prompt(buildUserContent(request, {
+    let result = await harness.prompt(buildUserContent(request, {
       connection,
       dialect: "DAB structured query (SQL and MongoDB find/aggregate)",
       queryLanguages: ["sql", "mongodb"],
@@ -599,8 +604,19 @@ async function runTask(input: {
         clarification: "unavailable",
       },
     }));
+    const currentPlan = plan.get();
+    if (currentPlan && analysisFinalization.version !== currentPlan.version && result.stopReason !== "error") {
+      result = await harness.prompt(
+        "The current execution plan has not passed finalize_analysis. Complete the plan, update its full analysis semantics, " +
+          "run the required checks, call finalize_analysis with current-run evidence, and return only its accepted answer.",
+      );
+    }
     answer = assistantText(result);
     if (result.stopReason === "error") error = result.errorMessage ?? "agent error";
+    const refreshedPlan = plan.get();
+    if (refreshedPlan && analysisFinalization.version !== refreshedPlan.version) {
+      error ??= "planned analysis did not pass finalize_analysis";
+    }
   } catch (caught) {
     error = caught instanceof Error ? caught.message : String(caught);
   } finally {

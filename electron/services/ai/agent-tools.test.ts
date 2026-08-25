@@ -50,6 +50,8 @@ try {
     recordRun: async () => {},
     requestProposal: async () => true,
     plan: new ExecutionPlanStore("test-run"),
+    analysisRuns: new Map(),
+    analysisFinalization: { version: null as number | null },
   };
 
   // 无连接时数据库相关工具明确报错，引导模型走别的路径
@@ -432,6 +434,10 @@ try {
           { id: "scope", title: "Scope", intent: "Define the metric", acceptance: "Definition found" },
           { id: "trend", title: "Trend", intent: "Measure daily values", acceptance: "Result available" },
         ],
+        analysis: {
+          question: "What is the daily trend?",
+          unresolved: ["Confirm source"],
+        },
       }),
       baseCtx,
     );
@@ -444,13 +450,69 @@ try {
     assert.equal(skipAhead.ok, false);
     const complete = await dispatchTool(
       "update_plan",
-      JSON.stringify({ stepId: "scope", status: "completed", evidence: "metrics.md" }),
+      JSON.stringify({
+        stepId: "scope",
+        status: "completed",
+        evidence: "metrics.md",
+        analysis: {
+          question: "What is the daily trend?",
+          grain: "one row per day",
+          measure: "SUM(facts.value)",
+          dimensions: ["facts.day"],
+          filters: [],
+          sources: [{ connectionName: "demo", table: "facts", columns: ["day", "value"], reason: "Metric source" }],
+          joins: [],
+          outputShape: "table",
+          assumptions: [],
+          unresolved: [],
+          verificationChecks: [{ id: "daily-grain", description: "One output row per day" }],
+        },
+      }),
       baseCtx,
     );
     assert.equal(complete.ok, true);
+    const finish = await dispatchTool(
+      "update_plan",
+      JSON.stringify({ stepId: "trend", status: "completed", evidence: "daily result", runId: "result-run" }),
+      baseCtx,
+    );
+    assert.equal(finish.ok, true);
+    baseCtx.analysisRuns.set("result-run", {
+      kind: "query",
+      connectionName: "demo",
+      tables: ["analytics.facts"],
+      columns: [{ name: "day", typeName: "DATE" }, { name: "total", typeName: "INTEGER" }],
+      rowCount: 30,
+      truncated: false,
+      sourceRunIds: [],
+    });
+    const staleFinalize = await dispatchTool(
+      "finalize_analysis",
+      JSON.stringify({
+        planVersion: 2,
+        answer: "Daily trend ready.",
+        evidence: [{ runId: "result-run", fields: ["day", "total"] }],
+        checks: [{ id: "daily-grain", runId: "result-run" }],
+      }),
+      baseCtx,
+    );
+    assert.equal(staleFinalize.ok, false);
+    assert.match(staleFinalize.text, /current plan version 3/);
+    const finalize = await dispatchTool(
+      "finalize_analysis",
+      JSON.stringify({
+        planVersion: 3,
+        answer: "Daily trend ready.",
+        evidence: [{ runId: "result-run", fields: ["day", "total"] }],
+        checks: [{ id: "daily-grain", runId: "result-run" }],
+      }),
+      baseCtx,
+    );
+    assert.equal(finalize.ok, true, finalize.text);
+    assert.equal(baseCtx.analysisFinalization.version, 3);
     const plan = await dispatchTool("get_plan", "{}", baseCtx);
     assert.equal(plan.ok, true);
-    assert.match(plan.text, /"status": "running"/);
+    assert.doesNotMatch(plan.text, /"status": "running"/);
   }
 
   // 同一毫秒内并行 SQL 也必须有不同的审计 runId，才能作为计划证据引用。
@@ -544,6 +606,7 @@ try {
       recordRun: async (run: { connectionName: string; rowCount: number }) => {
         recorded.push({ connectionName: run.connectionName, rowCount: run.rowCount });
       },
+      analysisRuns: new Map(),
     };
     const query = await dispatchTool(
       "run_sql",
@@ -560,6 +623,7 @@ try {
     assert.equal(queryPayload.connectionName, "warehouse");
     assert.equal(queryPayload.result.artifactAvailable, true);
     assert.equal(queryPayload.result.rowCount, 3);
+    assert.equal(ctx.analysisRuns.get(queryPayload.runId)?.tables[0], "facts");
     assert.deepEqual(recorded, [{ connectionName: "warehouse", rowCount: 3 }]);
 
     const python = await dispatchTool(
@@ -569,7 +633,9 @@ try {
     );
     assert.equal(python.ok, true, python.text);
     assert.deepEqual(pythonAliases, ["facts"]);
-    assert.equal(JSON.parse(python.text).result.value, 6);
+    const pythonPayload = JSON.parse(python.text) as { runId: string; result: { value: number } };
+    assert.equal(pythonPayload.result.value, 6);
+    assert.deepEqual(ctx.analysisRuns.get(pythonPayload.runId)?.sourceRunIds, [queryPayload.runId]);
 
     const wrongRun = await dispatchTool(
       "execute_python",

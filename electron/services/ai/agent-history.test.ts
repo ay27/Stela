@@ -70,6 +70,34 @@ try {
     content: "I will verify the current revenue source.",
     phase: "completed",
   });
+  await appendAgentHistoryEvent(storage, {
+    type: "plan_updated",
+    runId: "run_1",
+    plan: {
+      runId: "run_1",
+      version: 1,
+      steps: [{
+        id: "revenue",
+        title: "Calculate revenue",
+        intent: "Use the authoritative orders source.",
+        acceptance: "Revenue is verified.",
+        status: "running",
+      }],
+      analysis: {
+        question: "What is revenue?",
+        grain: "one scalar",
+        measure: "SUM(orders.revenue)",
+        dimensions: [],
+        filters: [],
+        sources: [{ table: "orders", columns: ["revenue"], reason: "Revenue facts" }],
+        joins: [],
+        outputShape: "scalar",
+        assumptions: [],
+        unresolved: [],
+        verificationChecks: [],
+      },
+    },
+  });
   await appendAgentHistoryEvent(storage, { type: "final", runId: "run_1", content: "Revenue is 42.", stepIndex: 2 });
   await appendAgentHistoryFinished(storage, "run_1");
   const lastEntry = (await storage.getEntries()).at(-1);
@@ -119,23 +147,35 @@ try {
   assert.deepEqual(history.runs[0]?.request.canvasRefresh, request.canvasRefresh);
   assert.deepEqual(history.runs[0]?.request.message, request.message);
   assert.deepEqual(history.runs[0]?.request.workspaceContext, request.workspaceContext);
-  assert.deepEqual(history.runs[0]?.events, [
+  const historyEvents = history.runs[0]?.events ?? [];
+  assert.deepEqual(historyEvents.map((event) => event.type), [
+    "canvas_updated",
+    "assistant_progress",
+    "plan_updated",
+    "final",
+  ]);
+  assert.deepEqual(historyEvents[0],
     {
       type: "canvas_updated",
       runId: "run_1",
       path: "reports/revenue.stela.canvas",
       title: "Revenue",
       action: "created",
-    },
-    {
+    });
+  assert.deepEqual(historyEvents[1], {
       type: "assistant_progress",
       runId: "run_1",
       stepIndex: 1,
       content: "I will verify the current revenue source.",
       phase: "completed",
-    },
-    { type: "final", runId: "run_1", content: "Revenue is 42.", stepIndex: 2 },
-  ]);
+    });
+  assert.equal(
+    historyEvents[2]?.type === "plan_updated"
+      ? historyEvents[2].plan.analysis?.measure
+      : null,
+    "SUM(orders.revenue)",
+  );
+  assert.deepEqual(historyEvents[3], { type: "final", runId: "run_1", content: "Revenue is 42.", stepIndex: 2 });
 
   const maintenanceRequest: AgentRunRequest = {
     runId: "run_2",
