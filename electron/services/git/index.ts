@@ -12,7 +12,7 @@ import { isRepo, initRepo, ensureGitignore } from "./init";
 import { authorIdentity, setAuthorIdentity, currentBranch } from "./author";
 import { getModifiedFiles, discardFile } from "./status";
 import { commit } from "./commit";
-import { pull, push, remoteStatus, addRemote, hasRemote } from "./remote";
+import { pull, push, remoteStatus, addRemote, hasRemote, integrateOrigin } from "./remote";
 import {
   conflictFiles,
   conflictMode,
@@ -38,6 +38,7 @@ export {
   remoteStatus,
   addRemote,
   hasRemote,
+  integrateOrigin,
   conflictFiles,
   conflictMode,
   resolveConflict,

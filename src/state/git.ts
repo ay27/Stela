@@ -15,6 +15,8 @@ import type {
   GitConflictMode,
   GitSyncPullResult,
   GitSyncPushResult,
+  GitSyncRequest,
+  GitSyncResult,
   GitVaultStatus,
 } from "@shared/types";
 
@@ -41,15 +43,51 @@ interface GitState {
   /** pull 检测到冲突时置 true；UI 据此打开冲突解决流程。 */
   conflicted: boolean;
   conflictMode: GitConflictMode;
+  /** Imported execution-history generation for mounted history views. */
+  historyRevision: number;
 
   refresh: () => Promise<void>;
   syncPush: (message?: string, options?: { push?: boolean }) => Promise<GitSyncPushResult | null>;
   syncPull: () => Promise<GitSyncPullResult | null>;
+  syncNow: (request: GitSyncRequest) => Promise<GitSyncResult | null>;
   clearConflict: () => void;
 }
 
 function isNoVault(err: unknown): boolean {
   return (err as { code?: string }).code === "no_vault";
+}
+
+async function refreshChangedDomains(result: GitSyncResult): Promise<void> {
+  const domains = new Set(result.changedDomains);
+  if (domains.has("vault-files")) {
+    useWorkspace.getState().reloadCleanFileTabsAfterSync();
+  }
+  if (domains.has("agent-history")) {
+    await useAgentPanel.getState().refreshHistory();
+  }
+  if (domains.has("settings")) {
+    const { useSettings } = await import("@/state/settings");
+    await useSettings.getState().reload();
+  }
+  if (domains.has("connections")) {
+    const { useConnections } = await import("@/state/connections");
+    await useConnections.getState().reload();
+  }
+}
+
+function dirtyTabsResult(): GitSyncResult {
+  return {
+    committed: false,
+    commitHash: null,
+    integrated: false,
+    pushed: false,
+    conflicted: false,
+    conflictMode: "none",
+    importedRuns: 0,
+    changedDomains: [],
+    blockedReason: "dirty-tabs",
+    message: "waiting for editor changes to save",
+  };
 }
 
 export const useGitStore = create<GitState>((set, get) => ({
@@ -59,6 +97,7 @@ export const useGitStore = create<GitState>((set, get) => ({
   lastError: null,
   conflicted: false,
   conflictMode: "none",
+  historyRevision: 0,
 
   async refresh() {
     if (get().phase === "loading") return;
@@ -108,6 +147,7 @@ export const useGitStore = create<GitState>((set, get) => ({
         lastMessage: r.message,
         conflicted: r.conflicted,
         conflictMode: r.conflictMode,
+        ...(r.imported > 0 ? { historyRevision: get().historyRevision + 1 } : {}),
       });
       // pull 拉到新内容：显式让 clean tab 重读磁盘，dirty tab 保护本地。
       // 比纯等 vault-watcher 事件更跟手、抖动更少；watcher 仍会兜底刷新文件树等。
@@ -117,6 +157,36 @@ export const useGitStore = create<GitState>((set, get) => ({
       }
       await get().refresh();
       return r;
+    } catch (err) {
+      set({
+        phase: "error",
+        lastError: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  },
+
+  async syncNow(request) {
+    if (useWorkspace.getState().tabs.some((tab) => tab.dirty)) {
+      const result = dirtyTabsResult();
+      set({ lastMessage: result.message });
+      return result;
+    }
+    set({ phase: "busy", lastError: null });
+    try {
+      const result = await window.stela.git.syncNow(request);
+      set({
+        phase: "idle",
+        lastMessage: result.message,
+        conflicted: result.conflicted,
+        conflictMode: result.conflictMode,
+        ...(result.changedDomains.includes("history")
+          ? { historyRevision: get().historyRevision + 1 }
+          : {}),
+      });
+      if (!result.conflicted) await refreshChangedDomains(result);
+      await get().refresh();
+      return result;
     } catch (err) {
       set({
         phase: "error",

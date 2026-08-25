@@ -68,6 +68,8 @@ import type {
   GitRemoteStatus,
   GitSyncPullResult,
   GitSyncPushResult,
+  GitSyncRequest,
+  GitSyncResult,
   GitVaultStatus,
   JournalCleanupSummary,
   JournalImportSummary,
@@ -302,6 +304,7 @@ interface StelaBridge {
       options?: { push?: boolean },
     ) => Promise<GitSyncPushResult>;
     syncPull: () => Promise<GitSyncPullResult>;
+    syncNow: (request: GitSyncRequest) => Promise<GitSyncResult>;
   };
   journal: {
     getDeviceProfile: () => Promise<DeviceProfile>;

@@ -81,6 +81,8 @@ import type {
   GitRemoteStatus,
   GitSyncPullResult,
   GitSyncPushResult,
+  GitSyncRequest,
+  GitSyncResult,
   GitVaultStatus,
   JournalCleanupSummary,
   JournalImportSummary,
@@ -432,6 +434,8 @@ const stela = {
     syncPush: (message?: string, options?: { push?: boolean }) =>
       call<GitSyncPushResult>(IPC.GIT_SYNC_PUSH, { message, ...options }),
     syncPull: () => call<GitSyncPullResult>(IPC.GIT_SYNC_PULL, {}),
+    syncNow: (request: GitSyncRequest) =>
+      call<GitSyncResult>(IPC.GIT_SYNC_NOW, request),
   },
 
   journal: {

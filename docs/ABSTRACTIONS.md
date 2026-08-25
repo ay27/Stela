@@ -266,6 +266,21 @@ Append-only, per-device files at `{vault}/.stela/history/history_{deviceSlug}.js
 
 Implementation: `electron/services/history-journal.ts`.
 
+### GitSyncRequest / GitSyncResult
+
+`window.stela.git.syncNow(request)` is the typed renderer-to-main synchronization
+contract. `GitSyncRequest` selects the trigger and permitted operations
+(`commit`, `integrate`, `push`); IPC validation requires `push` to imply
+`integrate`. The main process serializes requests per Vault.
+
+`GitSyncResult` reports checkpoint/integration/push outcomes, conflict mode,
+imported run count, and changed domains. The changed-domain union is
+`vault-files | history | agent-history | settings | connections | skills |
+templates`. Renderer stores use it to reload clean tabs and affected caches
+without replacing dirty editor buffers. `blockedReason` distinguishes dirty
+tabs, uncheckpointed local changes, existing/created conflicts, and offline
+remote access.
+
 ## Connection Model
 
 ### ConnectionEntry
@@ -1067,8 +1082,17 @@ vault-watcher (@parcel/watcher, main)
 renderer subscriber (vault-watcher-subscriber.ts)
     ├── clean tab → reload file content
     ├── dirty tab → conflict prompt (no silent overwrite)
-    └── vault-index / sql-index incremental rebuild
+    ├── vault-index / sql-index incremental rebuild
+    └── AutoGit schedule → 3s quiet period → git.syncNow
+
+focus / online ────────────────────────────────┐
+60s fallback sync scan ───────────────────────┴─→ immediate git.syncNow
 ```
+
+The watcher includes a narrow Git-shared `.stela` allowlist: settings,
+connections, execution history, Agent history, Skills, and SQL templates. It is
+an event source, not a storage authority; missing watcher events affect latency
+only because the fallback scan still evaluates Git state.
 
 ## Naming Map (legacy → current)
 

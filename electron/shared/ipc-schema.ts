@@ -655,6 +655,16 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
     push: z.boolean().optional(),
   }),
   [IPC.GIT_SYNC_PULL]: z.object({}).strict(),
+  [IPC.GIT_SYNC_NOW]: z.object({
+    trigger: z.enum(["manual", "auto", "external", "focus", "interval"]),
+    commit: z.boolean(),
+    integrate: z.boolean(),
+    push: z.boolean(),
+    message: z.string().max(4096).optional(),
+  }).strict().refine((value) => !value.push || value.integrate, {
+    message: "push requires integrate",
+    path: ["push"],
+  }),
 
   // 执行历史 Journal
   [IPC.JOURNAL_GET_DEVICE_PROFILE]: z.object({}).strict(),

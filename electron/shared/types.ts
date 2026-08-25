@@ -1541,3 +1541,35 @@ export interface GitSyncPullResult {
   imported: number;
   message: string;
 }
+
+export type GitSyncTrigger = "manual" | "auto" | "external" | "focus" | "interval";
+
+export type GitSyncChangedDomain =
+  | "vault-files"
+  | "history"
+  | "agent-history"
+  | "settings"
+  | "connections"
+  | "skills"
+  | "templates";
+
+export interface GitSyncRequest {
+  trigger: GitSyncTrigger;
+  commit: boolean;
+  integrate: boolean;
+  push: boolean;
+  message?: string;
+}
+
+export interface GitSyncResult {
+  committed: boolean;
+  commitHash: string | null;
+  integrated: boolean;
+  pushed: boolean;
+  conflicted: boolean;
+  conflictMode: GitConflictMode;
+  importedRuns: number;
+  changedDomains: GitSyncChangedDomain[];
+  blockedReason: null | "dirty-tabs" | "local-changes" | "conflict" | "offline";
+  message: string;
+}

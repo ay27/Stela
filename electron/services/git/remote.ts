@@ -1,8 +1,8 @@
 /**
  * 远端同步（移植自 tolaria `git/remote.rs` + `git/connect.rs`）。
  *
- * - pull 采用 merge（`--no-rebase`），冲突时不抛错，返回 conflicted=true 让 UI
- *   进入冲突解决流程。
+ * - legacy pull 采用 merge（`--no-rebase`）；统一同步事务对未发布本地提交使用
+ *   rebase，对纯 behind 分支 fast-forward。
  * - push 被拒绝（non-fast-forward）时返回 pullRequired=true 而非抛错。
  * - 凭据完全委托系统 git（SSH agent / GCM / Keychain）；不在应用内存 token。
  */
@@ -16,6 +16,15 @@ import type {
 import { git, gitOut } from "./command";
 import { conflictMode } from "./conflict";
 import { currentBranch } from "./author";
+
+export interface GitIntegrateResult {
+  ok: boolean;
+  updated: boolean;
+  conflicted: boolean;
+  conflictMode: GitPullResult["conflictMode"];
+  changedPaths: string[];
+  message: string;
+}
 
 /** 是否配置了 origin 远端。 */
 export async function hasRemote(vaultPath: string): Promise<boolean> {
@@ -129,6 +138,84 @@ export async function push(vaultPath: string): Promise<GitPushResult> {
     };
   }
   return { ok: true, pullRequired: false, message: r.stdout.trim() || "pushed" };
+}
+
+/**
+ * Fetch and integrate origin without touching a dirty worktree. The caller owns
+ * the clean/checkpoint gate. Local commits that are not on origin are rebased;
+ * a purely-behind branch fast-forwards. Conflict state is deliberately left in
+ * place for Stela's existing conflict UI.
+ */
+export async function integrateOrigin(vaultPath: string): Promise<GitIntegrateResult> {
+  const branch = await currentBranch(vaultPath);
+  if (!branch) {
+    return {
+      ok: false,
+      updated: false,
+      conflicted: false,
+      conflictMode: "none",
+      changedPaths: [],
+      message: "current branch is unavailable",
+    };
+  }
+  const before = await gitOut(["rev-parse", "HEAD"], { cwd: vaultPath, okExitCodes: [128] }).catch(() => "");
+  const fetched = await git(["fetch", "origin", branch], { cwd: vaultPath, okExitCodes: [1, 128] });
+  if (fetched.code !== 0) {
+    return {
+      ok: false,
+      updated: false,
+      conflicted: false,
+      conflictMode: "none",
+      changedPaths: [],
+      message: (fetched.stderr || fetched.stdout).trim() || "fetch failed",
+    };
+  }
+  const counts = await gitOut(
+    ["rev-list", "--left-right", "--count", `origin/${branch}...HEAD`],
+    { cwd: vaultPath, okExitCodes: [128] },
+  ).catch(() => "");
+  const [behind = 0, ahead = 0] = counts.split(/\s+/).map((value) => Number.parseInt(value, 10) || 0);
+  if (behind === 0) {
+    return {
+      ok: true,
+      updated: false,
+      conflicted: false,
+      conflictMode: "none",
+      changedPaths: [],
+      message: "Already up to date.",
+    };
+  }
+
+  const integrated = ahead > 0
+    ? await git(["rebase", `origin/${branch}`], { cwd: vaultPath, okExitCodes: [1, 128] })
+    : await git(["merge", "--ff-only", `origin/${branch}`], { cwd: vaultPath, okExitCodes: [1, 128] });
+  if (integrated.code !== 0) {
+    const mode = await conflictMode(vaultPath);
+    const output = `${integrated.stdout}\n${integrated.stderr}`.toLowerCase();
+    const conflicted = mode !== "none" || output.includes("conflict") || output.includes("resolve all conflicts");
+    return {
+      ok: false,
+      updated: false,
+      conflicted,
+      conflictMode: conflicted ? mode : "none",
+      changedPaths: [],
+      message: (integrated.stderr || integrated.stdout).trim() || "remote integration failed",
+    };
+  }
+  const after = await gitOut(["rev-parse", "HEAD"], { cwd: vaultPath, okExitCodes: [128] }).catch(() => "");
+  const changedPaths = before && after && before !== after
+    ? (await gitOut(["diff", "--name-only", "-z", before, after], { cwd: vaultPath, okExitCodes: [128] }).catch(() => ""))
+      .split("\0")
+      .filter(Boolean)
+    : [];
+  return {
+    ok: true,
+    updated: before !== after,
+    conflicted: false,
+    conflictMode: "none",
+    changedPaths,
+    message: integrated.stdout.trim() || (ahead > 0 ? "rebased" : "fast-forwarded"),
+  };
 }
 
 /**

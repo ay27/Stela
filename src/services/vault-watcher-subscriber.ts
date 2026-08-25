@@ -19,6 +19,7 @@ import type { VaultFsEvent } from "@shared/ipc-events";
 
 import { clearWikiResolverCache } from "@/editor/wiki";
 import { readFile, listDir } from "@/services/fs";
+import { scheduleAutoGit } from "@/services/auto-git";
 import { getKnownDiskContent } from "@/services/note-save-tracker";
 import { useFileTree } from "@/state/file-tree";
 import { useSearch } from "@/state/search";
@@ -129,6 +130,7 @@ export function installVaultWatcherSubscriber(): () => void {
   }
   unsubscribe = window.stela.vault.onExternalChange((payload) => {
     applyBatch(payload.events);
+    if (payload.events.length > 0) scheduleAutoGit("external-change");
   });
   return () => {
     if (unsubscribe) {

@@ -128,3 +128,4 @@ proposed → active → superseded
 | [0073](0073-three-state-skill-freshness.md) | Three-state Skill freshness and maintenance inspection | active |
 | [0074](0074-streamed-agent-process-narration.md) | Streamed Agent process narration | active |
 | [0075](0075-analysis-semantics-in-execution-plans.md) | Analysis semantics and current-run evidence finalization | active |
+| [0076](0076-event-driven-single-flight-git-sync.md) | Event-driven single-flight Git sync | active |

@@ -29,6 +29,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RunRecord } from "@/contracts";
 import { electronStorage } from "@/services/storage/electron-storage";
 import { useWorkspace } from "@/state/workspace";
+import { useGitStore } from "@/state/git";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n/use-t";
 
@@ -44,6 +45,7 @@ export function RunHistoryPanel() {
   const t = useT();
   const vaultReady = useWorkspace((s) => s.vaultReady);
   const openFile = useWorkspace((s) => s.openFile);
+  const syncHistoryRevision = useGitStore((s) => s.historyRevision);
 
   const [state, setState] = useState<State>(INITIAL);
   const [keyword, setKeyword] = useState("");
@@ -69,7 +71,7 @@ export function RunHistoryPanel() {
   useEffect(() => {
     if (!vaultReady) return;
     void refresh();
-  }, [vaultReady, refresh]);
+  }, [vaultReady, refresh, syncHistoryRevision]);
 
   const filtered = useMemo(() => {
     const k = keyword.trim().toLowerCase();

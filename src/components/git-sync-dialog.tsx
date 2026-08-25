@@ -23,6 +23,7 @@ import {
 
 import { cn } from "@/lib/utils";
 import { useGitStore } from "@/state/git";
+import { scheduleAutoGit } from "@/services/auto-git";
 import { useT } from "@/i18n/use-t";
 import type { GitModifiedFile } from "@shared/types";
 import { GitPulse } from "./git-pulse";
@@ -130,6 +131,7 @@ export function GitSyncDialog({ open, onOpenChange }: GitSyncDialogProps) {
       useGitStore.getState().clearConflict();
       await refresh();
       await reloadFiles();
+      scheduleAutoGit("conflict-resolved");
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : String(err));
     }

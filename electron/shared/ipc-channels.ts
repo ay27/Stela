@@ -142,6 +142,7 @@ export const IPC = {
   // 统一同步编排：commit(+push) / pull(+journal import + refresh)
   GIT_SYNC_PUSH: "git:sync-push",
   GIT_SYNC_PULL: "git:sync-pull",
+  GIT_SYNC_NOW: "git:sync-now",
 
   // 执行历史 Journal（按设备分片 JSONL）
   JOURNAL_GET_DEVICE_PROFILE: "journal:get-device-profile",

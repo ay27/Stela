@@ -40,6 +40,20 @@ try {
   notifyFileChanged(path.join(root, ".git", "config"));
   await wait(260);
   assert.equal(events.length, 0, "ignored paths should not publish synthetic events");
+
+  notifyFileChanged(path.join(root, ".stela", "settings.json"));
+  notifyFileChanged(path.join(root, ".stela", "history", "device.jsonl"));
+  await wait(260);
+  assert.deepEqual(events[0]?.events, [
+    { type: "changed", path: path.join(root, ".stela", "settings.json"), isDir: false },
+    { type: "changed", path: path.join(root, ".stela", "history", "device.jsonl"), isDir: false },
+  ], "syncable .stela domains should publish events");
+
+  events.length = 0;
+  notifyFileChanged(path.join(root, ".stela", "plugins", "private", "plugin.json"));
+  notifyFileChanged(path.join(root, ".stela", "metrics", "trace.jsonl"));
+  await wait(260);
+  assert.equal(events.length, 0, "local-only .stela domains should remain ignored");
 } finally {
   await stop();
   await rm(root, { recursive: true, force: true });

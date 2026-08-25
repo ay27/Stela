@@ -565,6 +565,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
           await electronStorage
             .open(saved)
             .catch((err) => console.error("[stela] storage_open failed", err));
+          startAutoPull();
           set({ vaultReady: true });
           return;
         }

@@ -74,6 +74,8 @@ import type {
   GitRemoteStatus,
   GitSyncPullResult,
   GitSyncPushResult,
+  GitSyncRequest,
+  GitSyncResult,
   GitVaultStatus,
   JournalCleanupSummary,
   JournalImportSummary,
@@ -848,6 +850,10 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
   registerHandler<Record<string, never>, GitSyncPullResult>(
     IPC.GIT_SYNC_PULL,
     () => syncOrchestrator.syncPull(requireVault()),
+  );
+  registerHandler<GitSyncRequest, GitSyncResult>(
+    IPC.GIT_SYNC_NOW,
+    (request) => syncOrchestrator.syncNow(requireVault(), request),
   );
 
   // ---------- 执行历史 Journal ----------

@@ -64,7 +64,7 @@ export function GitBadge({
     );
   }
 
-  const busy = phase === "busy" || autoPhase === "committing";
+  const busy = phase === "busy" || autoPhase === "syncing";
   const conflict = status.conflictCount > 0;
   const dirty = status.changedCount > 0;
   const needsSync = status.ahead > 0 || status.behind > 0;

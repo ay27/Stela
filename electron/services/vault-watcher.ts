@@ -4,12 +4,13 @@
  * 职责：
  *   1. 在 vault 切换时启动 / 停止原生递归 watcher
  *   2. 过滤掉应用自身写入的事件（app-owned suppress）
- *   3. 过滤 `.stela.sqlite*` / `.stela/` / `.git/` / 隐藏文件等噪音
+ *   3. 过滤 `.stela.sqlite*` / `.git/` / 隐藏文件等噪音；仅监听允许同步的
+ *      `.stela` 子域
  *   4. 把短时间内的多条事件合并成 batch 通过事件 channel 广播给 renderer
  *
  * 不做的事：
  *   - 不做 rename 推断（remove + add 自然能在 renderer 侧实现"先删再建"逻辑）
- *   - 不做 polling 兜底；网络盘 / Docker 卷出现反馈时再单独处理
+ *   - 不做 polling 兜底；Git 调度器的 60s status scan 负责安全兜底
  *
  * 注意：@parcel/watcher 是 Node 原生模块；在 main 进程使用，**不能**直接被 renderer 引用。
  */
@@ -36,6 +37,16 @@ const BATCH_DELAY_MS = 200;
  *  覆盖 GC / WAL 等场景。 */
 const SUPPRESS_TTL_MS = 1500;
 const WRITE_STABILITY_MS = 150;
+
+/** `.stela` 中只有这些 Git 共享域参与外部变更感知。 */
+const WATCHED_STELA_PATHS = [
+  "settings.json",
+  "connections.json",
+  "history",
+  "agent-history",
+  "skills",
+  "sql-templates",
+] as const;
 
 /**
  * 应用自身写入的路径 → 过期时间戳。原生 watcher 事件命中时若仍在 TTL 内则吞掉。
@@ -141,9 +152,18 @@ function shouldIgnore(absPath: string, vaultPath: string): boolean {
   if (!rel || rel.startsWith("..")) return true;
   // POSIX 化分段比较，避免 Windows 反斜杠导致的 startsWith 误判
   const parts = rel.split(/[\\/]/);
+  if (parts[0] === ".stela") {
+    const inside = parts.slice(1).join("/");
+    const allowed = inside.length === 0 || WATCHED_STELA_PATHS.some((watched) =>
+      inside === watched
+      || inside.startsWith(`${watched}/`)
+      || watched.startsWith(`${inside}/`),
+    );
+    if (!allowed) return true;
+  }
   for (const seg of parts) {
     if (!seg) continue;
-    if (seg === ".stela") return true;
+    if (seg === ".stela") continue;
     if (seg === ".git") return true;
     if (seg === "node_modules") return true;
     if (seg.startsWith(".stela.sqlite")) return true; // .stela.sqlite, -wal, -shm
