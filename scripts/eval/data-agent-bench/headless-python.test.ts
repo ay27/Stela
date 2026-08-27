@@ -47,6 +47,20 @@ try {
   assert.equal(result.ok, true, result.error);
   assert.deepEqual(result.value, { kind: "scalar", value: 80 });
 
+  const pandas = await pool.execute({
+    vaultPath,
+    sessionId,
+    artifacts: { left },
+    code: "df = to_df('left'); df['amount'] = df['amount'].astype(int); result = int(df['amount'].sum())",
+  });
+  assert.equal(pandas.ok, true, pandas.error);
+  assert.deepEqual(pandas.value, { kind: "scalar", value: 30 });
+
+  // Every result carries its input shapes and column types, so the model never
+  // has to spend a call probing them.
+  assert.match(pandas.stdout ?? "", /^\[INPUTS\] tables\[alias\] is a DuckDB relation/);
+  assert.match(pandas.stdout ?? "", /left: 2 rows x 2 cols \| id:BIGINT, amount:BIGINT/);
+
   const isolation = await pool.execute({
     vaultPath,
     sessionId,

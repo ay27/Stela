@@ -23,6 +23,10 @@ class QueryDBTool:
     def __init__(self, **kwargs):
         self.db_clients = {"demo_database": {"db_type": "sqlite"}}
     def exec(self, args):
+        if "giant" in args["query"]:
+            return {"success": True, "result": [{"value": "x" * 100000}]}
+        if "many" in args["query"]:
+            return {"success": True, "result": [{"value": index} for index in range(500)]}
         return {"success": True, "result": [{"value": 1, "query": args["query"]}]}
     def clean_up(self):
         pass
@@ -66,6 +70,42 @@ def validate(query_dir, llm_answer, reason=None):
     sql: "-- stela-dab-database: demo_database\nSELECT 1",
   });
   assert.equal(result.rows[0]?.[0], 1);
+  const artifactPath = path.join(root, "materialized.jsonl");
+  const materialized = await bridge.call<{
+    columns: Array<{ name: string }>;
+    previewRows: unknown[][];
+    rowCount: number;
+  }>("materialize_data_query", {
+    config,
+    query: { language: "sql", database: "demo_database", query: "SELECT many" },
+    request: { format: "jsonl", outputPath: artifactPath, previewRows: 2, previewMaxBytes: 24_576, maxBytes: 1_000_000 },
+  });
+  assert.equal(materialized.columns[0]?.name, "value");
+  assert.deepEqual(materialized.previewRows, [[0], [1]]);
+  assert.equal(materialized.rowCount, 500);
+  const artifactRows = (await fs.readFile(artifactPath, "utf-8")).trim().split("\n");
+  assert.equal(artifactRows.length, 500);
+  assert.deepEqual(JSON.parse(artifactRows[0]!), { c0: 0 });
+  assert.deepEqual(JSON.parse(artifactRows.at(-1)!), { c0: 499 });
+  const giantPath = path.join(root, "giant.jsonl");
+  const giant = await bridge.call<{ previewRows: unknown[][]; previewTruncatedBy: string[] }>("materialize_data_query", {
+    config,
+    query: { language: "sql", database: "demo_database", query: "SELECT giant" },
+    request: { format: "jsonl", outputPath: giantPath, previewRows: 2, previewMaxBytes: 1_024, maxBytes: 1_000_000 },
+  });
+  assert.deepEqual(giant.previewRows, []);
+  assert.deepEqual(giant.previewTruncatedBy, ["bytes"]);
+  assert.ok((await fs.stat(giantPath)).size > 100_000, "full artifact must remain intact despite preview truncation");
+  const rejectedPath = path.join(root, "rejected.jsonl");
+  await assert.rejects(
+    bridge.call("materialize_data_query", {
+      config,
+      query: { language: "sql", database: "demo_database", query: "SELECT many" },
+      request: { format: "jsonl", outputPath: rejectedPath, previewRows: 2, maxBytes: 10 },
+    }),
+    /artifact limit/,
+  );
+  await assert.rejects(fs.stat(rejectedPath), { code: "ENOENT" });
   const validation = await bridge.call<DabValidation>("validate", {
     config,
     answer: "one",

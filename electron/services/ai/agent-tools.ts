@@ -27,7 +27,6 @@ import {
 } from "@shared/chart-spec";
 import type {
   AgentToolName,
-  AgentPlanAnalysis,
   AgentPlanSnapshot,
   AgentProposalKind,
   AgentProposalPayload,
@@ -54,11 +53,7 @@ import * as analysisCanvasService from "../analysis-canvas";
 import * as search from "../search";
 import * as vaultFs from "../vault-fs";
 import { notifyFileChanged } from "../vault-watcher";
-import {
-  analysisReadinessIssues,
-  ExecutionPlanStore,
-  type CreatePlanStep,
-} from "./execution-plan";
+import { ExecutionPlanStore, type CreatePlanStep } from "./execution-plan";
 import { resolveNamedTableSchemas, searchTables } from "./schema-context";
 import { classifySql } from "./sql-guard";
 import {
@@ -186,6 +181,8 @@ export type AgentRunRecorder = (run: {
 const log = getLogger("ai.agent-tools");
 const RESULT_CHAR_BUDGET = 30_000;
 const SQL_PREVIEW_ROWS = 200;
+const SQL_PREVIEW_MAX_BYTES = 24 * 1024;
+const SQL_PREVIEW_CELL_MAX_BYTES = 4 * 1024;
 const QUERY_ARTIFACT_MAX_BYTES = 1024 * 1024 * 1024;
 const PYTHON_CODE_MAX_CHARS = 50_000;
 const PYTHON_INPUT_MAX_COUNT = 8;
@@ -205,6 +202,59 @@ function fail(message: string): ToolOutcome {
   return { ok: false, text: message };
 }
 
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
+  let low = 0;
+  let high = value.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (Buffer.byteLength(value.slice(0, middle), "utf8") <= Math.max(0, maxBytes - 3)) low = middle;
+    else high = middle - 1;
+  }
+  return `${value.slice(0, low)}…`;
+}
+
+function previewCell(value: unknown, maxBytes: number): unknown {
+  if (typeof value === "string") return truncateUtf8(value, maxBytes);
+  if (!value || typeof value !== "object") return value;
+  try {
+    const json = JSON.stringify(value);
+    return Buffer.byteLength(json, "utf8") <= maxBytes ? value : truncateUtf8(json, maxBytes);
+  } catch {
+    return truncateUtf8(String(value), maxBytes);
+  }
+}
+
+function boundedPreview(rows: unknown[][], rowCount: number, inferRowTruncation = true): {
+  rows: unknown[][];
+  truncated: boolean;
+  truncatedBy: Array<"rows" | "bytes">;
+} {
+  const bounded: unknown[][] = [];
+  let used = 2;
+  let bytesTruncated = false;
+  for (const rawRow of rows.slice(0, SQL_PREVIEW_ROWS)) {
+    const remaining = Math.max(1, SQL_PREVIEW_MAX_BYTES - used);
+    const perCell = Math.max(16, Math.min(SQL_PREVIEW_CELL_MAX_BYTES, Math.floor(remaining / Math.max(1, rawRow.length))));
+    const row = rawRow.map((cell) => previewCell(cell, perCell));
+    if (row.some((cell, index) => !Object.is(cell, rawRow[index]))) bytesTruncated = true;
+    const rowBytes = Buffer.byteLength(JSON.stringify(row), "utf8") + 1;
+    if (used + rowBytes > SQL_PREVIEW_MAX_BYTES) {
+      bytesTruncated = true;
+      break;
+    }
+    bounded.push(row);
+    used += rowBytes;
+  }
+  if (bounded.length < Math.min(rows.length, SQL_PREVIEW_ROWS)) bytesTruncated = true;
+  const rowTruncated = inferRowTruncation && rowCount > Math.min(rows.length, SQL_PREVIEW_ROWS);
+  return {
+    rows: bounded,
+    truncated: rowTruncated || bytesTruncated,
+    truncatedBy: [...(rowTruncated ? ["rows" as const] : []), ...(bytesTruncated ? ["bytes" as const] : [])],
+  };
+}
+
 export interface ToolOutcome {
   ok: boolean;
   text: string;
@@ -219,6 +269,8 @@ export interface AgentAnalysisRunEvidence {
   rowCount: number;
   truncated: boolean;
   sourceRunIds: string[];
+  /** Bounded same-run values supplied only to the tool-free result reviewer. */
+  summary?: unknown;
 }
 
 export interface ProposalRequest {
@@ -271,8 +323,6 @@ export interface AgentToolContext {
   chartRuns?: Map<string, { sql: string; columns: ColumnDef[]; rows: unknown[][] }>;
   /** Successful query/Python outputs created in this Agent run and eligible for final evidence. */
   analysisRuns?: Map<string, AgentAnalysisRunEvidence>;
-  /** The plan version accepted by finalize_analysis, if any. */
-  analysisFinalization?: { version: number | null };
   resolveChartRun?: (runId: string) => Promise<RunRecord | null>;
   /** Dedicated Canvas refresh runs may commit their target exactly once. */
   canvasRefresh?: { path: string; sourceId: string | null; committed: boolean };
@@ -382,11 +432,15 @@ export function createAgentTools(options: {
       name: "execute_python",
       label: "Execute Python",
       description:
-        "Run bounded local Python over successful run_query artifacts for cross-source joins or transformations. DuckDB, pandas, con, and tables are preloaded; assign the final value to result.",
+        "Run bounded local Python over successful run_query artifacts. tables[alias] is a DuckDBPyRelation, not a pandas DataFrame; use df = to_df('orders') before copy/astype/iloc/rename, or query relations with con.sql(...). DuckDB, pandas, con, tables, and to_df are preloaded. No files, network, package installs, or host APIs. Assign the final scalar, DataFrame, or DuckDB relation to result.",
       parameters: Type.Object({
-        code: Type.String({ description: "Python code. Assign the final scalar, DataFrame, or DuckDB relation to result." }),
-        inputs: Type.Record(Type.String(), Type.String(), {
-          description: "Alias to successful run_query runId.",
+        code: Type.String({
+          maxLength: PYTHON_CODE_MAX_CHARS,
+          description: "Python code. Example: df = to_df('orders'); result = df.groupby('region', as_index=False)['amount'].sum()",
+        }),
+        inputs: Type.Record(Type.String({ pattern: "^[A-Za-z_][A-Za-z0-9_]{0,63}$" }), Type.String(), {
+          maxProperties: PYTHON_INPUT_MAX_COUNT,
+          description: "Map each short Python alias to the exact runId returned by a successful run_query. Maximum 8 inputs.",
         }),
       }),
       executionMode: "sequential",
@@ -551,32 +605,6 @@ export function createAgentTools(options: {
             acceptance: Type.String(),
           }),
         ),
-        analysis: Type.Optional(Type.Object({
-          question: Type.Optional(Type.String()),
-          grain: Type.Optional(Type.String()),
-          measure: Type.Optional(Type.String()),
-          dimensions: Type.Optional(Type.Array(Type.String())),
-          filters: Type.Optional(Type.Array(Type.String())),
-          sources: Type.Optional(Type.Array(Type.Object({
-            connectionName: Type.Optional(Type.String()),
-            table: Type.String(),
-            columns: Type.Array(Type.String(), { minItems: 1 }),
-            reason: Type.String(),
-          }))),
-          joins: Type.Optional(Type.Array(Type.Object({
-            left: Type.String(),
-            right: Type.String(),
-            normalization: Type.Optional(Type.String()),
-            cardinality: Type.Optional(Type.String()),
-          }))),
-          outputShape: Type.Optional(Type.Union(["scalar", "percentage", "ranked_list", "table", "narrative"].map((value) => Type.Literal(value)))),
-          assumptions: Type.Optional(Type.Array(Type.String())),
-          unresolved: Type.Optional(Type.Array(Type.String())),
-          verificationChecks: Type.Optional(Type.Array(Type.Object({
-            id: Type.String(),
-            description: Type.String(),
-          }))),
-        })),
       }),
       executionMode: "sequential",
       execute: (toolCallId, params) => runTool("create_plan", toolCallId, params, ctx, requestProposal),
@@ -585,38 +613,12 @@ export function createAgentTools(options: {
       name: "update_plan",
       label: "Update execution plan",
       description:
-        "Complete, block, or skip the current execution-plan step. Completed steps require concise evidence; include runId when the evidence is a Stela SQL run.",
+        "Record progress on one plan step so the user can follow a long run. Complete, block, or skip any step in any order; this is bookkeeping only and never blocks the analysis.",
       parameters: Type.Object({
         stepId: Type.String(),
         status: Type.Union([Type.Literal("completed"), Type.Literal("blocked"), Type.Literal("skipped")]),
         evidence: Type.Optional(Type.String()),
         runId: Type.Optional(Type.String()),
-        analysis: Type.Optional(Type.Object({
-          question: Type.Optional(Type.String()),
-          grain: Type.Optional(Type.String()),
-          measure: Type.Optional(Type.String()),
-          dimensions: Type.Optional(Type.Array(Type.String())),
-          filters: Type.Optional(Type.Array(Type.String())),
-          sources: Type.Optional(Type.Array(Type.Object({
-            connectionName: Type.Optional(Type.String()),
-            table: Type.String(),
-            columns: Type.Array(Type.String(), { minItems: 1 }),
-            reason: Type.String(),
-          }))),
-          joins: Type.Optional(Type.Array(Type.Object({
-            left: Type.String(),
-            right: Type.String(),
-            normalization: Type.Optional(Type.String()),
-            cardinality: Type.Optional(Type.String()),
-          }))),
-          outputShape: Type.Optional(Type.Union(["scalar", "percentage", "ranked_list", "table", "narrative"].map((value) => Type.Literal(value)))),
-          assumptions: Type.Optional(Type.Array(Type.String())),
-          unresolved: Type.Optional(Type.Array(Type.String())),
-          verificationChecks: Type.Optional(Type.Array(Type.Object({
-            id: Type.String(),
-            description: Type.String(),
-          }))),
-        })),
       }),
       executionMode: "sequential",
       execute: (toolCallId, params) => runTool("update_plan", toolCallId, params, ctx, requestProposal),
@@ -628,27 +630,6 @@ export function createAgentTools(options: {
       parameters: Type.Object({}),
       executionMode: "sequential",
       execute: (toolCallId) => runTool("get_plan", toolCallId, {}, ctx, requestProposal),
-    },
-    {
-      name: "finalize_analysis",
-      label: "Finalize analysis",
-      description:
-        "Validate a completed complex analysis against the current plan version and successful, non-truncated run_query/execute_python outputs from this Agent run. Call this immediately before the final answer; simple tasks without a plan do not use it.",
-      parameters: Type.Object({
-        planVersion: Type.Number(),
-        answer: Type.String({ description: "The exact concise answer to return after validation." }),
-        evidence: Type.Array(Type.Object({
-          runId: Type.String(),
-          fields: Type.Optional(Type.Array(Type.String())),
-          description: Type.Optional(Type.String()),
-        }), { minItems: 1 }),
-        checks: Type.Array(Type.Object({
-          id: Type.String(),
-          runId: Type.String(),
-        })),
-      }),
-      executionMode: "sequential",
-      execute: (toolCallId, params) => runTool("finalize_analysis", toolCallId, params, ctx, requestProposal),
     },
     {
       name: "load_skill",
@@ -852,8 +833,22 @@ async function runListTables(
   ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
   const { name, connection } = requireNamedConnection(ctx, args.connectionName);
-  const tables = await ctx.connector.listTables(connection.kind, connection.config, args.database ?? null);
-  return ok({ connectionName: name, database: args.database ?? null, tables });
+  let database = typeof args.database === "string" && args.database.trim() ? args.database.trim() : null;
+  if (!database) {
+    const databases = await ctx.connector.listDatabases(connection.kind, connection.config);
+    if (databases.length === 1) database = databases[0] ?? null;
+    else if (databases.length > 1) {
+      return ok({
+        accepted: false,
+        reason: "database_required",
+        connectionName: name,
+        databases,
+        instruction: "Call list_tables again with one exact database from this list.",
+      });
+    }
+  }
+  const tables = await ctx.connector.listTables(connection.kind, connection.config, database);
+  return ok({ connectionName: name, database, tables });
 }
 
 async function runSearchTables(args: { keywords?: unknown; limit?: unknown; connectionName?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
@@ -1066,6 +1061,7 @@ async function runQuery(
   let result: QueryResult | null = null;
   let artifact: QueryArtifactDescriptor | null = null;
   let totalRowCount: number | undefined;
+  let connectorPreviewTruncatedBy: Array<"rows" | "bytes"> = [];
   try {
     if (
       classified?.classification !== "mutation" &&
@@ -1090,6 +1086,7 @@ async function runQuery(
               format,
               outputPath: target.tempPath,
               previewRows: SQL_PREVIEW_ROWS,
+              previewMaxBytes: SQL_PREVIEW_MAX_BYTES,
               maxBytes: QUERY_ARTIFACT_MAX_BYTES,
             };
           const materialized = ctx.connector.materializeDataQuery
@@ -1102,10 +1099,11 @@ async function runQuery(
               format === "parquet" ? "parquet-stream" : "jsonl-stream",
             );
             totalRowCount = materialized.rowCount;
+            connectorPreviewTruncatedBy = materialized.previewTruncatedBy ?? [];
             result = {
               kind: "query",
               columns: materialized.columns,
-              rows: materialized.previewRows.slice(0, SQL_PREVIEW_ROWS),
+              rows: materialized.previewRows,
               elapsedMs: materialized.elapsedMs,
             };
           } else {
@@ -1158,6 +1156,16 @@ async function runQuery(
     });
     throw err;
   }
+  let previewTruncatedBy: Array<"rows" | "bytes"> = [];
+  if (result.kind === "query") {
+    const preview = boundedPreview(
+      result.rows,
+      totalRowCount ?? result.rows.length,
+      connectorPreviewTruncatedBy.length === 0,
+    );
+    result = { ...result, rows: preview.rows };
+    previewTruncatedBy = [...new Set([...connectorPreviewTruncatedBy, ...preview.truncatedBy])];
+  }
   await recordAgentRun(ctx, auditText, startedAt, result, null, {
     runId,
     connectionName,
@@ -1182,7 +1190,7 @@ async function runQuery(
     return ok({ runId, connectionName, language: query.language, result: formatQueryResult(result) });
   }
   const rowCount = totalRowCount ?? result.rows.length;
-  const previewTruncated = rowCount > Math.min(result.rows.length, SQL_PREVIEW_ROWS);
+  const previewTruncated = previewTruncatedBy.length > 0;
   ctx.analysisRuns?.set(runId, {
     kind: "query",
     connectionName,
@@ -1191,6 +1199,13 @@ async function runQuery(
     rowCount,
     truncated: previewTruncated,
     sourceRunIds: [],
+    summary: {
+      columns: result.columns,
+      rowCount,
+      rows: result.rows,
+      previewTruncated,
+      previewTruncatedBy,
+    },
   });
   return ok({
     runId,
@@ -1202,10 +1217,18 @@ async function runQuery(
       rowCount,
       rows: result.rows.slice(0, SQL_PREVIEW_ROWS),
       previewTruncated,
+      previewTruncatedBy,
       artifactAvailable: artifact !== null,
       artifactMode: artifact?.mode ?? null,
       elapsedMs: result.elapsedMs,
     },
+    ...(previewTruncated
+      ? {
+          instruction: artifact !== null
+            ? "This preview is truncated, so it cannot support an exact result. Aggregate in the source query, or pass this runId to execute_python and compute over the full artifact."
+            : "This preview is truncated, so it cannot support an exact result. Aggregate in the source query instead of counting preview rows.",
+        }
+      : {}),
   });
 }
 
@@ -1243,9 +1266,18 @@ async function runExecutePython(
       rawRunId.trim(),
     );
     if (!artifact) {
+      const available = [...(ctx.analysisRuns?.entries() ?? [])]
+        .filter(([, run]) => run.kind === "query")
+        .slice(-5)
+        .map(([runId, run]) => ({
+          runId,
+          columns: run.columns.slice(0, 12).map((column) => column.name),
+          rowCount: run.rowCount,
+        }));
       return fail(
         `Input '${alias}' does not reference an available artifact from this local Agent session. ` +
-          "Run the query again and use the returned runId.",
+          "Use an exact recent run_query runId or run the query again." +
+          (available.length > 0 ? ` Recent successful query runs: ${JSON.stringify(available)}.` : ""),
       );
     }
     artifacts[alias] = artifact;
@@ -1273,6 +1305,7 @@ async function runExecutePython(
     rowCount: value.kind === "table" ? value.rowCount : value.kind === "scalar" ? 1 : 0,
     truncated: value.kind === "table" && value.truncated,
     sourceRunIds,
+    summary: value,
   });
   return ok({ runId, stdout: result.stdout, result: result.value, elapsedMs: result.elapsedMs });
 }
@@ -1935,21 +1968,26 @@ async function runAskUser(
 }
 
 async function runCreatePlan(
-  args: { steps?: unknown; analysis?: unknown },
+  args: { steps?: unknown },
   ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
   if (!ctx.plan) return fail("Execution plans are unavailable for this run.");
+  const existing = ctx.plan.get();
+  if (existing) {
+    return ok({
+      created: false,
+      plan: existing,
+      instruction: "A plan already exists. Use update_plan to record progress on it.",
+    });
+  }
   if (!Array.isArray(args.steps)) return fail("steps must be an array.");
-  const snapshot = ctx.plan.create(
-    args.steps as CreatePlanStep[],
-    args.analysis === undefined ? undefined : args.analysis as AgentPlanAnalysis,
-  );
+  const snapshot = ctx.plan.create(args.steps as CreatePlanStep[]);
   await ctx.persistPlan?.(snapshot);
-  return ok(snapshot);
+  return ok({ created: true, plan: snapshot });
 }
 
 async function runUpdatePlan(
-  args: { stepId?: unknown; status?: unknown; evidence?: unknown; runId?: unknown; analysis?: unknown },
+  args: { stepId?: unknown; status?: unknown; evidence?: unknown; runId?: unknown },
   ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
   if (!ctx.plan) return fail("Execution plans are unavailable for this run.");
@@ -1957,128 +1995,20 @@ async function runUpdatePlan(
   if (args.status !== "completed" && args.status !== "blocked" && args.status !== "skipped") {
     return fail("status must be completed, blocked, or skipped.");
   }
-  const snapshot = ctx.plan.update({
-      stepId: args.stepId,
-      status: args.status,
-      ...(typeof args.evidence === "string" ? { evidence: args.evidence } : {}),
-      ...(typeof args.runId === "string" ? { runId: args.runId } : {}),
-      ...(args.analysis === undefined ? {} : { analysis: args.analysis as AgentPlanAnalysis }),
-    });
+  const { snapshot, note } = ctx.plan.update({
+    stepId: args.stepId,
+    status: args.status,
+    ...(typeof args.evidence === "string" ? { evidence: args.evidence } : {}),
+    ...(typeof args.runId === "string" ? { runId: args.runId } : {}),
+  });
   await ctx.persistPlan?.(snapshot);
-  return ok(snapshot);
+  return ok(note ? { plan: snapshot, note } : snapshot);
 }
 
 function runGetPlan(ctx: AgentToolContext): ToolOutcome {
   if (!ctx.plan) return fail("Execution plans are unavailable for this run.");
   const snapshot = ctx.plan.get();
   return snapshot ? ok(snapshot) : ok({ plan: null, instruction: ctx.plan.formatForContext() });
-}
-
-function normalizedEvidenceName(value: string): string {
-  return value.trim().replace(/[`"']/g, "").toLowerCase();
-}
-
-function sameTable(left: string, right: string): boolean {
-  const a = normalizedEvidenceName(left);
-  const b = normalizedEvidenceName(right);
-  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
-}
-
-function queryEvidenceLeaves(
-  runId: string,
-  runs: Map<string, AgentAnalysisRunEvidence>,
-  seen = new Set<string>(),
-): AgentAnalysisRunEvidence[] {
-  if (seen.has(runId)) return [];
-  seen.add(runId);
-  const run = runs.get(runId);
-  if (!run) return [];
-  if (run.kind === "query") return [run];
-  return run.sourceRunIds.flatMap((sourceRunId) => queryEvidenceLeaves(sourceRunId, runs, seen));
-}
-
-function runFinalizeAnalysis(args: Record<string, unknown>, ctx: AgentToolContext): ToolOutcome {
-  const snapshot = ctx.plan?.get();
-  if (!snapshot) return fail("Create and complete an execution plan before finalizing a complex analysis.");
-  if (!Number.isInteger(args.planVersion) || args.planVersion !== snapshot.version) {
-    return fail(`planVersion must match the current plan version ${snapshot.version}. Read get_plan and retry.`);
-  }
-  const readinessIssues = analysisReadinessIssues(snapshot);
-  if (readinessIssues.length > 0) {
-    return fail(`The analysis plan is not ready: ${readinessIssues.join("; ")}.`);
-  }
-  const unfinished = snapshot.steps.filter((step) => step.status !== "completed" && step.status !== "skipped");
-  if (unfinished.length > 0) {
-    return fail(`Every plan step must be completed or skipped before finalization: ${unfinished.map((step) => step.id).join(", ")}.`);
-  }
-  const answer = typeof args.answer === "string" ? args.answer.trim() : "";
-  if (!answer) return fail("answer must be a non-empty string.");
-  if (!Array.isArray(args.evidence) || args.evidence.length === 0) {
-    return fail("evidence must bind at least one successful run from this Agent run.");
-  }
-  if (!Array.isArray(args.checks)) return fail("checks must be an array.");
-  const runs = ctx.analysisRuns;
-  if (!runs) return fail("Analysis evidence tracking is unavailable for this run.");
-
-  const boundRunIds: string[] = [];
-  for (const [index, raw] of args.evidence.entries()) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      return fail(`evidence[${index}] must be an object.`);
-    }
-    const binding = raw as Record<string, unknown>;
-    const runId = typeof binding.runId === "string" ? binding.runId.trim() : "";
-    const run = runs.get(runId);
-    if (!run) return fail(`evidence[${index}].runId must reference a successful run from this Agent run.`);
-    if (run.truncated) {
-      return fail(`Evidence run '${runId}' is truncated. Aggregate in the source or use execute_python over its full artifact.`);
-    }
-    const fields = stringList(binding.fields);
-    const available = new Set(run.columns.map((column) => column.name.toLowerCase()));
-    const missing = fields.filter((field) => !available.has(field.toLowerCase()));
-    if (missing.length > 0) {
-      return fail(`Evidence run '${runId}' does not contain fields: ${missing.join(", ")}.`);
-    }
-    boundRunIds.push(runId);
-  }
-
-  const requiredChecks = new Set(snapshot.analysis!.verificationChecks!.map((check) => check.id));
-  const seenChecks = new Set<string>();
-  for (const [index, raw] of args.checks.entries()) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return fail(`checks[${index}] must be an object.`);
-    const binding = raw as Record<string, unknown>;
-    const id = typeof binding.id === "string" ? binding.id.trim() : "";
-    const runId = typeof binding.runId === "string" ? binding.runId.trim() : "";
-    if (!requiredChecks.has(id)) return fail(`Unknown verification check id: ${id || "(empty)"}.`);
-    if (seenChecks.has(id)) return fail(`Duplicate verification check binding: ${id}.`);
-    const run = runs.get(runId);
-    if (!run) return fail(`Verification check '${id}' must reference a successful run from this Agent run.`);
-    if (run.truncated) return fail(`Verification check '${id}' references truncated run '${runId}'.`);
-    seenChecks.add(id);
-  }
-  const missingChecks = [...requiredChecks].filter((id) => !seenChecks.has(id));
-  if (missingChecks.length > 0) return fail(`Missing verification check bindings: ${missingChecks.join(", ")}.`);
-
-  const queryLeaves = boundRunIds.flatMap((runId) => queryEvidenceLeaves(runId, runs));
-  const uncoveredSources = snapshot.analysis!.sources!.filter((source) =>
-    !queryLeaves.some((run) =>
-      (!source.connectionName || run.connectionName === source.connectionName) &&
-      run.tables.some((table) => sameTable(table, source.table)),
-    ),
-  );
-  if (uncoveredSources.length > 0) {
-    return fail(
-      `Final evidence does not trace back to planned sources: ${uncoveredSources.map((source) =>
-        `${source.connectionName ? `${source.connectionName}:` : ""}${source.table}`).join(", ")}.`,
-    );
-  }
-
-  if (ctx.analysisFinalization) ctx.analysisFinalization.version = snapshot.version;
-  return ok({
-    answer,
-    planVersion: snapshot.version,
-    evidenceRunIds: [...new Set(boundRunIds)],
-    instruction: "Return answer verbatim as the user-facing final answer. Do not add unsupported values or claims.",
-  });
 }
 
 /** 把模型返回的 JSON 字符串参数安全 parse 成对象；失败时返回 `{}` 让工具自己报参数缺失。 */
@@ -2135,8 +2065,6 @@ export async function dispatchTool(
         return await runUpdatePlan(args, ctx);
       case "get_plan":
         return runGetPlan(ctx);
-      case "finalize_analysis":
-        return runFinalizeAnalysis(args, ctx);
       case "load_skill":
         return await runLoadSkill(args, ctx);
       case "search_skills":

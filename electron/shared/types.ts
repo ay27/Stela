@@ -118,6 +118,8 @@ export interface QueryArtifactRequest {
   format: QueryArtifactFormat;
   outputPath: string;
   previewRows: number;
+  /** Connector hint only; the host enforces the same bound again. */
+  previewMaxBytes?: number;
   maxBytes: number;
 }
 
@@ -126,6 +128,7 @@ export interface MaterializedQueryResult {
   kind: "query";
   columns: ColumnDef[];
   previewRows: unknown[][];
+  previewTruncatedBy?: Array<"rows" | "bytes">;
   rowCount: number;
   elapsedMs: number;
 }
@@ -774,56 +777,11 @@ export interface AgentPlanStep {
   runId?: string;
 }
 
-export type AgentAnalysisOutputShape =
-  | "scalar"
-  | "percentage"
-  | "ranked_list"
-  | "table"
-  | "narrative";
-
-export interface AgentPlanAnalysisSource {
-  connectionName?: string;
-  table: string;
-  columns: string[];
-  reason: string;
-}
-
-export interface AgentPlanAnalysisJoin {
-  left: string;
-  right: string;
-  normalization?: string;
-  cardinality?: string;
-}
-
-export interface AgentPlanVerificationCheck {
-  id: string;
-  description: string;
-}
-
-/**
- * Current-turn analysis semantics. Fields are optional while the Agent is still
- * discovering schema/business meaning; finalize_analysis requires a complete
- * snapshot and an explicitly empty unresolved list.
- */
-export interface AgentPlanAnalysis {
-  question?: string;
-  grain?: string;
-  measure?: string;
-  dimensions?: string[];
-  filters?: string[];
-  sources?: AgentPlanAnalysisSource[];
-  joins?: AgentPlanAnalysisJoin[];
-  outputShape?: AgentAnalysisOutputShape;
-  assumptions?: string[];
-  unresolved?: string[];
-  verificationChecks?: AgentPlanVerificationCheck[];
-}
-
+/** Progress bookkeeping for the agent panel only; it carries no authority over the answer (ADR-0078). */
 export interface AgentPlanSnapshot {
   runId: string;
   version: number;
   steps: AgentPlanStep[];
-  analysis?: AgentPlanAnalysis;
 }
 
 export type AgentStrategyReviewTrigger =
@@ -876,7 +834,6 @@ export type AgentToolName =
   | "create_plan"
   | "update_plan"
   | "get_plan"
-  | "finalize_analysis"
   | "load_skill"
   | "search_skills"
   | "save_skill"

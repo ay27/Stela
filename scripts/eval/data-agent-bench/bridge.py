@@ -17,6 +17,7 @@ import logging
 import re
 import sys
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -80,7 +81,8 @@ def parse_routed_query(sql: str, database_names: list[str]) -> tuple[str, str]:
     return database, query
 
 
-def infer_type_name(values: list[Any]) -> str:
+def infer_type_name(values: Iterable[Any]) -> str:
+    """Accepts a generator so a wide result stops at the first non-None value."""
     value = next((item for item in values if item is not None), None)
     if value is None:
         return "UNKNOWN"
@@ -93,6 +95,28 @@ def infer_type_name(values: list[Any]) -> str:
     if isinstance(value, (dict, list)):
         return "JSON"
     return "TEXT"
+
+
+def result_columns(records: list[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
+    """Column names in first-seen order plus inferred types.
+
+    Names still come from every record because MongoDB documents are heterogeneous.
+    Type inference receives a generator, so the common case costs one lookup per
+    column instead of allocating one list of every value per column.
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+    for record in records:
+        for key in record:
+            name = str(key)
+            if name not in seen:
+                seen.add(name)
+                names.append(name)
+    columns = [
+        {"name": name, "typeName": infer_type_name(record.get(name) for record in records)}
+        for name in names
+    ]
+    return names, columns
 
 
 def normalize_query_result(value: Any, elapsed_ms: int) -> dict[str, Any]:
@@ -108,24 +132,98 @@ def normalize_query_result(value: Any, elapsed_ms: int) -> dict[str, Any]:
     else:
         records = [{"value": value}]
 
-    names: list[str] = []
-    for record in records:
-        for key in record:
-            name = str(key)
-            if name not in names:
-                names.append(name)
-    columns = [
-        {
-            "name": name,
-            "typeName": infer_type_name([record.get(name) for record in records]),
-        }
-        for name in names
-    ]
+    names, columns = result_columns(records)
     rows = [[record.get(name) for name in names] for record in records]
     return {
         "kind": "query",
         "columns": columns,
         "rows": rows,
+        "elapsedMs": elapsed_ms,
+    }
+
+
+def materialize_query_result(
+    value: Any,
+    elapsed_ms: int,
+    request: dict[str, Any],
+    budget_ms: int = 0,
+) -> dict[str, Any]:
+    """Write a complete result as bounded JSONL without one giant stdout frame."""
+    if request.get("format") != "jsonl":
+        raise BridgeError("unsupported_artifact_format", "DAB materialization supports format=jsonl only.")
+    output_path = Path(str(request.get("outputPath") or ""))
+    if not output_path.is_absolute() or not output_path.parent.is_dir():
+        raise BridgeError("invalid_artifact_path", "outputPath must be an absolute path in an existing directory.")
+    preview_limit = max(0, min(200, int(request.get("previewRows") or 0)))
+    preview_max_bytes = max(0, int(request.get("previewMaxBytes") or 0))
+    max_bytes = int(request.get("maxBytes") or 0)
+    if max_bytes <= 0:
+        raise BridgeError("invalid_artifact_limit", "maxBytes must be positive.")
+
+    records: list[dict[str, Any]]
+    if isinstance(value, list):
+        if all(isinstance(item, dict) for item in value):
+            records = value
+        else:
+            records = [{"value": item} for item in value]
+    elif isinstance(value, dict):
+        records = [value]
+    else:
+        records = [{"value": value}]
+
+    names, columns = result_columns(records)
+    preview_rows: list[list[Any]] = []
+    preview_bytes = 2
+    preview_bytes_truncated = False
+    byte_size = 0
+    deadline = time.monotonic() + budget_ms / 1000 if budget_ms > 0 else None
+    try:
+        with output_path.open("x", encoding="utf-8") as artifact:
+            for index, record in enumerate(records):
+                if deadline is not None and index % 5000 == 0 and time.monotonic() > deadline:
+                    raise BridgeError(
+                        "query_artifact_timeout",
+                        f"Writing this result exceeded the {budget_ms} ms materialization budget after "
+                        f"{index} of {len(records)} rows; aggregate or filter in the source instead of "
+                        "materializing the full result.",
+                        True,
+                    )
+                row = [record.get(name) for name in names]
+                if index < preview_limit:
+                    preview_line = json.dumps(row, ensure_ascii=False, separators=(",", ":"), default=str)
+                    candidate_bytes = len(preview_line.encode("utf-8")) + 1
+                    if preview_max_bytes <= 0 or preview_bytes + candidate_bytes <= preview_max_bytes:
+                        preview_rows.append(row)
+                        preview_bytes += candidate_bytes
+                    else:
+                        preview_bytes_truncated = True
+                physical = {f"c{column_index}": item for column_index, item in enumerate(row)}
+                line = json.dumps(
+                    physical,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    default=str,
+                ) + "\n"
+                byte_size += len(line.encode("utf-8"))
+                if byte_size > max_bytes:
+                    raise BridgeError(
+                        "query_artifact_too_large",
+                        f"Query result exceeds the {max_bytes} byte artifact limit; aggregate or filter in the source.",
+                        True,
+                    )
+                artifact.write(line)
+    except Exception:
+        output_path.unlink(missing_ok=True)
+        raise
+    return {
+        "kind": "query",
+        "columns": columns,
+        "previewRows": preview_rows,
+        "previewTruncatedBy": [
+            *(["rows"] if len(records) > min(len(records), preview_limit) else []),
+            *(["bytes"] if preview_bytes_truncated else []),
+        ],
+        "rowCount": len(records),
         "elapsedMs": elapsed_ms,
     }
 
@@ -464,7 +562,7 @@ class DabRuntime:
             started = time.monotonic()
             value = self.invoke_tool(self.query_tool, {"db_name": database, "query": query})
             return normalize_query_result(value, round((time.monotonic() - started) * 1000))
-        if method == "execute_query":
+        if method in {"execute_query", "materialize_data_query"}:
             request = params.get("query")
             if not isinstance(request, dict):
                 raise BridgeError("invalid_query", "query must be a structured object.")
@@ -481,7 +579,18 @@ class DabRuntime:
                 value = self.execute_mongo_aggregation(database, query)
             else:
                 value = self.invoke_tool(self.query_tool, {"db_name": database, "query": query})
-            return normalize_query_result(value, round((time.monotonic() - started) * 1000))
+            elapsed_ms = round((time.monotonic() - started) * 1000)
+            if method == "materialize_data_query":
+                artifact_request = params.get("request")
+                if not isinstance(artifact_request, dict):
+                    raise BridgeError("invalid_artifact_request", "request must be an artifact request object.")
+                return materialize_query_result(
+                    value,
+                    elapsed_ms,
+                    artifact_request,
+                    max(0, int(params.get("budgetMs") or 0)),
+                )
+            return normalize_query_result(value, elapsed_ms)
         if method in {"close", "shutdown"}:
             self.close()
             return {"ok": True}

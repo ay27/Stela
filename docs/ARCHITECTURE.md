@@ -393,7 +393,7 @@ flowchart TB
   AGENT["ai:agent-run\nAgentHarness loop"]
   PROV["provider.ts → pi-ai Models"]
   HARNESS["agent.ts → stable prompt + turn envelope\n+ compact / overflow recovery"]
-  REVIEW["bounded analysis ledger\n+ one tool-free strategy review"]
+  REVIEW["bounded analysis ledger\n+ strategy review"]
   TOOLS["agent-tools → parallel reads\nsequential state changes\n→ connectors / search / vault-fs"]
   ART["main query-artifact cache\nsession + runId scoped"]
   PY["renderer Web Worker / eval Node Worker\nshared Pyodide + DuckDB + pandas core"]
@@ -431,15 +431,21 @@ flowchart TB
    target, available Skills, and MongoDB support), never from keyword classification. The current note or
    Canvas is execution context and is not rendered as user-authored content. Text segments retain their position around typed table,
    note, Canvas, RunSQL, and selection references, while resource bodies are deduplicated.
-   Plan versions are immutable appended session
-   entries. For analyses complex enough to create a plan, the snapshot also carries
-   the current question, grain, measure, dimensions, filters, sources/columns,
-   joins, output shape, assumptions, unresolved items, and verification checks.
-   Successful query/Python calls register disposable same-run evidence metadata;
-   `finalize_analysis` binds the current plan version and checks to those runs before
-   the final answer is emitted. No source pre-scan or durable evidence database is
-   involved, and no-plan questions retain the original fast path
-   ([ADR-0075](./adr/0075-analysis-semantics-in-execution-plans.md)). pi-ai requests use short cache retention. Read tools may run in parallel;
+   Plan versions are immutable appended session entries, and the plan is progress
+   bookkeeping for the agent panel only: it carries no authority over the answer
+   and never gates it. `create_plan` and `update_plan` are write-only records that
+   report notes (unknown step id, out-of-order completion, overwritten terminal
+   step) instead of failing the run, so no turn is spent repairing plan state.
+   Correctness is defended at the point of use instead: a truncated `run_query`
+   preview returns an instruction that it cannot support an exact result, every
+   `execute_python` result is prefixed with each input alias's row/column count
+   and column types, and the system prompt fixes the answer shape (conclusion,
+   material caveats, one data-basis line, then the requested value alone on the
+   last line without Markdown emphasis or thousands separators). Successful
+   query/Python calls still register disposable same-run evidence metadata for
+   chart and Canvas binding; there is no source pre-scan and no durable evidence
+   database ([ADR-0078](./adr/0078-plans-as-progress-bookkeeping.md)).
+   pi-ai requests use short cache retention. Read tools may run in parallel;
    plan tools, Python execution, chart creation, Canvas writes, and `propose_edit` are sequential.
    A bounded in-memory analysis ledger observes schema discovery, structured queries,
    and Python execution. Repeated query families receive a deterministic hint; structural
@@ -480,7 +486,8 @@ flowchart TB
    multi-statement blocking; MongoDB supports structured read-only find and a
    connector-declared aggregation allowlist, and rejects writes,
    cross-collection stages, and server-side JavaScript. Read-only calls return a
-   bounded model preview and, when available, a same-session machine-local
+   host-enforced preview of at most 200 rows, 24 KiB total, and 4 KiB per string
+   cell and, when available, a same-session machine-local
    artifact addressed only by run id. `execute_python` resolves explicit aliases
    to those artifacts and runs in an app-owned, Node-free Web Worker with
    offline Pyodide, DuckDB, and pandas. Main validates chunk reads; absolute

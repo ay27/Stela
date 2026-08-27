@@ -51,7 +51,6 @@ try {
     requestProposal: async () => true,
     plan: new ExecutionPlanStore("test-run"),
     analysisRuns: new Map(),
-    analysisFinalization: { version: null as number | null },
   };
 
   // 无连接时数据库相关工具明确报错，引导模型走别的路径
@@ -87,6 +86,8 @@ try {
     const searchSkills = tools.find((tool) => tool.name === "search_skills");
     const required = (searchSkills?.parameters as { required?: string[] } | undefined)?.required ?? [];
     assert.equal(required.includes("query"), false, "search_skills query must remain optional for browsing");
+    assert.equal(tools.some((tool) => tool.name === "revise_plan"), false);
+    assert.equal(tools.some((tool) => tool.name === "finalize_analysis"), false);
   }
   {
     const emptySkills = await dispatchTool("search_skills", "{}", baseCtx);
@@ -217,6 +218,62 @@ try {
       throw new Error("requestProposal should not be called when mutations are blocked by default");
     },
   };
+
+  // list_tables auto-selects a sole database and returns an actionable domain rejection for ambiguity.
+  {
+    const selected: Array<string | null | undefined> = [];
+    const single = await dispatchTool("list_tables", "{}", {
+      ...withConnection,
+      connector: {
+        ...fakeConnector,
+        listDatabases: async () => ["analytics"],
+        listTables: async (_kind: string, _config: unknown, database?: string | null) => {
+          selected.push(database);
+          return ["facts"];
+        },
+      },
+    });
+    assert.equal(single.ok, true);
+    assert.equal(JSON.parse(single.text).database, "analytics");
+    assert.deepEqual(selected, ["analytics"]);
+    const ambiguous = await dispatchTool("list_tables", "{}", {
+      ...withConnection,
+      connector: { ...fakeConnector, listDatabases: async () => ["a", "b"] },
+    });
+    assert.equal(ambiguous.ok, true);
+    assert.equal(JSON.parse(ambiguous.text).accepted, false);
+    assert.equal(JSON.parse(ambiguous.text).reason, "database_required");
+  }
+
+  // Host byte-bounds a giant cell even when a connector ignores previewMaxBytes.
+  {
+    let recordedRows: unknown[][] = [];
+    const giant = "x".repeat(100_000);
+    const bounded = await dispatchTool("run_query", JSON.stringify({
+      language: "sql",
+      query: "SELECT document FROM facts",
+    }), {
+      ...withConnection,
+      connector: {
+        ...fakeConnector,
+        executeUnbounded: async () => ({
+          kind: "query" as const,
+          columns: [{ name: "document", typeName: "TEXT" }],
+          rows: [[giant]],
+          elapsedMs: 1,
+        }),
+      },
+      recordRun: async (run: { rows: unknown[][] }) => { recordedRows = run.rows; },
+    });
+    assert.equal(bounded.ok, true, bounded.text);
+    const payload = JSON.parse(bounded.text) as {
+      result: { rows: string[][]; previewTruncated: boolean; previewTruncatedBy: string[] };
+    };
+    assert.equal(payload.result.previewTruncated, true);
+    assert.deepEqual(payload.result.previewTruncatedBy, ["bytes"]);
+    assert.ok((payload.result.rows[0]?.[0]?.length ?? 0) < 5_000);
+    assert.ok((recordedRows[0]?.[0] as string).length < 5_000);
+  }
 
   // run_query exposes structured MongoDB find/aggregate and rejects unsafe operators/stages.
   {
@@ -425,7 +482,7 @@ try {
     assert.equal(r.ok, false);
   }
 
-  // 计划工具只能按顺序完成当前步骤，并要求完成证据。
+  // 计划工具是只写记账：乱序、重复、未知步骤都只回执，不失败。
   {
     const create = await dispatchTool(
       "create_plan",
@@ -434,82 +491,44 @@ try {
           { id: "scope", title: "Scope", intent: "Define the metric", acceptance: "Definition found" },
           { id: "trend", title: "Trend", intent: "Measure daily values", acceptance: "Result available" },
         ],
-        analysis: {
-          question: "What is the daily trend?",
-          unresolved: ["Confirm source"],
-        },
       }),
       baseCtx,
     );
     assert.equal(create.ok, true);
+    assert.equal(JSON.parse(create.text).created, true);
+
+    const duplicate = await dispatchTool(
+      "create_plan",
+      JSON.stringify({ steps: [{ id: "other", title: "Other", intent: "Other", acceptance: "Other" }] }),
+      baseCtx,
+    );
+    assert.equal(duplicate.ok, true);
+    assert.equal(JSON.parse(duplicate.text).created, false);
+
+    // Completing a later step out of order is recorded, not rejected.
     const skipAhead = await dispatchTool(
       "update_plan",
       JSON.stringify({ stepId: "trend", status: "completed", evidence: "run_2" }),
       baseCtx,
     );
-    assert.equal(skipAhead.ok, false);
-    const complete = await dispatchTool(
+    assert.equal(skipAhead.ok, true, skipAhead.text);
+
+    // Evidence stays optional, so a missing line never costs a turn.
+    const noEvidence = await dispatchTool(
       "update_plan",
-      JSON.stringify({
-        stepId: "scope",
-        status: "completed",
-        evidence: "metrics.md",
-        analysis: {
-          question: "What is the daily trend?",
-          grain: "one row per day",
-          measure: "SUM(facts.value)",
-          dimensions: ["facts.day"],
-          filters: [],
-          sources: [{ connectionName: "demo", table: "facts", columns: ["day", "value"], reason: "Metric source" }],
-          joins: [],
-          outputShape: "table",
-          assumptions: [],
-          unresolved: [],
-          verificationChecks: [{ id: "daily-grain", description: "One output row per day" }],
-        },
-      }),
+      JSON.stringify({ stepId: "scope", status: "completed" }),
       baseCtx,
     );
-    assert.equal(complete.ok, true);
-    const finish = await dispatchTool(
+    assert.equal(noEvidence.ok, true, noEvidence.text);
+
+    const unknown = await dispatchTool(
       "update_plan",
-      JSON.stringify({ stepId: "trend", status: "completed", evidence: "daily result", runId: "result-run" }),
+      JSON.stringify({ stepId: "nope", status: "completed" }),
       baseCtx,
     );
-    assert.equal(finish.ok, true);
-    baseCtx.analysisRuns.set("result-run", {
-      kind: "query",
-      connectionName: "demo",
-      tables: ["analytics.facts"],
-      columns: [{ name: "day", typeName: "DATE" }, { name: "total", typeName: "INTEGER" }],
-      rowCount: 30,
-      truncated: false,
-      sourceRunIds: [],
-    });
-    const staleFinalize = await dispatchTool(
-      "finalize_analysis",
-      JSON.stringify({
-        planVersion: 2,
-        answer: "Daily trend ready.",
-        evidence: [{ runId: "result-run", fields: ["day", "total"] }],
-        checks: [{ id: "daily-grain", runId: "result-run" }],
-      }),
-      baseCtx,
-    );
-    assert.equal(staleFinalize.ok, false);
-    assert.match(staleFinalize.text, /current plan version 3/);
-    const finalize = await dispatchTool(
-      "finalize_analysis",
-      JSON.stringify({
-        planVersion: 3,
-        answer: "Daily trend ready.",
-        evidence: [{ runId: "result-run", fields: ["day", "total"] }],
-        checks: [{ id: "daily-grain", runId: "result-run" }],
-      }),
-      baseCtx,
-    );
-    assert.equal(finalize.ok, true, finalize.text);
-    assert.equal(baseCtx.analysisFinalization.version, 3);
+    assert.equal(unknown.ok, true);
+    assert.match(JSON.parse(unknown.text).note, /Unknown plan step 'nope'/);
+
     const plan = await dispatchTool("get_plan", "{}", baseCtx);
     assert.equal(plan.ok, true);
     assert.doesNotMatch(plan.text, /"status": "running"/);

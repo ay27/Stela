@@ -1,5 +1,7 @@
 import importlib.util
+import os
 import pathlib
+import tempfile
 import unittest
 
 
@@ -122,6 +124,52 @@ class BridgeHelpersTest(unittest.TestCase):
         self.assertEqual(result["kind"], "query")
         self.assertEqual([column["name"] for column in result["columns"]], ["name", "score"])
         self.assertEqual(result["rows"], [["a", 1.5], ["b", 2.0]])
+
+    def test_normalize_heterogeneous_records(self):
+        result = BRIDGE.normalize_query_result(
+            [{"name": "a"}, {"name": "b", "tags": ["x"]}, {"name": "c", "score": None}],
+            1,
+        )
+        self.assertEqual([column["name"] for column in result["columns"]], ["name", "tags", "score"])
+        self.assertEqual(
+            [column["typeName"] for column in result["columns"]],
+            ["TEXT", "JSON", "UNKNOWN"],
+        )
+
+    def test_materialize_respects_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = os.path.join(directory, "artifact.jsonl")
+            request = {
+                "format": "jsonl",
+                "outputPath": output,
+                "previewRows": 2,
+                "previewMaxBytes": 4096,
+                "maxBytes": 1_000_000,
+            }
+            result = BRIDGE.materialize_query_result(
+                [{"id": index} for index in range(5)],
+                3,
+                dict(request),
+                budget_ms=60_000,
+            )
+            self.assertEqual(result["rowCount"], 5)
+            self.assertEqual(len(result["previewRows"]), 2)
+            self.assertEqual(result["previewTruncatedBy"], ["rows"])
+            with open(output, encoding="utf-8") as artifact:
+                self.assertEqual(len(artifact.read().splitlines()), 5)
+
+            # The deadline is sampled every 5000 rows, so an expiry needs enough rows
+            # to reach the second check.
+            expired = os.path.join(directory, "expired.jsonl")
+            with self.assertRaises(BRIDGE.BridgeError) as caught:
+                BRIDGE.materialize_query_result(
+                    [{"id": index} for index in range(5001)],
+                    3,
+                    {**request, "outputPath": expired},
+                    budget_ms=1,
+                )
+            self.assertEqual(caught.exception.code, "query_artifact_timeout")
+            self.assertFalse(os.path.exists(expired))
 
     def test_extract_description_columns(self):
         description = """1. books_database

@@ -24,17 +24,21 @@ const modelRequests: Array<{
   messages?: Array<{ role?: string; content?: unknown; tool_calls?: unknown[] }>;
   reasoning_effort?: string;
 }> = [];
+
 const server = http.createServer(async (request, response) => {
   let requestBody = "";
   for await (const chunk of request) requestBody += String(chunk);
   modelRequests.push(JSON.parse(requestBody) as (typeof modelRequests)[number]);
   modelCalls += 1;
+  const isSalvage = requestBody.includes("The tool budget for this task is spent");
   response.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
     connection: "keep-alive",
   });
-  const delta = modelCalls === 1
+  const delta = isSalvage
+    ? { role: "assistant", content: "Best effort from the evidence gathered so far.\none" }
+    : modelCalls === 1
     ? {
         role: "assistant",
         tool_calls: [
@@ -62,7 +66,39 @@ const server = http.createServer(async (request, response) => {
           },
         ],
       }
-    : { role: "assistant", content: "one" };
+    : modelCalls === 2
+      ? {
+          role: "assistant",
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_stela_dab_query",
+              type: "function",
+              function: {
+                name: "run_query",
+                arguments: JSON.stringify({
+                  language: "sql",
+                  database: "demo_database",
+                  query: "SELECT value FROM demo_table",
+                }),
+              },
+            },
+            {
+              index: 1,
+              id: "call_stela_dab_complete",
+              type: "function",
+              function: {
+                name: "update_plan",
+                arguments: JSON.stringify({
+                  stepId: "answer",
+                  status: "completed",
+                  evidence: "The query returned the requested scalar.",
+                }),
+              },
+            },
+          ],
+        }
+      : { role: "assistant", content: "one" };
   response.write(`data: ${JSON.stringify({
     id: "chatcmpl-stela-dab-test",
     object: "chat.completion.chunk",
@@ -75,7 +111,7 @@ const server = http.createServer(async (request, response) => {
     object: "chat.completion.chunk",
     created: Math.floor(Date.now() / 1000),
     model: "mock-model",
-    choices: [{ index: 0, delta: {}, finish_reason: modelCalls === 1 ? "tool_calls" : "stop" }],
+    choices: [{ index: 0, delta: {}, finish_reason: !isSalvage && modelCalls <= 2 ? "tool_calls" : "stop" }],
     usage: { prompt_tokens: 100, completion_tokens: 1, total_tokens: 101 },
   })}\n\n`);
   response.end("data: [DONE]\n\n");
@@ -109,55 +145,69 @@ def validate(query_dir, llm_answer, reason=None):
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address === "object");
-  const child = spawn(
-    path.join(repoRoot, "node_modules", ".bin", "tsx"),
-    [
-      path.join(repoRoot, "scripts", "eval", "run-data-agent-bench.ts"),
-      "--dab-root", dabRoot,
-      "--dataset", "demo",
-      "--query-id", "1",
-      "--runs", "1",
-      "--output", output,
-      "--python", "python3",
-      "--concurrency", "2",
-      "--no-python",
-      "--bridge-timeout-ms", "10000",
-    ],
-    {
-      cwd: repoRoot,
-      env: {
-        ...process.env,
-        STELA_EVAL_API_KEY: "test-key",
-        STELA_EVAL_BASE_URL: `http://127.0.0.1:${address.port}/v1`,
-        STELA_EVAL_MODEL: "mock-model",
+  const runBenchmark = async (outputDir: string, extraArgs: string[] = []): Promise<void> => {
+    modelCalls = 0;
+    const child = spawn(
+      path.join(repoRoot, "node_modules", ".bin", "tsx"),
+      [
+        path.join(repoRoot, "scripts", "eval", "run-data-agent-bench.ts"),
+        "--dab-root", dabRoot,
+        "--dataset", "demo",
+        "--query-id", "1",
+        "--runs", "1",
+        "--output", outputDir,
+        "--python", "python3",
+        "--concurrency", "2",
+        "--no-python",
+        "--bridge-timeout-ms", "10000",
+        ...extraArgs,
+      ],
+      {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          STELA_EVAL_API_KEY: "test-key",
+          STELA_EVAL_BASE_URL: `http://127.0.0.1:${address.port}/v1`,
+          STELA_EVAL_MODEL: "mock-model",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
       },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-  child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-  const exitCode = await new Promise<number | null>((resolve) => child.on("exit", resolve));
-  assert.equal(exitCode, 0, `${stdout}\n${stderr}`);
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    const exitCode = await new Promise<number | null>((resolve) => child.on("exit", resolve));
+    assert.equal(exitCode, 0, `${stdout}\n${stderr}`);
+  };
+  await runBenchmark(output);
   const finalPath = path.join(output, "query_demo", "query1", "run_0", "final_agent.json");
   const final = JSON.parse(await fs.readFile(finalPath, "utf-8")) as {
     answer: string;
     valid: boolean;
     toolCalls: number;
+    error: string | null;
     efficiency: { reviewTriggered: boolean };
+    terminateReason: string;
     requestedReasoningEffort: string;
     effectiveReasoningEffort: string;
   };
+  const toolLog = await fs.readFile(
+    path.join(output, "query_demo", "query1", "run_0", "tool_calls.jsonl"),
+    "utf-8",
+  );
   assert.equal(final.answer, "one");
   assert.equal(final.valid, true);
-  assert.equal(final.toolCalls, 2);
+  assert.equal(final.toolCalls, 4);
+  assert.equal(final.error, null, toolLog);
   assert.equal(final.efficiency.reviewTriggered, false);
   assert.equal(final.requestedReasoningEffort, "medium");
   assert.equal(final.effectiveReasoningEffort, "medium");
   assert.ok(await readCompleted(finalPath, "medium", "medium"));
   assert.equal(await readCompleted(finalPath, "off", "off"), null);
-  assert.equal(modelCalls, 2);
+  // Planning is bookkeeping only, so a completed run spends no extra model call on it.
+  assert.equal(modelCalls, 3);
+  assert.equal(final.terminateReason, "final_answer");
   assert.ok(modelRequests.every((request) => request.reasoning_effort === "medium"));
   const followUpMessages = modelRequests[1]?.messages ?? [];
   const toolRequestIndex = followUpMessages.findIndex((message) =>
@@ -173,20 +223,36 @@ def validate(query_dir, llm_answer, reason=None):
     index > toolRequestIndex && message.role === "user" && String(message.content).includes("Execution plan snapshot")
   );
   assert.ok(planSnapshotIndex > toolRequestIndex + 2, "plan snapshot must follow the complete tool-result batch");
-  assert.match(
-    await fs.readFile(path.join(output, "query_demo", "query1", "run_0", "tool_calls.jsonl"), "utf-8"),
-    /list_databases/,
-  );
+  assert.doesNotMatch(toolLog, /finalize_analysis|revise_plan|salvage_start/);
   const summary = JSON.parse(await fs.readFile(path.join(output, "summary.json"), "utf-8")) as { validRate: number };
   assert.equal(summary.validRate, 1);
   const manifest = JSON.parse(await fs.readFile(path.join(output, "manifest.json"), "utf-8")) as {
     concurrency: number;
     bridgeTimeoutMs: number;
     strategyReview: boolean;
+    salvageMs: number;
   };
   assert.equal(manifest.concurrency, 2);
   assert.equal(manifest.bridgeTimeoutMs, 10_000);
   assert.equal(manifest.strategyReview, true);
+  assert.equal(manifest.salvageMs, 120_000);
+
+  // Hitting the tool cap must still be scored on a best-effort answer, not "".
+  const cappedOutput = path.join(root, "results-tool-cap");
+  await runBenchmark(cappedOutput, ["--max-tool-calls", "1"]);
+  const cappedDir = path.join(cappedOutput, "query_demo", "query1", "run_0");
+  const capped = JSON.parse(await fs.readFile(path.join(cappedDir, "final_agent.json"), "utf-8")) as {
+    answer: string;
+    valid: boolean;
+    terminateReason: string;
+    error: string | null;
+  };
+  const cappedLog = await fs.readFile(path.join(cappedDir, "tool_calls.jsonl"), "utf-8");
+  assert.equal(capped.terminateReason, "tool_call_cap_salvaged", cappedLog);
+  assert.equal(capped.error, null);
+  assert.equal(capped.valid, true);
+  assert.match(capped.answer, /Best effort/);
+  assert.match(cappedLog, /"type":"salvage_start"/);
 } finally {
   server.close();
   await fs.rm(root, { recursive: true, force: true });

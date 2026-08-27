@@ -19,6 +19,7 @@ def _quote_literal(value):
 _cfg = json.loads(__stela_inputs_json)
 con = duckdb.connect(database=':memory:')
 tables = {}
+_schema_lines = []
 for _item in _cfg:
     _alias = _item['alias']
     _quoted_alias = _quote_ident(_alias)
@@ -40,7 +41,26 @@ for _item in _cfg:
             f'FROM read_json_auto({_quote_literal(_item["path"])}, format=\'newline_delimited\')'
         )
     tables[_alias] = con.table(_alias)
+    # Report each alias's shape and resolved column types up front. Without it the
+    # model burns whole tool calls on hasattr/type probes just to learn its inputs.
+    # rowCount comes from the descriptor, so this costs no scan.
+    _schema_lines.append(
+        f'  {_alias}: {_item["rowCount"]} rows x {len(tables[_alias].columns)} cols | '
+        + ', '.join(
+            f'{_column}:{_type}'
+            for _column, _type in zip(tables[_alias].columns, tables[_alias].types)
+        )
+    )
 
+def to_df(alias):
+    if alias not in tables:
+        raise KeyError(f"Unknown table alias {alias!r}; available aliases: {sorted(tables.keys())}")
+    return tables[alias].df()
+
+_schema = (
+    '[INPUTS] tables[alias] is a DuckDB relation; to_df(alias) gives a pandas DataFrame.\n'
+    + '\n'.join(_schema_lines) + '\n\n'
+) if _schema_lines else ''
 _stdout = io.StringIO()
 _namespace = {
     '__builtins__': __builtins__,
@@ -48,6 +68,7 @@ _namespace = {
     'pd': pd,
     'con': con,
     'tables': tables,
+    'to_df': to_df,
 }
 try:
     with contextlib.redirect_stdout(_stdout):
@@ -84,20 +105,20 @@ try:
         _payload = {'kind': 'scalar', 'value': _scalar}
     __stela_result_json = json.dumps({
         'ok': True,
-        'stdout': _stdout.getvalue()[-65536:],
+        'stdout': _schema + _stdout.getvalue()[-65536:],
         'value': _payload,
     }, default=str)
     if len(__stela_result_json) > 2_000_000:
         __stela_result_json = json.dumps({
             'ok': False,
-            'stdout': _stdout.getvalue()[-65536:],
+            'stdout': _schema + _stdout.getvalue()[-65536:],
             'value': {'kind': 'none'},
             'error': 'Python result exceeds the 2 MB response limit; aggregate or select fewer columns.',
         })
 except BaseException as _error:
     __stela_result_json = json.dumps({
         'ok': False,
-        'stdout': _stdout.getvalue()[-65536:],
+        'stdout': _schema + _stdout.getvalue()[-65536:],
         'value': {'kind': 'none'},
         'error': ''.join(traceback.format_exception_only(type(_error), _error)).strip()[:16000],
     })

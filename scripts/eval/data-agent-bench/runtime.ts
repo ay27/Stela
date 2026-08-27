@@ -359,11 +359,12 @@ export function buildDabUserPrompt(input: {
     input.hintsText ? "DATASET HINTS:\n" + input.hintsText : "",
     `ACTIVE CONNECTION CONTRACT:\n` +
       `- This is a product-faithful Stela benchmark connection. Use Stela's existing tools only.\n` +
+      `- Use list_databases first when the logical database is not explicit, then pass one exact database to list_tables and run_query.\n` +
       `- Each run_query call targets exactly one logical database through its database field. Use language=sql for PostgreSQL/SQLite/DuckDB and language=mongodb for MongoDB collections.\n` +
       `- MongoDB supports structured read-only find and safe aggregate operations. Prefer aggregate for grouping, ranking, string expressions, and counts.\n` +
       `- Query different logical databases separately; do not join them in one database query.\n` +
       (capabilities.pythonAvailable
-        ? `- Successful run_query results can be combined through their artifacts with execute_python. Use DuckDB/pandas there for exact cross-database joins and large calculations.`
+        ? `- Successful run_query results can be combined through their artifacts with execute_python. Each tables[alias] value is a DuckDB relation; use to_df(alias) before pandas methods.`
         : `- Python execution is disabled for this legacy baseline; report the capability boundary instead of inventing a cross-database answer.`),
     "QUERY:\n" + input.query,
   ];

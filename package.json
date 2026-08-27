@@ -39,7 +39,8 @@
     "eval:agent-ask": "tsx scripts/eval/run-agent-ask.ts",
     "eval:data-agent-bench": "tsx scripts/eval/run-data-agent-bench.ts",
     "report:data-agent-bench": "tsx scripts/eval/build-data-agent-bench-report.ts",
-    "test:eval:data-agent-bench": "tsx electron/services/ai/analysis-efficiency.test.ts && tsx scripts/eval/data-agent-bench/runtime.test.ts && tsx scripts/eval/data-agent-bench/headless-python.test.ts && python3 -m unittest scripts/eval/data-agent-bench/bridge_test.py && tsx scripts/eval/data-agent-bench/bridge.integration.test.ts && tsx scripts/eval/data-agent-bench/runner.integration.test.ts && tsx scripts/eval/data-agent-bench/report.test.ts && node scripts/eval/data-agent-bench/ssh-connector.test.mjs"
+    "compare:data-agent-bench": "tsx scripts/eval/compare-data-agent-bench.ts",
+    "test:eval:data-agent-bench": "tsx electron/services/ai/analysis-efficiency.test.ts && tsx scripts/eval/data-agent-bench/runtime.test.ts && tsx scripts/eval/data-agent-bench/headless-python.test.ts && tsx scripts/eval/data-agent-bench/paired-comparison.test.ts && python3 -m unittest scripts/eval/data-agent-bench/bridge_test.py && tsx scripts/eval/data-agent-bench/bridge.integration.test.ts && tsx scripts/eval/data-agent-bench/runner.integration.test.ts && tsx scripts/eval/data-agent-bench/report.test.ts && node scripts/eval/data-agent-bench/ssh-connector.test.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",

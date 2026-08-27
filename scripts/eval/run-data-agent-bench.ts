@@ -25,6 +25,8 @@ import type {
   AiSettings,
   ConnectionEntry,
   DataQueryRequest,
+  MaterializedQueryResult,
+  QueryArtifactRequest,
   QueryResult,
   RunRecord,
   AgentStrategyCheckpoint,
@@ -90,6 +92,11 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../..");
 const bridgePath = path.join(here, "data-agent-bench", "bridge.py");
 const EXECUTION_PLAN_ENTRY = "execution_plan";
+const SALVAGE_PROMPT =
+  "The tool budget for this task is spent, so no further tool calls are possible. " +
+  "Answer now from the query and Python results already in this conversation: state your best conclusion, " +
+  "name the evidence it rests on, flag anything you could not verify, and put the requested value alone on the last line. " +
+  "A best-effort answer with its caveats is required; refusing to answer is not an option.";
 
 interface CliOptions {
   dabRoot: string;
@@ -110,6 +117,8 @@ interface CliOptions {
   pyodideAssets: string;
   noPython: boolean;
   strategyReview: boolean;
+  /** Slice of timeoutMs held back so a capped run still produces its best answer. */
+  salvageMs: number;
   reasoningEffort: AiReasoningEffort;
   condaEnv: string;
   python: string | null;
@@ -171,7 +180,9 @@ function parseArgs(argv: string[]): CliOptions {
     output: value("--output") ? path.resolve(value("--output")!) : null,
     dataset: value("--dataset") ?? null,
     queryId: value("--query-id") ? intArg(value("--query-id"), "--query-id", 1) : null,
-    runs: intArg(value("--runs") ?? "1", "--runs", 1),
+    // One run per case leaves a ~5 point binomial standard error, which is larger
+    // than the differences these comparisons try to resolve.
+    runs: intArg(value("--runs") ?? "3", "--runs", 1),
     hints: !argv.includes("--no-hints"),
     all: argv.includes("--all"),
     resume: argv.includes("--resume"),
@@ -187,6 +198,7 @@ function parseArgs(argv: string[]): CliOptions {
     ),
     noPython: argv.includes("--no-python"),
     strategyReview: !argv.includes("--no-strategy-review"),
+    salvageMs: intArg(value("--salvage-ms") ?? "120000", "--salvage-ms", 0),
     reasoningEffort: evalReasoningEffort(value("--reasoning-effort")),
     condaEnv: value("--conda-env") ?? "dabench",
     python: value("--python") ?? null,
@@ -364,7 +376,6 @@ async function runTask(input: {
   });
   const plan = new ExecutionPlanStore(request.runId);
   const analysisRuns = new Map<string, AgentAnalysisRunEvidence>();
-  const analysisFinalization = { version: null as number | null };
   const planPersistence = createPlanPersistenceBuffer(async (snapshot) => {
     await session.appendCustomEntry(EXECUTION_PLAN_ENTRY, {
       runId: snapshot.runId,
@@ -382,6 +393,7 @@ async function runTask(input: {
   let forcedStop: string | null = null;
   let error: string | null = null;
   let answer = "";
+  let salvagedAnswer = false;
   const started = Date.now();
   let abortAgent = (): void => {};
   const reviewAbort = new AbortController();
@@ -435,6 +447,7 @@ async function runTask(input: {
             dialect: "DAB routed SQL",
             queryLanguages: ["sql", "mongodb"],
             mongoOperations: ["find", "aggregate"],
+            queryArtifactFormats: ["jsonl"],
           }],
           listDatabases: async () => bridgeCall("list_databases", { config: bridgeConfig }),
           listTables: async (_kind, _config, database) =>
@@ -445,6 +458,18 @@ async function runTask(input: {
             bridgeCall("execute", { config: bridgeConfig, sql }),
           executeQuery: async (_kind, _config, query: DataQueryRequest) =>
             bridgeCall("execute_query", { config: bridgeConfig, query }),
+          materializeDataQuery: async (
+            _kind,
+            _config,
+            query: DataQueryRequest,
+            request: QueryArtifactRequest,
+          ) => bridgeCall<MaterializedQueryResult>("materialize_data_query", {
+            config: bridgeConfig,
+            query,
+            request,
+            // Fail with an actionable artifact error before the bridge call itself times out.
+            budgetMs: Math.floor(options.bridgeTimeoutMs * 0.6),
+          }),
         },
         ...(pythonPool
           ? {
@@ -464,7 +489,6 @@ async function runTask(input: {
         run: { runId: request.runId, sessionId: request.runId, notePath: null, questionsAsked: 0 },
         chartRuns: new Map(),
         analysisRuns,
-        analysisFinalization,
         resolveChartRun: async (runId) => runRecords.get(runId) ?? null,
         plan,
         persistPlan: planPersistence.enqueue,
@@ -551,7 +575,7 @@ async function runTask(input: {
     return { content };
   });
   abortAgent = () => { void harness.abort(); };
-  const timer = setTimeout(() => stop("task_timeout"), options.timeoutMs);
+  const timer = setTimeout(() => stop("task_timeout"), Math.max(1, options.timeoutMs - options.salvageMs));
   const unsubscribe = harness.subscribe(async (event) => {
     if (event.type === "turn_end") {
       if (pendingStrategyCheckpoint) {
@@ -591,34 +615,54 @@ async function runTask(input: {
   });
 
   try {
-    let result = await harness.prompt(buildUserContent(request, {
-      connection,
-      dialect: "DAB structured query (SQL and MongoDB find/aggregate)",
-      queryLanguages: ["sql", "mongodb"],
-      mongoOperations: ["find", "aggregate"],
-      contextSources: {
-        vault_notes: "empty",
-        skills: "empty",
-        sql_history: "empty",
-        canvas: "empty",
-        clarification: "unavailable",
-      },
-    }));
-    const currentPlan = plan.get();
-    if (currentPlan && analysisFinalization.version !== currentPlan.version && result.stopReason !== "error") {
-      result = await harness.prompt(
-        "The current execution plan has not passed finalize_analysis. Complete the plan, update its full analysis semantics, " +
-          "run the required checks, call finalize_analysis with current-run evidence, and return only its accepted answer.",
-      );
+    try {
+      const result = await harness.prompt(buildUserContent(request, {
+        connection,
+        dialect: "DAB structured query (SQL and MongoDB find/aggregate)",
+        queryLanguages: ["sql", "mongodb"],
+        mongoOperations: ["find", "aggregate"],
+        contextSources: {
+          vault_notes: "empty",
+          skills: "empty",
+          sql_history: "empty",
+          canvas: "empty",
+          clarification: "unavailable",
+        },
+      }));
+      if (result.stopReason === "error") error = result.errorMessage ?? "agent error";
+      answer = assistantText(result);
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : String(caught);
     }
-    answer = assistantText(result);
-    if (result.stopReason === "error") error = result.errorMessage ?? "agent error";
-    const refreshedPlan = plan.get();
-    if (refreshedPlan && analysisFinalization.version !== refreshedPlan.version) {
-      error ??= "planned analysis did not pass finalize_analysis";
+
+    // A wall-clock or tool cap is a harness artifact the product does not have.
+    // Scoring an empty answer measures the timer, not the agent, so spend the
+    // reserved slice on one tool-less turn over the evidence already gathered.
+    if (forcedStop && !answer.trim()) {
+      clearTimeout(timer);
+      toolEvents.push({ at: Date.now(), type: "salvage_start", reason: forcedStop });
+      const salvageTimer = setTimeout(() => { void harness.abort(); }, options.salvageMs);
+      try {
+        await harness.setActiveTools([]);
+        const salvaged = assistantText(await harness.prompt(SALVAGE_PROMPT));
+        if (salvaged.trim()) {
+          answer = salvaged;
+          salvagedAnswer = true;
+          error = null;
+        }
+      } catch (caught) {
+        toolEvents.push({
+          at: Date.now(),
+          type: "salvage_error",
+          message: caught instanceof Error ? caught.message : String(caught),
+        });
+      } finally {
+        clearTimeout(salvageTimer);
+        toolEvents.push({ at: Date.now(), type: "salvage_end", salvaged: salvagedAnswer });
+      }
     }
   } catch (caught) {
-    error = caught instanceof Error ? caught.message : String(caught);
+    error ??= caught instanceof Error ? caught.message : String(caught);
   } finally {
     clearTimeout(timer);
     strategyUnsubscribe();
@@ -630,6 +674,10 @@ async function runTask(input: {
       "utf-8",
     );
   }
+
+  const terminateReason = salvagedAnswer
+    ? `${forcedStop}_salvaged`
+    : forcedStop ?? (error ? "error" : "final_answer");
 
   let validation: DabValidation;
   const validatorBridge = new DabBridgeClient({
@@ -644,7 +692,7 @@ async function runTask(input: {
     validation = await validatorBridge.call("validate", {
       config: bridgeConfig,
       answer,
-      terminateReason: forcedStop ?? (error ? "error" : "final_answer"),
+      terminateReason,
     });
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
@@ -663,7 +711,7 @@ async function runTask(input: {
     answer,
     valid: validation.is_valid === true,
     validation,
-    terminateReason: forcedStop ?? (error ? "error" : "final_answer"),
+    terminateReason,
     error,
     model: credentials.model,
     requestedReasoningEffort: reasoning.requested,
@@ -840,6 +888,8 @@ async function main(): Promise<void> {
     pythonRuntime: options.noPython ? "disabled" : "pyodide",
     pythonConcurrency: options.noPython ? 0 : options.pythonConcurrency,
     strategyReview: options.strategyReview,
+    salvageMs: options.salvageMs,
+    selection: { mode: options.all ? "all" : "dataset" },
     host: { platform: process.platform, arch: process.arch, node: process.version },
   });
 

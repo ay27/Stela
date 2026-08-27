@@ -127,5 +127,7 @@ proposed → active → superseded
 | [0072](0072-profile-scoped-agent-reasoning-effort.md) | Profile-scoped Agent reasoning effort | active |
 | [0073](0073-three-state-skill-freshness.md) | Three-state Skill freshness and maintenance inspection | active |
 | [0074](0074-streamed-agent-process-narration.md) | Streamed Agent process narration | active |
-| [0075](0075-analysis-semantics-in-execution-plans.md) | Analysis semantics and current-run evidence finalization | active |
+| [0075](0075-analysis-semantics-in-execution-plans.md) | Analysis semantics and current-run evidence finalization | superseded → [0078](0078-plans-as-progress-bookkeeping.md) |
 | [0076](0076-event-driven-single-flight-git-sync.md) | Event-driven single-flight Git sync | active |
+| [0077](0077-independent-planned-result-review.md) | Independent planned-result review and bounded revision | rejected → [0078](0078-plans-as-progress-bookkeeping.md) |
+| [0078](0078-plans-as-progress-bookkeeping.md) | Execution plans are progress bookkeeping, not an answer gate | active |

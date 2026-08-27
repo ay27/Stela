@@ -90,6 +90,42 @@ function comparisonCases() {
   return new Map((state.comparisonData?.cases ?? []).map((item) => [item.id, item]));
 }
 
+function comparisonPairs() {
+  if (!state.comparisonData) return [];
+  const previous = comparisonCases();
+  return state.data.cases.flatMap((current) => {
+    const before = previous.get(current.id);
+    return before ? [{ current, previous: before }] : [];
+  });
+}
+
+function summarizeCases(cases) {
+  const count = cases.length;
+  const sum = (selector) => cases.reduce((total, item) => total + selector(item), 0);
+  const promptTokens = sum((item) =>
+    item.usage.inputTokens + item.usage.cacheReadTokens + item.usage.cacheWriteTokens);
+  return {
+    count,
+    valid: cases.filter((item) => item.valid).length,
+    validRate: count > 0 ? cases.filter((item) => item.valid).length / count : 0,
+    averageElapsedMs: count > 0 ? sum((item) => item.elapsedMs) / count : 0,
+    averageToolCalls: count > 0 ? sum((item) => item.toolCalls) / count : 0,
+    averageOutputTokens: count > 0 ? sum((item) => item.usage.outputTokens) / count : 0,
+    cacheHitRate: promptTokens > 0 ? sum((item) => item.usage.cacheReadTokens) / promptTokens : null,
+    reviewsCompleted: cases.filter((item) => item.efficiency?.reviewStatus === "completed").length,
+  };
+}
+
+function comparableSummary() {
+  const pairs = comparisonPairs();
+  if (pairs.length === 0) return null;
+  return {
+    pairs,
+    current: summarizeCases(pairs.map((pair) => pair.current)),
+    previous: summarizeCases(pairs.map((pair) => pair.previous)),
+  };
+}
+
 function caseChange(item, previous = comparisonCases().get(item.id)) {
   if (!state.comparisonData || !previous) return state.comparisonData ? "new" : null;
   if (item.valid && !previous.valid) return "fixed";
@@ -137,25 +173,26 @@ function filteredCases() {
 function renderSummary() {
   const target = document.getElementById("summary");
   const totals = state.data.totals;
-  const previous = state.comparisonData?.totals ?? null;
-  const validNote = previous
-    ? `${formatPercent(totals.validRate)} · ${signed((totals.validRate - previous.validRate) * 100, 1)} pp`
+  const comparable = comparableSummary();
+  const validNote = comparable
+    ? `${formatPercent(comparable.current.validRate)} / ${comparable.current.count} 个共同 case · ${signed((comparable.current.validRate - comparable.previous.validRate) * 100, 1)} pp`
     : formatPercent(totals.validRate);
-  const durationNote = previous
-    ? `对照轮 ${formatDuration(previous.averageElapsedMs)} · ${signed((totals.averageElapsedMs / previous.averageElapsedMs - 1) * 100, 1)}%`
+  const durationNote = comparable
+    ? `共同 case 对照 ${formatDuration(comparable.previous.averageElapsedMs)} · ${signed((comparable.current.averageElapsedMs / comparable.previous.averageElapsedMs - 1) * 100, 1)}%`
     : `累计 ${formatDuration(totals.elapsedMs)}`;
-  const toolNote = previous
-    ? `对照轮 ${formatNumber(previous.toolCalls)} · ${signed(totals.toolCalls - previous.toolCalls)}`
+  const toolNote = comparable
+    ? `共同 case ${comparable.current.averageToolCalls.toFixed(1)} / case · 对照 ${comparable.previous.averageToolCalls.toFixed(1)}`
     : `平均 ${(totals.toolCalls / totals.cases).toFixed(1)} / case`;
-  const outputNote = previous
-    ? `对照轮 ${compactNumber(previous.outputTokens)} · ${signed((totals.outputTokens / previous.outputTokens - 1) * 100, 1)}%`
+  const outputNote = comparable
+    ? `共同 case 平均 · 对照 ${compactNumber(comparable.previous.averageOutputTokens)} · ${signed((comparable.current.averageOutputTokens / comparable.previous.averageOutputTokens - 1) * 100, 1)}%`
     : `${formatNumber(totals.modelTurns)} 个模型轮次`;
-  const cacheNote = previous && totals.cacheHitRate != null && previous.cacheHitRate != null
-    ? `对照轮 ${formatPercent(previous.cacheHitRate)} · ${signed((totals.cacheHitRate - previous.cacheHitRate) * 100, 1)} pp`
+  const cacheNote = comparable && comparable.current.cacheHitRate != null && comparable.previous.cacheHitRate != null
+    ? `共同 case 对照 ${formatPercent(comparable.previous.cacheHitRate)} · ${signed((comparable.current.cacheHitRate - comparable.previous.cacheHitRate) * 100, 1)} pp`
     : `${compactNumber(totals.cacheReadTokens)} cached tokens`;
-  const reviewNote = previous
-    ? `对照轮 ${previous.strategyReviewsCompleted ?? 0} · ${signed((totals.strategyReviewsCompleted ?? 0) - (previous.strategyReviewsCompleted ?? 0))}`
+  const reviewNote = comparable
+    ? `共同 case 完成 ${comparable.current.reviewsCompleted} · 对照 ${comparable.previous.reviewsCompleted}`
     : `${totals.strategyReviewsCompleted ?? 0} completed · ${totals.strategyReviewsFailed ?? 0} failed`;
+  const resultReviewNote = `${totals.resultReviewsSkipped ?? 0} 仅结构门 · ${totals.resultReviewsExhausted ?? 0} 两轮耗尽 · ${totals.resultReviewsUnavailable ?? 0} 不可用 · ${totals.resultReviewsStructuralFailed ?? 0} 结构失败`;
   target.replaceChildren(
     metric("通过率", `${totals.valid} / ${totals.cases}`, validNote),
     metric("平均耗时", formatDuration(totals.averageElapsedMs), durationNote),
@@ -163,12 +200,15 @@ function renderSummary() {
     metric("模型输出 Token", compactNumber(totals.outputTokens), outputNote),
     metric("Prompt Cache", totals.cacheHitRate == null ? "—" : formatPercent(totals.cacheHitRate), cacheNote),
     metric("策略复盘", String(totals.strategyReviewsTriggered ?? 0), reviewNote),
+    metric("结果审查通过", String(totals.resultReviewsAccepted ?? 0), resultReviewNote),
   );
 }
 
 function historyRunLabel(run) {
   const date = run.sourceGeneratedAt ? new Date(run.sourceGeneratedAt).toLocaleString("zh-CN") : "未知时间";
-  return `${run.label} · ${run.totals.valid}/${run.totals.cases} · ${date}`;
+  const expectedCases = Math.max(...(state.history?.runs ?? [run]).map((item) => item.totals.cases));
+  const coverage = run.totals.cases < expectedCases ? ` · 部分 ${run.totals.cases}/${expectedCases}` : "";
+  return `${run.label} · ${run.totals.valid}/${run.totals.cases}${coverage} · ${date}`;
 }
 
 function renderHistory() {
@@ -223,24 +263,36 @@ function renderComparison() {
   panel.hidden = false;
   const currentRun = currentHistoryRun();
   const previousRun = comparisonHistoryRun();
+  const comparable = comparableSummary();
   document.getElementById("comparison-label").textContent =
-    `${currentRun?.label ?? "当前轮"} vs ${previousRun?.label ?? "对照轮"}`;
+    `${currentRun?.label ?? "当前轮"} vs ${previousRun?.label ?? "对照轮"}` +
+    (comparable ? ` · ${comparable.current.count} 个共同 case` : "");
   const previousCases = comparisonCases();
   const changes = state.data.cases.map((item) => caseChange(item, previousCases.get(item.id)));
   const count = (change) => changes.filter((item) => item === change).length;
   const summary = document.getElementById("comparison-summary");
   summary.replaceChildren(
-    metric("净提升", signed(state.data.totals.valid - previous.totals.valid), `${signed((state.data.totals.validRate - previous.totals.validRate) * 100, 1)} pp`),
+    metric(
+      "净提升",
+      comparable ? signed(comparable.current.valid - comparable.previous.valid) : "—",
+      comparable ? `${signed((comparable.current.validRate - comparable.previous.validRate) * 100, 1)} pp · 共同 case` : "无共同 case",
+    ),
     metric("已修复", String(count("fixed")), "失败 → 通过"),
     metric("新回归", String(count("regressed")), "通过 → 失败"),
     metric("持续失败", String(count("still-fail")), "两轮均未通过"),
   );
 
-  const previousDatasets = new Map(previous.datasets.map((item) => [item.name, item]));
-  const rows = state.data.datasets.map((item) => {
-    const before = previousDatasets.get(item.name);
-    return { item, before, delta: before ? item.validRate - before.validRate : null };
-  }).sort((a, b) => (b.delta ?? -Infinity) - (a.delta ?? -Infinity) || a.item.name.localeCompare(b.item.name));
+  const pairsByDataset = new Map();
+  for (const pair of comparable?.pairs ?? []) {
+    const pairs = pairsByDataset.get(pair.current.dataset) ?? [];
+    pairs.push(pair);
+    pairsByDataset.set(pair.current.dataset, pairs);
+  }
+  const rows = [...pairsByDataset.entries()].map(([name, pairs]) => {
+    const current = summarizeCases(pairs.map((pair) => pair.current));
+    const before = summarizeCases(pairs.map((pair) => pair.previous));
+    return { name, current, before, delta: current.validRate - before.validRate };
+  }).sort((a, b) => b.delta - a.delta || a.name.localeCompare(b.name));
   const table = element("table", "stela-comparison-table");
   const head = element("thead", "");
   const headRow = element("tr", "");
@@ -249,13 +301,13 @@ function renderComparison() {
   const body = element("tbody", "");
   for (const row of rows) {
     const tr = element("tr", "");
-    tr.addEventListener("click", () => setDatasetFilter(row.item.name));
+    tr.addEventListener("click", () => setDatasetFilter(row.name));
     const values = [
-      row.item.name,
-      `${row.item.valid}/${row.item.cases} · ${formatPercent(row.item.validRate)}`,
-      row.before ? `${row.before.valid}/${row.before.cases} · ${formatPercent(row.before.validRate)}` : "—",
-      row.delta == null ? "新增" : `${signed(row.delta * 100, 1)} pp`,
-      formatDuration(row.item.averageElapsedMs),
+      row.name,
+      `${row.current.valid}/${row.current.count} · ${formatPercent(row.current.validRate)}`,
+      `${row.before.valid}/${row.before.count} · ${formatPercent(row.before.validRate)}`,
+      `${signed(row.delta * 100, 1)} pp`,
+      formatDuration(row.current.averageElapsedMs),
     ];
     values.forEach((value, index) => tr.append(element("td", index === 3 && row.delta !== 0 ? (row.delta > 0 ? "stela-delta-up" : "stela-delta-down") : "", value)));
     body.append(tr);
@@ -274,6 +326,9 @@ function renderSignals() {
     0,
   );
   const strategyReviews = state.data.cases.filter((item) => item.efficiency?.reviewTriggered);
+  const resultReviewIssues = state.data.cases.filter((item) =>
+    ["exhausted_with_warning", "unavailable", "structural_failed"].includes(item.resultReview?.status)
+  );
   const signals = [
     {
       value: `${mongo.length} cases`,
@@ -299,6 +354,11 @@ function renderSignals() {
       value: `${strategyReviews.length} cases`,
       text: `触发策略复盘；峰值同族查询 ${state.data.totals.queryFamilyPeak ?? 0} 次，复盘后仍执行 ${state.data.totals.postReviewRunQueryCalls ?? 0} 次 run_query。`,
       className: strategyReviews.length > 0 ? "stela-signal-warning" : "",
+    },
+    {
+      value: `${resultReviewIssues.length} cases`,
+      text: `planned result 未正常通过独立审查：两轮耗尽 ${state.data.totals.resultReviewsExhausted ?? 0}，审查不可用 ${state.data.totals.resultReviewsUnavailable ?? 0}，结构门失败 ${state.data.totals.resultReviewsStructuralFailed ?? 0}。`,
+      className: resultReviewIssues.length > 0 ? "stela-signal-warning" : "",
     },
   ];
   const target = document.getElementById("signals");
@@ -503,6 +563,7 @@ function renderDetail(item) {
     ["工具调用", String(item.toolCalls)],
     ["同族查询峰值", String(item.efficiency?.queryFamilyPeak ?? 0)],
     ["策略复盘", item.efficiency?.reviewStatus ?? "not_triggered"],
+    ["结果审查", item.resultReview?.status ?? "legacy_unknown"],
   ];
   for (const [label, value] of metricValues) {
     const card = element("div", "stela-detail-metric");
@@ -517,6 +578,9 @@ function renderDetail(item) {
     const truth = element("div", "stela-ground-truth");
     truth.append(element("div", "stela-trace-label", "Ground truth"), element("pre", "", item.groundTruth));
     validation.append(truth);
+  }
+  if (item.resultReview?.diagnosis) {
+    validation.append(detailBlock("RESULT REVIEW", item.resultReview.diagnosis));
   }
   if (item.error) validation.append(element("pre", "stela-validation", item.error));
   const trace = element("section", "stela-trace");
@@ -584,11 +648,29 @@ function renderToolStats() {
   const target = document.getElementById("tool-stats");
   const current = new Map((state.data.toolStats ?? []).map((item) => [item.tool, item]));
   const previous = new Map((state.comparisonData?.toolStats ?? []).map((item) => [item.tool, item]));
+  const normalized = (item, tool) => {
+    if (!item) return {
+      tool, calls: 0, successCalls: 0, rejectedCalls: 0, runtimeErrorCalls: 0,
+      passedCaseCalls: 0, failedCaseCalls: 0, successRate: 0, errorCauses: [], legacy: false,
+    };
+    const modern = Number.isFinite(item.successCalls);
+    return {
+      ...item,
+      successCalls: modern ? item.successCalls : 0,
+      rejectedCalls: modern ? item.rejectedCalls ?? 0 : 0,
+      runtimeErrorCalls: modern ? item.runtimeErrorCalls ?? 0 : 0,
+      passedCaseCalls: item.passedCaseCalls ?? item.passCalls ?? 0,
+      failedCaseCalls: item.failedCaseCalls ?? item.failCalls ?? 0,
+      successRate: modern ? item.successRate ?? (item.calls ? item.successCalls / item.calls : 0) : null,
+      errorCauses: item.errorCauses ?? [],
+      legacy: !modern,
+    };
+  };
   const rows = [...new Set([...current.keys(), ...previous.keys()])]
     .map((tool) => ({
       tool,
-      current: current.get(tool) ?? { tool, calls: 0, passCalls: 0, failCalls: 0 },
-      previous: previous.get(tool) ?? null,
+      current: normalized(current.get(tool), tool),
+      previous: previous.has(tool) ? normalized(previous.get(tool), tool) : null,
     }))
     .sort((left, right) => right.current.calls - left.current.calls || left.tool.localeCompare(right.tool));
   const currentCases = Math.max(state.data.totals.cases, 1);
@@ -601,12 +683,28 @@ function renderToolStats() {
     const rateNote = row.previous
       ? `${currentRate.toFixed(2)} / case · 对照 ${(row.previous.calls / previousCases).toFixed(2)} · ${signed(currentRate - row.previous.calls / previousCases, 2)}`
       : `${currentRate.toFixed(2)} / case`;
+    if (item.legacy) {
+      counts.append(element("span", "stela-tool-rate", "旧报告：无真实工具结果"));
+    } else {
+      counts.append(
+        element("span", "stela-status-pass", `${item.successCalls} 成功`),
+        element("span", "stela-status-fail", `${item.rejectedCalls} 拒绝`),
+        element("span", "stela-status-fail", `${item.runtimeErrorCalls} 运行错误`),
+        element("span", "stela-tool-rate", `${(item.successRate * 100).toFixed(1)}% 工具成功率`),
+      );
+    }
     counts.append(
-      element("span", "stela-status-pass", `${item.passCalls} pass`),
-      element("span", "stela-status-fail", `${item.failCalls} fail`),
-      element("span", "stela-tool-total", formatNumber(item.calls)),
+      element("span", "stela-tool-total", `${formatNumber(item.calls)} 调用`),
       element("span", "stela-tool-rate", rateNote),
+      element("span", "stela-tool-rate", `案例相关：正确 ${item.passedCaseCalls} · 错误 ${item.failedCaseCalls}`),
     );
+    if (item.errorCauses.length > 0) {
+      counts.append(element(
+        "span",
+        "stela-tool-rate",
+        `原因：${item.errorCauses.map((cause) => `${cause.category} ${cause.count}`).join(" · ")}`,
+      ));
+    }
     card.append(element("div", "stela-tool-name", item.tool), counts);
     return card;
   }));
@@ -651,7 +749,11 @@ function updateReportMeta() {
     : `${requestedReasoning} -> ${effectiveReasoning}`;
   const generated = state.data.sourceGeneratedAt ? new Date(state.data.sourceGeneratedAt).toLocaleString("zh-CN") : "未知时间";
   const label = currentHistoryRun()?.label;
-  document.getElementById("report-meta").textContent = `${label ? `${label} · ` : ""}${model} · reasoning ${reasoning} · ${state.data.totals.cases} cases · 完成于 ${generated}`;
+  const expectedCases = Math.max(state.data.totals.cases, ...(state.history?.runs ?? []).map((run) => run.totals.cases));
+  const coverage = state.data.totals.cases < expectedCases
+    ? `部分结果 ${state.data.totals.cases}/${expectedCases} cases`
+    : `${state.data.totals.cases} cases`;
+  document.getElementById("report-meta").textContent = `${label ? `${label} · ` : ""}${model} · reasoning ${reasoning} · ${coverage} · ${state.data.totals.cases < expectedCases ? "最后结果于" : "完成于"} ${generated}`;
 }
 
 function renderAll() {

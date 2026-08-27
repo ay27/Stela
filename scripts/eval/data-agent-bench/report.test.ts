@@ -50,6 +50,17 @@ async function writeRun(dataset: string, query: number, valid: boolean): Promise
       postReviewRunQueryCalls: 2,
       reviewStatus: "completed",
     } : undefined,
+    resultReview: valid ? {
+      status: "accepted",
+      reviews: 1,
+      revisions: 0,
+      diagnosis: "Evidence matches the scalar answer.",
+    } : {
+      status: "structural_failed",
+      reviews: 0,
+      revisions: 0,
+      diagnosis: "Evidence was missing.",
+    },
     usage: {
       inputTokens: 10,
       outputTokens: 20,
@@ -100,6 +111,8 @@ try {
   assert.equal(report.totals.strategyReviewsTriggered, 1);
   assert.equal(report.totals.strategyReviewsCompleted, 1);
   assert.equal(report.totals.queryFamilyPeak, 8);
+  assert.equal(report.totals.resultReviewsAccepted, 1);
+  assert.equal(report.totals.resultReviewsStructuralFailed, 1);
   assert.equal(report.cases[0]?.question, "Question 1?");
   assert.equal(report.cases[0]?.requestedReasoningEffort, "high");
   assert.equal(report.cases[0]?.effectiveReasoningEffort, "medium");
@@ -107,6 +120,12 @@ try {
   assert.equal(report.cases[1]?.efficiency.reviewStatus, "not_triggered");
   assert.equal(report.cases[1]?.trace[1]?.toolName, "run_sql");
   assert.equal(report.failureCategories[0]?.count, 1);
+  const runSqlStats = report.toolStats.find((item) => item.tool === "run_sql");
+  assert.equal(runSqlStats?.calls, 3);
+  assert.equal(runSqlStats?.successCalls, 1);
+  assert.equal(runSqlStats?.runtimeErrorCalls, 2);
+  assert.equal(runSqlStats?.passedCaseCalls, 1);
+  assert.equal(runSqlStats?.failedCaseCalls, 2);
 
   await writeDataAgentBenchReport(input, output);
   for (const name of ["index.html", "styles.css", "app.js", "analysis-data.json"]) {
@@ -139,6 +158,12 @@ try {
   const historyApp = await fs.readFile(path.join(historyOutput, "app.js"), "utf-8");
   assert.match(historyApp, /comparisonData\?\.toolStats/);
   assert.match(historyApp, /\/ case · 对照/);
+  assert.match(historyApp, /function comparisonPairs\(\)/);
+  assert.match(historyApp, /个共同 case/);
+  assert.match(historyApp, /部分结果/);
+  assert.match(historyApp, /工具成功率/);
+  assert.match(historyApp, /案例相关/);
+  assert.doesNotMatch(historyApp, /\$\{item\.passCalls\} pass/);
   for (const run of history.runs) {
     const stat = await fs.stat(path.join(historyOutput, run.dataFile));
     assert.ok(stat.size > 0, `${run.dataFile} must be generated`);

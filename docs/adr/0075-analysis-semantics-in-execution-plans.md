@@ -2,7 +2,8 @@
 type: ADR
 id: "0075"
 title: "Analysis semantics and current-run evidence finalization"
-status: active
+status: superseded
+superseded_by: "0078"
 date: 2026-08-24
 ---
 

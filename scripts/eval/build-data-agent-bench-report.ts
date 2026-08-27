@@ -52,6 +52,7 @@ interface RawRun {
   toolCallCounts: Record<string, number>;
   capabilityFailures: Record<string, number>;
   efficiency?: ReportEfficiency;
+  resultReview?: ReportResultReview;
   usage: {
     inputTokens: number;
     outputTokens: number;
@@ -70,6 +71,19 @@ export interface ReportEfficiency {
   runQueryCallsAtReview: number | null;
   postReviewRunQueryCalls: number;
   reviewStatus: "not_triggered" | "running" | "completed" | "failed";
+}
+
+export interface ReportResultReview {
+  status:
+    | "no_plan"
+    | "structural_only"
+    | "accepted"
+    | "exhausted_with_warning"
+    | "unavailable"
+    | "structural_failed";
+  reviews: number;
+  revisions: number;
+  diagnosis: string | null;
 }
 
 export interface ReportTraceStep {
@@ -108,11 +122,13 @@ export interface ReportCase {
   toolCallCounts: Record<string, number>;
   capabilityFailures: Record<string, number>;
   efficiency: ReportEfficiency;
+  resultReview: ReportResultReview;
   usage: RawRun["usage"];
   trace: ReportTraceStep[];
 }
 
 export interface DataAgentBenchReport {
+  schemaVersion: 2;
   generatedAt: string;
   sourceGeneratedAt: string | null;
   manifest: Record<string, unknown>;
@@ -135,6 +151,12 @@ export interface DataAgentBenchReport {
     queryFamilyPeak: number;
     strategyHints: number;
     postReviewRunQueryCalls: number;
+    resultReviewsAccepted: number;
+    resultReviewsExhausted: number;
+    resultReviewsUnavailable: number;
+    resultReviewsStructuralFailed: number;
+    /** Planned cases that passed the structural gate while semantic review was off. */
+    resultReviewsSkipped: number;
   };
   datasets: Array<{
     name: string;
@@ -146,7 +168,17 @@ export interface DataAgentBenchReport {
     capabilityFailures: Record<string, number>;
   }>;
   failureCategories: Array<{ category: string; count: number }>;
-  toolStats: Array<{ tool: string; calls: number; passCalls: number; failCalls: number }>;
+  toolStats: Array<{
+    tool: string;
+    calls: number;
+    successCalls: number;
+    rejectedCalls: number;
+    runtimeErrorCalls: number;
+    successRate: number;
+    passedCaseCalls: number;
+    failedCaseCalls: number;
+    errorCauses: Array<{ category: string; count: number }>;
+  }>;
   cases: ReportCase[];
 }
 
@@ -181,6 +213,50 @@ const EMPTY_EFFICIENCY: ReportEfficiency = {
   postReviewRunQueryCalls: 0,
   reviewStatus: "not_triggered",
 };
+
+const EMPTY_RESULT_REVIEW: ReportResultReview = {
+  status: "no_plan",
+  reviews: 0,
+  revisions: 0,
+  diagnosis: null,
+};
+
+type ToolOutcomeKind = "success" | "rejected" | "runtime_error";
+
+function toolOutcome(step: ReportTraceStep): { kind: ToolOutcomeKind; cause: string | null } {
+  const text = step.text.trim();
+  if (!step.isError) {
+    try {
+      const parsed = JSON.parse(text) as { accepted?: unknown; reason?: unknown };
+      if (parsed.accepted === false || parsed.reason === "database_required") {
+        return { kind: "rejected", cause: step.toolName?.includes("plan") || step.toolName === "finalize_analysis" ? "plan_contract" : "domain_rejection" };
+      }
+    } catch {
+      // Successful non-JSON tool text remains a success.
+    }
+    return { kind: "success", cause: null };
+  }
+  const lower = text.toLowerCase();
+  if (/timed? out|timeout/.test(lower)) return { kind: "runtime_error", cause: "timeout" };
+  if (/terminated|cancelled|aborted|task_timeout/.test(lower)) return { kind: "runtime_error", cause: "termination" };
+  if (/bridge|readline|invalid string length/.test(lower)) return { kind: "runtime_error", cause: "bridge" };
+  if (step.toolName === "execute_python") {
+    if (/duckdbpyrelation|dataframe|alias|runid|artifact|inputs supports|valid identifier/.test(lower)) {
+      return { kind: "rejected", cause: "python_contract" };
+    }
+    return { kind: "runtime_error", cause: "python_runtime" };
+  }
+  if (step.toolName?.includes("plan") || step.toolName === "finalize_analysis") {
+    return { kind: "rejected", cause: "plan_contract" };
+  }
+  if (/must |must be|requires?|unknown |invalid |not allowed|not support|does not reference|missing /.test(lower)) {
+    return { kind: "rejected", cause: "input_contract" };
+  }
+  if (step.toolName === "run_query" || step.toolName === "run_sql") {
+    return { kind: "runtime_error", cause: "query_or_schema" };
+  }
+  return { kind: "runtime_error", cause: "execution" };
+}
 
 function truncate(value: string, limit: number): string {
   if (value.length <= limit) return value;
@@ -347,6 +423,7 @@ export async function buildDataAgentBenchReport(input: string): Promise<DataAgen
     toolCallCounts: run.toolCallCounts ?? {},
     capabilityFailures: run.capabilityFailures ?? {},
     efficiency: { ...EMPTY_EFFICIENCY, ...(run.efficiency ?? {}) },
+    resultReview: { ...EMPTY_RESULT_REVIEW, ...(run.resultReview ?? {}) },
     usage: run.usage,
     trace: compactTrace(run.transcript ?? []),
   })).sort((a, b) => a.dataset.localeCompare(b.dataset) || a.query - b.query || a.run - b.run);
@@ -372,15 +449,58 @@ export async function buildDataAgentBenchReport(input: string): Promise<DataAgen
     };
   });
   const failureCounts = new Map<string, number>();
-  const tools = new Map<string, { calls: number; passCalls: number; failCalls: number }>();
+  const tools = new Map<string, {
+    calls: number;
+    successCalls: number;
+    rejectedCalls: number;
+    runtimeErrorCalls: number;
+    passedCaseCalls: number;
+    failedCaseCalls: number;
+    causes: Map<string, number>;
+  }>();
   for (const item of cases) {
     if (!item.valid) failureCounts.set(item.failureCategory, (failureCounts.get(item.failureCategory) ?? 0) + 1);
     for (const [tool, calls] of Object.entries(item.toolCallCounts)) {
-      const value = tools.get(tool) ?? { calls: 0, passCalls: 0, failCalls: 0 };
+      const value = tools.get(tool) ?? {
+        calls: 0,
+        successCalls: 0,
+        rejectedCalls: 0,
+        runtimeErrorCalls: 0,
+        passedCaseCalls: 0,
+        failedCaseCalls: 0,
+        causes: new Map<string, number>(),
+      };
       value.calls += calls;
-      if (item.valid) value.passCalls += calls;
-      else value.failCalls += calls;
+      if (item.valid) value.passedCaseCalls += calls;
+      else value.failedCaseCalls += calls;
       tools.set(tool, value);
+    }
+    const observed = new Map<string, number>();
+    for (const step of item.trace.filter((trace) => trace.role === "tool" && trace.toolName)) {
+      const tool = step.toolName!;
+      const value = tools.get(tool) ?? {
+        calls: 0,
+        successCalls: 0,
+        rejectedCalls: 0,
+        runtimeErrorCalls: 0,
+        passedCaseCalls: 0,
+        failedCaseCalls: 0,
+        causes: new Map<string, number>(),
+      };
+      const outcome = toolOutcome(step);
+      if (outcome.kind === "success") value.successCalls += 1;
+      else if (outcome.kind === "rejected") value.rejectedCalls += 1;
+      else value.runtimeErrorCalls += 1;
+      if (outcome.cause) value.causes.set(outcome.cause, (value.causes.get(outcome.cause) ?? 0) + 1);
+      observed.set(tool, (observed.get(tool) ?? 0) + 1);
+      tools.set(tool, value);
+    }
+    for (const [tool, calls] of Object.entries(item.toolCallCounts)) {
+      const missing = calls - (observed.get(tool) ?? 0);
+      if (missing <= 0) continue;
+      const value = tools.get(tool)!;
+      value.runtimeErrorCalls += missing;
+      value.causes.set("missing_result", (value.causes.get("missing_result") ?? 0) + missing);
     }
   }
   const tokenPromptTotal = cases.reduce((sum, item) =>
@@ -389,6 +509,7 @@ export async function buildDataAgentBenchReport(input: string): Promise<DataAgen
   const summary = await readJson<{ generatedAt?: string }>(path.join(input, "summary.json"), {});
   const manifest = await readJson<Record<string, unknown>>(path.join(input, "manifest.json"), {});
   return {
+    schemaVersion: 2,
     generatedAt: new Date().toISOString(),
     sourceGeneratedAt: summary.generatedAt ?? null,
     manifest,
@@ -416,13 +537,30 @@ export async function buildDataAgentBenchReport(input: string): Promise<DataAgen
         (sum, item) => sum + item.efficiency.postReviewRunQueryCalls,
         0,
       ),
+      resultReviewsAccepted: cases.filter((item) => item.resultReview.status === "accepted").length,
+      resultReviewsExhausted: cases.filter((item) => item.resultReview.status === "exhausted_with_warning").length,
+      resultReviewsUnavailable: cases.filter((item) => item.resultReview.status === "unavailable").length,
+      resultReviewsStructuralFailed: cases.filter((item) => item.resultReview.status === "structural_failed").length,
+      resultReviewsSkipped: cases.filter((item) => item.resultReview.status === "structural_only").length,
     },
     datasets,
     failureCategories: [...failureCounts.entries()]
       .map(([category, count]) => ({ category, count }))
       .sort((a, b) => b.count - a.count),
     toolStats: [...tools.entries()]
-      .map(([tool, value]) => ({ tool, ...value }))
+      .map(([tool, value]) => ({
+        tool,
+        calls: value.calls,
+        successCalls: value.successCalls,
+        rejectedCalls: value.rejectedCalls,
+        runtimeErrorCalls: value.runtimeErrorCalls,
+        successRate: value.calls > 0 ? value.successCalls / value.calls : 0,
+        passedCaseCalls: value.passedCaseCalls,
+        failedCaseCalls: value.failedCaseCalls,
+        errorCauses: [...value.causes.entries()]
+          .map(([category, count]) => ({ category, count }))
+          .sort((left, right) => right.count - left.count || left.category.localeCompare(right.category)),
+      }))
       .sort((a, b) => b.calls - a.calls),
     cases,
   };

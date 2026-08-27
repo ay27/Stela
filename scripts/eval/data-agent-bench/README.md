@@ -17,11 +17,18 @@ The benchmark path is intentionally product-faithful:
   cross-collection stages, facets, and JavaScript predicates are rejected.
 - Headless Linux exposes the existing `execute_python` tool through isolated
   Node workers running the same offline Pyodide, DuckDB, pandas, execution
-  script, artifact authorization, timeout, and result limits as the desktop.
+  script, `to_df(alias)` helper, artifact authorization, timeout, and result
+  limits as the desktop. `tables[alias]` remains a DuckDB relation.
+- Query artifacts retain the complete result, while both bridge and host enforce
+  a 200-row / 24-KiB preview bound before a result enters JSONL stdout or model
+  context.
 - Dataset hints are enabled by default; pass `--no-hints` to disable them.
 - Product and evaluation runs keep a bounded in-memory analysis ledger. Repeated
   query families receive a deterministic hint, and a stalled run gets at most
   one tool-free strategy review from the current Agent model.
+- Every structurally finalized planned result also receives an isolated semantic
+  review with the same model and reasoning effort. Reviewer-requested corrections
+  append at most two plan revisions; the status is stored in `final_agent.json`.
 
 ## Linux runner
 
@@ -53,7 +60,6 @@ npm run eval:data-agent-bench -- \
 npm run eval:data-agent-bench -- \
   --dab-root "$DAB_ROOT" \
   --all \
-  --runs 1 \
   --concurrency 3 \
   --python-concurrency 2 \
   --reasoning-effort medium \
@@ -87,6 +93,14 @@ Strategy review is enabled by default and recorded in the manifest and each
 baseline. The reviewer has no tools, never blocks the main Agent, uses the
 active eval model, and its tokens are included in total usage.
 
+`--salvage-ms` (default 120000) is held back from `--timeout-ms`, not added to
+it. When a run hits the wall clock or a tool cap with no answer text, the runner
+takes the tools away and spends that slice on one final turn over the evidence
+already gathered, so a capped case is scored on its best available answer rather
+than on the empty string. Salvaged cases carry a `*_salvaged` `terminateReason`
+and log `salvage_start` / `salvage_end` in `tool_calls.jsonl`. Pass
+`--salvage-ms 0` to restore the old hard stop.
+
 Generate the static analysis dashboard from any completed result directory:
 
 ```bash
@@ -110,14 +124,57 @@ python3 -m http.server 8765 --directory /path/to/dab-results/analysis
 History mode discovers completed child directories, writes a small
 `history.json` index, and stores each run's truncated analysis separately below
 `analysis/runs/`. The browser loads only the selected current and comparison
-runs. Tool cards show calls per case and the delta from the selected comparison,
-so prompt changes can be checked for unnecessary planning or retrieval calls.
+runs. Tool cards separately show actual successful calls, deterministic/domain
+rejections, runtime failures, grouped causes, and calls observed inside
+validator-passing versus validator-failing cases. The latter is correlation,
+not tool success. Cards also show calls per case and the delta from the selected
+comparison, so prompt changes can be checked for unnecessary planning or
+retrieval calls.
 Re-run the same command after copying in a new result directory; existing history
 remains available by directory identity and completion timestamp.
 
-One internal run per query reports a **valid rate**, not leaderboard Pass@1.
-For a leaderboard-shaped result, run `--all --runs 5`; `submission.json` uses
-DAB's `dataset/query/run/answer` shape.
+`--runs` defaults to 3 and reports a **valid rate**, not leaderboard Pass@1. A
+single run per case leaves roughly a five-point binomial standard error, which is
+larger than the differences prompt and gate changes usually produce, so `--runs 1`
+is for smoke checks only. For a leaderboard-shaped result use `--all --runs 5`;
+`submission.json` uses DAB's `dataset/query/run/answer` shape.
+
+Never read a change's effect off two unpaired valid rates. Compare two result
+directories on the cases both completed, majority-voting repeated runs, with
+McNemar's exact test:
+
+```bash
+npx tsx scripts/eval/compare-data-agent-bench.ts \
+  --baseline /path/to/previous-results \
+  --candidate /path/to/new-results
+```
+
+DAB's own `validate.py` is the authority for correctness and is intentionally not
+modified here, so leaderboard comparability is preserved. It matches ground truth
+loosely: an answer that names the right entity while concluding the wrong one can
+still be marked valid. Treat per-case verdicts as noisy and decide on the paired
+statistic, not on individual cases.
+
+Deciding whether an Agent change earns its place therefore takes two commands on
+the Linux eval host, with the same model, reasoning effort, and concurrency in
+both:
+
+```bash
+# 1. Candidate, semantic review off (the default product path).
+npm run eval:data-agent-bench -- \
+  --dab-root "$DAB_ROOT" --all --reasoning-effort high \
+  --concurrency 3 --python-concurrency 2 --bridge-timeout-ms 600000 --resume \
+  --output /path/to/dab-results/candidate
+
+# 2. Paired verdict against the previous accepted run.
+npm run compare:data-agent-bench -- \
+  --baseline /path/to/dab-results/previous-accepted \
+  --candidate /path/to/dab-results/candidate
+```
+
+Only if the candidate wins does a second A/B of `--result-review` against that
+same candidate make sense, and its extra tokens and elapsed time must be reported
+next to any accuracy delta.
 
 ## Optional Mac desktop parity smoke through SSH
 
