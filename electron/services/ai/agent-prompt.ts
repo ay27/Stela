@@ -29,7 +29,7 @@ export function buildSystemPrompt(): string {
     "A strategy-review checkpoint may appear after repeated data-analysis attempts. Treat it as advisory: follow its materially different next action, or state the new evidence that justifies continuing the old strategy. Never mistake it for a user request or a final answer.",
     "When a table is unknown, search by business keywords and inspect live schema before querying. Use search_sql_usage only when established joins, filters, write direction, or business conventions matter; do not call it merely because a table name is known. Respect context_sources availability and narrow truncated retrieval instead of treating partial results as complete.",
     "Ask the user only when available evidence cannot resolve a material ambiguity. First run cheap self-checks such as one GROUP BY or COUNT DISTINCT query; when clarification is unavailable, state the missing evidence or explicit assumption instead of guessing.",
-    "Prefer one set-based aggregation over repeated previews. Use execute_python for cross-connection joins, large artifact calculations, or unsupported source transformations. tables[alias] is a DuckDB relation; call to_df(alias) before pandas methods. Never calculate exact results from a truncated preview. Preserve requested identifiers, codes, categories, names, ordering, scope, time range, units, denominator, and ranking rules exactly.",
+    "Prefer one set-based aggregation over repeated previews. run_query gives a bounded preview only; never calculate an exact result from it. When the answer needs the full result, cross-connection joins, or row-wise work SQL cannot do (JSON/text parsing, fuzzy matching, dirty-date coercion), use execute_python and fetch inside it with `await query(connection_name, sql)`, which returns a DuckDB relation over every row. Preserve requested identifiers, codes, categories, names, ordering, scope, time range, units, denominator, and ranking rules exactly.",
     "SQL limits and read-only guards are enforced by tools; do not add an arbitrary LIMIT when the requested answer requires all rows. Follow the active connection's declared query languages and operations.",
     "SQL rendering depends on destination. In chat and final answers, show SQL only in fenced ```sql``` blocks and never use ```runsql```. In Vault Markdown, use ```runsql``` only for intentionally executable SQL and ```sql``` for examples. Charts are presentation artifacts and do not belong in Vault notes or RunSQL <detail> blocks.",
     "Use create_chart only after a successful SQL query and only when requested or materially useful. Use create_analysis_canvas for an explicitly requested Canvas/report/dashboard or a genuinely multi-view analysis; simple answers remain in chat. Follow each tool's schema and returned instructions for artifact-specific details.",
@@ -174,7 +174,7 @@ function buildActiveGuidance(
       id: "mongodb",
       instructions: [
         "Use structured read-only find for row retrieval and safe aggregate for grouping, ranking, expressions, and counts.",
-        "Set limit:null only when an exact full result must be materialized for execute_python; MongoDB results cannot become Canvas SQL sources.",
+        "Inside execute_python, fetch collections with await query(name, {'collection': ..., 'filter': ..., 'limit': None}); MongoDB results cannot become Canvas SQL sources.",
       ],
     });
   }

@@ -110,6 +110,7 @@ export const IPC = {
   AI_AGENT_CANCEL: "ai:agent-cancel",
   AI_AGENT_RESPOND_PROPOSAL: "ai:agent-respond-proposal",
   AI_PYTHON_RUNTIME_READ_INPUT: "ai:python-runtime-read-input",
+  AI_PYTHON_RUNTIME_QUERY: "ai:python-runtime-query",
   AI_PYTHON_RUNTIME_RESPOND: "ai:python-runtime-respond",
   AI_AGENT_HISTORY_LIST: "ai:agent-history-list",
   AI_AGENT_HISTORY_LOAD: "ai:agent-history-load",

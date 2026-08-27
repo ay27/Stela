@@ -267,11 +267,18 @@ try {
     });
     assert.equal(bounded.ok, true, bounded.text);
     const payload = JSON.parse(bounded.text) as {
-      result: { rows: string[][]; previewTruncated: boolean; previewTruncatedBy: string[] };
+      result: {
+        rows?: string[][];
+        sampleRows?: string[][];
+        previewTruncated: boolean;
+        previewTruncatedBy: string[];
+      };
     };
     assert.equal(payload.result.previewTruncated, true);
     assert.deepEqual(payload.result.previewTruncatedBy, ["bytes"]);
-    assert.ok((payload.result.rows[0]?.[0]?.length ?? 0) < 5_000);
+    // Truncated results are never presented as countable `rows`.
+    assert.equal(payload.result.rows, undefined);
+    assert.ok((payload.result.sampleRows?.[0]?.[0]?.length ?? 0) < 5_000);
     assert.ok((recordedRows[0]?.[0] as string).length < 5_000);
   }
 
@@ -560,10 +567,11 @@ try {
     assert.equal(new Set(runIds).size, 2);
   }
 
-  // Agent 可显式选择另一个 Vault connection；完整查询落 artifact 后可由同 session 的 Python 引用。
+  // Agent 可显式选择另一个 Vault connection；沙箱内 query() 自己取全量数据。
   {
     const executedConnections: string[] = [];
     const recorded: Array<{ connectionName: string; rowCount: number }> = [];
+    const sandboxDescriptors: Array<{ rowCount: number }> = [];
     let artifactRunId = "";
     let pythonAliases: string[] = [];
     const descriptor = {
@@ -612,8 +620,16 @@ try {
         discard: async () => {},
       },
       pythonExecutor: {
-        execute: async (input: { artifacts: Record<string, unknown> }) => {
+        execute: async (input: {
+          artifacts: Record<string, unknown>;
+          runQuery?: (arg: { connectionName: string; request: string }) => Promise<{ rowCount: number }>;
+        }) => {
           pythonAliases = Object.keys(input.artifacts);
+          const fetched = await input.runQuery?.({
+            connectionName: "warehouse",
+            request: JSON.stringify({ language: "sql", query: "SELECT value FROM facts" }),
+          });
+          if (fetched) sandboxDescriptors.push(fetched);
           return {
             ok: true,
             stdout: "",
@@ -636,33 +652,65 @@ try {
     const queryPayload = JSON.parse(query.text) as {
       runId: string;
       connectionName: string;
-      result: { artifactAvailable: boolean; rowCount: number };
+      result: { rowCount: number };
     };
     assert.deepEqual(executedConnections, ["warehouse-kind"]);
     assert.equal(queryPayload.connectionName, "warehouse");
-    assert.equal(queryPayload.result.artifactAvailable, true);
     assert.equal(queryPayload.result.rowCount, 3);
     assert.equal(ctx.analysisRuns.get(queryPayload.runId)?.tables[0], "facts");
     assert.deepEqual(recorded, [{ connectionName: "warehouse", rowCount: 3 }]);
 
+    // execute_python takes no inputs: the sandbox fetches its own data through
+    // the runQuery bridge, and only a connection name crosses the boundary.
     const python = await dispatchTool(
       "execute_python",
-      JSON.stringify({ code: "result = 6", inputs: { facts: queryPayload.runId } }),
+      JSON.stringify({ code: "result = 6" }),
       ctx,
     );
     assert.equal(python.ok, true, python.text);
-    assert.deepEqual(pythonAliases, ["facts"]);
+    assert.deepEqual(pythonAliases, [], "no artifact is staged up front");
     const pythonPayload = JSON.parse(python.text) as { runId: string; result: { value: number } };
     assert.equal(pythonPayload.result.value, 6);
-    assert.deepEqual(ctx.analysisRuns.get(pythonPayload.runId)?.sourceRunIds, [queryPayload.runId]);
-
-    const wrongRun = await dispatchTool(
-      "execute_python",
-      JSON.stringify({ code: "result = 1", inputs: { facts: "another-session-run" } }),
-      ctx,
+    assert.deepEqual(sandboxDescriptors.map((item) => item.rowCount), [3]);
+    assert.deepEqual(
+      ctx.analysisRuns.get(pythonPayload.runId)?.sourceRunIds.length,
+      1,
+      "a sandbox query is credited as this Python run's source",
     );
-    assert.equal(wrongRun.ok, false);
-    assert.match(wrongRun.text, /local Agent session/i);
+
+    // Mutations are refused in the main process even with mutations enabled.
+    sandboxDescriptors.length = 0;
+    const mutating = await dispatchTool(
+      "execute_python",
+      JSON.stringify({ code: "result = 1" }),
+      {
+        ...ctx,
+        aiSettings: { ...ctx.aiSettings, agentAllowMutations: true },
+        pythonExecutor: {
+          execute: async (input: {
+            runQuery?: (arg: { connectionName: string; request: string }) => Promise<unknown>;
+          }) => {
+            let refusal = "";
+            try {
+              await input.runQuery?.({
+                connectionName: "warehouse",
+                request: JSON.stringify({ language: "sql", query: "UPDATE facts SET value = 1" }),
+              });
+            } catch (error) {
+              refusal = error instanceof Error ? error.message : String(error);
+            }
+            return {
+              ok: true,
+              stdout: "",
+              value: { kind: "scalar" as const, value: refusal },
+              elapsedMs: 1,
+            };
+          },
+        },
+      },
+    );
+    assert.equal(mutating.ok, true, mutating.text);
+    assert.match(JSON.parse(mutating.text).result.value, /blocked|not allowed|rejected/i);
 
     const toolNames = createAgentTools({ ctx, requestProposal: async () => false }).map((tool) => tool.name);
     assert.ok(toolNames.includes("execute_python"));

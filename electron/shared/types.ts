@@ -854,6 +854,8 @@ export interface PythonExecutionRequest {
   code: string;
   inputs: PythonExecutionInput[];
   timeoutMs: number;
+  /** When true the sandbox may call `await query(connection, sql)`. */
+  canQuery?: boolean;
 }
 
 export type PythonExecutionValue =

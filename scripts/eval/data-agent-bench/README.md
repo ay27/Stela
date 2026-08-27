@@ -17,11 +17,12 @@ The benchmark path is intentionally product-faithful:
   cross-collection stages, facets, and JavaScript predicates are rejected.
 - Headless Linux exposes the existing `execute_python` tool through isolated
   Node workers running the same offline Pyodide, DuckDB, pandas, execution
-  script, `to_df(alias)` helper, artifact authorization, timeout, and result
-  limits as the desktop. `tables[alias]` remains a DuckDB relation.
-- Query artifacts retain the complete result, while both bridge and host enforce
-  a 200-row / 24-KiB preview bound before a result enters JSONL stdout or model
-  context.
+  script, sandbox `query()` protocol, artifact authorization, and budgets as the
+  desktop. Inside Python, `await query(connection, request)` returns a DuckDB
+  relation over the full result; `execute_python` takes no inputs.
+- Query artifacts retain the complete result and carry it into the sandbox, while
+  the model-facing `run_query` preview is bounded to 200 rows / 5 KiB and a
+  truncated result is returned as `sampleRows` rather than `rows`.
 - Dataset hints are enabled by default; pass `--no-hints` to disable them.
 - Product and evaluation runs keep a bounded in-memory analysis ledger. Repeated
   query families receive a deterministic hint, and a stalled run gets at most
@@ -172,9 +173,9 @@ npm run compare:data-agent-bench -- \
   --candidate /path/to/dab-results/candidate
 ```
 
-Only if the candidate wins does a second A/B of `--result-review` against that
-same candidate make sense, and its extra tokens and elapsed time must be reported
-next to any accuracy delta.
+A candidate that does not win the paired test does not earn its place, however
+plausible the mechanism. Report elapsed time and token cost next to any accuracy
+delta.
 
 ## Optional Mac desktop parity smoke through SSH
 

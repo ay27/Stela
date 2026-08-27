@@ -578,6 +578,17 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
       length: z.number().int().min(1).max(4 * 1024 * 1024),
     })
     .strict(),
+  [IPC.AI_PYTHON_RUNTIME_QUERY]: z
+    .object({
+      jobId: z.string().uuid(),
+      connectionName: stringMin1.max(256),
+      /**
+       * JSON-encoded DataQueryRequest from the sandbox. Bounded here, then given
+       * the same semantic validation run_query applies to model input.
+       */
+      request: stringMin1.max(100_000),
+    })
+    .strict(),
   [IPC.AI_PYTHON_RUNTIME_RESPOND]: z
     .object({
       jobId: z.string().uuid(),

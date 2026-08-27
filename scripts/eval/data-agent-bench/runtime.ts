@@ -364,7 +364,7 @@ export function buildDabUserPrompt(input: {
       `- MongoDB supports structured read-only find and safe aggregate operations. Prefer aggregate for grouping, ranking, string expressions, and counts.\n` +
       `- Query different logical databases separately; do not join them in one database query.\n` +
       (capabilities.pythonAvailable
-        ? `- Successful run_query results can be combined through their artifacts with execute_python. Each tables[alias] value is a DuckDB relation; use to_df(alias) before pandas methods.`
+        ? `- Join across logical databases inside execute_python: fetch each side with \`await query(connection_name, sql)\`, which returns a DuckDB relation over the full result (.df() for pandas).`
         : `- Python execution is disabled for this legacy baseline; report the capability boundary instead of inventing a cross-database answer.`),
     "QUERY:\n" + input.query,
   ];

@@ -58,6 +58,7 @@ import type {
   PluginInfo,
   PluginInstallInput,
   QueryResult,
+  PythonExecutionInput,
   PythonExecutionRequest,
   PythonExecutionResult,
   PythonRuntimeInputChunk,
@@ -366,6 +367,8 @@ const stela = {
         offset,
         length,
       }),
+    query: (jobId: string, connectionName: string, request: string) =>
+      call<PythonExecutionInput>(IPC.AI_PYTHON_RUNTIME_QUERY, { jobId, connectionName, request }),
     respond: (jobId: string, result: PythonExecutionResult) =>
       call<{ accepted: boolean }>(IPC.AI_PYTHON_RUNTIME_RESPOND, { jobId, result }),
     onRequest: (callback: (request: PythonExecutionRequest) => void) => {

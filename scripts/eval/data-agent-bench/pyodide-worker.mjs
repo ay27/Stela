@@ -13,6 +13,24 @@ function inputPath(jobId, alias, format) {
   return `/stela-inputs/${jobId}/${alias}.${format === "parquet" ? "parquet" : "jsonl"}`;
 }
 
+/** The one JS callable handed to Python; see src/services/python-runtime-core.ts. */
+function requestQuery(connectionName, request) {
+  const job = active;
+  if (!job) return Promise.reject(new Error("Pyodide worker has no active job"));
+  job.queryCounter += 1;
+  const requestId = `r${job.queryCounter}`;
+  return new Promise((resolve, reject) => {
+    job.pendingQueries.set(requestId, { resolve, reject, alias: "" });
+    parentPort.postMessage({
+      type: "query",
+      jobId: job.request.jobId,
+      requestId,
+      connectionName: String(connectionName),
+      request: String(request),
+    });
+  });
+}
+
 async function executeActive() {
   const job = active;
   if (!job) return;
@@ -24,8 +42,8 @@ async function executeActive() {
     }));
     pyodide.globals.set("__stela_code", job.request.code);
     pyodide.globals.set("__stela_inputs_json", JSON.stringify(config));
-    await pyodide.runPythonAsync(executeScript);
-    const raw = pyodide.globals.get("__stela_result_json");
+    pyodide.globals.set("__stela_query", job.request.canQuery ? requestQuery : null);
+    const raw = await pyodide.runPythonAsync(executeScript);
     const parsed = JSON.parse(String(raw));
     raw?.destroy?.();
     parentPort.postMessage({
@@ -47,10 +65,10 @@ async function executeActive() {
       },
     });
   } finally {
-    for (const key of ["__stela_code", "__stela_inputs_json", "__stela_result_json"]) {
+    for (const key of ["__stela_code", "__stela_inputs_json", "__stela_query"]) {
       pyodide.globals.delete(key);
     }
-    for (const input of job.inputs.values()) {
+    for (const input of [...job.inputs.values(), ...job.fetched.values()]) {
       try { pyodide.FS.unlink(input.path); } catch {}
     }
     try { pyodide.FS.rmdir(`/stela-inputs/${job.request.jobId}`); } catch {}
@@ -70,23 +88,81 @@ async function start(request) {
       complete: false,
     });
   }
-  active = { request, inputs };
+  active = {
+    request,
+    inputs,
+    fetched: new Map(),
+    pendingQueries: new Map(),
+    queriesByAlias: new Map(),
+    descriptors: new Map(),
+    queryCounter: 0,
+  };
   parentPort.postMessage({ type: "ready", jobId: request.jobId });
   if (inputs.size === 0) await executeActive();
+}
+
+function queryInput(message) {
+  const job = active;
+  if (!job || job.request.jobId !== message.jobId) return;
+  const pendingQuery = job.pendingQueries.get(message.requestId);
+  if (!pendingQuery) return;
+  pendingQuery.alias = message.input.alias;
+  job.queriesByAlias.set(message.input.alias, message.requestId);
+  job.descriptors.set(message.input.alias, message.input);
+}
+
+function queryError(message) {
+  const job = active;
+  if (!job || job.request.jobId !== message.jobId) return;
+  const pendingQuery = job.pendingQueries.get(message.requestId);
+  if (!pendingQuery) return;
+  job.pendingQueries.delete(message.requestId);
+  if (pendingQuery.alias) job.queriesByAlias.delete(pendingQuery.alias);
+  pendingQuery.reject(new Error(message.error));
 }
 
 async function chunk(message) {
   const job = active;
   if (!job || job.request.jobId !== message.jobId) return;
+  const data = new Uint8Array(message.data);
+  const requestId = job.queriesByAlias.get(message.alias);
+  if (requestId) {
+    let target = job.fetched.get(message.alias);
+    if (!target) {
+      const descriptor = job.descriptors.get(message.alias);
+      const filePath = inputPath(message.jobId, message.alias, descriptor.format);
+      target = { path: filePath, stream: pyodide.FS.open(filePath, "w"), complete: false };
+      job.fetched.set(message.alias, target);
+    }
+    if (target.complete) return;
+    if (data.byteLength > 0) pyodide.FS.write(target.stream, data, 0, data.byteLength);
+    if (!message.eof) return;
+    pyodide.FS.close(target.stream);
+    target.complete = true;
+    const pendingQuery = job.pendingQueries.get(requestId);
+    job.pendingQueries.delete(requestId);
+    job.queriesByAlias.delete(message.alias);
+    pendingQuery?.resolve(
+      JSON.stringify({ ...job.descriptors.get(message.alias), path: target.path }),
+    );
+    return;
+  }
   const input = job.inputs.get(message.alias);
   if (!input || input.complete) return;
-  const data = new Uint8Array(message.data);
   if (data.byteLength > 0) pyodide.FS.write(input.stream, data, 0, data.byteLength);
   if (message.eof) {
     pyodide.FS.close(input.stream);
     input.complete = true;
   }
   if ([...job.inputs.values()].every((item) => item.complete)) await executeActive();
+}
+
+function handle(message) {
+  if (message.type === "start") return start(message.request);
+  if (message.type === "chunk") return chunk(message);
+  if (message.type === "query-input") return queryInput(message);
+  if (message.type === "query-error") return queryError(message);
+  return undefined;
 }
 
 try {
@@ -102,7 +178,7 @@ try {
   });
   parentPort.postMessage({ type: "initialized" });
   parentPort.on("message", (message) => {
-    Promise.resolve(message.type === "start" ? start(message.request) : chunk(message)).catch((error) => {
+    Promise.resolve(handle(message)).catch((error) => {
       parentPort.postMessage({
         type: "fatal",
         jobId: message.request?.jobId ?? message.jobId ?? null,

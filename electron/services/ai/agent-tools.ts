@@ -144,6 +144,16 @@ export interface AgentPythonExecutorOps {
     sessionId: string;
     code: string;
     artifacts: Record<string, QueryArtifactDescriptor>;
+    /**
+     * Serves `await query(connection, request)` from inside the sandbox. The
+     * sandbox only ever sends a connection name plus a JSON-encoded
+     * DataQueryRequest; resolution, sql-guard, and journaling happen here in the
+     * main process.
+     */
+    runQuery?: (input: {
+      connectionName: string;
+      request: string;
+    }) => Promise<QueryArtifactDescriptor>;
     signal?: AbortSignal;
   }): Promise<PythonExecutionResult>;
 }
@@ -183,11 +193,16 @@ const RESULT_CHAR_BUDGET = 30_000;
 const SQL_PREVIEW_ROWS = 200;
 const SQL_PREVIEW_MAX_BYTES = 24 * 1024;
 const SQL_PREVIEW_CELL_MAX_BYTES = 4 * 1024;
+/**
+ * What the *model* sees, as opposed to what charts and the journal keep. A
+ * truncated preview of 200 countable rows is exactly what makes a model treat a
+ * partial result as the whole one, so a truncated result yields a handful of
+ * rows under a different key and never a countable table.
+ */
+const MODEL_PREVIEW_MAX_BYTES = 5 * 1024;
+const MODEL_SAMPLE_ROWS = 5;
 const QUERY_ARTIFACT_MAX_BYTES = 1024 * 1024 * 1024;
 const PYTHON_CODE_MAX_CHARS = 50_000;
-const PYTHON_INPUT_MAX_COUNT = 8;
-const PYTHON_ALIAS_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
-
 function truncate(text: string, maxChars = RESULT_CHAR_BUDGET): string {
   return text.length <= maxChars
     ? text
@@ -225,7 +240,13 @@ function previewCell(value: unknown, maxBytes: number): unknown {
   }
 }
 
-function boundedPreview(rows: unknown[][], rowCount: number, inferRowTruncation = true): {
+function boundedPreview(
+  rows: unknown[][],
+  rowCount: number,
+  inferRowTruncation = true,
+  maxRows = SQL_PREVIEW_ROWS,
+  maxBytes = SQL_PREVIEW_MAX_BYTES,
+): {
   rows: unknown[][];
   truncated: boolean;
   truncatedBy: Array<"rows" | "bytes">;
@@ -233,21 +254,21 @@ function boundedPreview(rows: unknown[][], rowCount: number, inferRowTruncation 
   const bounded: unknown[][] = [];
   let used = 2;
   let bytesTruncated = false;
-  for (const rawRow of rows.slice(0, SQL_PREVIEW_ROWS)) {
-    const remaining = Math.max(1, SQL_PREVIEW_MAX_BYTES - used);
+  for (const rawRow of rows.slice(0, maxRows)) {
+    const remaining = Math.max(1, maxBytes - used);
     const perCell = Math.max(16, Math.min(SQL_PREVIEW_CELL_MAX_BYTES, Math.floor(remaining / Math.max(1, rawRow.length))));
     const row = rawRow.map((cell) => previewCell(cell, perCell));
     if (row.some((cell, index) => !Object.is(cell, rawRow[index]))) bytesTruncated = true;
     const rowBytes = Buffer.byteLength(JSON.stringify(row), "utf8") + 1;
-    if (used + rowBytes > SQL_PREVIEW_MAX_BYTES) {
+    if (used + rowBytes > maxBytes) {
       bytesTruncated = true;
       break;
     }
     bounded.push(row);
     used += rowBytes;
   }
-  if (bounded.length < Math.min(rows.length, SQL_PREVIEW_ROWS)) bytesTruncated = true;
-  const rowTruncated = inferRowTruncation && rowCount > Math.min(rows.length, SQL_PREVIEW_ROWS);
+  if (bounded.length < Math.min(rows.length, maxRows)) bytesTruncated = true;
+  const rowTruncated = inferRowTruncation && rowCount > Math.min(rows.length, maxRows);
   return {
     rows: bounded,
     truncated: rowTruncated || bytesTruncated,
@@ -408,7 +429,7 @@ export function createAgentTools(options: {
       name: "run_query",
       label: "Run query",
       description:
-        "Run one structured SQL or MongoDB query through a named Stela connection. SQL mutations remain guarded. MongoDB supports read-only find and, when declared by the connector, a safe aggregation pipeline. Results include a bounded preview and, when supported, a session-local artifact for execute_python.",
+        "Run one structured SQL or MongoDB query through a named Stela connection and get a bounded preview. Use it to inspect data and to back a chart. For anything that needs the full result, query from inside execute_python instead. SQL mutations remain guarded. MongoDB supports read-only find and, when declared by the connector, a safe aggregation pipeline.",
       // Function providers require the top-level schema to be type=object.
       // SQL/Mongo field requirements are discriminated again in runQuery.
       parameters: Type.Object({
@@ -432,15 +453,11 @@ export function createAgentTools(options: {
       name: "execute_python",
       label: "Execute Python",
       description:
-        "Run bounded local Python over successful run_query artifacts. tables[alias] is a DuckDBPyRelation, not a pandas DataFrame; use df = to_df('orders') before copy/astype/iloc/rename, or query relations with con.sql(...). DuckDB, pandas, con, tables, and to_df are preloaded. No files, network, package installs, or host APIs. Assign the final scalar, DataFrame, or DuckDB relation to result.",
+        "Run local Python that fetches its own data with `await query(connection_name, request)`, which returns a DuckDB relation over the full result (.df() for pandas). request is a SQL string, or a MongoDB dict like {'collection': 'orders', 'filter': {}, 'limit': None}. Use it to read whole tables and do row-wise work SQL cannot: JSON/text parsing, fuzzy matching, dirty-date coercion, cross-connection joins. query() is read-only. duckdb, pandas, con, and tables are preloaded. No files, network, package installs, or host APIs. Assign the final scalar, DataFrame, or DuckDB relation to result.",
       parameters: Type.Object({
         code: Type.String({
           maxLength: PYTHON_CODE_MAX_CHARS,
-          description: "Python code. Example: df = to_df('orders'); result = df.groupby('region', as_index=False)['amount'].sum()",
-        }),
-        inputs: Type.Record(Type.String({ pattern: "^[A-Za-z_][A-Za-z0-9_]{0,63}$" }), Type.String(), {
-          maxProperties: PYTHON_INPUT_MAX_COUNT,
-          description: "Map each short Python alias to the exact runId returned by a successful run_query. Maximum 8 inputs.",
+          description: "Python code; top-level await is allowed. Example: df = (await query('sales', 'SELECT region, amount FROM orders')).df(); result = df.groupby('region', as_index=False)['amount'].sum()",
         }),
       }),
       executionMode: "sequential",
@@ -1015,35 +1032,56 @@ function normalizeDataQuery(args: Record<string, unknown>): DataQueryRequest | s
   };
 }
 
-async function runQuery(
-  args: Record<string, unknown>,
+interface DataQueryOutcome {
+  runId: string;
+  connectionName: string;
+  result: QueryResult;
+  artifact: QueryArtifactDescriptor | null;
+  /** Full result size, which may exceed the bounded preview in `result.rows`. */
+  rowCount: number;
+  previewTruncatedBy: Array<"rows" | "bytes">;
+}
+
+/**
+ * Execute one structured query end to end: sql-guard, materialize to a session
+ * artifact when the connector supports it, bound the preview, journal the run.
+ *
+ * Shared by the `run_query` tool and the sandbox `query()` RPC so both paths get
+ * the same guard, the same artifact, and the same audit record. `allowMutations`
+ * is an explicit argument rather than read from settings because the sandbox
+ * path must stay read-only regardless of what the user enabled for the Agent.
+ */
+async function executeDataQuery(
   ctx: AgentToolContext,
-): Promise<ToolOutcome> {
-  const { name: connectionName, connection } = requireNamedConnection(ctx, args.connectionName);
-  const normalized = normalizeDataQuery(args);
-  if (typeof normalized === "string") return fail(normalized);
-  const query = normalized;
+  input: {
+    requestedConnection?: unknown;
+    query: DataQueryRequest;
+    allowMutations: boolean;
+  },
+): Promise<DataQueryOutcome | { failure: string }> {
+  const { name: connectionName, connection } = requireNamedConnection(ctx, input.requestedConnection);
+  const query = input.query;
   const connectorMeta = ctx.connector.listKinds().find((item) => item.kind === connection.kind);
   const languages = connectorMeta?.queryLanguages ?? ["sql"];
   if (!languages.includes(query.language)) {
-    return fail(`Connection '${connectionName}' does not support ${query.language} queries.`);
+    return { failure: `Connection '${connectionName}' does not support ${query.language} queries.` };
   }
   if (query.language === "mongodb") {
     const operation = query.operation ?? "find";
     const operations = connectorMeta?.mongoOperations ?? ["find"];
     if (!operations.includes(operation)) {
-      return fail(`Connection '${connectionName}' does not support MongoDB ${operation} queries.`);
+      return { failure: `Connection '${connectionName}' does not support MongoDB ${operation} queries.` };
     }
   }
   const classified = query.language === "sql"
-    ? classifySql(query.query, ctx.aiSettings.agentAllowMutations)
+    ? classifySql(query.query, input.allowMutations)
     : null;
   if (classified?.classification === "multi-statement") {
-    return fail(classified.blockedReason ?? "Multiple statements are not allowed.");
+    return { failure: classified.blockedReason ?? "Multiple statements are not allowed." };
   }
   if (classified?.classification === "mutation") {
-    if (!ctx.aiSettings.agentAllowMutations) {
-      return fail(classified.blockedReason ?? "Mutating statements are blocked by default.");
+    if (!input.allowMutations) {
+      return { failure: classified.blockedReason ?? "Mutating statements are blocked by default." };
     }
     const approved = await ctx.requestProposal({
       kind: "mutation_sql",
@@ -1052,7 +1090,7 @@ async function runQuery(
         description: `Run ${classified.keyword ?? "mutation"} statement on connection '${connectionName}'`,
       },
     });
-    if (!approved) return fail("The user rejected this SQL statement. Do not retry it as-is.");
+    if (!approved) return { failure: "The user rejected this SQL statement. Do not retry it as-is." };
   }
 
   const auditText = query.language === "sql" ? query.query : JSON.stringify(query);
@@ -1126,7 +1164,7 @@ async function runQuery(
           query.query,
         );
       } else {
-        return fail(`Connection '${connectionName}' cannot execute structured MongoDB queries.`);
+        return { failure: `Connection '${connectionName}' cannot execute structured MongoDB queries.` };
       }
       if (result.kind === "query") {
         totalRowCount = result.rows.length;
@@ -1172,6 +1210,31 @@ async function runQuery(
     rowCount: totalRowCount,
     queryLanguage: query.language,
   });
+  return {
+    runId,
+    connectionName,
+    result,
+    artifact,
+    rowCount: totalRowCount ?? (result.kind === "query" ? result.rows.length : 0),
+    previewTruncatedBy,
+  };
+}
+
+async function runQuery(
+  args: Record<string, unknown>,
+  ctx: AgentToolContext,
+): Promise<ToolOutcome> {
+  const normalized = normalizeDataQuery(args);
+  if (typeof normalized === "string") return fail(normalized);
+  const query = normalized;
+  const executed = await executeDataQuery(ctx, {
+    requestedConnection: args.connectionName,
+    query,
+    allowMutations: ctx.aiSettings.agentAllowMutations,
+  });
+  if ("failure" in executed) return fail(executed.failure);
+  const { runId, connectionName, result, previewTruncatedBy } = executed;
+  const auditText = query.language === "sql" ? query.query : JSON.stringify(query);
   const evidenceTables = query.language === "sql"
     ? extractSqlFacts(query.query).flatMap((facts) => [
       ...facts.readTables,
@@ -1189,7 +1252,7 @@ async function runQuery(
   if (result.kind === "mutation") {
     return ok({ runId, connectionName, language: query.language, result: formatQueryResult(result) });
   }
-  const rowCount = totalRowCount ?? result.rows.length;
+  const rowCount = executed.rowCount;
   const previewTruncated = previewTruncatedBy.length > 0;
   ctx.analysisRuns?.set(runId, {
     kind: "query",
@@ -1207,6 +1270,16 @@ async function runQuery(
       previewTruncatedBy,
     },
   });
+  // A truncated result is handed back as `sampleRows`, never as `rows`: the model
+  // cannot count what is not presented as the result.
+  const modelPreview = boundedPreview(
+    result.rows,
+    rowCount,
+    false,
+    previewTruncated ? MODEL_SAMPLE_ROWS : SQL_PREVIEW_ROWS,
+    MODEL_PREVIEW_MAX_BYTES,
+  );
+  const truncated = previewTruncated || modelPreview.truncated;
   return ok({
     runId,
     connectionName,
@@ -1215,25 +1288,26 @@ async function runQuery(
       kind: "query",
       columns: result.columns,
       rowCount,
-      rows: result.rows.slice(0, SQL_PREVIEW_ROWS),
-      previewTruncated,
-      previewTruncatedBy,
-      artifactAvailable: artifact !== null,
-      artifactMode: artifact?.mode ?? null,
+      ...(truncated ? { sampleRows: modelPreview.rows } : { rows: modelPreview.rows }),
+      previewTruncated: truncated,
+      previewTruncatedBy: truncated
+        ? [...new Set([...previewTruncatedBy, ...modelPreview.truncatedBy])]
+        : [],
       elapsedMs: result.elapsedMs,
     },
-    ...(previewTruncated
+    ...(truncated
       ? {
-          instruction: artifact !== null
-            ? "This preview is truncated, so it cannot support an exact result. Aggregate in the source query, or pass this runId to execute_python and compute over the full artifact."
-            : "This preview is truncated, so it cannot support an exact result. Aggregate in the source query instead of counting preview rows.",
+          instruction:
+            `Only ${modelPreview.rows.length} sample rows are shown; rowCount is the true size. ` +
+            "Do not count or aggregate these samples. Aggregate in the source query, or read every row " +
+            "inside execute_python with `await query(connection_name, request)`.",
         }
       : {}),
   });
 }
 
 async function runExecutePython(
-  args: { code?: unknown; inputs?: unknown },
+  args: { code?: unknown },
   ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
   if (!ctx.pythonExecutor || !ctx.queryArtifacts || !ctx.run.sessionId) {
@@ -1244,50 +1318,50 @@ async function runExecutePython(
   if (code.length > PYTHON_CODE_MAX_CHARS) {
     return fail(`code exceeds ${PYTHON_CODE_MAX_CHARS} characters.`);
   }
-  if (!args.inputs || typeof args.inputs !== "object" || Array.isArray(args.inputs)) {
-    return fail("inputs must be an object mapping aliases to run_query runIds.");
-  }
-  const entries = Object.entries(args.inputs as Record<string, unknown>);
-  if (entries.length > PYTHON_INPUT_MAX_COUNT) {
-    return fail(`inputs supports at most ${PYTHON_INPUT_MAX_COUNT} run_query results.`);
-  }
-  const artifacts: Record<string, QueryArtifactDescriptor> = {};
   const sourceRunIds: string[] = [];
-  for (const [alias, rawRunId] of entries) {
-    if (!PYTHON_ALIAS_PATTERN.test(alias)) {
-      return fail(`Invalid Python input alias '${alias}'. Use a valid identifier up to 64 characters.`);
-    }
-    if (typeof rawRunId !== "string" || !rawRunId.trim()) {
-      return fail(`Input '${alias}' must reference a non-empty run_query runId.`);
-    }
-    const artifact = await ctx.queryArtifacts.resolve(
-      ctx.vaultPath,
-      ctx.run.sessionId,
-      rawRunId.trim(),
-    );
-    if (!artifact) {
-      const available = [...(ctx.analysisRuns?.entries() ?? [])]
-        .filter(([, run]) => run.kind === "query")
-        .slice(-5)
-        .map(([runId, run]) => ({
-          runId,
-          columns: run.columns.slice(0, 12).map((column) => column.name),
-          rowCount: run.rowCount,
-        }));
-      return fail(
-        `Input '${alias}' does not reference an available artifact from this local Agent session. ` +
-          "Use an exact recent run_query runId or run the query again." +
-          (available.length > 0 ? ` Recent successful query runs: ${JSON.stringify(available)}.` : ""),
-      );
-    }
-    artifacts[alias] = artifact;
-    sourceRunIds.push(rawRunId.trim());
-  }
   const result = await ctx.pythonExecutor.execute({
     vaultPath: ctx.vaultPath,
     sessionId: ctx.run.sessionId,
     code,
-    artifacts,
+    artifacts: {},
+    runQuery: async ({ connectionName, request }) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(request);
+      } catch {
+        throw new Error("query() received a request that is not valid JSON.");
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("query() takes a SQL string or a MongoDB request object.");
+      }
+      // Same normalizer the run_query tool uses, so both paths reject the same
+      // malformed and forbidden requests.
+      const query = normalizeDataQuery(parsed as Record<string, unknown>);
+      if (typeof query === "string") throw new Error(query);
+      const executed = await executeDataQuery(ctx, {
+        requestedConnection: connectionName,
+        query,
+        // Sandbox code is never allowed to mutate, whatever the user enabled for
+        // the Agent: a mutation must go through the UI proposal on run_query.
+        allowMutations: false,
+      });
+      if ("failure" in executed) throw new Error(executed.failure);
+      if (!executed.artifact) {
+        throw new Error(
+          "This result is too large to hand to Python. Aggregate or filter it in the query first.",
+        );
+      }
+      sourceRunIds.push(executed.runId);
+      if (query.language === "sql") {
+        recordSkillTableEvidence(
+          ctx,
+          extractSqlFacts(query.query)
+            .flatMap((facts) => facts.readTables)
+            .map((table) => (table.db ? `${table.db}.${table.table}` : table.table)),
+        );
+      }
+      return executed.artifact;
+    },
     signal: ctx.signal,
   });
   if (!result.ok) {

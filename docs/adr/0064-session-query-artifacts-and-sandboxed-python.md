@@ -2,7 +2,8 @@
 type: ADR
 id: "0064"
 title: "Session query artifacts and sandboxed Python"
-status: active
+status: superseded
+superseded_by: "0079"
 date: 2026-08-14
 ---
 

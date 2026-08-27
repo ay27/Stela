@@ -55,6 +55,7 @@ import type {
   PluginInfo,
   PluginInstallInput,
   QueryResult,
+  PythonExecutionInput,
   PythonExecutionResult,
   PythonRuntimeInputChunk,
   RowsPage,
@@ -120,6 +121,7 @@ import type { AnalysisCanvasFlowLayoutPatch } from "@shared/analysis-canvas";
 import { cancelSkillMaintenance } from "../services/ai/skill-maintenance-queue";
 import { runInlineCompletion } from "../services/ai/inline-completion";
 import {
+  queryForPythonJob,
   readPythonRuntimeInput,
   respondPythonRuntime,
 } from "../services/ai/python-runtime-broker";
@@ -644,6 +646,10 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
     { jobId: string; alias: string; offset: number; length: number },
     PythonRuntimeInputChunk
   >(IPC.AI_PYTHON_RUNTIME_READ_INPUT, readPythonRuntimeInput);
+  registerHandler<
+    { jobId: string; connectionName: string; request: string },
+    PythonExecutionInput
+  >(IPC.AI_PYTHON_RUNTIME_QUERY, queryForPythonJob);
   registerHandler<
     { jobId: string; result: PythonExecutionResult },
     { accepted: boolean }

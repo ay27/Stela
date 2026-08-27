@@ -4,9 +4,9 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 
 import type {
+  PythonExecutionInput,
   PythonExecutionRequest,
   PythonExecutionResult,
-  QueryArtifactDescriptor,
 } from "@shared/types";
 import { readQueryArtifactChunk } from "../../../electron/services/query-artifacts";
 import type { AgentPythonExecutorOps } from "../../../electron/services/ai/agent-tools";
@@ -18,9 +18,18 @@ import {
 const CHUNK_BYTES = 4 * 1024 * 1024;
 const EXECUTION_TIMEOUT_MS = 60_000;
 
+/**
+ * Same budgets as the product broker: the timer measures inactivity, so each
+ * served query refreshes it, and MAX_TOTAL_MS is the ceiling refreshing cannot
+ * lift. See electron/services/ai/python-runtime-broker.ts.
+ */
+const MAX_TOTAL_MS = 10 * 60 * 1000;
+const MAX_QUERIES_PER_JOB = 32;
+
 type WorkerMessage =
   | { type: "initialized" }
   | { type: "ready"; jobId: string }
+  | { type: "query"; jobId: string; requestId: string; connectionName: string; request: string }
   | { type: "result"; jobId: string; result: PythonExecutionResult; fatal?: boolean }
   | { type: "fatal"; jobId: string | null; error: string };
 
@@ -103,13 +112,7 @@ class PyodideSlot {
     return this.initialized;
   }
 
-  async execute(input: {
-    vaultPath: string;
-    sessionId: string;
-    code: string;
-    artifacts: Record<string, QueryArtifactDescriptor>;
-    signal?: AbortSignal;
-  }): Promise<PythonExecutionResult> {
+  async execute(input: Parameters<AgentPythonExecutorOps["execute"]>[0]): Promise<PythonExecutionResult> {
     await this.ensureWorker();
     const worker = this.worker;
     if (!worker) throw new Error("Pyodide worker is unavailable.");
@@ -118,6 +121,7 @@ class PyodideSlot {
       jobId,
       code: input.code,
       timeoutMs: EXECUTION_TIMEOUT_MS,
+      canQuery: Boolean(input.runQuery),
       inputs: Object.entries(input.artifacts).map(([alias, artifact]) => ({
         alias,
         runId: artifact.runId,
@@ -127,9 +131,12 @@ class PyodideSlot {
         byteSize: artifact.byteSize,
       })),
     };
+    const deadlineAt = Date.now() + (input.runQuery ? MAX_TOTAL_MS : EXECUTION_TIMEOUT_MS);
+    let queryCount = 0;
 
     return new Promise<PythonExecutionResult>((resolve, reject) => {
       let settled = false;
+      let timer: ReturnType<typeof setTimeout>;
       const finish = (callback: () => void, reset = false): void => {
         if (settled) return;
         settled = true;
@@ -142,32 +149,93 @@ class PyodideSlot {
         callback();
       };
       const fail = (error: Error, reset = true): void => finish(() => reject(error), reset);
+      const armTimer = (): void => {
+        clearTimeout(timer);
+        const slice = EXECUTION_TIMEOUT_MS + 2_000;
+        const remaining = deadlineAt - Date.now();
+        const totalExhausted = remaining <= slice;
+        timer = setTimeout(
+          () =>
+            fail(
+              new Error(
+                totalExhausted
+                  ? `Python execution exceeded the ${Math.round(MAX_TOTAL_MS / 1000)}s total budget`
+                  : `Python execution timed out after ${EXECUTION_TIMEOUT_MS}ms without progress`,
+              ),
+            ),
+          Math.max(0, Math.min(slice, remaining)),
+        );
+      };
+      const streamArtifact = async (alias: string, runId: string): Promise<void> => {
+        let offset = 0;
+        while (true) {
+          if (input.signal?.aborted) throw new Error("Python execution cancelled");
+          const chunk = await readQueryArtifactChunk({
+            vaultPath: input.vaultPath,
+            sessionId: input.sessionId,
+            runId,
+            offset,
+            length: CHUNK_BYTES,
+          });
+          const data = chunk.data.slice();
+          offset += data.byteLength;
+          worker.postMessage(
+            { type: "chunk", jobId, alias, data: data.buffer, eof: chunk.eof },
+            [data.buffer],
+          );
+          if (chunk.eof) return;
+        }
+      };
       const stream = async (): Promise<void> => {
-        for (const item of request.inputs) {
-          let offset = 0;
-          while (true) {
-            if (input.signal?.aborted) throw new Error("Python execution cancelled");
-            const chunk = await readQueryArtifactChunk({
-              vaultPath: input.vaultPath,
-              sessionId: input.sessionId,
-              runId: item.runId,
-              offset,
-              length: CHUNK_BYTES,
-            });
-            const data = chunk.data.slice();
-            const bytesRead = data.byteLength;
-            worker.postMessage(
-              { type: "chunk", jobId, alias: item.alias, data: data.buffer, eof: chunk.eof },
-              [data.buffer],
+        for (const item of request.inputs) await streamArtifact(item.alias, item.runId);
+      };
+      const serveQuery = async (
+        message: Extract<WorkerMessage, { type: "query" }>,
+      ): Promise<void> => {
+        const reply = (payload: Record<string, unknown>): void =>
+          worker.postMessage({ jobId, requestId: message.requestId, ...payload });
+        let descriptor: PythonExecutionInput;
+        try {
+          if (!input.runQuery) throw new Error("This Python job cannot query data connections");
+          queryCount += 1;
+          if (queryCount > MAX_QUERIES_PER_JOB) {
+            throw new Error(
+              `query() is limited to ${MAX_QUERIES_PER_JOB} calls per execution; aggregate in SQL instead of looping`,
             );
-            offset += bytesRead;
-            if (chunk.eof) break;
           }
+          // Issuing a query is progress too; see the product broker.
+          armTimer();
+          const artifact = await input.runQuery({
+            connectionName: message.connectionName,
+            request: message.request,
+          });
+          descriptor = {
+            alias: `q${queryCount}`,
+            runId: artifact.runId,
+            format: artifact.format,
+            columns: artifact.columns,
+            rowCount: artifact.rowCount,
+            byteSize: artifact.byteSize,
+          };
+        } catch (error) {
+          reply({ type: "query-error", error: error instanceof Error ? error.message : String(error) });
+          return;
+        }
+        reply({ type: "query-input", input: descriptor });
+        try {
+          await streamArtifact(descriptor.alias, descriptor.runId);
+          armTimer();
+        } catch (error) {
+          reply({ type: "query-error", error: error instanceof Error ? error.message : String(error) });
         }
       };
       const onMessage = (message: WorkerMessage): void => {
         if (message.type === "ready" && message.jobId === jobId) {
           void stream().catch((error) => fail(error instanceof Error ? error : new Error(String(error))));
+        } else if (message.type === "query" && message.jobId === jobId) {
+          void serveQuery(message).catch((error) =>
+            fail(error instanceof Error ? error : new Error(String(error))),
+          );
         } else if (message.type === "result" && message.jobId === jobId) {
           finish(() => resolve(message.result), message.fatal === true);
         } else if (message.type === "fatal" && (message.jobId === null || message.jobId === jobId)) {
@@ -177,10 +245,7 @@ class PyodideSlot {
       const onError = (error: Error): void => fail(error);
       const onExit = (code: number): void => fail(new Error(`Pyodide worker exited with code ${code}.`));
       const onAbort = (): void => fail(new Error("Python execution cancelled"));
-      const timer = setTimeout(
-        () => fail(new Error(`Python execution timed out after ${EXECUTION_TIMEOUT_MS}ms`)),
-        EXECUTION_TIMEOUT_MS + 2_000,
-      );
+      armTimer();
       worker.on("message", onMessage);
       worker.once("error", onError);
       worker.once("exit", onExit);

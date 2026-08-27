@@ -20,7 +20,7 @@ SQL result sets, Agent sessions, and local Agent traces are too large to live in
 | Vault config | `{vault}/.stela/*.json` | Authoritative | Settings, connections, plugin manifests |
 | Agent session history | `{vault}/.stela/agent-history/<deviceSlug>/*.jsonl` | **Authoritative** | pi AgentHarness context and Agent Panel timeline; newest 20 per device |
 | Local Agent observability | `{vault}/.stela/agent-metrics.local.sqlite` | **Authoritative (local, 90 days)** | AI/Agent runs, tool events, Skill usage, maintenance outcomes, redacted traces |
-| Agent query artifacts | `{userData}/query-artifacts/` | Disposable | Session-scoped Parquet/JSONL inputs for local `execute_python`; never synced or exposed by path |
+| Agent query artifacts | `{userData}/query-artifacts/` | Disposable | Session-scoped Parquet/JSONL transport for sandbox `query()`; never synced, never named to the model, never exposed by path |
 | Session state | Zustand + localStorage + `{userData}/` | Disposable | Panel widths, open tabs, recent vaults |
 
 Vault source files + JSONL win for synced product data. `.stela.sqlite` remains disposable; the separately named `agent-metrics.local.sqlite` is a bounded machine-local observability authority and is never used for note or execution recovery.
@@ -310,7 +310,7 @@ API v1/v2 connectors remain valid and default to SQL-only; Agent SQL uses their
 buffered result to create a size-limited JSONL artifact when possible. Renderer
 `connector.execute` keeps
 the existing `execution.maxRows` behavior, while this unbounded fallback is an
-internal Agent-only registry path. ([ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md),
+internal Agent-only registry path. ([ADR-0079](./adr/0079-sandbox-query-rpc.md),
 [ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md))
 
 ## Git Sync
@@ -438,8 +438,8 @@ flowchart TB
    step) instead of failing the run, so no turn is spent repairing plan state.
    Correctness is defended at the point of use instead: a truncated `run_query`
    preview returns an instruction that it cannot support an exact result, every
-   `execute_python` result is prefixed with each input alias's row/column count
-   and column types, and the system prompt fixes the answer shape (conclusion,
+   `query()` prints the fetched relation's row/column count and column types, and
+   the system prompt fixes the answer shape (conclusion,
    material caveats, one data-basis line, then the requested value alone on the
    last line without Markdown emphasis or thousands separators). Successful
    query/Python calls still register disposable same-run evidence metadata for
@@ -486,15 +486,25 @@ flowchart TB
    multi-statement blocking; MongoDB supports structured read-only find and a
    connector-declared aggregation allowlist, and rejects writes,
    cross-collection stages, and server-side JavaScript. Read-only calls return a
-   host-enforced preview of at most 200 rows, 24 KiB total, and 4 KiB per string
-   cell and, when available, a same-session machine-local
-   artifact addressed only by run id. `execute_python` resolves explicit aliases
-   to those artifacts and runs in an app-owned, Node-free Web Worker with
-   offline Pyodide, DuckDB, and pandas. Main validates chunk reads; absolute
-   paths never cross preload or enter prompts/history. DAB's headless runner
-   uses an isolated Node Worker around that same execution core, with an empty
-   JavaScript global object and the same artifact, timeout, and result limits;
-   the desktop product remains Node-free. ([ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md),
+   model-facing preview of at most 200 rows, 5 KiB total, and 4 KiB per string
+   cell; a truncated result is returned as `sampleRows` rather than `rows`, so a
+   partial result cannot be counted as a whole one.
+   `execute_python` takes no inputs. The sandbox fetches its own data with
+   `await query(connection, request)` — a SQL string, or a dict for MongoDB —
+   which is an authorized RPC back to main: only a connection *name* crosses the
+   boundary, main resolves it, forces read-only through `classifySql(sql, false)`
+   regardless of `agentAllowMutations`, journals a `runId`, and streams the
+   resulting artifact into the sandbox as a DuckDB relation. Artifacts remain the
+   transport and audit mechanism but no longer appear in the model's surface.
+   Per execution: 32 `query()` calls, 2 GiB materialized, a 60s inactivity timer
+   that each completed query refreshes, and a 10-minute wall clock. Code runs
+   through `eval_code_async` so top-level `await` works. Injecting one JS
+   callable ends the sandbox's airtight JS isolation; the retained defenses are
+   self-only CSP on a `file://` opaque origin, no `window`/preload in a Worker,
+   credentials never leaving main, main-side read-only enforcement, and a journal
+   entry per call. DAB's headless runner implements the same `query` protocol in
+   an isolated Node Worker; the desktop product remains Node-free.
+   ([ADR-0079](./adr/0079-sandbox-query-rpc.md),
    [ADR-0068](./adr/0068-headless-pyodide-agent-evaluation.md))
    Production CSP adds only `wasm-unsafe-eval` for Pyodide compilation; scripts
    and connections remain self-only and normal `unsafe-eval` stays disabled.
@@ -635,7 +645,7 @@ All retrieval is lexical and in-process — no embeddings, no FTS5 index ([ADR-0
 - Agent `run_query` records SQL text or canonical structured-query JSON plus `queryLanguage` to `result-store` and `history-journal` under `blockId` `agent:<runId>`, so Agent executions remain auditable. Old history defaults to SQL.
 - Retrieval quality is measured by `npm run eval:retrieval` against mechanically labelled slices; labels never share a signal with the ranker. That eval calls the ranking functions directly, so it says nothing about whether the model picks the right tool or writes a usable query.
 - Ask discipline (`ask_user`) is measured by `npm run eval:agent-ask`, which drives the real `AgentHarness` with the real system prompt and tools. Tasks are generated in pairs from same-family table names in the vault: one version names the table, one leaves ≥3 used candidates open. Asking on the open version and not asking on the named one are both counted, so an agent that always asks cannot score well. Only `connector.execute`, `recordRun`, and `sqlIndex.query` are stubbed — answer correctness needs a live connection and is out of scope. `--self-check` verifies the whole rig without a model call.
-- End-to-end answer quality is measured by `npm run eval:data-agent-bench` against DataAgentBench on the Linux host that owns its PostgreSQL, MongoDB, SQLite, and DuckDB environments. The runner reuses Stela's real system prompt, `AgentHarness`, provider transport, and Agent tools without starting Electron. Its requested/effective reasoning effort defaults to `medium`, is overrideable by CLI or environment, is recorded in every result/manifest/report, and participates in resume compatibility so unlike conditions cannot be mixed. A thin stdio bridge maps SQL and structured MongoDB find to DAB's official `QueryDBTool`; safe aggregation uses the same dataset MongoDB service directly because upstream has no pipeline input. The existing `execute_python` tool runs the shared offline Pyodide/DuckDB/pandas core in isolated evaluation Node workers and consumes the normal session query artifacts, never system Python. The runner may process distinct datasets concurrently while serializing runs within each dataset; datasets backed by the shared MongoDB service are mutually exclusive, and Python worker concurrency is bounded separately. A fatal bridge timeout aborts the Agent and preserves its root error, while validation runs through an independent bridge. Task/bridge timeouts terminate the complete Python process group so blocking database calls cannot outlive a run. Large file-backed datasets should live on the Linux host's local disk rather than NFS. Linux headless results are authoritative; a temporary Mac subprocess connector may tunnel the same bridge over SSH for desktop parity smoke tests only. ([ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md), [ADR-0068](./adr/0068-headless-pyodide-agent-evaluation.md), [ADR-0072](./adr/0072-profile-scoped-agent-reasoning-effort.md))
+- End-to-end answer quality is measured by `npm run eval:data-agent-bench` against DataAgentBench on the Linux host that owns its PostgreSQL, MongoDB, SQLite, and DuckDB environments. The runner reuses Stela's real system prompt, `AgentHarness`, provider transport, and Agent tools without starting Electron. Its requested/effective reasoning effort defaults to `medium`, is overrideable by CLI or environment, is recorded in every result/manifest/report, and participates in resume compatibility so unlike conditions cannot be mixed. A thin stdio bridge maps SQL and structured MongoDB find to DAB's official `QueryDBTool`; safe aggregation uses the same dataset MongoDB service directly because upstream has no pipeline input. The existing `execute_python` tool runs the shared offline Pyodide/DuckDB/pandas core in isolated evaluation Node workers, serving sandbox `query()` through the same protocol and the same session query artifacts as the product, never system Python. The runner may process distinct datasets concurrently while serializing runs within each dataset; datasets backed by the shared MongoDB service are mutually exclusive, and Python worker concurrency is bounded separately. A fatal bridge timeout aborts the Agent and preserves its root error, while validation runs through an independent bridge. Task/bridge timeouts terminate the complete Python process group so blocking database calls cannot outlive a run. Large file-backed datasets should live on the Linux host's local disk rather than NFS. Linux headless results are authoritative; a temporary Mac subprocess connector may tunnel the same bridge over SSH for desktop parity smoke tests only. ([ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md), [ADR-0068](./adr/0068-headless-pyodide-agent-evaluation.md), [ADR-0072](./adr/0072-profile-scoped-agent-reasoning-effort.md))
 
 ### Prompt cache boundary
 

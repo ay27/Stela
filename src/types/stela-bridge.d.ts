@@ -45,6 +45,7 @@ import type {
   PluginInfo,
   PluginInstallInput,
   QueryResult,
+  PythonExecutionInput,
   PythonExecutionRequest,
   PythonExecutionResult,
   PythonRuntimeInputChunk,
@@ -259,6 +260,15 @@ interface StelaBridge {
       offset: number,
       length: number,
     ) => Promise<PythonRuntimeInputChunk>;
+    /**
+     * Serves one sandbox `await query(connection, request)`. `request` is a
+     * JSON-encoded DataQueryRequest; main enforces read-only.
+     */
+    query: (
+      jobId: string,
+      connectionName: string,
+      request: string,
+    ) => Promise<PythonExecutionInput>;
     respond: (
       jobId: string,
       result: PythonExecutionResult,

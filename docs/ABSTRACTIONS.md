@@ -778,11 +778,12 @@ the current note connection. The connector's `queryLanguages` and
 `mongoOperations` determine whether SQL, structured MongoDB find, or safe
 MongoDB aggregation is accepted. Aggregation uses a bounded stage allowlist and
 rejects writes, cross-collection stages, facets, and server-side JavaScript. A
-successful read returns at most 200 preview rows, 24 KiB total preview data,
-and 4 KiB per string cell to the model and records the same host-enforced rows
-in normal history, while `rowCount` describes the full result. Row- and
-byte-truncation reasons are explicit. When possible it also creates a
-machine-local artifact under Electron
+successful read returns at most 200 preview rows, 5 KiB total preview data, and
+4 KiB per string cell to the model, while `rowCount` describes the full result.
+A truncated result arrives under `sampleRows` instead of `rows`, so a partial
+result is not presented as something countable; row- and byte-truncation reasons
+stay explicit. History still records the wider host-enforced preview. When
+possible the read also creates a machine-local artifact under Electron
 `userData`, keyed by Vault hash, local `sessionId`, and query `runId`:
 
 ```typescript
@@ -802,20 +803,39 @@ interface QueryArtifactDescriptor {
 }
 ```
 
-`execute_python({ code, inputs })` maps at most eight valid Python identifier
-aliases to exact run ids from that local session. `tables[alias]` is a DuckDB
-relation; the preloaded `to_df(alias)` helper materializes one selected relation
-before pandas methods. Main resolves descriptors and authorizes bounded chunk reads;
-renderer receives bytes but no host path. An app-owned Web Worker loads bundled
-Pyodide, DuckDB, pandas, NumPy, and their pinned offline dependencies, registers
-the selected inputs in an in-memory DuckDB connection, and requires code to
-assign a bounded scalar/DataFrame/relation to `result`. There is no Node API,
-host filesystem, subprocess, package installation, or general network bridge.
-Timeout/cancellation terminates the Worker. Artifacts are disposable, capped,
-TTL-cleaned, and never written to Vault SQLite/JSONL, Markdown, Agent history,
-or Git. Headless evaluation uses the same Python program and offline packages
-inside isolated Node workers, without changing the desktop runtime or exposing
-a second model tool. ([ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md),
+`execute_python({ code })` takes no inputs. The sandbox fetches its own data:
+
+```python
+orders = await query('warehouse', 'SELECT customer_id, amount, ts FROM orders')
+docs   = await query('crm', {'collection': 'contacts', 'filter': {}, 'limit': None})
+result = ...  # bounded scalar / DataFrame / DuckDB relation
+```
+
+`query(connection, request)` returns a DuckDB relation over the **full** result
+(`.df()` for pandas) and is an authorized RPC back to main. `request` is a SQL
+string or a MongoDB dict, validated by the same `normalizeDataQuery` the
+`run_query` tool uses. Only a connection *name* crosses the sandbox boundary;
+main resolves it, forces read-only via `classifySql(sql, false)` regardless of
+`agentAllowMutations`, journals a `runId`, materializes an artifact, and streams
+it in as bounded chunks under a host-generated alias. Artifacts stay the
+transport, audit, and replay mechanism, but the model never names one. Per
+execution: 32 `query()` calls, 2 GiB materialized, a 60s inactivity timer that
+each completed query refreshes, and a 10-minute wall clock.
+
+An app-owned Web Worker loads bundled Pyodide, DuckDB, pandas, NumPy, and their
+pinned offline dependencies, runs code through `eval_code_async` so top-level
+`await` works, and requires a bounded scalar/DataFrame/relation in `result`.
+There is no Node API, host filesystem, subprocess, package installation, or
+general network bridge, and `query()` is the only injected JS callable. That one
+callable ends the sandbox's airtight JS isolation, so containment rests on
+self-only CSP over a `file://` opaque origin, a Worker with no `window` or
+preload, credentials never leaving main, main-side read-only enforcement, and
+one journal entry per call. Timeout/cancellation terminates the Worker.
+Artifacts are disposable, capped, TTL-cleaned, and never written to Vault
+SQLite/JSONL, Markdown, Agent history, or Git. Headless evaluation implements
+the same `query` protocol over the same Python program inside isolated Node
+workers, without changing the desktop runtime or exposing a second model tool.
+([ADR-0079](./adr/0079-sandbox-query-rpc.md),
 [ADR-0068](./adr/0068-headless-pyodide-agent-evaluation.md))
 
 `search_sql_usage({ table })` finds a table in either read or write position;
@@ -828,10 +848,10 @@ Safety ([ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md)):
 - `sql-guard` classifies read-only vs mutation vs multi-statement
 - Mutations + `propose_edit` block on `ai:agent-respond-proposal`
 - Runs continue until model completion, error, or explicit user cancellation ([ADR-0017](./adr/0017-user-cancelled-agent-runs.md))
-- Read tools and `run_query` may execute in parallel. `execute_python`, plan mutations, chart creation, Canvas creation/update, and `propose_edit` are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0064](./adr/0064-session-query-artifacts-and-sandboxed-python.md)). NodeExecutionEnv is harness cwd only (not exposed as model tools)
+- Read tools and `run_query` may execute in parallel. `execute_python`, plan mutations, chart creation, Canvas creation/update, and `propose_edit` are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0079](./adr/0079-sandbox-query-rpc.md)). NodeExecutionEnv is harness cwd only (not exposed as model tools)
 - Compaction uses `ai.contextWindow` + one overflow recovery ([ADR-0018](./adr/0018-pi-ai-agent-harness.md))
 - Execution plans are bounded and linear. Their active store is main-process runtime state; every versioned `AgentPlanSnapshot` is appended immutably to the pi session, and only the highest version for the current run is active ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md), [ADR-0046](./adr/0046-device-sharded-agent-session-history.md))
-- A plan grants no authority over the answer and never gates it. `create_plan` and `update_plan` are write-only records that report a note — unknown step id, out-of-order completion, overwritten terminal step — instead of failing the run, and evidence lines are optional. Answer correctness is defended at the point of use: a truncated `run_query` preview returns an instruction that it cannot support an exact result, each `execute_python` result is prefixed with its input aliases' row/column counts and column types, and the stable prompt fixes the answer shape (conclusion, material caveats, one data-basis line, then the requested value alone on the last line without Markdown emphasis or thousands separators). Successful query/Python calls still register disposable same-run evidence metadata for chart and Canvas binding, and Python evidence retains its source run lineage; Stela does not pre-scan sources or persist an evidence catalog ([ADR-0078](./adr/0078-plans-as-progress-bookkeeping.md))
+- A plan grants no authority over the answer and never gates it. `create_plan` and `update_plan` are write-only records that report a note — unknown step id, out-of-order completion, overwritten terminal step — instead of failing the run, and evidence lines are optional. Answer correctness is defended at the point of use: a truncated `run_query` result returns only `sampleRows` plus an instruction that they cannot support an exact result, each sandbox `query()` prints its relation's row/column count and column types, and the stable prompt fixes the answer shape (conclusion, material caveats, one data-basis line, then the requested value alone on the last line without Markdown emphasis or thousands separators). Successful query/Python calls still register disposable same-run evidence metadata for chart and Canvas binding, and Python evidence retains its source run lineage; Stela does not pre-scan sources or persist an evidence catalog ([ADR-0078](./adr/0078-plans-as-progress-bookkeeping.md))
 - The Agent system prompt and tool list are request-invariant. The compact stable prompt defines grounding, evidence order, planning threshold, mutation approval, rendering, and answer policy. Dynamic context, including explicit availability states and deterministic current-run guidance for Canvas, RunSQL rewrite, Skills, and MongoDB, is bounded, redacted, and appended in the user turn immediately before the request; pi-ai uses short cache retention and session affinity ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md))
 - Data analysis is driven by material uncertainty rather than a mandatory checklist. Locate runs only when the source is unknown, Ground only when semantic ambiguity affects correctness, Verify only when plausible interpretations would change the answer, and Challenge only when evidence contradicts the working conclusion. Every tool call must compute a requested result or resolve such an uncertainty; the Agent stops once the requested conclusion is supported. Physical semantics prefer current context, live schema/DDL, small samples, then SQL usage; business semantics prefer current definitions, SQL usage, Vault notes, Skills, then clarification. Routine locate-schema-query lookups do not create execution plans.
 - RunSQL fix/schema quick actions auto-submit in a new Agent tab; rewrite/question actions open editable drafts. `runsql_rewrite` proposals are bound to the original SQL snapshot and renderer target, then reuse the inline diff accept/discard UI ([ADR-0059](./adr/0059-agent-panel-quick-actions.md))
