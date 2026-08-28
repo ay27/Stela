@@ -1,6 +1,6 @@
 /**
- * 内联补全评测。mask-and-predict：拿真实 runsql 块在行尾截断，
- * 后半行就是 ground truth——**不需要任何标注**。
+ * 内联补全评测。mask-and-predict：从真实 runsql 块移除一个内部 span，
+ * 保留同行与后续 suffix，形成真正的 FIM case——**不需要任何标注**。
  *
  *   export STELA_EVAL_API_KEY=...
  *   export STELA_EVAL_BASE_URL=https://.../v1
@@ -8,7 +8,8 @@
  *   STELA_EVAL_VAULT=~/some-vault npm run eval:completion -- --save
  *
  * 常用开关：`--cases=10` 先试通链路，`--dry-run` 不发请求只看 prompt，
- * `--no-note-context` 做 heading/prose 的 A/B，`--compare` 对比 baseline，
+ * `--no-note-context` 做 heading/prose 的 A/B，`--native-fim` 测官方 DeepSeek FIM，
+ * `--cut=middle|table|tail` 切换样本，`--compare` 对比 baseline，
  * `--concurrency=N` 调并发（默认 6）。
  *
  * 三个指标：
@@ -33,9 +34,12 @@ import type {
 } from "@shared/types";
 
 import {
+  buildInlineFimInput,
   buildInlineCompletionPrompt,
   referencedTableNames,
+  sanitizeCompletionCandidate,
 } from "../../electron/services/ai/inline-completion";
+import { completeNativeDeepSeekFim } from "../../electron/services/ai/inline-completion-transport";
 import {
   buildEvalSettings,
   loadConnection,
@@ -61,11 +65,11 @@ const cacheFile = path.join(internalDir, "eval-completion-cache.json");
 const SAMPLE_SIZE = 120;
 /** 与 sql-inline-completion.ts 的真实触发条件对齐：光标前非空白至少 3 个字符。 */
 const MIN_PREFIX_NON_WS = 3;
-/** ghost text 只取一行，所以 ground truth 也只比一行。 */
+/** ground truth 是一个短 span；产品最多显示三行。 */
 const MIN_TRUTH_CHARS = 4;
 /** 超过这个长度的「一行」是数据块而不是 SQL 结构，不属于补全场景。 */
 const MAX_TRUTH_CHARS = 200;
-/** 单条请求上限。产品里 120ms 后就该出建议，等一分钟已经毫无意义。 */
+/** 单条请求上限。产品里 250ms 后就该出建议，等一分钟已经毫无意义。 */
 const REQUEST_TIMEOUT_MS = 60_000;
 /** 非 --verbose 时最多打几条跑偏样本。 */
 const MAX_DIVERGENT_SAMPLES = 8;
@@ -103,6 +107,10 @@ interface Report {
   unknownTableRate: number;
   emptyRate: number;
   firstTokenMsP50: number;
+  averagePromptTokens: number;
+  averageCompletionTokens: number;
+  cacheHitTokens: number;
+  cacheMissTokens: number;
   cacheHits: number;
 }
 
@@ -155,11 +163,12 @@ function noteContextFor(
  * 后面」——那恰好是真实使用里最想要建议、也最容易补错表名的时刻。`table`
  * 专门切在 FROM / JOIN 之后，让 ground truth 以表名开头。
  */
-type CutMode = "middle" | "table";
+type CutMode = "middle" | "table" | "tail";
 
 const TABLE_KEYWORD_RE = /\b(?:from|join)\s+(?=\S)/gi;
 
 function cutModeFrom(args: Set<string>): CutMode {
+  if (args.has("--cut=tail")) return "tail";
   return args.has("--cut=table") ? "table" : "middle";
 }
 
@@ -205,6 +214,9 @@ function buildCases(
       let cutAt: number | null;
       if (cutMode === "table") {
         cutAt = tableCutAt(line, lines[i - 1]);
+      } else if (cutMode === "tail") {
+        const match = /[`"A-Za-z_][`"\w$]*(?:\([^)]*\))?\s*[,;]?\s*$/.exec(line);
+        cutAt = match?.index ?? null;
       } else {
         const cutMatches = [...line.matchAll(/\s+/g)];
         const cut = cutMatches[Math.floor(cutMatches.length / 2)];
@@ -212,7 +224,12 @@ function buildCases(
       }
       if (cutAt === null) continue;
       const head = line.slice(0, cutAt);
-      const truth = line.slice(cutAt);
+      const remaining = line.slice(cutAt);
+      const truthMatch =
+        cutMode === "table"
+          ? /^[`"\w$.]+/.exec(remaining)
+          : /^[`"A-Za-z_][`"\w$]*(?:\([^)]*\))?\s*[,;]?/.exec(remaining);
+      const truth = truthMatch?.[0] ?? remaining;
       if (truth.trim().length < MIN_TRUTH_CHARS) continue;
       // ghost text 只在写 SQL 时有意义：注释行里补的是散文，
       // 而三百字符的 JSON 数据块没人会按 Tab 接受。两者都不是补全场景。
@@ -220,7 +237,12 @@ function buildCases(
       if (truth.length > MAX_TRUTH_CHARS) continue;
       const prefix = `${lines.slice(0, i).join("\n")}\n${head}`;
       if (prefix.replace(/\s/g, "").length < MIN_PREFIX_NON_WS) continue;
-      const suffix = lines.slice(i + 1).join("\n");
+      const sameLineSuffix = remaining.slice(truth.length);
+      const laterLines = lines.slice(i + 1).join("\n");
+      const suffix = laterLines ? `${sameLineSuffix}\n${laterLines}` : sameLineSuffix;
+      // True FIM invariant: the masked span is the only removed text, including
+      // when a same-line suffix exists after the cursor.
+      if (`${prefix}${truth}${suffix}` !== block.sql) continue;
       const siblings = (byNote.get(block.noteRel) ?? [])
         .filter((b) => b.blockIndex !== block.blockIndex)
         .slice(0, 8)
@@ -359,6 +381,11 @@ const SQL_WORDS = new Set(
 interface CacheEntry {
   text: string;
   firstTokenMs: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  cacheHitTokens?: number;
+  cacheMissTokens?: number;
+  averageLogprob?: number;
 }
 
 /** 并发取回的原始结果；打分在全部取回后按顺序做，保证输出可读且确定。 */
@@ -441,6 +468,8 @@ async function assemblePrompt(
 ): Promise<{
   system: string;
   user: string;
+  fimPrompt: string;
+  fimSuffix: string;
   tables: string[];
   schemas: Awaited<ReturnType<typeof loadSchemaDirTableSchemas>>;
 }> {
@@ -466,8 +495,12 @@ async function assemblePrompt(
   const dialect = connection
     ? resolveDialect({ kind: connection.entry.kind, displayName: connection.entry.kind })
     : "Standard SQL";
+  const chat = buildInlineCompletionPrompt({ request, dialect, tables, schemas });
+  const fim = buildInlineFimInput({ request, dialect, tables, schemas });
   return {
-    ...buildInlineCompletionPrompt({ request, dialect, tables, schemas }),
+    ...chat,
+    fimPrompt: fim.prompt,
+    fimSuffix: fim.suffix,
     tables,
     schemas,
   };
@@ -479,7 +512,12 @@ async function dryRun(args: Set<string>): Promise<void> {
   const corpus = await loadCorpus(vaultPath);
   const connection = await loadConnection(vaultPath);
   const withNoteContext = !args.has("--no-note-context");
-  const cases = buildCases(corpus.blocks, corpus.notes, SAMPLE_SIZE, cutModeFrom(args));
+  const cases = buildCases(
+    corpus.blocks,
+    corpus.notes,
+    numericArg(args, "--cases") ?? SAMPLE_SIZE,
+    cutModeFrom(args),
+  );
   if (cases.length === 0) throw new Error("no maskable runsql blocks found in this vault");
 
   let withHeading = 0;
@@ -514,11 +552,18 @@ async function main(): Promise<void> {
     return;
   }
   const { apiKey, baseUrl, model } = requireCredentials();
+  const nativeFim = args.has("--native-fim");
+  if (nativeFim && model !== "deepseek-v4-flash") {
+    throw new Error("--native-fim requires STELA_EVAL_MODEL=deepseek-v4-flash");
+  }
 
   const useFixture = args.has("--fixture");
   // --cases=N：先用几条试通链路，别为了发现 model 名写错等 20 分钟。
   const sampleSize = numericArg(args, "--cases") ?? SAMPLE_SIZE;
-  console.log(`model ${model} @ ${baseUrl}, ${sampleSize} cases max`);
+  console.log(
+    `model ${model} @ ${baseUrl}, transport ${nativeFim ? "native-fim" : "chat"}, ` +
+      `${sampleSize} cases max`,
+  );
   const vaultPath = useFixture ? await materializeFixture() : resolveVaultPath();
   process.stdout.write(`loading corpus from ${vaultPath} ... `);
   const corpus = await loadCorpus(vaultPath);
@@ -541,6 +586,7 @@ async function main(): Promise<void> {
 
   const prefixMatches: number[] = [];
   const firstTokenTimes: number[] = [];
+  const averageLogprobs: number[] = [];
   let exactLines = 0;
   let hallucinations = 0;
   let hallucinationChecked = 0;
@@ -553,6 +599,10 @@ async function main(): Promise<void> {
   let scored = 0;
   let unknownTables = 0;
   let tableRefsChecked = 0;
+  let promptTokens = 0;
+  let completionTokens = 0;
+  let cacheHitTokens = 0;
+  let cacheMissTokens = 0;
   const catalog = await loadTableCatalog(connection);
   // 一个 67% 的数字没法判断是模型不行还是指标不行，所以总是留几条跑偏样本；
   // 小规模跑或 --verbose 时全都打出来。
@@ -574,7 +624,12 @@ async function main(): Promise<void> {
       const testCase = cases[i]!;
       const prompt = await assemblePrompt(testCase, i, connection, withNoteContext);
       const key = createHash("sha256")
-        .update(`${model}\u0000${prompt.system}\u0000${prompt.user}`)
+        .update(
+          `${model}\u0000${nativeFim ? "native-fim" : "chat"}\u0000` +
+            (nativeFim
+              ? `${prompt.fimPrompt}\u0000${prompt.fimSuffix}`
+              : `${prompt.system}\u0000${prompt.user}`),
+        )
         .digest("hex");
       const progress = `[${String(++done).padStart(3)}/${cases.length}]`;
       const cached = cache[key];
@@ -593,26 +648,47 @@ async function main(): Promise<void> {
       let failure = "";
       const started = Date.now();
       let firstTokenMs = 0;
+      let usage: Omit<CacheEntry, "text" | "firstTokenMs"> = {};
       try {
-        await streamChatCompletions({
-          settings,
-          apiKey,
-          system: prompt.system,
-          user: prompt.user,
-          profileId: "eval",
-          signal: controller.signal,
-          onDelta: (delta) => {
-            if (!firstTokenMs) firstTokenMs = Date.now() - started;
-            text += delta;
-          },
-        });
+        if (nativeFim) {
+          const result = await completeNativeDeepSeekFim({
+            apiKey,
+            model,
+            prompt: prompt.fimPrompt,
+            suffix: prompt.fimSuffix,
+            signal: controller.signal,
+          });
+          text = result.text;
+          firstTokenMs = Date.now() - started;
+          usage = {
+            promptTokens: result.usage?.promptTokens,
+            completionTokens: result.usage?.completionTokens,
+            cacheHitTokens: result.usage?.cacheHitTokens,
+            cacheMissTokens: result.usage?.cacheMissTokens,
+            averageLogprob: result.averageLogprob ?? undefined,
+          };
+        } else {
+          await streamChatCompletions({
+            settings,
+            apiKey,
+            system: prompt.system,
+            user: prompt.user,
+            profileId: "eval",
+            signal: controller.signal,
+            maxTokens: 64,
+            onDelta: (delta) => {
+              if (!firstTokenMs) firstTokenMs = Date.now() - started;
+              text += delta;
+            },
+          });
+        }
       } catch (err) {
         failure = err instanceof Error ? err.message : String(err);
       } finally {
         clearTimeout(timeout);
       }
       const elapsed = Date.now() - started;
-      const entry: CacheEntry = { text, firstTokenMs: firstTokenMs || elapsed };
+      const entry: CacheEntry = { text, firstTokenMs: firstTokenMs || elapsed, ...usage };
       fetched[i] = { entry, prompt, failed: Boolean(failure) };
       if (failure) {
         failures++;
@@ -653,13 +729,13 @@ async function main(): Promise<void> {
     // emptyRate 与 prefixMatch，让一次网络抖动看起来像模型退步。
     if (!result || result.failed) continue;
     const { entry } = result;
+    promptTokens += entry.promptTokens ?? 0;
+    completionTokens += entry.completionTokens ?? 0;
+    cacheHitTokens += entry.cacheHitTokens ?? 0;
+    cacheMissTokens += entry.cacheMissTokens ?? 0;
     const { tables, schemas } = result.prompt;
 
-    // 与 renderer 的 normalize 对齐到「只取第一行、剥掉 fence」这一层。
-    const suggestion = entry.text
-      .replace(/^```[a-z]*\n?/i, "")
-      .replace(/```$/, "")
-      .split("\n")[0] ?? "";
+    const suggestion = sanitizeCompletionCandidate(entry.text);
     scored++;
     if (!suggestion.trim()) empties++;
     prefixMatches.push(commonPrefixRatio(suggestion, testCase.truth));
@@ -670,6 +746,7 @@ async function main(): Promise<void> {
     if (verdict === "literal") literalOnly++;
     if (verdict === "cjk-alias") cjkAliases++;
     firstTokenTimes.push(entry.firstTokenMs);
+    if (entry.averageLogprob !== undefined) averageLogprobs.push(entry.averageLogprob);
 
     const knownColumns = new Set(
       schemas.flatMap((s) => (s.columns ?? []).map((c) => c.name.toLowerCase())),
@@ -738,6 +815,10 @@ async function main(): Promise<void> {
     unknownTableRate: tableRefsChecked > 0 ? unknownTables / tableRefsChecked : 0,
     emptyRate: empties / n,
     firstTokenMsP50: median(firstTokenTimes),
+    averagePromptTokens: promptTokens / n,
+    averageCompletionTokens: completionTokens / n,
+    cacheHitTokens,
+    cacheMissTokens,
     cacheHits,
   };
 
@@ -745,6 +826,7 @@ async function main(): Promise<void> {
 
   const suffix =
     `${useFixture ? "fixture" : "real"}` +
+    `${nativeFim ? ".native-fim" : ".chat"}` +
     `${cutMode === "middle" ? "" : `.cut-${cutMode}`}` +
     `${withNoteContext ? "" : ".no-note-context"}`;
   const baselineFile = path.join(internalDir, `eval-completion-baseline.${suffix}.json`);
@@ -797,6 +879,21 @@ async function main(): Promise<void> {
   );
   // 这个数字属于评测端点，不是产品的补全 profile —— 别拿它当延迟结论。
   console.log(`  first token p50       ${report.firstTokenMsP50} ms  [eval endpoint]`);
+  if (nativeFim) {
+    console.log(
+      `  average tokens        ${report.averagePromptTokens.toFixed(0)} input / ` +
+        `${report.averageCompletionTokens.toFixed(1)} output`,
+    );
+    console.log(
+      `  prompt cache tokens   ${report.cacheHitTokens} hit / ${report.cacheMissTokens} miss`,
+    );
+    if (averageLogprobs.length > 0) {
+      console.log(
+        `  average logprob p50   ${median(averageLogprobs).toFixed(3)} ` +
+          `[${averageLogprobs.length} responses]`,
+      );
+    }
+  }
   if (scored < 30) {
     console.log(`  ⚠ ${scored} cases is too few to conclude anything; drop --cases for a full run`);
   }

@@ -20,6 +20,7 @@ import type {
   AiInlineCompletionEvent,
   AiSchemaTargetContext,
 } from "@shared/types";
+import type { ColumnDef } from "@/contracts";
 import {
   cancelInlineCompletion,
   onInlineCompletionEvent,
@@ -28,20 +29,17 @@ import {
 import { useSettings } from "@/state/settings";
 
 import { useColumnCache } from "./column-cache";
+import { sqlCompletionContextBlockReason } from "./sql-inline-completion-context";
 import { extractScope } from "./sql-scope";
 
-/**
- * 与 ADR-0024 / docs 对齐的去抖间隔。原先代码里是 120ms 而文档写 600ms，
- * 两边不一致；取 120ms 一侧并把文档改过来——ghost text 是可忽略的建议，
- * 早出现晚出现都不打断输入，而 600ms 在实测里明显"慢半拍"。
- */
-const DEBOUNCE_MS = 120;
-const MAX_PREFIX_CHARS = 12_000;
-const MAX_SUFFIX_CHARS = 8_000;
-const MAX_GHOST_LINES = 1;
-const MAX_GHOST_CHARS = 240;
-/** 与 inline-completion.ts 的 MAX_TABLES 同量级；prompt 里塞不下更多。 */
-const MAX_PREWARM_TABLES = 5;
+const DEBOUNCE_MS = 250;
+const MAX_PREFIX_CHARS = 4_000;
+const MAX_SUFFIX_CHARS = 2_000;
+const MAX_GHOST_LINES = 3;
+const MAX_GHOST_CHARS = 360;
+const MAX_PREWARM_TABLES = 3;
+const CACHE_TTL_MS = 5 * 60_000;
+const CACHE_MAX_ENTRIES = 64;
 
 interface CompletionContext {
   pos: number;
@@ -52,6 +50,35 @@ interface CompletionContext {
 interface GhostState {
   pos: number;
   text: string;
+}
+
+interface CompletionCacheEntry {
+  text: string;
+  expiresAt: number;
+}
+
+const completionCache = new Map<string, CompletionCacheEntry>();
+
+function readCompletionCache(key: string): { hit: boolean; text: string } {
+  const entry = completionCache.get(key);
+  if (!entry) return { hit: false, text: "" };
+  if (entry.expiresAt <= Date.now()) {
+    completionCache.delete(key);
+    return { hit: false, text: "" };
+  }
+  completionCache.delete(key);
+  completionCache.set(key, entry);
+  return { hit: true, text: entry.text };
+}
+
+function writeCompletionCache(key: string, text: string): void {
+  completionCache.delete(key);
+  completionCache.set(key, { text, expiresAt: Date.now() + CACHE_TTL_MS });
+  while (completionCache.size > CACHE_MAX_ENTRIES) {
+    const oldest = completionCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    completionCache.delete(oldest);
+  }
 }
 
 type EventHandler = (event: AiInlineCompletionEvent) => void;
@@ -153,35 +180,31 @@ function getContext(view: EditorView): CompletionContext | null {
   const selection = view.state.selection.main;
   if (!selection.empty) return null;
   const pos = selection.head;
-  const line = view.state.doc.lineAt(pos);
-  if (view.state.doc.sliceString(pos, line.to).trim()) return null;
   const prefix = view.state.doc.sliceString(
     Math.max(0, pos - MAX_PREFIX_CHARS),
     pos,
   );
-  if (prefix.replace(/\s/g, "").length < 3) return null;
+  const suffix = view.state.doc.sliceString(
+    pos,
+    Math.min(view.state.doc.length, pos + MAX_SUFFIX_CHARS),
+  );
+  if (`${prefix}${suffix}`.replace(/\s/g, "").length < 3) return null;
   return {
     pos,
     prefix,
-    suffix: view.state.doc.sliceString(
-      pos,
-      Math.min(view.state.doc.length, pos + MAX_SUFFIX_CHARS),
-    ),
+    suffix,
   };
 }
 
-function getContextBlockReason(view: EditorView): string | null {
+function getContextBlockReason(
+  view: EditorView,
+  allowCompleteStatement = false,
+): string | null {
   const selection = view.state.selection.main;
   if (!selection.empty) return "selection is not empty";
-  const line = view.state.doc.lineAt(selection.head);
-  if (view.state.doc.sliceString(selection.head, line.to).trim()) {
-    return "cursor is not at line end";
-  }
-  const prefix = view.state.doc.sliceString(
-    Math.max(0, selection.head - MAX_PREFIX_CHARS),
-    selection.head,
-  );
-  return prefix.replace(/\s/g, "").length < 3 ? "SQL prefix is too short" : null;
+  return sqlCompletionContextBlockReason(view.state, selection.head, {
+    allowCompleteStatement,
+  });
 }
 
 function stripRepeatedPrefix(text: string, prefix: string): string {
@@ -197,7 +220,13 @@ function stripRepeatedPrefix(text: string, prefix: string): string {
   return text;
 }
 
-function addRequiredLeadingSpace(text: string, prefix: string): string {
+const SQL_KEYWORDS = new Set(
+  "select from where join left right inner outer cross on using group by having order limit offset union all and or as case when then else end with insert update delete into values set".split(
+    " ",
+  ),
+);
+
+function addRequiredLeadingSpace(text: string, prefix: string, suffix: string): string {
   if (!text || /^\s/.test(text)) return text;
   const beforeCursor = prefix.at(-1);
   const firstSuggestionChar = text[0];
@@ -208,10 +237,22 @@ function addRequiredLeadingSpace(text: string, prefix: string): string {
   ) {
     return text;
   }
+  // True middle-of-token FIM: `sel|ect` must insert `ect`, not ` ect`.
+  if (/^[\p{L}\p{N}_$]/u.test(suffix)) return text;
+  const partial = /[\p{L}_]+$/u.exec(prefix)?.[0]?.toLowerCase() ?? "";
+  const firstWord = /^[\p{L}_]+/u.exec(text)?.[0]?.toLowerCase() ?? "";
+  if (
+    partial &&
+    firstWord &&
+    !SQL_KEYWORDS.has(partial) &&
+    SQL_KEYWORDS.has(`${partial}${firstWord}`)
+  ) {
+    return text;
+  }
   return ` ${text}`;
 }
 
-function normalizeSuggestion(
+export function normalizeSuggestion(
   text: string,
   prefix: string,
   suffix: string,
@@ -245,7 +286,7 @@ function normalizeSuggestion(
       break;
     }
   }
-  out = addRequiredLeadingSpace(out, prefix);
+  out = addRequiredLeadingSpace(out, prefix, suffix);
   out = out.split("\n").slice(0, MAX_GHOST_LINES).join("\n");
   return out.slice(0, MAX_GHOST_CHARS);
 }
@@ -298,12 +339,18 @@ export function sqlInlineCompletionExtension({
   getConnectionName,
   getSiblingSqls,
   getNoteContext,
+  ensureColumnsForTable,
   canRequest,
 }: {
   getConnectionName: () => string | null;
   getSiblingSqls: () => string[];
   /** 当前块所在小节的 heading 与一段散文，口径说明常写在那里。 */
   getNoteContext?: () => { heading: string | null; prose: string | null };
+  /** Existing column-cache-backed probe; awaited before a paid model request. */
+  ensureColumnsForTable?: (
+    db: string | null,
+    table: string,
+  ) => Promise<ColumnDef[]>;
   canRequest: () => boolean;
 }): Extension {
   ensureEventSubscription();
@@ -319,6 +366,8 @@ export function sqlInlineCompletionExtension({
       private context: CompletionContext | null = null;
       private scheduledAt = 0;
       private performanceLogged = false;
+      private activeCacheKey: string | null = null;
+      private allowCompleteStatement = false;
       private readonly settingsUnsubscribe: () => void;
 
       constructor(private readonly view: EditorView) {
@@ -391,11 +440,24 @@ export function sqlInlineCompletionExtension({
         return hadActivity;
       }
 
-      private canStart(): boolean {
-        return this.getStartBlockReason() === null;
+      requestManual(): boolean {
+        this.pendingEdit = false;
+        this.reset();
+        const blockReason = this.getStartBlockReason(true);
+        if (blockReason) {
+          debug("manual request blocked", { reason: blockReason });
+          return false;
+        }
+        this.scheduledAt = performance.now();
+        void this.request(true);
+        return true;
       }
 
-      private getStartBlockReason(): string | null {
+      private canStart(): boolean {
+        return this.getStartBlockReason(this.allowCompleteStatement) === null;
+      }
+
+      private getStartBlockReason(allowCompleteStatement = false): string | null {
         const ai = useSettings.getState().settings.ai;
         const profile = ai.profiles.find(
           (item) => item.id === ai.completionProfileId,
@@ -410,7 +472,7 @@ export function sqlInlineCompletionExtension({
           return "native completion popup is open";
         }
         if (!canRequest()) return "another RunSQL AI operation is pending";
-        return getContextBlockReason(this.view);
+        return getContextBlockReason(this.view, allowCompleteStatement);
       }
 
       private schedule(): void {
@@ -442,10 +504,13 @@ export function sqlInlineCompletionExtension({
         }
         this.context = null;
         this.rawText = "";
+        this.activeCacheKey = null;
+        this.allowCompleteStatement = false;
       }
 
-      private async request(): Promise<void> {
-        const blockReason = this.getStartBlockReason();
+      private async request(allowCompleteStatement = false): Promise<void> {
+        this.allowCompleteStatement = allowCompleteStatement;
+        const blockReason = this.getStartBlockReason(allowCompleteStatement);
         if (blockReason) {
           debug("request cancelled before IPC", { reason: blockReason });
           this.reset();
@@ -453,16 +518,70 @@ export function sqlInlineCompletionExtension({
         }
         const context = getContext(this.view);
         if (!context) return;
+        const stateBeforeSchema = this.view.state;
+        const ai = useSettings.getState().settings.ai;
+        const profile = ai.profiles.find((item) => item.id === ai.completionProfileId);
+        if (!profile) return;
+        const connectionName = getConnectionName();
+        if (connectionName && ensureColumnsForTable) {
+          const targets = extractScope(stateBeforeSchema, context.pos).tables
+            .filter((path) => path.length > 0)
+            .slice(0, MAX_PREWARM_TABLES);
+          await Promise.all(
+            targets.map((path) => {
+              const table = path[path.length - 1];
+              const database = path.length > 1 ? path[path.length - 2] : null;
+              return ensureColumnsForTable(database, table);
+            }),
+          );
+          const current = getContext(this.view);
+          if (
+            this.view.state !== stateBeforeSchema ||
+            !current ||
+            current.pos !== context.pos ||
+            current.prefix !== context.prefix ||
+            current.suffix !== context.suffix
+          ) {
+            debug("request cancelled after schema warmup", { reason: "context changed" });
+            return;
+          }
+          const reasonAfterSchema = this.getStartBlockReason(allowCompleteStatement);
+          if (reasonAfterSchema) {
+            debug("request cancelled after schema warmup", { reason: reasonAfterSchema });
+            return;
+          }
+        }
+        const tableSchemas = cachedTableSchemas(this.view, connectionName);
+        const noteContext = getNoteContext?.();
+        const siblingSqls = getSiblingSqls();
+        const cacheKey = JSON.stringify({
+          profileId: profile.id,
+          model: profile.model,
+          connectionName,
+          prefix: context.prefix,
+          suffix: context.suffix,
+          tableSchemas,
+          heading: noteContext?.heading ?? null,
+          prose: noteContext?.prose ?? null,
+          siblingSqls,
+        });
+        const cached = readCompletionCache(cacheKey);
+        if (cached.hit) {
+          this.context = context;
+          this.rawText = cached.text;
+          this.pendingEdit = false;
+          debug("completion cache hit", { chars: cached.text.length });
+          this.showNormalized(true);
+          return;
+        }
         const requestId = crypto.randomUUID();
         this.requestId = requestId;
         this.context = context;
         this.rawText = "";
         this.pendingEdit = false;
         this.performanceLogged = false;
+        this.activeCacheKey = cacheKey;
         eventHandlers.set(requestId, (event) => this.onEvent(event));
-        const connectionName = getConnectionName();
-        const tableSchemas = cachedTableSchemas(this.view, connectionName);
-        const noteContext = getNoteContext?.();
         try {
           debug("starting IPC request", {
             requestId,
@@ -474,7 +593,7 @@ export function sqlInlineCompletionExtension({
             requestId,
             prefix: context.prefix,
             suffix: context.suffix,
-            siblingSqls: getSiblingSqls(),
+            siblingSqls,
             connectionName,
             tableSchemas,
             heading: noteContext?.heading ?? null,
@@ -505,15 +624,20 @@ export function sqlInlineCompletionExtension({
         }
         if (event.type === "final") {
           this.showNormalized(true);
+          if (this.activeCacheKey) writeCompletionCache(this.activeCacheKey, this.rawText);
           this.requestId = null;
           this.context = null;
           this.rawText = "";
+          this.activeCacheKey = null;
+          this.allowCompleteStatement = false;
           return;
         }
         if (event.type === "cancelled" || event.type === "error") {
           this.requestId = null;
           this.context = null;
           this.rawText = "";
+          this.activeCacheKey = null;
+          this.allowCompleteStatement = false;
           setGhost(this.view, null);
         }
       }
@@ -548,7 +672,6 @@ export function sqlInlineCompletionExtension({
           setGhost(this.view, null);
           return;
         }
-        if (!this.requestId) return;
         setGhost(this.view, { pos: context.pos, text });
         if (import.meta.env.DEV && !this.performanceLogged) {
           this.performanceLogged = true;
@@ -579,6 +702,10 @@ export function sqlInlineCompletionExtension({
     Prec.highest(
       keymap.of([
         { key: "Tab", run: acceptCompletion },
+        {
+          key: "Alt-\\",
+          run: (view) => view.plugin(plugin)?.requestManual() ?? false,
+        },
         {
           key: "Escape",
           run: (view) => view.plugin(plugin)?.clearGhost() ?? false,

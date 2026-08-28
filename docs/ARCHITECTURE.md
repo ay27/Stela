@@ -364,6 +364,7 @@ Stela AI is **search-first and provider-backed**, not on-device RAG. Retrieval u
 | Concern | Implementation |
 |---------|----------------|
 | Chat / agent transport | `@earendil-works/pi-ai` — built-in provider factories by `vendorId`, or `createProvider` + `openAICompletionsApi` for `custom` ([ADR-0022](./adr/0022-ai-multi-provider-profiles.md)) |
+| SQL inline transport | Official DeepSeek V4 Flash → native `/beta/completions`; other profiles → bounded pi-ai chat fallback ([ADR-0080](./adr/0080-guarded-native-fim-inline-completion.md)) |
 | Agent loop | `@earendil-works/pi-agent-core` `AgentHarness` + in-memory `Session` |
 | API key | `{vault}/.stela/secrets/ai_{deviceSlug}_{profileId}.json` via `safeStorage` (injected into pi `CredentialStore`; not pi `auth.json`) |
 | Settings | vault `.stela/settings.json` → shared `ai.profiles` (including requested reasoning effort), chat/agent `activeProfileId`, independent inline `completionProfileId` (+ policy flags); keys never in settings |
@@ -376,9 +377,10 @@ standard `reasoning_effort` and surfaces endpoint rejection without silent
 downgrade. Missing settings migrate to `medium`. SQL inline completion
 independently selects `completionProfileId` from the same profiles and remains
 reasoning-off; changing the active chat profile does not change completion.
-Inline schema context reads the connection's local `schemaDir` plus columns the
-renderer already cached, and never issues connector calls from the completion
-path itself ([ADR-0028](./adr/0028-inline-completion-schema-and-note-context.md),
+Inline schema context reads the connection's local `schemaDir` plus columns in
+the renderer cache. Before a paid completion call, referenced tables are ensured
+through that existing TTL cache; if every referenced physical table still lacks
+columns, the request is suppressed ([ADR-0080](./adr/0080-guarded-native-fim-inline-completion.md),
 [ADR-0072](./adr/0072-profile-scoped-agent-reasoning-effort.md)). Vendor dropdown
 lists every pi built-in provider (no Stela allowlist) plus Custom.
 
@@ -388,7 +390,8 @@ lists every pi built-in provider (no Stela allowlist) plus Custom.
 flowchart TB
   UI["Renderer UI\nRunSQL / Schema quick actions / AgentSidebar"]
   PRE["window.stela.ai.* / agent.*"]
-  INLINE["dedicated inline start/cancel/event\nprefix + suffix + local schemaDir"]
+  INLINE["dedicated inline start/cancel/event\nprefix + suffix + compact cached schema"]
+  FIM["official DeepSeek native FIM\nor bounded pi-ai chat fallback"]
   PARSE["ai:parse-sql-query\nNL → SqlIndexFilter only"]
   AGENT["ai:agent-run\nAgentHarness loop"]
   PROV["provider.ts → pi-ai Models"]
@@ -400,7 +403,8 @@ flowchart TB
   GUARD["sql-guard + proposal IPC"]
 
   UI --> PRE
-  PRE --> INLINE --> PROV
+  PRE --> INLINE --> FIM
+  FIM --> PROV
   PRE --> PARSE
   PRE --> AGENT
   PARSE --> PROV
@@ -411,7 +415,7 @@ flowchart TB
   TOOLS --> ART --> PY --> TOOLS
 ```
 
-1. **SQL inline completion** — `AI_INLINE_COMPLETION_START` / `AI_INLINE_COMPLETION_CANCEL` invoke channels and the `ai:inline-completion-event` push channel stream insertion text correlated by `requestId`; preload exposes `window.stela.ai.startInlineCompletion`, `cancelInlineCompletion`, and `onInlineCompletionEvent`. The selected completion profile's model receives bounded prefix/suffix sections, up to 8K characters of nearest-first sibling RunSQL blocks, the nearest heading plus a 500-character prose excerpt, and table schemas from two sources: columns the renderer already has in `column-cache` (sent in the request, preferred per table) and DDL for referenced tables found in the connection's local `schemaDir`. Requests never trigger a column probe; the probe is warmed on block focus instead. This path uses pi-ai `streamSimple`, not AgentHarness, and never falls back to connector list/execute calls. RunSQL triggers only after an edit, waits 120 ms at a line tail, and shows at most one ghost-text line; focus, click, or selection movement never starts a model request. A native completion popup takes priority, then a pending edited context is re-scheduled after it closes. Stale requests are cancelled, Tab accepts, Escape dismisses, and IME composition, blur, or editor destruction suppress or cancel completion. ([ADR-0028](./adr/0028-inline-completion-schema-and-note-context.md))
+1. **SQL inline completion** — `AI_INLINE_COMPLETION_START` / `AI_INLINE_COMPLETION_CANCEL` invoke channels and `ai:inline-completion-event` pushes insertion text correlated by `requestId`; preload exposes typed start/cancel/subscribe methods. Official DeepSeek V4 Flash profiles use main-process native non-thinking FIM with real prefix/suffix fields; other profiles use bounded pi-ai chat simulation. A failed native request never starts a paid chat retry. Total input is capped near 8K characters (4K prefix, 2K suffix, 2K auxiliary context), using at most three referenced tables, two table-related sibling blocks, and 300 prose characters. Renderer live columns own membership/type and schemaDir columns only add comments or serve as compact fallback; full engine/storage DDL is never sent. Referenced table columns are ensured through the existing per-table TTL cache before the paid call, and main suppresses the call if any referenced physical table still has no schema. Automatic completion waits 250 ms after an edit and may run at any SQL cursor position, while cursor movement alone stays free; a parser-clean `SELECT ... FROM ...` at the document tail is treated as finished and spends no tokens. `Alt+\` invokes completion manually and may deliberately extend such a statement. Comment/string positions, IME, blur, selections, semicolon-terminated statements, and native completion popups block requests. Candidates are buffered, bounded to three lines/360 characters, and pass confidence (when available), syntax-regression, schema, repetition, and suffix-overlap guards before display. With one referenced table whose columns are known, both qualified and bare candidate identifiers must exist in that schema; validation stays conservative when the candidate introduces another table. A 64-entry five-minute renderer LRU caches positive and suppressed results. Tab accepts and Escape dismisses. ([ADR-0080](./adr/0080-guarded-native-fim-inline-completion.md))
 2. **Harness agent** — `AgentHarness` tool loop with streaming `ai:agent-event`.
    Tools browse live connector schema, run structured SQL or MongoDB queries, execute bounded local Python,
    validate timeline charts against
@@ -665,8 +669,12 @@ bounded and passed through `redactForPrompt` in a
 last segment. `active_guidance` is app-generated and applies only to its current
 run; resource bodies and the user request remain untrusted data. Plan versions
 are appended as immutable run/version snapshots.
-Agent, inline completion, and SQL query parsing use pi-ai short cache retention;
-the Agent session id supplies session affinity ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md)).
+Agent, chat-fallback inline completion, and SQL query parsing use pi-ai short
+cache retention; the Agent session id supplies session affinity. Native
+DeepSeek FIM keeps stable auxiliary context before the changing SQL prefix and
+relies on the provider's automatic prefix cache
+([ADR-0060](./adr/0060-cache-stable-agent-prompts.md),
+[ADR-0080](./adr/0080-guarded-native-fim-inline-completion.md)).
 
 ### Agent safety
 

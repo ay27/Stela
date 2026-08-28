@@ -557,6 +557,7 @@ export async function streamChatCompletions({
   signal,
   onDelta,
   onMessage,
+  maxTokens,
 }: {
   settings: AiSettings;
   apiKey: string;
@@ -567,6 +568,7 @@ export async function streamChatCompletions({
   signal: AbortSignal;
   onDelta: (text: string) => void;
   onMessage?: (message: AssistantMessage) => void;
+  maxTokens?: number;
 }): Promise<void> {
   try {
     if (signal.aborted) {
@@ -582,7 +584,7 @@ export async function streamChatCompletions({
       {
         signal,
         temperature: 0.2,
-        maxTokens: 48,
+        maxTokens: maxTokens ?? 48,
         reasoning: "off",
         cacheRetention: "short",
         ...(sessionId ? { sessionId } : {}),

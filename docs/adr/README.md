@@ -80,7 +80,7 @@ proposed → active → superseded
 | [0025](0025-quit-checkpoint-and-export-reveal.md) | Quit checkpoint feedback and restricted export reveal | active |
 | [0026](0026-ranked-lexical-retrieval-for-agent.md) | Ranked lexical retrieval for agent tools | active |
 | [0027](0027-agent-ask-user-clarification.md) | Agent clarification questions as a third proposal kind | active |
-| [0028](0028-inline-completion-schema-and-note-context.md) | Inline completion reads renderer column cache and note context | active |
+| [0028](0028-inline-completion-schema-and-note-context.md) | Inline completion reads renderer column cache and note context | superseded → [0080](0080-guarded-native-fim-inline-completion.md) |
 | [0029](0029-vault-scoped-agent-skills.md) | Vault-scoped Markdown Skills for the agent | superseded → [0030](0030-data-knowledge-skills-only.md) |
 | [0030](0030-data-knowledge-skills-only.md) | Data-knowledge Skills only | superseded → [0031](0031-internal-agent-knowledge-skills.md) |
 | [0031](0031-internal-agent-knowledge-skills.md) | Internal agent knowledge Skills | superseded → [0032](0032-self-maintained-agent-knowledge-skills.md) |
@@ -132,4 +132,5 @@ proposed → active → superseded
 | [0077](0077-independent-planned-result-review.md) | Independent planned-result review and bounded revision | rejected → [0078](0078-plans-as-progress-bookkeeping.md) |
 | [0078](0078-plans-as-progress-bookkeeping.md) | Execution plans are progress bookkeeping, not an answer gate | active |
 | [0079](0079-sandbox-query-rpc.md) | Sandbox query() RPC instead of model-managed artifacts | active |
+| [0080](0080-guarded-native-fim-inline-completion.md) | Guarded native FIM for SQL inline completion | active |
 | [0081](0081-deterministic-tool-failure-circuit-breaker.md) | Deterministic tool failure circuit breaker | active |

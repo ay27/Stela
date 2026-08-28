@@ -2,7 +2,8 @@
 type: ADR
 id: "0028"
 title: "Inline completion reads renderer column cache and note context"
-status: active
+status: superseded
+superseded_by: "0080"
 date: 2026-07-25
 ---
 

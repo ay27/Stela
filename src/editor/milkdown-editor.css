@@ -1240,7 +1240,9 @@
 
 .stela-cb__cm .cm-stela-inline-completion-ghost {
   color: hsl(var(--muted-foreground) / 0.55);
+  display: inline-block;
   white-space: pre;
+  vertical-align: top;
   pointer-events: none;
 }
 

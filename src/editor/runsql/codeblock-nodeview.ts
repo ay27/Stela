@@ -638,7 +638,8 @@ export class CodeBlockNodeView implements NodeView {
             this.ensureColumnsFor(db, table),
           dialect: resolveEditorDialect(getRunContext()?.connectionName),
         }),
-        // 获得焦点就预热 FROM/JOIN 里那些表的列缓存。列探针有一次
+        // 获得焦点就预热 FROM/JOIN 里那些表的列缓存。若表名是聚焦后才输入，
+        // inline completion 还会在付费模型请求前 await 同一份 TTL 缓存。列探针有一次
         // 100~300ms 往返，等到用户敲出 `alias.` 或触发 AI 补全时再拉就是
         // 一次可感知的等待；此时拉则两边都已命中缓存。fire-and-forget，
         // 失败在 column-cache 内部已降级为空列。
@@ -653,6 +654,8 @@ export class CodeBlockNodeView implements NodeView {
                   getRunContext()?.connectionName ?? null,
                 getSiblingSqls: () => this.collectNearbySiblingSqls(),
                 getNoteContext: () => this.collectNoteContext(),
+                ensureColumnsForTable: (db, table) =>
+                  this.ensureColumnsFor(db, table),
                 canRequest: () => !this.pendingAiRewrite,
               }),
             ]
