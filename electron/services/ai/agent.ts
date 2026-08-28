@@ -99,9 +99,7 @@ import {
   type SkillSourceNote,
 } from "./skill-source-context";
 import {
-  cancelSkillMaintenance,
   enqueueSkillMaintenance,
-  registerSkillMaintenanceActivity,
   SKILL_MAINTENANCE_MAX_TURNS,
 } from "./skill-maintenance-queue";
 
@@ -529,7 +527,7 @@ async function runSkillMaintenance(options: {
         sqlIndex: { query: sqlIndex.query },
         skills: skills.loaded,
         mode: refreshSkill ? "refresh" : "maintenance",
-        run: { runId: request.runId, sessionId: request.sessionId, notePath: request.notePath ?? null, questionsAsked: 0 },
+        run: { runId: request.runId, sessionId: request.sessionId, notePath: request.notePath ?? null, questionsAsked: 0, toolFailureStreak: new Map() },
         recordRun: recordAgentRun(vaultPath),
         onSkillMaintenance: (record) => actions.push(record),
       },
@@ -824,17 +822,14 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           explicitSkillMaintenance,
           skillEvidence,
           getSkillFreshness: resolveSkillFreshness,
-          ensureSkillFresh: async (skill) => {
-            if (await resolveSkillFreshness(skill) !== "stale") return skill;
-            if (!settings.ai.automaticSkillMaintenanceEnabled) return null;
-            if (skill.metadata.category === "analysis-runbook" && skill.metadata.sources.length === 0) {
-              return null;
-            }
-            cancelSkillMaintenance(vaultPath);
-            const activity = registerSkillMaintenanceActivity(vaultPath, signal);
-            let refreshed: boolean;
-            try {
-              refreshed = await runSkillMaintenance({
+          scheduleSkillRefresh: (skill) => {
+            // 走和 post_run_create 相同的队列：自带 60s 超时与 per-vault 串行，
+            // 刷新结果留给下一次 run 使用，不再让 load_skill 等一次 LLM 往返。
+            void (async () => {
+              if (await resolveSkillFreshness(skill) !== "stale") return;
+              if (!settings.ai.automaticSkillMaintenanceEnabled) return;
+              if (skill.metadata.category === "analysis-runbook" && skill.metadata.sources.length === 0) return;
+              const jobOptions = {
                 vaultPath,
                 request,
                 conversation: conversationForMaintenance((await session!.buildContext()).messages),
@@ -846,19 +841,19 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
                 dialect,
                 aiSettings: settings.ai,
                 onEvent: emit,
-                signal: activity.signal,
                 refreshSkill: skill,
                 emitStatus: false,
-              });
-            } finally {
-              activity.dispose();
-            }
-            if (!refreshed) return null;
-            const reloaded = await loadAgentSkills(vaultPath);
-            skills.loaded.splice(0, skills.loaded.length, ...reloaded.loaded);
-            return skills.loaded.find((item) => item.metadata.name === skill.metadata.name) ?? null;
+              };
+              enqueueSkillMaintenance(
+                vaultPath,
+                async (maintenanceSignal) => {
+                  await runSkillMaintenance({ ...jobOptions, signal: maintenanceSignal });
+                },
+                () => {},
+              );
+            })().catch((error) => log.warn("scheduleSkillRefresh failed", { error }));
           },
-          run: { runId, sessionId: request.sessionId, notePath: request.notePath ?? null, questionsAsked: 0 },
+          run: { runId, sessionId: request.sessionId, notePath: request.notePath ?? null, questionsAsked: 0, toolFailureStreak: new Map() },
           chartRuns: new Map(),
           analysisRuns,
           canvasRefresh: request.canvasRefresh ? {

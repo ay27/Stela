@@ -97,7 +97,11 @@ export const STRATEGY_REVIEW_SYSTEM_PROMPT = [
   "Return exactly one JSON object with assessment ('continue' or 'change'), diagnosis, nextActions (1-3 concise strings), avoid, and successCondition.",
 ].join("\n");
 
-const DATA_ANALYSIS_TOOLS = new Set([
+/**
+ * ADR-0069 划定的探索类工具：这些工具的重复失败由 advisory ledger 处理，
+ * 刻意不 block——一次有效的长分析本来就需要很多次查询。
+ */
+export const DATA_ANALYSIS_TOOLS = new Set([
   "list_databases",
   "list_tables",
   "search_tables",

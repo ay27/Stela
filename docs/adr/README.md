@@ -132,3 +132,4 @@ proposed → active → superseded
 | [0077](0077-independent-planned-result-review.md) | Independent planned-result review and bounded revision | rejected → [0078](0078-plans-as-progress-bookkeeping.md) |
 | [0078](0078-plans-as-progress-bookkeeping.md) | Execution plans are progress bookkeeping, not an answer gate | active |
 | [0079](0079-sandbox-query-rpc.md) | Sandbox query() RPC instead of model-managed artifacts | active |
+| [0081](0081-deterministic-tool-failure-circuit-breaker.md) | Deterministic tool failure circuit breaker | active |

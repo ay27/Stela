@@ -486,7 +486,7 @@ async function runTask(input: {
         sqlIndex: { query: async () => [] },
         skills: [],
         mode: "normal",
-        run: { runId: request.runId, sessionId: request.runId, notePath: null, questionsAsked: 0 },
+        run: { runId: request.runId, sessionId: request.runId, notePath: null, questionsAsked: 0, toolFailureStreak: new Map() },
         chartRuns: new Map(),
         analysisRuns,
         resolveChartRun: async (runId) => runRecords.get(runId) ?? null,

@@ -453,6 +453,11 @@ flowchart TB
    one tool-free review by the active model. The validated advice is appended as an immutable
    strategy checkpoint, never blocks tools, and is preserved by compaction
    ([ADR-0069](./adr/0069-adaptive-agent-strategy-review.md)).
+   Outside those exploration tools, `dispatchTool` blocks a single tool for the rest of
+   the run after three consecutive failures and clears its counter on any success, so a
+   deterministically rejected payload cannot be retried indefinitely. The run itself is
+   never terminated and every other tool stays available
+   ([ADR-0081](./adr/0081-deterministic-tool-failure-circuit-breaker.md)).
    Mutations, note writes, and RunSQL rewrites
    wait for user approval. Fix/schema quick actions auto-submit in a new Agent tab;
    rewrite/question actions open editable drafts. The unified `@` picker and Add to Chat
@@ -563,7 +568,9 @@ three states: `fresh` matches tracked sources, `stale` conflicts with or has los
 tracked source, and `untracked` has no source hashes. Routine prompt injection uses
 only fresh Skills; routine search omits stale results, while explicit maintenance
 can inspect stale or untracked bodies as untrusted drafts before rebuilding them
-from live evidence. Automatic creation uses strict
+from live evidence. A routine `load_skill` on a stale Skill fails immediately and
+queues the refresh on the shared maintenance queue instead of blocking the tool
+call on a maintenance model round trip. Automatic creation uses strict
 templates for dialect, metric, glossary, or lineage knowledge; analysis runbooks
 require an explicit user request, while an already source-tracked runbook may be
 refreshed. Live connector schema overrides any conflicting Skill. See

@@ -279,7 +279,7 @@ function buildToolContext(world: EvalWorld, runId: string, settings: AiSettings)
     sqlIndex: corpusSqlIndex(world.blocks, world.vaultPath),
     skills: [],
     mode: "normal" as const,
-    run: { runId, notePath: null, questionsAsked: 0 },
+    run: { runId, notePath: null, questionsAsked: 0, toolFailureStreak: new Map() },
     recordRun: async () => {},
   };
 }

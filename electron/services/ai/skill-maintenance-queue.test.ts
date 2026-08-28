@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 
-import {
-  cancelSkillMaintenance,
-  enqueueSkillMaintenance,
-  registerSkillMaintenanceActivity,
-} from "./skill-maintenance-queue";
+import { cancelSkillMaintenance, enqueueSkillMaintenance } from "./skill-maintenance-queue";
 
 let releaseFirst!: () => void;
 const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
@@ -31,9 +27,15 @@ await thirdDone;
 assert.equal(secondDropped, true);
 assert.deepEqual(order, ["first-start", "first-end", "third"]);
 
-const parent = new AbortController();
-const activity = registerSkillMaintenanceActivity("refresh-vault", parent.signal);
-assert.equal(activity.signal.aborted, false);
-cancelSkillMaintenance("refresh-vault");
-assert.equal(activity.signal.aborted, true);
-activity.dispose();
+// 后台 stale-Skill 刷新依赖 cancelSkillMaintenance 能中断在飞的 job。
+let refreshSignal!: AbortSignal;
+let releaseRefresh!: () => void;
+const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+enqueueSkillMaintenance("cancel-vault", async (signal) => {
+  refreshSignal = signal;
+  await refreshGate;
+}, () => {});
+assert.equal(refreshSignal.aborted, false);
+cancelSkillMaintenance("cancel-vault");
+assert.equal(refreshSignal.aborted, true);
+releaseRefresh();

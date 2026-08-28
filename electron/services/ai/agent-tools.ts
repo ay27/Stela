@@ -12,6 +12,7 @@ import fs from "node:fs/promises";
 
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { z } from "zod";
 
 import { AppError } from "@shared/errors";
 import { parseAnalysisCanvas, type AnalysisCanvas } from "@shared/analysis-canvas";
@@ -67,6 +68,7 @@ import {
   type LoadedAgentSkill,
 } from "./agent-skills";
 import type { AgentSkillFreshness } from "./skill-source-context";
+import { DATA_ANALYSIS_TOOLS } from "./analysis-efficiency";
 
 /**
  * Connector registry 的最小依赖面。用注入而不是静态 `import registry.ts`——
@@ -217,6 +219,21 @@ function fail(message: string): ToolOutcome {
   return { ok: false, text: message };
 }
 
+/**
+ * zod 的 `error.message` 是整个 issue 数组的 JSON dump，模型读不动就只会原样重试。
+ * 压成 `path: message`，并把判别联合的合法取值补上——那是重试里最常撞的一类。
+ */
+function describeZodError(error: unknown): string {
+  if (!(error instanceof z.ZodError)) return error instanceof Error ? error.message : String(error);
+  return error.issues.slice(0, 12).map((issue) => {
+    const location = issue.path.join(".") || "(root)";
+    const allowed = issue.code === "invalid_union_discriminator"
+      ? ` Allowed values: ${issue.options.map((option) => String(option)).join(" | ")}.`
+      : "";
+    return `${location}: ${issue.message}${allowed}`;
+  }).join("; ");
+}
+
 function truncateUtf8(value: string, maxBytes: number): string {
   if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
   let low = 0;
@@ -306,6 +323,30 @@ export interface ProposalRequest {
 const MAX_QUESTIONS_PER_RUN = 3;
 
 /**
+ * `create_chart` 的 preset/mark 约束在 [chart-spec.ts](../../shared/chart-spec.ts) 的
+ * `presetMarks` 与 `refineChartShape` 里，advertised schema 表达不了这些跨字段规则，
+ * 只能写进 description，否则模型只能靠重试撞对。
+ */
+const CHART_PRESET_RULES =
+  "Preset gates the allowed marks: trend=line|area, ranking=bar, composition=arc, distribution=histogram|boxplot, " +
+  "correlation=point, funnel=funnel, retention=rect, comparison=bar|line|area|point|rule, custom=any. " +
+  "Only comparison and custom accept two layers, and layered charts must share one x field and use bar|line|area|point|rule.";
+/**
+ * Canvas 的结构只存在于 [analysis-canvas.ts](../../shared/analysis-canvas.ts) 的 zod 里，
+ * 工具参数只能声明成一个 JSON 字符串，所以 card 判别联合必须在 description 里讲清楚。
+ */
+const CANVAS_CARD_RULES =
+  "Every card needs id and type. type gates the rest: markdown needs markdown; kpi needs sourceId and value; " +
+  "chart needs sourceId and chart; table needs sourceId; flow needs nodes and edges. No other keys are accepted per type. " +
+  "A chart card's chart.fields is an object keyed by field id, not the array that create_chart takes.";
+const CHART_MARK_RULES =
+  "Required channels: bar/line/area/point need x and y; arc needs theta and color; rect needs x, y, and color; " +
+  "rule needs y; histogram needs x; boxplot needs y; funnel needs x and y. " +
+  "Quantitative fields required for line/area/rule/point y, histogram x, boxplot y, funnel x, rect color, theta, and size. " +
+  "Categorical fields required for arc color and funnel y; rect x and y must be categorical or temporal; " +
+  "bar needs exactly one quantitative axis and one categorical or temporal axis.";
+
+/**
  * 工具执行上下文，由 [agent.ts](./agent.ts) 每次 run 构造一次。
  * `requestProposal` 把「等用户确认」抽象成一个 Promise：agent 循环负责发
  * proposal 事件、注册 resolver，用户 approve/reject 时 resolve 这个 Promise。
@@ -332,7 +373,8 @@ export interface AgentToolContext {
   explicitSkillMaintenance?: boolean;
   skillEvidence?: { notePaths: Set<string>; tables: Set<string> };
   getSkillFreshness?: (skill: LoadedAgentSkill) => Promise<AgentSkillFreshness>;
-  ensureSkillFresh?: (skill: LoadedAgentSkill) => Promise<LoadedAgentSkill | null>;
+  /** 排入后台 Skill 刷新队列，不阻塞当前工具调用。 */
+  scheduleSkillRefresh?: (skill: LoadedAgentSkill) => void;
   onSkillMaintenance?: (record: AgentSkillMaintenanceRecord) => void;
   onSkillUsage?: (record: {
     type: "candidate" | "loaded";
@@ -350,9 +392,16 @@ export interface AgentToolContext {
   onCanvasUpdated?: (event: { path: string; title: string; action: "created" | "updated" }) => void;
   /**
    * 单次 run 的可变状态：`runId` / `notePath` 用于给执行历史生成
-   * `agent:<runId>` 形式的 blockId；`questionsAsked` 由 `ask_user` 自增。
+   * `agent:<runId>` 形式的 blockId；`questionsAsked` 由 `ask_user` 自增；
+   * `toolFailureStreak` 由 `dispatchTool` 维护，记录每个工具名的连续失败次数。
    */
-  run: { runId: string; sessionId?: string; notePath: string | null; questionsAsked: number };
+  run: {
+    runId: string;
+    sessionId?: string;
+    notePath: string | null;
+    questionsAsked: number;
+    toolFailureStreak: Map<string, number>;
+  };
   plan?: ExecutionPlanStore;
   persistPlan?: (snapshot: AgentPlanSnapshot) => Promise<void>;
   /** Renderer-owned rewrite targets explicitly attached to this run. */
@@ -472,36 +521,45 @@ export function createAgentTools(options: {
         runId: Type.String({ description: "Exact runId returned by a SQL run_query in this Agent run." }),
         title: Type.Optional(Type.String()),
         description: Type.Optional(Type.String()),
-        preset: Type.Union(["trend", "ranking", "composition", "distribution", "correlation", "funnel", "retention", "comparison", "custom"].map((value) => Type.Literal(value))),
+        preset: Type.Union(
+          ["trend", "ranking", "composition", "distribution", "correlation", "funnel", "retention", "comparison", "custom"].map((value) => Type.Literal(value)),
+          { description: CHART_PRESET_RULES },
+        ),
         fields: Type.Array(Type.Object({
-          id: Type.String({ description: "Stable short id referenced by layer encodings." }),
+          id: Type.String({ description: "Stable short id referenced by layer encodings. Must match ^[A-Za-z_][A-Za-z0-9_-]{0,127}$." }),
           field: Type.String({ description: "Exact result column name." }),
           type: Type.Union(["nominal", "ordinal", "quantitative", "temporal", "boolean"].map((value) => Type.Literal(value))),
           title: Type.Optional(Type.String()),
-          temporalInput: Type.Optional(Type.Union([Type.Literal("iso"), Type.Literal("epoch-ms"), Type.Literal("epoch-seconds")])),
+          temporalInput: Type.Optional(Type.Union([Type.Literal("iso"), Type.Literal("epoch-ms"), Type.Literal("epoch-seconds")], { description: "Only valid when type is temporal." })),
           format: Type.Optional(Type.Object({
             kind: Type.Union(["auto", "text", "number", "compact", "percent", "currency", "date", "datetime", "duration", "boolean"].map((value) => Type.Literal(value))),
-            input: Type.Optional(Type.String()),
-            currency: Type.Optional(Type.String()),
-            style: Type.Optional(Type.String()),
-            timeZone: Type.Optional(Type.String()),
-            minimumFractionDigits: Type.Optional(Type.Number()),
-            maximumFractionDigits: Type.Optional(Type.Number()),
-            trueLabel: Type.Optional(Type.String()),
-            falseLabel: Type.Optional(Type.String()),
+            input: Type.Optional(Type.String({ description: "Required for percent (ratio|whole) and duration (milliseconds|seconds); optional for date/datetime (iso|epoch-ms|epoch-seconds); rejected for other kinds." })),
+            currency: Type.Optional(Type.String({ description: "Required for currency kind: uppercase ISO 4217 code such as USD." })),
+            style: Type.Optional(Type.String({ description: "date/datetime: short|medium|long. duration: short|clock." })),
+            timeZone: Type.Optional(Type.String({ description: "date/datetime only: local|UTC." })),
+            minimumFractionDigits: Type.Optional(Type.Number({ description: "number kind only." })),
+            maximumFractionDigits: Type.Optional(Type.Number({ description: "number, compact, percent, and currency kinds only." })),
+            trueLabel: Type.Optional(Type.String({ description: "boolean kind only." })),
+            falseLabel: Type.Optional(Type.String({ description: "boolean kind only." })),
             nullLabel: Type.Optional(Type.String()),
-          })),
-        }), { minItems: 1, maxItems: 32 }),
+          }, { additionalProperties: false })),
+        }, { additionalProperties: false }), { minItems: 1, maxItems: 32 }),
         layers: Type.Array(Type.Object({
-          mark: Type.Union(["bar", "line", "area", "point", "arc", "rect", "rule", "histogram", "boxplot", "funnel"].map((value) => Type.Literal(value))),
+          mark: Type.Union(
+            ["bar", "line", "area", "point", "arc", "rect", "rule", "histogram", "boxplot", "funnel"].map((value) => Type.Literal(value)),
+            { description: CHART_MARK_RULES },
+          ),
           encoding: Type.Object({
             x: Type.Optional(Type.String()), y: Type.Optional(Type.String()), color: Type.Optional(Type.String()),
             size: Type.Optional(Type.String()), theta: Type.Optional(Type.String()),
+          }, {
+            additionalProperties: false,
+            description: "Only these five channels exist. Every value must be a field id declared in fields, never a column name, label, or nested object.",
           }),
           yAxis: Type.Optional(Type.Union([Type.Literal("left"), Type.Literal("right")])),
-          stack: Type.Optional(Type.Union([Type.Literal("none"), Type.Literal("normal"), Type.Literal("percent")])),
-          bins: Type.Optional(Type.Number()),
-        }), { minItems: 1, maxItems: 2 }),
+          stack: Type.Optional(Type.Union([Type.Literal("none"), Type.Literal("normal"), Type.Literal("percent")], { description: "Only bar and area marks can stack." })),
+          bins: Type.Optional(Type.Number({ description: "Histogram marks only; integer 5-50." })),
+        }, { additionalProperties: false }), { minItems: 1, maxItems: 2 }),
       }),
       executionMode: "sequential",
       execute: (toolCallId, params) => runTool("create_chart", toolCallId, params, ctx, requestProposal),
@@ -528,7 +586,7 @@ export function createAgentTools(options: {
       name: "update_analysis_canvas", label: "Update analysis Canvas",
       description: "Replace a Canvas with validated complete JSON. Keep existing semantic ids, bind each new or changed SQL source through sourceRuns, and omit Flow positions; Stela audits runs and preserves user-owned layout. Canvas refresh runs permit one final atomic update.",
       parameters: Type.Object({
-        path: Type.String(), etag: Type.String(), content: Type.String({ description: "Complete version 1 .stela.canvas JSON." }),
+        path: Type.String(), etag: Type.String(), content: Type.String({ description: `Complete version 1 .stela.canvas JSON. ${CANVAS_CARD_RULES}` }),
         sourceRuns: Type.Array(Type.Object({
           sourceId: Type.String({ description: "Canvas source id being created, changed, or refreshed." }),
           runId: Type.String({ description: "Successful SQL run_query id from this Agent run." }),
@@ -1405,7 +1463,7 @@ function runCreateChart(args: Record<string, unknown>, ctx: AgentToolContext): T
   };
   const parsed = stelaChartSpecSchema.safeParse(candidate);
   if (!parsed.success) {
-    return fail(parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; "));
+    return fail(describeZodError(parsed.error));
   }
   validateStelaChartData(parsed.data, run.columns, run.rows);
   const source = stringifyStelaChartSpec(parsed.data);
@@ -1453,7 +1511,7 @@ async function runUpdateAnalysisCanvas(args: Record<string, unknown>, ctx: Agent
   const currentFile = await analysisCanvasService.readAnalysisCanvas(ctx.vaultPath, target);
   const current = parseAnalysisCanvas(currentFile.content);
   let desired: AnalysisCanvas;
-  try { desired = parseAnalysisCanvas(args.content); } catch (error) { return fail(`Invalid Canvas JSON: ${error instanceof Error ? error.message : String(error)}`); }
+  try { desired = parseAnalysisCanvas(args.content); } catch (error) { return fail(`Invalid Canvas JSON: ${describeZodError(error)}`); }
   if (
     desired.id !== current.id ||
     desired.createdAt !== current.createdAt ||
@@ -1760,15 +1818,17 @@ async function runReadNote(args: { path?: unknown; offset?: unknown; maxChars?: 
 
 async function runLoadSkill(args: { name?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
   const name = typeof args.name === "string" ? args.name.trim() : "";
-  let skill = ctx.skills.find((item) => item.metadata.name === name);
+  const skill = ctx.skills.find((item) => item.metadata.name === name);
   if (!skill) return fail(`No installed Skill named '${name}'. Use only names in the available Skills list.`);
-  let freshness = ctx.getSkillFreshness ? await ctx.getSkillFreshness(skill) : "fresh";
+  const freshness = ctx.getSkillFreshness ? await ctx.getSkillFreshness(skill) : "fresh";
   if (freshness === "stale" && !ctx.explicitSkillMaintenance) {
-    skill = ctx.ensureSkillFresh ? await ctx.ensureSkillFresh(skill) ?? undefined : undefined;
-    if (!skill) {
-      return fail(`stale_skill_unavailable: '${name}' could not be refreshed from current Vault documents. Use live schema and note retrieval instead.`);
-    }
-    freshness = ctx.getSkillFreshness ? await ctx.getSkillFreshness(skill) : "fresh";
+    // ADR-0073 把 stale Skill 排除在 routine 发现之外，所以这里不再内联刷新：
+    // 那是一次完整的 maintenance LLM 调用，实测阻塞 10-57s 且近三成仍然失败。
+    ctx.scheduleSkillRefresh?.(skill);
+    return fail(
+      `stale_skill_unavailable: '${name}' no longer matches its source documents. A background refresh was scheduled; ` +
+        "do not call load_skill for it again in this run. Use live schema and note retrieval instead.",
+    );
   }
   ctx.onSkillUsage?.({
     type: "loaded",
@@ -1907,6 +1967,59 @@ async function runSaveSkill(
   return ok(record, RESULT_CHAR_BUDGET, ctx.mode === "maintenance" || ctx.mode === "refresh");
 }
 
+/**
+ * 归一化 CRLF 与行尾空白，同时逐字符保留原文下标。
+ * 保留映射而不是按长度回推，否则归一化删掉的空白会让替换切片错位。
+ */
+function normalizeForMatch(text: string): { normalized: string; origin: number[] } {
+  let normalized = "";
+  const origin: number[] = [];
+  let cursor = 0;
+  for (;;) {
+    const newline = text.indexOf("\n", cursor);
+    const lineEnd = newline < 0 ? text.length : newline;
+    let trimmed = lineEnd;
+    while (trimmed > cursor && (text[trimmed - 1] === " " || text[trimmed - 1] === "\t" || text[trimmed - 1] === "\r")) {
+      trimmed -= 1;
+    }
+    for (let i = cursor; i < trimmed; i += 1) {
+      normalized += text[i];
+      origin.push(i);
+    }
+    if (newline < 0) return { normalized, origin };
+    normalized += "\n";
+    origin.push(newline);
+    cursor = newline + 1;
+  }
+}
+
+/**
+ * 精确匹配失败时退回空白容错匹配：模型常从分页或截断的 read_note 复制片段，
+ * 差异集中在 CRLF 与行尾空白，而不是内容本身。唯一性要求两种模式下都保留。
+ */
+function locateOldText(content: string, oldText: string): { start: number; end: number } | { error: string } {
+  const ambiguous = "oldText appears more than once. Provide a larger unique oldText snippet.";
+  const exact = content.indexOf(oldText);
+  if (exact >= 0) {
+    if (content.indexOf(oldText, exact + oldText.length) >= 0) return { error: ambiguous };
+    return { start: exact, end: exact + oldText.length };
+  }
+  const haystack = normalizeForMatch(content);
+  const needle = normalizeForMatch(oldText).normalized;
+  const loose = needle ? haystack.normalized.indexOf(needle) : -1;
+  if (loose < 0) {
+    const anchor = oldText.split("\n").map((line) => line.trim()).find((line) => line.length > 0) ?? "";
+    const hint = anchor
+      ? `Its first non-blank line (${JSON.stringify(truncate(anchor, 120))}) appears ${content.split(anchor).length - 1} time(s) in the note.`
+      : "oldText contains no non-blank line.";
+    return {
+      error: `oldText was not found in the note, even ignoring line-ending and trailing-whitespace differences. ${hint} Re-read the exact region with read_note and copy oldText verbatim instead of retrying the same snippet.`,
+    };
+  }
+  if (haystack.normalized.indexOf(needle, loose + needle.length) >= 0) return { error: ambiguous };
+  return { start: haystack.origin[loose], end: haystack.origin[loose + needle.length - 1] + 1 };
+}
+
 async function runProposeEdit(
   args: {
     targetId?: unknown;
@@ -1947,13 +2060,9 @@ async function runProposeEdit(
   const oldContent = await vaultFs.readFile(target);
   let nextContent = args.newContent;
   if (nextContent === undefined) {
-    const oldText = args.oldText as string;
-    const first = oldContent.indexOf(oldText);
-    if (first < 0) return fail("oldText was not found in the note.");
-    if (oldContent.indexOf(oldText, first + oldText.length) >= 0) {
-      return fail("oldText appears more than once. Provide a larger unique oldText snippet.");
-    }
-    nextContent = oldContent.slice(0, first) + (args.newText as string) + oldContent.slice(first + oldText.length);
+    const located = locateOldText(oldContent, args.oldText as string);
+    if ("error" in located) return fail(located.error);
+    nextContent = oldContent.slice(0, located.start) + (args.newText as string) + oldContent.slice(located.end);
   }
   const approved = await ctx.requestProposal({
     kind: "edit_note",
@@ -1988,7 +2097,14 @@ async function runProposeRunsqlEdit(
   if (!sql) return fail("sql must be a non-empty string.");
   const target = ctx.rewriteTargets?.get(targetId);
   if (!target) {
-    return fail("This RunSQL target was not explicitly attached to the current request.");
+    const attached = [...(ctx.rewriteTargets?.keys() ?? [])];
+    return fail(
+      `This RunSQL target was not explicitly attached to the current request. ${
+        attached.length
+          ? `Attached targetIds: ${attached.join(", ")}. Resource catalog ids are not rewrite target ids.`
+          : "No RunSQL target is attached at all: edit the note with path plus oldText/newText, or ask the user to attach the RunSQL block first."
+      }`,
+    );
   }
   if (sql === target.sql.trim()) return fail("The proposed SQL is unchanged.");
   const description = typeof args.description === "string" && args.description.trim()
@@ -2095,8 +2211,37 @@ function parseArgs(raw: string): Record<string, unknown> {
   }
 }
 
+/**
+ * 同名工具连续失败的熔断阈值。遥测里出现过一个 run 内 `propose_edit` 连错 9 次、
+ * `update_analysis_canvas` 连错 4 次，每次失败都要付一整轮模型往返。
+ * 按 ADR-0017 整个 run 仍然只由用户取消，所以这里只拦住那一个工具；
+ * ADR-0069 的探索类工具不在范围内，它们的失败是分析过程本身。
+ */
+const MAX_CONSECUTIVE_TOOL_FAILURES = 3;
+/** `run_sql` 是 `run_query` 的别名，熔断豁免范围要和 ADR-0069 的探索类工具一致。 */
+const UNBREAKABLE_TOOLS = new Set([...DATA_ANALYSIS_TOOLS, "run_sql"]);
+
 /** 工具异常不该崩循环——统一在这里捕获并转成 role:tool 的 error 文本，回喂模型自愈。 */
 export async function dispatchTool(
+  name: string,
+  rawArguments: string,
+  ctx: AgentToolContext,
+): Promise<ToolOutcome> {
+  if (UNBREAKABLE_TOOLS.has(name)) return await dispatchToolCall(name, rawArguments, ctx);
+  const streak = ctx.run.toolFailureStreak;
+  if ((streak.get(name) ?? 0) >= MAX_CONSECUTIVE_TOOL_FAILURES) {
+    return fail(
+      `${name} has failed ${MAX_CONSECUTIVE_TOOL_FAILURES} times in a row in this run and is now blocked. ` +
+        "Stop calling it: reach the goal another way, or answer the user with the evidence you already have and state what is missing.",
+    );
+  }
+  const outcome = await dispatchToolCall(name, rawArguments, ctx);
+  if (outcome.ok) streak.delete(name);
+  else streak.set(name, (streak.get(name) ?? 0) + 1);
+  return outcome;
+}
+
+async function dispatchToolCall(
   name: string,
   rawArguments: string,
   ctx: AgentToolContext,

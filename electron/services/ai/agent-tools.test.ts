@@ -6,8 +6,17 @@ import { tmpdir } from "node:os";
 import type { AiSettings } from "@shared/types";
 
 import { ExecutionPlanStore } from "./execution-plan";
-import { createAgentTools, dispatchTool } from "./agent-tools";
+import { createAgentTools, dispatchTool as dispatchToolRaw } from "./agent-tools";
 import { updateAnalysisCanvasFlowLayout } from "../analysis-canvas";
+
+/**
+ * 这些场景块共用一个 ctx，但每块都代表一次独立 run，所以默认清掉连续失败计数。
+ * 熔断本身由文件末尾的专用场景直接调 `dispatchToolRaw` 验证。
+ */
+const dispatchTool: typeof dispatchToolRaw = (name, rawArguments, ctx) => {
+  ctx.run.toolFailureStreak.clear();
+  return dispatchToolRaw(name, rawArguments, ctx);
+};
 
 const AI_SETTINGS = {
   providerMode: "openai-compatible",
@@ -46,7 +55,7 @@ try {
     sqlIndex: { query: async () => [] },
     skills: [],
     mode: "normal" as const,
-    run: { runId: "test-run", notePath: null, questionsAsked: 0 },
+    run: { runId: "test-run", notePath: null, questionsAsked: 0, toolFailureStreak: new Map<string, number>() },
     recordRun: async () => {},
     requestProposal: async () => true,
     plan: new ExecutionPlanStore("test-run"),
@@ -592,7 +601,7 @@ try {
         warehouse: { kind: "warehouse-kind", config: { database: "analytics" } },
       },
       connectionDialects: { demo: "SQLite", warehouse: "PostgreSQL" },
-      run: { runId: "cross-connection", sessionId: "session-1", notePath: null, questionsAsked: 0 },
+      run: { runId: "cross-connection", sessionId: "session-1", notePath: null, questionsAsked: 0, toolFailureStreak: new Map<string, number>() },
       connector: {
         ...fakeConnector,
         listKinds: () => [],
@@ -887,9 +896,13 @@ Inspect the live schema first.`;
     });
     assert.deepEqual(browseUsage, [], "browsing metadata must not record every row as a candidate");
 
+    const scheduledRefreshes: string[] = [];
     const routineStaleCtx = {
       ...usageCtx,
       getSkillFreshness: async () => "stale" as const,
+      scheduleSkillRefresh: (skill: { metadata: { name: string } }) => {
+        scheduledRefreshes.push(skill.metadata.name);
+      },
     };
     const hiddenStale = await dispatchTool(
       "search_skills",
@@ -911,6 +924,11 @@ Inspect the live schema first.`;
     );
     assert.equal(rejectedStaleLoad.ok, false);
     assert.match(rejectedStaleLoad.text, /stale_skill_unavailable/);
+    assert.deepEqual(
+      scheduledRefreshes,
+      ["verified-gotcha"],
+      "a stale load must queue a background refresh instead of blocking on a maintenance LLM call",
+    );
 
     const maintenanceStaleCtx = {
       ...routineStaleCtx,
@@ -1293,6 +1311,125 @@ Inspect the live schema first.`;
     );
     assert.equal(ambiguous.ok, false);
     assert.match(ambiguous.text, /one edit target/i);
+  }
+
+  // oldText 只差行尾空白和 CRLF 时仍然命中；真的不存在时错误要能指导下一步。
+  {
+    const notePath = join(root, "crlf.md");
+    await writeFile(notePath, "# Report\r\n\r\nkeep   \r\nSELECT 1;   \r\ntail\r\n");
+    const looseHit = await dispatchTool(
+      "propose_edit",
+      JSON.stringify({ path: notePath, oldText: "keep\nSELECT 1;", newText: "keep\nSELECT 2;" }),
+      { ...baseCtx, requestProposal: async () => true },
+    );
+    assert.equal(looseHit.ok, true, looseHit.text);
+    const rewritten = await readFile(notePath, "utf8");
+    assert.match(rewritten, /SELECT 2;/);
+    assert.doesNotMatch(rewritten, /SELECT 1;/);
+    assert.match(rewritten, /tail/);
+
+    const miss = await dispatchTool(
+      "propose_edit",
+      JSON.stringify({ path: notePath, oldText: "nowhere to be found", newText: "x" }),
+      baseCtx,
+    );
+    assert.equal(miss.ok, false);
+    assert.match(miss.text, /appears 0 time\(s\)/);
+    assert.match(miss.text, /read_note/);
+  }
+
+  // 错误的 targetId 要把合法 id 报回去，一个都没附加时要给出替代路径。
+  {
+    const wrongTarget = await dispatchTool(
+      "propose_edit",
+      JSON.stringify({ targetId: "resource_runsql_abc", sql: "SELECT 1" }),
+      { ...baseCtx, rewriteTargets: new Map([["runsql_42", { sql: "SELECT 0" }]]) },
+    );
+    assert.equal(wrongTarget.ok, false);
+    assert.match(wrongTarget.text, /runsql_42/);
+
+    const noTargets = await dispatchTool(
+      "propose_edit",
+      JSON.stringify({ targetId: "runsql_42", sql: "SELECT 1" }),
+      baseCtx,
+    );
+    assert.equal(noTargets.ok, false);
+    assert.match(noTargets.text, /No RunSQL target is attached/i);
+  }
+
+  // zod 的 encoding 是 strict 的，Vega-Lite 风格的 channel 必须在工具层就被拒。
+  {
+    const chartCtx = {
+      ...baseCtx,
+      chartRuns: new Map([["chart-run", {
+        sql: "SELECT category, total FROM t",
+        columns: [{ name: "category", typeName: "VARCHAR" }, { name: "total", typeName: "BIGINT" }],
+        rows: [["A", 2], ["B", 1]] as unknown[][],
+      }]]),
+    };
+    const chartArgs = {
+      runId: "chart-run",
+      preset: "ranking",
+      fields: [
+        { id: "cat", field: "category", type: "nominal" },
+        { id: "total", field: "total", type: "quantitative" },
+      ],
+    };
+    const strict = await dispatchTool(
+      "create_chart",
+      JSON.stringify({ ...chartArgs, layers: [{ mark: "bar", encoding: { y: "cat", x: "total", category: "cat" } }] }),
+      chartCtx,
+    );
+    assert.equal(strict.ok, false);
+    assert.match(strict.text, /category/);
+
+    const accepted = await dispatchTool(
+      "create_chart",
+      JSON.stringify({ ...chartArgs, layers: [{ mark: "bar", encoding: { y: "cat", x: "total" } }] }),
+      chartCtx,
+    );
+    assert.equal(accepted.ok, true, accepted.text);
+
+    // advertised schema 必须和 zod 一样窄，否则模型只能靠重试才知道 channel 不存在。
+    const createChart = createAgentTools({ ctx: baseCtx, requestProposal: async () => false })
+      .find((tool) => tool.name === "create_chart");
+    const encoding = (createChart?.parameters as {
+      properties: { layers: { items: { properties: { encoding: { additionalProperties?: boolean } } } } };
+    }).properties.layers.items.properties.encoding;
+    assert.equal(encoding.additionalProperties, false);
+  }
+
+  // ADR-0081：同名工具连续失败到阈值就熔断，成功一次清零，探索类工具豁免。
+  {
+    const breakerNote = join(root, "breaker.md");
+    await writeFile(breakerNote, "breaker target\n");
+    const breakerCtx = {
+      ...baseCtx,
+      run: { ...baseCtx.run, toolFailureStreak: new Map<string, number>() },
+    };
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const failed = await dispatchToolRaw("propose_edit", JSON.stringify({ path: breakerNote }), breakerCtx);
+      assert.equal(failed.ok, false);
+      assert.doesNotMatch(failed.text, /now blocked/, `attempt ${attempt} must still reach the tool`);
+    }
+    const blocked = await dispatchToolRaw("propose_edit", JSON.stringify({ path: breakerNote, newContent: "x" }), breakerCtx);
+    assert.equal(blocked.ok, false);
+    assert.match(blocked.text, /propose_edit has failed 3 times in a row/);
+    assert.equal(await readFile(breakerNote, "utf8"), "breaker target\n", "a blocked tool must not run");
+
+    breakerCtx.run.toolFailureStreak.set("propose_edit", 2);
+    const recovered = await dispatchToolRaw(
+      "propose_edit",
+      JSON.stringify({ path: breakerNote, newContent: "recovered" }),
+      { ...breakerCtx, requestProposal: async () => true },
+    );
+    assert.equal(recovered.ok, true, recovered.text);
+    assert.equal(breakerCtx.run.toolFailureStreak.get("propose_edit"), undefined, "success must reset the streak");
+
+    breakerCtx.run.toolFailureStreak.set("run_sql", 9);
+    const exploration = await dispatchToolRaw("run_sql", JSON.stringify({ sql: "SELECT 1" }), breakerCtx);
+    assert.equal(exploration.ok, false);
+    assert.match(exploration.text, /No data connection/, "ADR-0069 exploration tools are never blocked");
   }
 
   {

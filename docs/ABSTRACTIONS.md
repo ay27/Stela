@@ -740,6 +740,21 @@ type AgentEvent =
   | { type: "cancelled"; runId: string };
 ```
 
+Tool dispatch keeps two per-run counters on the tool context: `questionsAsked`
+caps `ask_user` at three questions, and `toolFailureStreak` maps a tool name to
+its consecutive failure count. A tool that reaches three consecutive failures is
+blocked for the rest of the run and any success clears its entry; the
+exploration tools governed by
+[ADR-0069](./adr/0069-adaptive-agent-strategy-review.md) are exempt, and the run
+is never terminated
+([ADR-0081](./adr/0081-deterministic-tool-failure-circuit-breaker.md)).
+
+Tool validation failures report zod issues as `path: message` pairs, adding the
+allowed values when a discriminated union rejected the payload, so a rejected
+Canvas or chart payload can be repaired rather than resent. `propose_edit`
+matches `oldText` exactly first, then retries ignoring CRLF and trailing
+whitespace per line, and still requires the match to be unique.
+
 The Agent composer is a renderer-only ProseMirror document with one paragraph,
 plain text, hard breaks, and atomic resource nodes. Each Agent tab retains its
 own disposable EditorState so selection and undo history survive panel
@@ -896,9 +911,10 @@ per-Skill `sourcePaths` and `sourceTables`; runtime accepts only a subset of not
 read and tables inspected in its current turn. `fresh` means tracked
 sources still match, `stale` means a tracked source changed, disappeared, or was
 superseded by the current SQL-usage note set, and `untracked` means no source hash
-exists. Routine `load_skill` refreshes or rejects stale content and warns on
-untracked content. Explicit maintenance may read stale or untracked bodies only as
-untrusted drafts and must verify their rules before saving.
+exists. Routine `load_skill` rejects stale content with `stale_skill_unavailable`,
+queues a background refresh, and warns on untracked content. Explicit maintenance
+may read stale or untracked bodies only as untrusted drafts and must verify their
+rules before saving.
 
 After a normal completion with successful tool evidence, an independent bounded
 maintenance job receives the complete current-task conversation, structured
