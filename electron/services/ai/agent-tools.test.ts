@@ -758,8 +758,137 @@ try {
       ctx,
     );
     assert.equal(r.ok, true);
-    assert.match(r.text, /"name": "id"/);
+    assert.equal(JSON.parse(r.text).tables[0].columns, "id:BIGINT");
     assert.ok(executed.some((sql) => sql.startsWith("DESCRIBE")));
+  }
+
+  // 宽表回归探测器：两张 329 列的表必须一次装完。旧版撞 parseColumnsFromDdl 的 80
+  // 列隐藏上限 + 冗余 ddlSnippet，模型看到残缺列清单就绕道 information_schema。
+  {
+    const wideColumns = Array.from({ length: 329 }, (_, i) => ({
+      name: `col_${String(i).padStart(3, "0")}_metric_value`,
+      type: "varchar(255)",
+      comment: `业务字段第 ${i} 列的中文注释说明`,
+    }));
+    const ddlFor = (table: string) =>
+      [
+        `CREATE TABLE \`${table}\` (`,
+        wideColumns
+          .map((column) => `  \`${column.name}\` ${column.type} NULL COMMENT "${column.comment}"`)
+          .join(",\n"),
+        ') ENGINE=OLAP DUPLICATE KEY(`col_000_metric_value`) DISTRIBUTED BY HASH(`col_000_metric_value`) BUCKETS 10;',
+      ].join("\n");
+    const wideCtx = {
+      ...withConnection,
+      connector: {
+        listKinds: () => [],
+        listDatabases: async () => ["dw"],
+        listTables: async () => ["wide_a", "wide_b"],
+        execute: async (_kind: string, _config: unknown, sql: string) => {
+          const table = /`?(wide_[ab])`?/.exec(sql)?.[1];
+          if (!sql.startsWith("SHOW CREATE") || !table) throw new Error("unsupported");
+          return {
+            kind: "query" as const,
+            columns: [{ name: "Create Table", typeName: "VARCHAR" }],
+            rows: [[ddlFor(table)]],
+            elapsedMs: 1,
+          };
+        },
+      },
+    };
+
+    const wide = await dispatchTool(
+      "get_table_schema",
+      JSON.stringify({ tables: ["dw.wide_a", "dw.wide_b"] }),
+      wideCtx,
+    );
+    assert.equal(wide.ok, true, wide.text);
+    assert.doesNotMatch(wide.text, /\[truncated/);
+    const parsed = JSON.parse(wide.text);
+    assert.equal(parsed.tables.length, 2);
+    for (const table of parsed.tables) {
+      assert.equal(table.totalColumnCount, 329, `${table.table} lost columns`);
+      assert.equal(table.columnsComplete, true, `${table.table} was truncated`);
+      assert.equal(table.returnedColumnCount, 329);
+      // 只给 tables 时不带 comment，也不带冗余 DDL——那是 63% 的旧 payload。
+      assert.equal(table.commentsOmitted, true);
+      assert.equal(table.ddlSnippet, undefined);
+      const lines = table.columns.split("\n");
+      assert.equal(lines.length, 329);
+      assert.equal(lines[0], "col_000_metric_value:varchar(255)");
+      assert.equal(lines[328], "col_328_metric_value:varchar(255)");
+    }
+
+    // 点名列时才带 comment，并且未命中的列要明确报出来，不能静默消失。
+    const named = await dispatchTool(
+      "get_table_schema",
+      JSON.stringify({ tables: ["dw.wide_a"], columnNames: ["col_005_metric_value", "not_a_column"] }),
+      wideCtx,
+    );
+    assert.equal(named.ok, true, named.text);
+    const namedTable = JSON.parse(named.text).tables[0];
+    assert.equal(namedTable.columns, "col_005_metric_value:varchar(255) -- 业务字段第 5 列的中文注释说明");
+    assert.deepEqual(namedTable.missingRequestedColumns, ["not_a_column"]);
+    assert.equal(namedTable.commentsOmitted, undefined);
+
+    const paged = await dispatchTool(
+      "get_table_schema",
+      JSON.stringify({ tables: ["dw.wide_a"], columnOffset: 300 }),
+      wideCtx,
+    );
+    const pagedTable = JSON.parse(paged.text).tables[0];
+    assert.equal(pagedTable.returnedColumnCount, 29);
+    assert.equal(pagedTable.columnsComplete, true);
+    assert.equal(pagedTable.columns.split("\n")[0], "col_300_metric_value:varchar(255)");
+
+    const withDdl = await dispatchTool(
+      "get_table_schema",
+      JSON.stringify({ tables: ["dw.wide_a"], includeDdl: true }),
+      wideCtx,
+    );
+    assert.match(JSON.parse(withDdl.text).tables[0].ddlSnippet, /^CREATE TABLE/);
+  }
+
+  // 真放不下时：截断顺序是列最后，且必须逐表报出 nextColumnOffset + 指示，不能只留
+  // 一个全局 ...[truncated N chars]——那是模型看不出哪张表不全的根因。
+  {
+    const columns = Array.from({ length: 900 }, (_, i) => `col_${String(i).padStart(3, "0")}_wide_metric`);
+    const ctx = {
+      ...withConnection,
+      connector: {
+        listKinds: () => [],
+        listDatabases: async () => ["dw"],
+        listTables: async () => ["huge"],
+        execute: async (_kind: string, _config: unknown, sql: string) => {
+          if (!sql.startsWith("SHOW CREATE")) throw new Error("unsupported");
+          return {
+            kind: "query" as const,
+            columns: [{ name: "Create Table", typeName: "VARCHAR" }],
+            rows: [[
+              `CREATE TABLE \`huge\` (\n${columns.map((name) => `  \`${name}\` varchar(255) NULL`).join(",\n")}\n) ENGINE=OLAP;`,
+            ]],
+            elapsedMs: 1,
+          };
+        },
+      },
+    };
+    const r = await dispatchTool("get_table_schema", JSON.stringify({ tables: ["dw.huge"] }), ctx);
+    const table = JSON.parse(r.text).tables[0];
+    assert.equal(table.totalColumnCount, 900);
+    assert.equal(table.columnsComplete, false);
+    assert.equal(table.nextColumnOffset, table.returnedColumnCount);
+    assert.ok(table.returnedColumnCount > 500, `only ${table.returnedColumnCount} columns fit`);
+    assert.match(JSON.parse(r.text).instruction, /dw\.huge/);
+    assert.doesNotMatch(r.text, /\[truncated/);
+
+    const resumed = await dispatchTool(
+      "get_table_schema",
+      JSON.stringify({ tables: ["dw.huge"], columnOffset: table.nextColumnOffset }),
+      ctx,
+    );
+    const rest = JSON.parse(resumed.text).tables[0];
+    assert.equal(rest.columnsComplete, true);
+    assert.equal(rest.returnedColumnCount, 900 - table.returnedColumnCount);
   }
 
   // propose_edit：reject 不写盘，approve 才写盘
@@ -781,6 +910,39 @@ try {
     assert.equal(r.ok, true);
     const written = await dispatchTool("read_note", JSON.stringify({ path: join(root, "note.md") }), baseCtx);
     assert.match(written.text, /approved content/);
+    // 成功文案不得暗示内容被语义校验过——只做了一次读回比对。
+    assert.doesNotMatch(r.text, /verified/i);
+    assert.match(r.text, /correctness is not checked/i);
+  }
+
+  // 审批预览必须包含实际改动区。旧版发整篇前 6,000 字符，改动在 40K 处就完全看不见。
+  {
+    const longNote = join(root, "long.md");
+    const lines = Array.from({ length: 1_200 }, (_, i) => `line ${i} ${"padding ".repeat(6)}`);
+    await writeFile(longNote, lines.join("\n"), "utf8");
+    const edited = [...lines];
+    edited[1_000] = "THE ACTUAL CHANGE lands deep in the note";
+    let preview: { oldContent?: string; newContent?: string } = {};
+    const r = await dispatchTool(
+      "propose_edit",
+      JSON.stringify({ path: longNote, newContent: edited.join("\n") }),
+      {
+        ...baseCtx,
+        requestProposal: async (proposal: { payload: { oldContent?: string; newContent?: string } }) => {
+          preview = proposal.payload;
+          return true;
+        },
+      },
+    );
+    assert.equal(r.ok, true, r.text);
+    assert.ok(lines.join("\n").length > 40_000, "fixture must exceed the old 6,000-char preview");
+    assert.match(preview.newContent ?? "", /THE ACTUAL CHANGE/);
+    assert.match(preview.oldContent ?? "", /line 1000 /);
+    assert.ok((preview.oldContent ?? "").length <= 6_200, "preview must stay bounded");
+    // 省略标记两侧必须一致，否则渲染端的 line diff 会凭空多出一对增删行。
+    const elided = (text: string) => text.split("\n").filter((line) => line.startsWith("…["));
+    assert.deepEqual(elided(preview.oldContent ?? ""), elided(preview.newContent ?? ""));
+    assert.equal(elided(preview.oldContent ?? "").length, 2);
   }
 
   // 自动维护可创建新 Skill，但不能静默覆盖或归档已有知识。

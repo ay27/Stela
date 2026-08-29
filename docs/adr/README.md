@@ -134,3 +134,4 @@ proposed → active → superseded
 | [0079](0079-sandbox-query-rpc.md) | Sandbox query() RPC instead of model-managed artifacts | active |
 | [0080](0080-guarded-native-fim-inline-completion.md) | Guarded native FIM for SQL inline completion | active |
 | [0081](0081-deterministic-tool-failure-circuit-breaker.md) | Deterministic tool failure circuit breaker | active |
+| [0082](0082-coverage-over-precision-in-bounded-tool-results.md) | Coverage over precision in bounded tool results | active |

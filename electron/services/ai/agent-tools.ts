@@ -31,6 +31,7 @@ import type {
   AgentPlanSnapshot,
   AgentProposalKind,
   AgentProposalPayload,
+  AiSchemaColumnContext,
   AiSettings,
   ColumnDef,
   ConnectionEntry,
@@ -192,6 +193,10 @@ export type AgentRunRecorder = (run: {
 
 const log = getLogger("ai.agent-tools");
 const RESULT_CHAR_BUDGET = 30_000;
+/** DDL 解析护栏，不是展示上限：真实宽表 300+ 列，取整到 4096 只为挡住病态 DDL。 */
+const SCHEMA_COLUMN_HARD_LIMIT = 4_096;
+/** 给 get_table_schema 的列/DDL 用的预算，留出信封字段和 instruction 的余量。 */
+const SCHEMA_RESULT_BUDGET = RESULT_CHAR_BUDGET - 2_000;
 const SQL_PREVIEW_ROWS = 200;
 const SQL_PREVIEW_MAX_BYTES = 24 * 1024;
 const SQL_PREVIEW_CELL_MAX_BYTES = 4 * 1024;
@@ -464,11 +469,23 @@ export function createAgentTools(options: {
     {
       name: "get_table_schema",
       label: "Get table schema",
-      description: "Fetch column names/types and DDL (if available) for one or more tables.",
+      description:
+        "Fetch live column names and types for one or more tables. This is the authoritative source for table structure: never reconstruct it from information_schema, SHOW COLUMNS, or a LIMIT 0 query. Column comments are returned only when you pass columnNames, because full comments and full column coverage cannot both fit for wide tables. Each table reports columnsComplete; when it is false, narrow with columnNames or page with columnOffset instead of treating the partial list as the table's width.",
       parameters: Type.Object({
         tables: Type.Array(Type.String(), {
           description: "Table names, optionally qualified as db.table.",
         }),
+        columnNames: Type.Optional(Type.Array(Type.String(), {
+          description:
+            "Verify only these columns across the requested tables and return their comments. Missing ones come back in missingRequestedColumns.",
+        })),
+        columnOffset: Type.Optional(Type.Number({
+          description: "Resume an incomplete column list from a previous nextColumnOffset.",
+        })),
+        includeDdl: Type.Optional(Type.Boolean({
+          description:
+            "Include a truncated CREATE TABLE snippet. Off by default: it repeats the column list and crowds it out. Only turn it on for engine, partitioning, distribution, or key clauses.",
+        })),
         connectionName: Type.Optional(Type.String({ description: "Available Stela connection name; defaults to current." })),
       }),
       executionMode: "parallel",
@@ -989,16 +1006,80 @@ async function tableUsage(
   }
 }
 
-async function runGetTableSchema(args: { tables?: unknown; connectionName?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
+/**
+ * 一条 `name:type` 行约 34 字符，`-- comment` 再翻倍到约 60。一张 329 列的宽表
+ * 因此是 11K / 20K —— 注释和全列覆盖对宽表是二选一，不可能都要。
+ */
+function formatSchemaColumn(column: AiSchemaColumnContext, withComment: boolean): string {
+  const typeName = column.typeName?.trim();
+  const comment = withComment ? column.comment?.replace(/\s+/g, " ").trim() : undefined;
+  return `${column.name}${typeName ? `:${typeName}` : ""}${comment ? ` -- ${comment}` : ""}`;
+}
+
+/**
+ * 列清单是一个换行拼接的字符串，不是 JSON 数组：pretty-print 会给每列加 8 空格
+ * 缩进 + 引号 + 逗号，12 字符的纯格式税，两张 329 列的表光这一项就 8K。这里只剩
+ * 转义换行的 2 字符（+1 余量）。
+ */
+const SCHEMA_LINE_JSON_OVERHEAD = 3;
+
+/**
+ * 降级顺序是硬性的：先砍 comment，再砍列。缺 comment 模型知道自己缺什么，可以
+ * 用 columnNames 点名再要一次；缺列会让它以为表就这么宽，然后拿残缺列清单去写
+ * SQL —— 降精度可恢复，降覆盖会误导。
+ */
+function fitSchemaColumns(
+  columns: AiSchemaColumnContext[],
+  wantComments: boolean,
+  charBudget: number,
+): { lines: string[]; commentsOmitted: boolean } {
+  const render = (withComment: boolean) => columns.map((column) => formatSchemaColumn(column, withComment));
+  const width = (lines: string[]) =>
+    lines.reduce((total, line) => total + line.length + SCHEMA_LINE_JSON_OVERHEAD, 0);
+
+  // 有注释但没带上就要说出来，不管是预算不够还是本轮没点名列——否则模型不知道
+  // 这张表还有中文语义可以要，只能自己去 information_schema 捞。
+  const hasComments = columns.some((column) => column.comment?.trim());
+  if (wantComments) {
+    const withComments = render(true);
+    if (width(withComments) <= charBudget) return { lines: withComments, commentsOmitted: false };
+  }
+  const bare = render(false);
+  if (width(bare) <= charBudget) return { lines: bare, commentsOmitted: hasComments };
+
+  const lines: string[] = [];
+  let used = 0;
+  for (const line of bare) {
+    used += line.length + SCHEMA_LINE_JSON_OVERHEAD;
+    if (used > charBudget) break;
+    lines.push(line);
+  }
+  return { lines, commentsOmitted: hasComments };
+}
+
+async function runGetTableSchema(
+  args: {
+    tables?: unknown;
+    columnNames?: unknown;
+    columnOffset?: unknown;
+    includeDdl?: unknown;
+    connectionName?: unknown;
+  },
+  ctx: AgentToolContext,
+): Promise<ToolOutcome> {
   const { name, connection } = requireNamedConnection(ctx, args.connectionName);
   const tables = stringList(args.tables);
   if (tables.length === 0) return fail("tables must be a non-empty array of table names.");
+  const requestedColumns = stringList(args.columnNames);
+  const columnOffset = boundedInt(args.columnOffset, 0, 0, 100_000);
+  const includeDdl = args.includeDdl === true;
   const targets = await resolveNamedTableSchemas({
     tableNames: tables,
     connectionName: name,
     connection,
     matchReason: "agent get_table_schema",
     preferLocalSchemaDir: false,
+    maxColumnsPerTable: SCHEMA_COLUMN_HARD_LIMIT,
     request: {
       context: {
         connector: { dialect: ctx.connectionDialects?.[name] ?? resolveDialect(connection.kind, ctx) },
@@ -1016,15 +1097,71 @@ async function runGetTableSchema(args: { tables?: unknown; connectionName?: unkn
     ctx,
     targets.map((target) => target.database ? `${target.database}.${target.table}` : target.table),
   );
-  return ok(
-    targets.map((t) => ({
-      database: t.database,
-      table: t.table,
-      columns: t.columns,
-      ddlSnippet: t.ddlSnippet,
-      source: t.source,
-    })),
+
+  // 每张表拿等额配额，而不是先到先得：旧版让第一张宽表吃光 30K，第二张只剩一个
+  // 残缺前缀，模型看不出是哪张表不全，于是绕道 information_schema 重查。
+  const columnShare = Math.floor(SCHEMA_RESULT_BUDGET / targets.length);
+
+  const columnPayload = targets.map((target) => {
+    const all = target.columns ?? [];
+    let selected = all;
+    let missingRequestedColumns: string[] | undefined;
+    if (requestedColumns.length > 0) {
+      const byName = new Map(all.map((column) => [column.name.toLowerCase(), column]));
+      selected = requestedColumns.flatMap((requested) => {
+        const hit = byName.get(requested.toLowerCase());
+        return hit ? [hit] : [];
+      });
+      const missing = requestedColumns.filter((requested) => !byName.has(requested.toLowerCase()));
+      if (missing.length > 0) missingRequestedColumns = missing;
+    }
+    const windowed = selected.slice(columnOffset);
+    // Comments only ride along when the model named the columns: it already knows
+    // which ones it wants, so it is confirming meaning rather than counting shape.
+    const { lines, commentsOmitted } = fitSchemaColumns(windowed, requestedColumns.length > 0, columnShare);
+    const returned = columnOffset + lines.length;
+    const complete = returned >= selected.length;
+    const columns = lines.join("\n");
+    return {
+      table: target.database ? `${target.database}.${target.table}` : target.table,
+      source: target.source,
+      totalColumnCount: selected.length,
+      returnedColumnCount: lines.length,
+      columnsComplete: complete,
+      ...(complete ? {} : { nextColumnOffset: returned }),
+      ...(commentsOmitted ? { commentsOmitted: true } : {}),
+      columns,
+      ...(missingRequestedColumns ? { missingRequestedColumns } : {}),
+      ddlSnippet: target.ddlSnippet,
+    };
+  });
+
+  // DDL 最后拿剩下的额度，绝不预留：它和 columns 同源于一次 SHOW CREATE，是冗余
+  // 的，为它挤掉列覆盖会让模型以为表就这么宽。
+  const columnsUsed = columnPayload.reduce((total, table) => total + table.columns.length, 0);
+  const ddlShare = includeDdl
+    ? Math.floor(Math.max(0, SCHEMA_RESULT_BUDGET - columnsUsed) / columnPayload.length)
+    : 0;
+  const payload = columnPayload.map(({ ddlSnippet, ...table }) =>
+    ddlShare > 0 && ddlSnippet ? { ...table, ddlSnippet: truncate(ddlSnippet, ddlShare) } : table,
   );
+
+  const incomplete = payload.filter((table) => !table.columnsComplete);
+  return ok({
+    format: "columns is one `name:type` per line; ` -- text` after a type is that column's comment",
+    tables: payload,
+    ...(payload.some((table) => table.commentsOmitted)
+      ? { note: "These tables have column comments, omitted here so the full column list fits. Pass columnNames to get comments for the columns you care about." }
+      : {}),
+    ...(incomplete.length > 0
+      ? {
+          instruction:
+            `Column lists are incomplete for: ${incomplete.map((table) => table.table).join(", ")}. ` +
+            "Call again with columnNames for the columns you actually need, or with columnOffset=nextColumnOffset to page. " +
+            "Do not treat a partial list as the table's full width.",
+        }
+      : {}),
+  });
 }
 
 function normalizeDataQuery(args: Record<string, unknown>): DataQueryRequest | string {
@@ -1993,6 +2130,54 @@ function normalizeForMatch(text: string): { normalized: string; origin: number[]
   }
 }
 
+const PROPOSAL_PREVIEW_CONTEXT_LINES = 12;
+const PROPOSAL_PREVIEW_CHAR_CAP = 6_000;
+
+/**
+ * 审批卡片必须能看见实际改动区。旧版发整篇前 6,000 字符：一次 51,714 字符的写入
+ * 改的是第三个 runsql 块，用户在卡片里只看到 frontmatter 和前两个块，点了同意才
+ * 发现改错了。
+ *
+ * 这里按行对齐掐掉首尾未变部分，只留命中区加上下文。省略标记的行数对两侧恒等
+ * （prefix / suffix 是共有的），所以渲染端的 line diff 会把它们判成 equal 而不是
+ * 凭空多出一对增删行。
+ *
+ * ponytail: 只处理单个连续命中区——多处分散修改会被合并成一个大窗口。要精确到
+ * 每处再上真 diff hunk（renderer 的 buildDiffSegments 已经做了这件事）。
+ */
+function boundedEditPreview(
+  oldContent: string,
+  newContent: string,
+): { oldContent: string; newContent: string } {
+  const oldLines = oldContent.split("\n");
+  const newLines = newContent.split("\n");
+  let prefix = 0;
+  while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    suffix < oldLines.length - prefix &&
+    suffix < newLines.length - prefix &&
+    oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+  const start = Math.max(0, prefix - PROPOSAL_PREVIEW_CONTEXT_LINES);
+  const window = (lines: string[]): string => {
+    const end = Math.min(lines.length, lines.length - suffix + PROPOSAL_PREVIEW_CONTEXT_LINES);
+    return [
+      ...(start > 0 ? [`…[${start} unchanged lines above]`] : []),
+      ...lines.slice(start, end),
+      ...(end < lines.length ? [`…[${lines.length - end} unchanged lines below]`] : []),
+    ].join("\n");
+  };
+  return {
+    oldContent: truncate(window(oldLines), PROPOSAL_PREVIEW_CHAR_CAP),
+    newContent: truncate(window(newLines), PROPOSAL_PREVIEW_CHAR_CAP),
+  };
+}
+
 /**
  * 精确匹配失败时退回空白容错匹配：模型常从分页或截断的 read_note 复制片段，
  * 差异集中在 CRLF 与行尾空白，而不是内容本身。唯一性要求两种模式下都保留。
@@ -2069,21 +2254,22 @@ async function runProposeEdit(
     payload: {
       notePath: args.path,
       description,
-      oldContent: truncate(oldContent, 6_000),
-      newContent: truncate(nextContent, 6_000),
+      ...boundedEditPreview(oldContent, nextContent),
     },
   });
   if (!approved) return fail("The user rejected this edit. Do not retry it as-is.");
   await vaultFs.writeFile(target, nextContent);
-  const verified = await vaultFs.readFile(target);
-  if (verified !== nextContent) {
-    return fail(`Write verification failed for ${args.path}.`);
+  const readBack = await vaultFs.readFile(target);
+  if (readBack !== nextContent) {
+    return fail(`Write-back check failed for ${args.path}: the file on disk does not match what was written.`);
   }
   notifyFileChanged(target);
+  // 只说「字节写对了」。旧文案 "Wrote and verified" 会让模型（和用户）以为内容的
+  // 正确性也被校验过，而这里只做了一次读回比对。
   return ok({
-    message: `Wrote and verified ${nextContent.length} chars.`,
+    message: `Wrote ${nextContent.length} chars to ${args.path}; re-read matches the bytes written. Content correctness is not checked.`,
     path: args.path,
-    verified: true,
+    bytesWrittenMatch: true,
   });
 }
 

@@ -236,7 +236,12 @@ function extractColumnComment(line: string): string | undefined {
   return text.length > 0 ? text : undefined;
 }
 
-export function parseColumnsFromDdl(ddl: string): AiSchemaColumnContext[] {
+/**
+ * `maxColumns` 只是防一条病态 DDL 撑爆内存的护栏，不是展示上限。默认 80 是给
+ * prompt 里嵌的 catalog 用的；按名字直查表结构的调用方要传自己的上限，否则
+ * 一张 329 列的宽表会被静默砍成 80 列，模型会以为表就这么宽。
+ */
+export function parseColumnsFromDdl(ddl: string, maxColumns = 80): AiSchemaColumnContext[] {
   const columns: AiSchemaColumnContext[] = [];
   const seen = new Set<string>();
   for (const rawLine of ddl.split(/\r?\n/)) {
@@ -269,7 +274,7 @@ export function parseColumnsFromDdl(ddl: string): AiSchemaColumnContext[] {
     seen.add(lowerName);
     const comment = extractColumnComment(line);
     columns.push(comment ? { name, typeName, comment } : { name, typeName });
-    if (columns.length >= 80) break;
+    if (columns.length >= maxColumns) break;
   }
   return columns;
 }
@@ -686,6 +691,7 @@ async function fetchTableSchemaFromConnector(
   table: string,
   dialect: string | undefined,
   deps: SchemaResolverDeps,
+  maxColumns?: number,
 ): Promise<{ columns: AiSchemaColumnContext[]; ddlSnippet: string | null }> {
   if (!deps.execute) {
     log.warn("schema probe skipped: connector execute dep missing", {
@@ -712,7 +718,7 @@ async function fetchTableSchemaFromConnector(
       if (typeof ddl === "string" && ddl.trim()) {
         return {
           ddlSnippet: truncate(ddl.trim(), MAX_DDL_CHARS),
-          columns: parseColumnsFromDdl(ddl),
+          columns: parseColumnsFromDdl(ddl, maxColumns),
         };
       }
     }
@@ -809,6 +815,8 @@ export interface ResolveNamedTableSchemasOptions {
   score?: number;
   /** false 时即使存在 schemaDir，也向当前 connector 拉取结构。 */
   preferLocalSchemaDir?: boolean;
+  /** DDL 解析的列数护栏。省略时沿用 prompt-catalog 的 80 列默认。 */
+  maxColumnsPerTable?: number;
   deps?: SchemaResolverDeps;
 }
 
@@ -893,6 +901,7 @@ export async function resolveNamedTableSchemas(
           table,
           dialect,
           deps,
+          options.maxColumnsPerTable,
         );
       }
       columns = fetched.columns.length > 0 ? fetched.columns : columns;

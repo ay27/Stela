@@ -30,6 +30,8 @@ import type {
   ConnectionMap,
 } from "@shared/types";
 
+import { runsqlRewriteTargets } from "@shared/agent-message";
+
 import * as connectionsStore from "../connections-store";
 import * as connectorRegistry from "../connectors/registry";
 import * as deviceProfile from "../device-profile";
@@ -868,13 +870,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           onCanvasUpdated: (event) => emit({ type: "canvas_updated", runId, ...event }),
           plan,
           persistPlan: planPersistence.enqueue,
-          rewriteTargets: new Map(
-            (request.attachments ?? []).flatMap((attachment) =>
-              attachment.kind === "runsql" && attachment.rewriteTargetId
-                ? [[attachment.rewriteTargetId, { sql: attachment.sql, sourcePath: attachment.sourcePath }]]
-                : [],
-            ),
-          ),
+          rewriteTargets: runsqlRewriteTargets(request),
           recordRun: recordAgentRun(vaultPath),
           onSkillMaintenance: (record) => normalSkillActions.push(record),
           onSkillUsage: (record) => {

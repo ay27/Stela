@@ -633,6 +633,24 @@ cached. A qualified `database.table` passed to `get_table_schema` is fetched
 directly; only an unqualified name enumerates the catalog to resolve its database.
 When several qualified tables are requested, their fallback probes run concurrently.
 
+`get_table_schema` returns `columns` as one `name:type` line per column, not a JSON
+array of objects: a pretty-printed array costs 12 characters of pure formatting per
+column, which alone is 8K on two 300-column tables. Coverage outranks precision, so
+column comments are returned only when the call passes `columnNames` (a named set is
+the model confirming meaning, not counting shape) and full comments plus full
+coverage never both fit for a wide table. `includeDdl` defaults to false because the
+snippet re-derives the same column list from the same `SHOW CREATE TABLE`. Each table
+reports `totalColumnCount`, `returnedColumnCount`, `columnsComplete`, plus
+`nextColumnOffset` and `commentsOmitted` when they apply, and `missingRequestedColumns`
+for names that do not exist. Every table gets an equal share of the character budget,
+and over budget the drop order is comments, then DDL, then columns — a missing comment
+is a precision loss the model can name and re-request with `columnNames`, while a
+missing column silently misrepresents the table's width. `parseColumnsFromDdl` keeps
+its 80-column default for prompt-embedded catalogs; only this tool raises it. Shedding
+precision before coverage, allocating equal per-entity shares, and reporting
+completeness per entity rather than as one global marker apply to any bounded tool
+payload ([ADR-0082](./adr/0082-coverage-over-precision-in-bounded-tool-results.md)).
+
 When the connector implements `describeTables(kind, config, tables)` the schema
 resolver calls it once per lookup and uses the returned `TableDescriptor`
 columns (with `comment`) directly. Otherwise it falls back to `SHOW CREATE TABLE`
@@ -754,6 +772,18 @@ allowed values when a discriminated union rejected the payload, so a rejected
 Canvas or chart payload can be repaired rather than resent. `propose_edit`
 matches `oldText` exactly first, then retries ignoring CRLF and trailing
 whitespace per line, and still requires the match to be unique.
+
+A `propose_edit` note approval carries a preview windowed on the changed region, not
+the note's leading characters: main aligns the two versions by line, keeps twelve
+context lines around the changed span, and replaces each elided run with a marker
+whose line count is identical on both sides so the renderer's line diff folds it as
+unchanged. Without the window a change deep in a long note is invisible in the
+approval card. On success the tool reports that the file re-read matches the bytes
+written and states that content correctness is not checked; the older
+"Wrote and verified" wording implied a semantic check that never happened. RunSQL
+rewrite targets are keyed by the renderer-owned `rewriteTargetId` on the request's
+message resources — never by `resource.id`, and never read off the deprecated
+`attachments` field, which no production renderer path sets.
 
 The Agent composer is a renderer-only ProseMirror document with one paragraph,
 plain text, hard breaks, and atomic resource nodes. Each Agent tab retains its

@@ -114,3 +114,28 @@ export function legacyAgentMessage(request: Pick<
 export function requestAgentMessage(request: AgentRunRequest): AgentMessageContent {
   return request.message ?? legacyAgentMessage(request);
 }
+
+/**
+ * Renderer-owned RunSQL rewrite targets explicitly attached to this run, keyed by
+ * `rewriteTargetId` (the NodeView registry id — **not** the resource catalog id).
+ *
+ * Must go through {@link requestAgentMessage}: the composer only sends `message`,
+ * so reading `request.attachments` directly leaves the map empty and every
+ * `propose_edit({ targetId, sql })` fails.
+ */
+export function runsqlRewriteTargets(
+  request: AgentRunRequest,
+): Map<string, { sql: string; sourcePath?: string }> {
+  return new Map(
+    requestAgentMessage(request).resources.flatMap((resource) =>
+      resource.kind === "runsql" && resource.rewriteTargetId
+        ? [[
+            resource.rewriteTargetId,
+            resource.sourcePath
+              ? { sql: resource.sql, sourcePath: resource.sourcePath }
+              : { sql: resource.sql },
+          ] as const]
+        : [],
+    ),
+  );
+}
