@@ -841,7 +841,7 @@ async function runTool(
   }
   return {
     content: [{ type: "text" as const, text: outcome.text }],
-    details: { summary: outcome.text },
+    details: {},
     ...(outcome.terminate ? { terminate: true } : {}),
   };
 }

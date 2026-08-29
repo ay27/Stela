@@ -93,8 +93,12 @@ try {
       "function providers require run_query parameters to have a top-level object schema",
     );
     const searchSkills = tools.find((tool) => tool.name === "search_skills");
-    const required = (searchSkills?.parameters as { required?: string[] } | undefined)?.required ?? [];
+    assert.ok(searchSkills);
+    const required = (searchSkills.parameters as { required?: string[] }).required ?? [];
     assert.equal(required.includes("query"), false, "search_skills query must remain optional for browsing");
+    const searchSkillsResult = await searchSkills.execute("test-search-skills", {});
+    assert.deepEqual(searchSkillsResult.details, {}, "tool details must not duplicate model-visible content");
+    assert.match(searchSkillsResult.content[0]?.type === "text" ? searchSkillsResult.content[0].text : "", /"skills"/);
     assert.equal(tools.some((tool) => tool.name === "revise_plan"), false);
     assert.equal(tools.some((tool) => tool.name === "finalize_analysis"), false);
   }
