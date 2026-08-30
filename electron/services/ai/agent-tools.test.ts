@@ -85,7 +85,21 @@ try {
     );
   }
   {
-    const tools = createAgentTools({ ctx: baseCtx, requestProposal: async () => false });
+    const tools = createAgentTools({
+      ctx: { ...baseCtx, queryArtifacts: {} as never, pythonExecutor: {} as never },
+      requestProposal: async () => false,
+    });
+    assert.equal(tools.length, 19, "the provider-facing tool list must remain compact");
+    const serializedTools = JSON.stringify(tools);
+    assert.ok(
+      serializedTools.length <= 16_500,
+      `provider-facing tools must stay <= 16500 chars, got ${serializedTools.length}`,
+    );
+    assert.equal(tools.some((tool) => tool.name === "list_catalog"), true);
+    assert.equal(tools.some((tool) => tool.name === "plan"), true);
+    for (const legacyName of ["list_databases", "list_tables", "create_plan", "update_plan", "get_plan"]) {
+      assert.equal(tools.some((tool) => tool.name === legacyName), false, `${legacyName} is an internal alias only`);
+    }
     const runQuery = tools.find((tool) => tool.name === "run_query");
     assert.equal(
       (runQuery?.parameters as { type?: string } | undefined)?.type,
@@ -101,6 +115,12 @@ try {
     assert.match(searchSkillsResult.content[0]?.type === "text" ? searchSkillsResult.content[0].text : "", /"skills"/);
     assert.equal(tools.some((tool) => tool.name === "revise_plan"), false);
     assert.equal(tools.some((tool) => tool.name === "finalize_analysis"), false);
+    const createChart = tools.find((tool) => tool.name === "create_chart");
+    const serializedChart = JSON.stringify(createChart);
+    assert.ok(
+      serializedChart.length <= 2_800,
+      `create_chart must stay <= 2800 chars, got ${serializedChart.length}`,
+    );
   }
   {
     const emptySkills = await dispatchTool("search_skills", "{}", baseCtx);
@@ -232,10 +252,16 @@ try {
     },
   };
 
-  // list_tables auto-selects a sole database and returns an actionable domain rejection for ambiguity.
+  // list_catalog auto-selects a sole database and returns an actionable domain rejection for ambiguity.
   {
     const selected: Array<string | null | undefined> = [];
-    const single = await dispatchTool("list_tables", "{}", {
+    const databases = await dispatchTool("list_catalog", JSON.stringify({ level: "databases" }), {
+      ...withConnection,
+      connector: { ...fakeConnector, listDatabases: async () => ["analytics"] },
+    });
+    assert.equal(databases.ok, true);
+    assert.deepEqual(JSON.parse(databases.text).databases, ["analytics"]);
+    const single = await dispatchTool("list_catalog", JSON.stringify({ level: "tables" }), {
       ...withConnection,
       connector: {
         ...fakeConnector,
@@ -249,13 +275,14 @@ try {
     assert.equal(single.ok, true);
     assert.equal(JSON.parse(single.text).database, "analytics");
     assert.deepEqual(selected, ["analytics"]);
-    const ambiguous = await dispatchTool("list_tables", "{}", {
+    const ambiguous = await dispatchTool("list_catalog", JSON.stringify({ level: "tables" }), {
       ...withConnection,
       connector: { ...fakeConnector, listDatabases: async () => ["a", "b"] },
     });
     assert.equal(ambiguous.ok, true);
     assert.equal(JSON.parse(ambiguous.text).accepted, false);
     assert.equal(JSON.parse(ambiguous.text).reason, "database_required");
+    assert.match(JSON.parse(ambiguous.text).instruction, /list_catalog/);
   }
 
   // Host byte-bounds a giant cell even when a connector ignores previewMaxBytes.
@@ -505,8 +532,9 @@ try {
   // 计划工具是只写记账：乱序、重复、未知步骤都只回执，不失败。
   {
     const create = await dispatchTool(
-      "create_plan",
+      "plan",
       JSON.stringify({
+        action: "create",
         steps: [
           { id: "scope", title: "Scope", intent: "Define the metric", acceptance: "Definition found" },
           { id: "trend", title: "Trend", intent: "Measure daily values", acceptance: "Result available" },
@@ -518,8 +546,8 @@ try {
     assert.equal(JSON.parse(create.text).created, true);
 
     const duplicate = await dispatchTool(
-      "create_plan",
-      JSON.stringify({ steps: [{ id: "other", title: "Other", intent: "Other", acceptance: "Other" }] }),
+      "plan",
+      JSON.stringify({ action: "create", steps: [{ id: "other", title: "Other", intent: "Other", acceptance: "Other" }] }),
       baseCtx,
     );
     assert.equal(duplicate.ok, true);
@@ -527,29 +555,29 @@ try {
 
     // Completing a later step out of order is recorded, not rejected.
     const skipAhead = await dispatchTool(
-      "update_plan",
-      JSON.stringify({ stepId: "trend", status: "completed", evidence: "run_2" }),
+      "plan",
+      JSON.stringify({ action: "update", stepId: "trend", status: "completed", evidence: "run_2" }),
       baseCtx,
     );
     assert.equal(skipAhead.ok, true, skipAhead.text);
 
     // Evidence stays optional, so a missing line never costs a turn.
     const noEvidence = await dispatchTool(
-      "update_plan",
-      JSON.stringify({ stepId: "scope", status: "completed" }),
+      "plan",
+      JSON.stringify({ action: "update", stepId: "scope", status: "completed" }),
       baseCtx,
     );
     assert.equal(noEvidence.ok, true, noEvidence.text);
 
     const unknown = await dispatchTool(
-      "update_plan",
-      JSON.stringify({ stepId: "nope", status: "completed" }),
+      "plan",
+      JSON.stringify({ action: "update", stepId: "nope", status: "completed" }),
       baseCtx,
     );
     assert.equal(unknown.ok, true);
     assert.match(JSON.parse(unknown.text).note, /Unknown plan step 'nope'/);
 
-    const plan = await dispatchTool("get_plan", "{}", baseCtx);
+    const plan = await dispatchTool("plan", JSON.stringify({ action: "get" }), baseCtx);
     assert.equal(plan.ok, true);
     assert.doesNotMatch(plan.text, /"status": "running"/);
   }
@@ -982,7 +1010,7 @@ Inspect the live schema first.`;
       maintenanceCtx,
     );
     assert.equal(created.ok, true);
-    const skillUsage: Array<{ type: string; source: string; name: string; category: string | null }> = [];
+    const skillUsage: Array<{ type: string; source: string; origin: "system" | "vault"; name: string; category: string | null }> = [];
     const usageCtx = {
       ...baseCtx,
       skills: maintenanceCtx.skills,
@@ -1019,6 +1047,59 @@ Inspect the live schema first.`;
       { type: "loaded", source: "load", name: "verified-gotcha" },
     ]);
     const verifiedSkill = maintenanceCtx.skills[0]!;
+    const systemSkill = {
+      ...verifiedSkill,
+      skill: { ...verifiedSkill.skill, name: "chart-authoring", content: "# Chart rules\nUse valid field ids." },
+      content: "---\nname: chart-authoring\ndescription: Read-only chart rules.\n---\n\n# Chart rules\nUse valid field ids.",
+      metadata: {
+        ...verifiedSkill.metadata,
+        name: "chart-authoring",
+        description: "Read-only chart rules.",
+        origin: "system" as const,
+        category: null,
+        tags: [],
+        sources: [],
+        sourceTables: [],
+        relativePath: "playbooks/chart-authoring/SKILL.md",
+      },
+    };
+    const systemCtx = { ...usageCtx, skills: [systemSkill, verifiedSkill] };
+    const hiddenSystem = await dispatchTool(
+      "search_skills",
+      JSON.stringify({ query: "chart authoring" }),
+      systemCtx,
+    );
+    assert.deepEqual(JSON.parse(hiddenSystem.text).skills, [], "System Skills are exact-load only");
+    const loadedSystem = await dispatchTool(
+      "load_skill",
+      JSON.stringify({ name: "chart-authoring" }),
+      systemCtx,
+    );
+    assert.equal(loadedSystem.ok, true);
+    assert.equal(JSON.parse(loadedSystem.text).source, "system");
+    assert.equal(JSON.parse(loadedSystem.text).usableForFacts, false);
+    const overwriteSystem = await dispatchTool(
+      "save_skill",
+      JSON.stringify({
+        name: "chart-authoring",
+        content,
+        reason: "Attempt to replace bundled guidance.",
+      }),
+      systemCtx,
+    );
+    assert.equal(overwriteSystem.ok, false);
+    assert.match(overwriteSystem.text, /read-only System Skill/);
+    const automaticShadow = await dispatchTool(
+      "save_skill",
+      JSON.stringify({
+        name: "chart-authoring",
+        content: content.replaceAll("verified-gotcha", "chart-authoring"),
+        reason: "Automatic maintenance must not shadow bundled guidance.",
+      }),
+      { ...maintenanceCtx, reservedSkillNames: ["chart-authoring"] },
+    );
+    assert.equal(automaticShadow.ok, false);
+    assert.match(automaticShadow.text, /read-only System Skill/);
     const browseUsage: typeof skillUsage = [];
     const browseCtx = {
       ...usageCtx,

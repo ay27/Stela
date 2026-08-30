@@ -102,8 +102,7 @@ export const STRATEGY_REVIEW_SYSTEM_PROMPT = [
  * 刻意不 block——一次有效的长分析本来就需要很多次查询。
  */
 export const DATA_ANALYSIS_TOOLS = new Set([
-  "list_databases",
-  "list_tables",
+  "list_catalog",
   "search_tables",
   "get_table_schema",
   "run_query",
@@ -191,6 +190,9 @@ function targetFor(toolName: string, input: Record<string, unknown>): string {
     return `${String(input.connectionName ?? "current")}:${String(input.database ?? "default")}${collection}`;
   }
   if (toolName === "get_table_schema") return stringify(input.tables ?? input, 240);
+  if (toolName === "list_catalog") {
+    return input.level === "tables" ? String(input.database ?? "default") : "databases";
+  }
   if (toolName === "list_tables") return String(input.database ?? "default");
   return toolName;
 }
@@ -236,7 +238,10 @@ export class AnalysisEfficiencyLedger {
     content: Array<TextContent | { type: string; [key: string]: unknown }>;
     isError: boolean;
   }): AnalysisEfficiencySignal {
-    if (input.toolName === "update_plan" && !input.isError) this.markProgress();
+    if (
+      (input.toolName === "update_plan" || (input.toolName === "plan" && input.args.action === "update"))
+      && !input.isError
+    ) this.markProgress();
     if (input.toolName === "execute_python" && !input.isError) this.markProgress();
     if (!DATA_ANALYSIS_TOOLS.has(input.toolName)) {
       return this.signal(null, null, 0);

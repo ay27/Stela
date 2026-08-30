@@ -426,9 +426,10 @@ flowchart TB
    bind to same-run audited SQL and do not use a note-edit proposal. Flow cards
    use controlled graph semantics and Agent updates preserve user layout. Plan state is
    persisted into pi session context so compaction cannot discard the active step
-   or evidence. The compact system prompt and tool list stay invariant. It defines
-   conditional evidence policy, source hierarchy, planning threshold, mutation boundary, and
-   output contract; locale, connection, matched Skill metadata, the implicit current
+   or evidence. The compact system prompt and tool list stay invariant. The prompt
+   keeps only Stela-wide trust, grounding, approval, rendering, locale, and output
+   contracts; capability-specific operation rules stay in tool descriptions or
+   point-of-use System Skills. Connection, matched Vault Skill metadata, the implicit current
    Workspace tab, deterministic current-run capability guidance, and a versioned ordered
    message are appended in a bounded, redacted user-turn envelope. Capability guidance
    is derived only from structured context (Canvas refresh/workspace, RunSQL rewrite
@@ -437,9 +438,11 @@ flowchart TB
    note, Canvas, RunSQL, and selection references, while resource bodies are deduplicated.
    Plan versions are immutable appended session entries, and the plan is progress
    bookkeeping for the agent panel only: it carries no authority over the answer
-   and never gates it. `create_plan` and `update_plan` are write-only records that
-   report notes (unknown step id, out-of-order completion, overwritten terminal
-   step) instead of failing the run, so no turn is spent repairing plan state.
+   and never gates it. The single sequential `plan` tool uses
+   `action=create|update|get`; create/update report notes (unknown step id,
+   out-of-order completion, overwritten terminal step) instead of failing the
+   run, and get is only for state recovery. Historical tool names remain internal
+   dispatch aliases and are not advertised to the model.
    Correctness is defended at the point of use instead: a truncated `run_query`
    preview returns an instruction that it cannot support an exact result, every
    `query()` prints the fetched relation's row/column count and column types, and
@@ -448,14 +451,14 @@ flowchart TB
    last line without Markdown emphasis or thousands separators). Successful
    query/Python calls still register disposable same-run evidence metadata for
    chart and Canvas binding; there is no source pre-scan and no durable evidence
-   database ([ADR-0078](./adr/0078-plans-as-progress-bookkeeping.md)).
+   database ([ADR-0084](./adr/0084-single-action-plan-tool.md)).
    A bounded payload that cannot fit sheds precision before coverage, divides its
    budget into equal per-entity shares instead of first-come-first-served, and
    reports completeness per entity rather than as one global truncation marker, so
    a partial result cannot be mistaken for the shape of the object
    ([ADR-0082](./adr/0082-coverage-over-precision-in-bounded-tool-results.md)).
    pi-ai requests use short cache retention. Read tools may run in parallel;
-   plan tools, Python execution, chart creation, Canvas writes, and `propose_edit` are sequential.
+   the plan tool, Python execution, chart creation, Canvas writes, and `propose_edit` are sequential.
    A bounded in-memory analysis ledger observes schema discovery, structured queries,
    and Python execution. Repeated query families receive a deterministic hint; structural
    fan-out, twenty queries without plan progress, or clustered failures can trigger at most
@@ -526,16 +529,26 @@ flowchart TB
 
 ### Agent Skills
 
-Skills are vault-scoped Markdown instructions at
+The Agent loads two pi-compatible Skill sources through `loadSourcedSkills`.
+Read-only **System Skills** ship at `resources/playbooks/<skill-name>/SKILL.md`
+and are loaded only by exact name when a capability description points to one.
+They are excluded from ranking, `search_skills`, freshness, maintenance, and the
+Experience Knowledge UI. `load_skill` returns `source=system`; save/archive reject
+reserved System names, and a same-named Vault Skill is rejected rather than
+shadowing application guidance. `chart-authoring` is the first System Skill and
+holds cross-field composition rules for `create_chart`
+([ADR-0083](./adr/0083-sourced-system-skills.md)).
+
+**Vault Skills** are user-repository knowledge at
 `{vault}/.stela/skills/<skill-name>/SKILL.md`, and therefore follow normal Git
-sync and review. Valid Skill frontmatter adds a controlled `category`
+sync and review. Valid Vault Skill frontmatter adds a controlled `category`
 (`sql-dialect`, `metric-definition`, `business-glossary`, `data-lineage`, or
 `analysis-runbook`) and non-empty `tags` to pi-agent-core's native `name` and
 required `description`. Skill bodies are concise reusable guidance: scope, rule,
 and a minimal verification or exception. They do not contain analysis narration,
 result rows, or one-off SQL.
 
-Routine local ranking injects at most eight fresh Skills with a positive lexical
+Routine local ranking injects at most eight fresh Vault Skills with a positive lexical
 match to the user's request; explicit knowledge-maintenance turns inject none, so
 their first `search_skills` page is not biased by the active document. The model
 uses `search_skills` to browse or find further candidates and `load_skill` to read

@@ -2,8 +2,9 @@
 type: ADR
 id: "0078"
 title: "Execution plans are progress bookkeeping, not an answer gate"
-status: active
+status: superseded
 date: 2026-08-27
+superseded_by: "0084"
 ---
 
 ## Context

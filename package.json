@@ -149,6 +149,13 @@
     ],
     "extraResources": [
       {
+        "from": "resources/playbooks",
+        "to": "playbooks",
+        "filter": [
+          "**/SKILL.md"
+        ]
+      },
+      {
         "from": "plugins/connector-mysql",
         "to": "plugins/connector-mysql",
         "filter": [

@@ -84,7 +84,7 @@ function queryResult(rowCount = 1) {
       });
       assert.equal(signal.reviewTrigger, null);
     }
-    ledger.recordResult({ toolName: "update_plan", args: {}, content: queryResult(), isError: false });
+    ledger.recordResult({ toolName: "plan", args: { action: "update" }, content: queryResult(), isError: false });
   }
 }
 
@@ -112,7 +112,7 @@ function queryResult(rowCount = 1) {
       isError: false,
     });
   }
-  ledger.recordResult({ toolName: "update_plan", args: {}, content: queryResult(), isError: false });
+  ledger.recordResult({ toolName: "plan", args: { action: "update" }, content: queryResult(), isError: false });
   const signal = ledger.recordResult({
     toolName: "run_query",
     args: { language: "sql", query: "SELECT * FROM empty_after_progress" },

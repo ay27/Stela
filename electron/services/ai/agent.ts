@@ -63,6 +63,7 @@ import {
   type AgentSkillMaintenanceRecord,
   type LoadedAgentSkill,
 } from "./agent-skills";
+import { bundledSystemSkillsRoot } from "./bundled-skills";
 import {
   createPlanPersistenceBuffer,
   ExecutionPlanStore,
@@ -453,7 +454,7 @@ async function runSkillMaintenance(options: {
     return false;
   };
   const actions: AgentSkillMaintenanceRecord[] = [];
-  const promptSkills = rankAgentSkillsForRequest(skills.loaded, request, SKILL_PROMPT_LIMIT);
+  const promptSkills = rankAgentSkillsForRequest(skills.vault, request, SKILL_PROMPT_LIMIT);
   const maintenanceTables = refreshSkill
     ? tablesFromSkill(refreshSkill)
     : Array.from(new Set(evidence.flatMap((item) => item.tables ?? []))).slice(0, 8);
@@ -527,7 +528,8 @@ async function runSkillMaintenance(options: {
           describeTables: connectorRegistry.describeTables,
         },
         sqlIndex: { query: sqlIndex.query },
-        skills: skills.loaded,
+        skills: skills.vault,
+        reservedSkillNames: skills.system.map((skill) => skill.metadata.name),
         mode: refreshSkill ? "refresh" : "maintenance",
         run: { runId: request.runId, sessionId: request.sessionId, notePath: request.notePath ?? null, questionsAsked: 0, toolFailureStreak: new Map() },
         recordRun: recordAgentRun(vaultPath),
@@ -719,7 +721,12 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
     const dialect = request.connectionName
       ? available.dialects[request.connectionName] ?? null
       : null;
-    const skills = await loadAgentSkills(vaultPath);
+    const skills = await loadAgentSkills(vaultPath, { systemSkillDir: bundledSystemSkillsRoot() });
+    if (!skills.system.some((skill) => skill.metadata.name === "chart-authoring")) {
+      log.warn("Bundled chart-authoring System Skill is unavailable", {
+        rejected: skills.rejected.filter((item) => item.origin === "system"),
+      });
+    }
     const explicitSkillMaintenance = request.entryPoint === "knowledge-maintenance";
     const skillEvidence = { notePaths: new Set<string>(), tables: new Set<string>() };
     const freshnessCache = new WeakMap<LoadedAgentSkill, Promise<AgentSkillFreshness>>();
@@ -746,7 +753,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         agentMetrics.addEvent(metricRunId, {
           type: "skill_candidate",
           name: skill.metadata.name,
-          payload: { category: skill.metadata.category, source: "prompt" },
+          payload: { category: skill.metadata.category, source: "prompt", origin: skill.metadata.origin },
         });
       }
     }
@@ -820,6 +827,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           signal,
           sqlIndex: { query: sqlIndex.query },
           skills: skills.loaded,
+          reservedSkillNames: skills.system.map((skill) => skill.metadata.name),
           mode: "normal",
           explicitSkillMaintenance,
           skillEvidence,
@@ -878,7 +886,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
             agentMetrics.addEvent(metricRunId, {
               type: record.type === "loaded" ? "skill_loaded" : "skill_candidate",
               name: record.name,
-              payload: { category: record.category, source: record.source },
+              payload: { category: record.category, source: record.source, origin: record.origin },
             });
           },
         },
@@ -1226,7 +1234,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           : [],
         contextSources: {
           vault_notes: "unknown",
-          skills: skills.loaded.length > 0 ? "available" : "empty",
+          skills: skills.vault.length > 0 ? "available" : "empty",
           sql_history: "unknown",
           canvas: "unknown",
           clarification: "available",

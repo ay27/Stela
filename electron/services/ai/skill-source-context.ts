@@ -68,6 +68,7 @@ export async function getSkillFreshness(
   skill: LoadedAgentSkill,
   query: SkillSourceQuery,
 ): Promise<AgentSkillFreshness> {
+  if (skill.metadata.origin === "system") return "fresh";
   if (skill.metadata.sources.length === 0) return "untracked";
   for (const source of skill.metadata.sources) {
     try {

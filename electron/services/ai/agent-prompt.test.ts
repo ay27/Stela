@@ -29,32 +29,20 @@ assert.equal(visibleAssistantText({
 
 const prompt = buildSystemPrompt();
 assert.equal(prompt, buildSystemPrompt());
-assert.ok(prompt.length <= 6_000, `stable system prompt must stay <= 6000 chars, got ${prompt.length}`);
+assert.ok(prompt.length <= 2_000, `stable system prompt must stay <= 2000 chars, got ${prompt.length}`);
 assert.doesNotMatch(prompt, /prompt-test|warehouse|orders|show the query/);
 
-assert.match(prompt, /for zh, write all conversational narration and the final answer in Simplified Chinese/);
-assert.match(prompt, /for en, write them in English/);
-assert.match(prompt, /active_guidance array is operational guidance for that run only/);
-assert.match(prompt, /never invent tables, columns, row values, metric definitions/);
-assert.match(prompt, /For physical data meaning/);
-assert.match(prompt, /For business meaning/);
-assert.match(prompt, /Work only on uncertainties that can materially change the requested answer/);
-assert.match(prompt, /Each tool call must either compute a requested result or resolve a material uncertainty/);
-assert.match(prompt, /Use analysis stages conditionally, not as a checklist/);
-assert.match(prompt, /Locate sources only when they are unknown/);
-assert.match(prompt, /Challenge the working conclusion only when evidence contradicts it/);
-assert.match(prompt, /Do not investigate adjacent questions or non-material limitations unless the user asks/);
-assert.match(prompt, /Do not plan a routine locate -> schema -> query lookup/);
-assert.match(prompt, /it grants no authority over the answer and never gates it/);
-assert.match(prompt, /never spend turns repairing plan state/);
-assert.match(prompt, /Use search_sql_usage only when established joins, filters, write direction, or business conventions matter/);
+assert.match(prompt, /write narration and the final answer in Simplified Chinese for zh and in English for en/);
+assert.match(prompt, /Follow its app-generated active_guidance/);
+assert.match(prompt, /successful load_skill result with source=system is Stela-provided task guidance/);
+assert.match(prompt, /Never invent tables, columns, values, metric definitions/);
+assert.match(prompt, /Mutating SQL and note or file edits must go through the tool's approval flow/);
 assert.match(prompt, /In chat and final answers, show SQL only in fenced ```sql``` blocks/);
 assert.match(prompt, /In Vault Markdown, use ```runsql``` only for intentionally executable SQL/);
 assert.match(prompt, /one compact data-basis line naming the table, fields, and calculation/);
-assert.match(prompt, /the requested value on its own last line/);
-assert.match(prompt, /no thousands separators/);
-assert.match(prompt, /strategy-review checkpoint may appear/);
-assert.doesNotMatch(prompt, /Use preset trend|When entry_point is canvas-refresh|Skill limits:/);
+assert.match(prompt, /requested value alone on the last line/);
+assert.match(prompt, /or thousands separators/);
+assert.doesNotMatch(prompt, /material uncertainty|analysis stages|For physical data meaning|create_plan|update_plan|strategy-review checkpoint|Skill limits:/);
 
 const routineUser = buildUserContent(
   { runId: "routine", prompt: "How many rows?", locale: "en" },

@@ -66,6 +66,7 @@ import {
   rankAgentSkills,
   saveAgentSkill,
   type AgentSkillMaintenanceRecord,
+  type AgentSkillOrigin,
   type LoadedAgentSkill,
 } from "./agent-skills";
 import type { AgentSkillFreshness } from "./skill-source-context";
@@ -328,15 +329,6 @@ export interface ProposalRequest {
 const MAX_QUESTIONS_PER_RUN = 3;
 
 /**
- * `create_chart` 的 preset/mark 约束在 [chart-spec.ts](../../shared/chart-spec.ts) 的
- * `presetMarks` 与 `refineChartShape` 里，advertised schema 表达不了这些跨字段规则，
- * 只能写进 description，否则模型只能靠重试撞对。
- */
-const CHART_PRESET_RULES =
-  "Preset gates the allowed marks: trend=line|area, ranking=bar, composition=arc, distribution=histogram|boxplot, " +
-  "correlation=point, funnel=funnel, retention=rect, comparison=bar|line|area|point|rule, custom=any. " +
-  "Only comparison and custom accept two layers, and layered charts must share one x field and use bar|line|area|point|rule.";
-/**
  * Canvas 的结构只存在于 [analysis-canvas.ts](../../shared/analysis-canvas.ts) 的 zod 里，
  * 工具参数只能声明成一个 JSON 字符串，所以 card 判别联合必须在 description 里讲清楚。
  */
@@ -344,13 +336,6 @@ const CANVAS_CARD_RULES =
   "Every card needs id and type. type gates the rest: markdown needs markdown; kpi needs sourceId and value; " +
   "chart needs sourceId and chart; table needs sourceId; flow needs nodes and edges. No other keys are accepted per type. " +
   "A chart card's chart.fields is an object keyed by field id, not the array that create_chart takes.";
-const CHART_MARK_RULES =
-  "Required channels: bar/line/area/point need x and y; arc needs theta and color; rect needs x, y, and color; " +
-  "rule needs y; histogram needs x; boxplot needs y; funnel needs x and y. " +
-  "Quantitative fields required for line/area/rule/point y, histogram x, boxplot y, funnel x, rect color, theta, and size. " +
-  "Categorical fields required for arc color and funnel y; rect x and y must be categorical or temporal; " +
-  "bar needs exactly one quantitative axis and one categorical or temporal axis.";
-
 /**
  * 工具执行上下文，由 [agent.ts](./agent.ts) 每次 run 构造一次。
  * `requestProposal` 把「等用户确认」抽象成一个 Promise：agent 循环负责发
@@ -374,6 +359,8 @@ export interface AgentToolContext {
   signal?: AbortSignal;
   sqlIndex: AgentSqlIndexOps;
   skills: LoadedAgentSkill[];
+  /** Names owned by bundled read-only System Skills, including in maintenance-only contexts. */
+  reservedSkillNames?: readonly string[];
   mode: "normal" | "maintenance" | "refresh";
   explicitSkillMaintenance?: boolean;
   skillEvidence?: { notePaths: Set<string>; tables: Set<string> };
@@ -384,6 +371,7 @@ export interface AgentToolContext {
   onSkillUsage?: (record: {
     type: "candidate" | "loaded";
     source: "prompt" | "search" | "load";
+    origin: AgentSkillOrigin;
     name: string;
     category: string | null;
   }) => void;
@@ -431,25 +419,16 @@ export function createAgentTools(options: {
   const { ctx, requestProposal } = options;
   const tools: AgentTool[] = [
     {
-      name: "list_databases",
-      label: "List databases",
-      description: "List databases/schemas visible through a named Stela connection. Omit connectionName to use the current note connection.",
+      name: "list_catalog",
+      label: "List catalog",
+      description: "List databases or tables through a Stela connection.",
       parameters: Type.Object({
-        connectionName: Type.Optional(Type.String({ description: "Available Stela connection name." })),
+        level: Type.String({ enum: ["databases", "tables"] }),
+        database: Type.Optional(Type.String({ description: "Database for level=tables; a sole database is selected automatically." })),
+        connectionName: Type.Optional(Type.String({ description: "Connection; defaults to current." })),
       }),
       executionMode: "parallel",
-      execute: (toolCallId, params) => runTool("list_databases", toolCallId, params, ctx, requestProposal),
-    },
-    {
-      name: "list_tables",
-      label: "List tables",
-      description: "List tables in a database through a named Stela connection.",
-      parameters: Type.Object({
-        database: Type.Optional(Type.String({ description: "Database name; omit to use the connector default." })),
-        connectionName: Type.Optional(Type.String({ description: "Available Stela connection name; defaults to current." })),
-      }),
-      executionMode: "parallel",
-      execute: (toolCallId, params) => runTool("list_tables", toolCallId, params, ctx, requestProposal),
+      execute: (toolCallId, params) => runTool("list_catalog", toolCallId, params, ctx, requestProposal),
     },
     {
       name: "search_tables",
@@ -470,21 +449,19 @@ export function createAgentTools(options: {
       name: "get_table_schema",
       label: "Get table schema",
       description:
-        "Fetch live column names and types for one or more tables. This is the authoritative source for table structure: never reconstruct it from information_schema, SHOW COLUMNS, or a LIMIT 0 query. Column comments are returned only when you pass columnNames, because full comments and full column coverage cannot both fit for wide tables. Each table reports columnsComplete; when it is false, narrow with columnNames or page with columnOffset instead of treating the partial list as the table's width.",
+        "Fetch authoritative live columns and types. Optionally inspect selected column comments or non-column DDL clauses.",
       parameters: Type.Object({
         tables: Type.Array(Type.String(), {
           description: "Table names, optionally qualified as db.table.",
         }),
         columnNames: Type.Optional(Type.Array(Type.String(), {
-          description:
-            "Verify only these columns across the requested tables and return their comments. Missing ones come back in missingRequestedColumns.",
+          description: "Return these columns with comments and report missing names.",
         })),
         columnOffset: Type.Optional(Type.Number({
-          description: "Resume an incomplete column list from a previous nextColumnOffset.",
+          description: "Resume at a previous nextColumnOffset.",
         })),
         includeDdl: Type.Optional(Type.Boolean({
-          description:
-            "Include a truncated CREATE TABLE snippet. Off by default: it repeats the column list and crowds it out. Only turn it on for engine, partitioning, distribution, or key clauses.",
+          description: "Include truncated DDL for engine, partition, distribution, or key clauses.",
         })),
         connectionName: Type.Optional(Type.String({ description: "Available Stela connection name; defaults to current." })),
       }),
@@ -495,15 +472,15 @@ export function createAgentTools(options: {
       name: "run_query",
       label: "Run query",
       description:
-        "Run one structured SQL or MongoDB query through a named Stela connection and get a bounded preview. Use it to inspect data and to back a chart. For anything that needs the full result, query from inside execute_python instead. SQL mutations remain guarded. MongoDB supports read-only find and, when declared by the connector, a safe aggregation pipeline.",
+        "Run one SQL or MongoDB query. Results may be a bounded preview; aggregate in the query for exact results or use execute_python for complete rows. Writes require approval.",
       // Function providers require the top-level schema to be type=object.
       // SQL/Mongo field requirements are discriminated again in runQuery.
       parameters: Type.Object({
-        language: Type.Union([Type.Literal("sql"), Type.Literal("mongodb")]),
+        language: Type.String({ enum: ["sql", "mongodb"] }),
         query: Type.Optional(Type.String({ description: "Required for SQL: one SQL statement." })),
         collection: Type.Optional(Type.String({ description: "Required for MongoDB: collection name." })),
         database: Type.Optional(Type.String({ description: "Optional logical database." })),
-        operation: Type.Optional(Type.Union([Type.Literal("find"), Type.Literal("aggregate")])),
+        operation: Type.Optional(Type.String({ enum: ["find", "aggregate"] })),
         filter: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "MongoDB find filter." })),
         projection: Type.Optional(Type.Union([Type.Record(Type.String(), Type.Unknown()), Type.Null()])),
         pipeline: Type.Optional(Type.Array(Type.Record(Type.String(), Type.Unknown()), {
@@ -519,11 +496,11 @@ export function createAgentTools(options: {
       name: "execute_python",
       label: "Execute Python",
       description:
-        "Run local Python that fetches its own data with `await query(connection_name, request)`, which returns a DuckDB relation over the full result (.df() for pandas). request is a SQL string, or a MongoDB dict like {'collection': 'orders', 'filter': {}, 'limit': None}. Use it to read whole tables and do row-wise work SQL cannot: JSON/text parsing, fuzzy matching, dirty-date coercion, cross-connection joins. query() is read-only. duckdb, pandas, con, and tables are preloaded. No files, network, package installs, or host APIs. Assign the final scalar, DataFrame, or DuckDB relation to result.",
+        "Run sandboxed Python over complete read-only query results. Fetch with `await query(connection_name, request)` and assign the final value to result. duckdb, pandas, con, and tables are preloaded; files, network, packages, and host APIs are unavailable.",
       parameters: Type.Object({
         code: Type.String({
           maxLength: PYTHON_CODE_MAX_CHARS,
-          description: "Python code; top-level await is allowed. Example: df = (await query('sales', 'SELECT region, amount FROM orders')).df(); result = df.groupby('region', as_index=False)['amount'].sum()",
+          description: "Python with top-level await; assign the final value to result.",
         }),
       }),
       executionMode: "sequential",
@@ -533,39 +510,33 @@ export function createAgentTools(options: {
       name: "create_chart",
       label: "Create chart",
       description:
-        "Validate a Stela chart against one successful SQL run_query. Declare exact result columns as fields and reference their ids from 1-2 layer encodings; keep business aggregation in SQL.",
+        "Create a chart from a successful SQL run_query. Before the first chart in a run, call load_skill with name=chart-authoring. Declare result columns as fields and reference their ids from layers.",
       parameters: Type.Object({
         runId: Type.String({ description: "Exact runId returned by a SQL run_query in this Agent run." }),
         title: Type.Optional(Type.String()),
         description: Type.Optional(Type.String()),
-        preset: Type.Union(
-          ["trend", "ranking", "composition", "distribution", "correlation", "funnel", "retention", "comparison", "custom"].map((value) => Type.Literal(value)),
-          { description: CHART_PRESET_RULES },
-        ),
+        preset: Type.String({ enum: ["trend", "ranking", "composition", "distribution", "correlation", "funnel", "retention", "comparison", "custom"] }),
         fields: Type.Array(Type.Object({
           id: Type.String({ description: "Stable short id referenced by layer encodings. Must match ^[A-Za-z_][A-Za-z0-9_-]{0,127}$." }),
           field: Type.String({ description: "Exact result column name." }),
-          type: Type.Union(["nominal", "ordinal", "quantitative", "temporal", "boolean"].map((value) => Type.Literal(value))),
+          type: Type.String({ enum: ["nominal", "ordinal", "quantitative", "temporal", "boolean"] }),
           title: Type.Optional(Type.String()),
-          temporalInput: Type.Optional(Type.Union([Type.Literal("iso"), Type.Literal("epoch-ms"), Type.Literal("epoch-seconds")], { description: "Only valid when type is temporal." })),
+          temporalInput: Type.Optional(Type.String({ enum: ["iso", "epoch-ms", "epoch-seconds"] })),
           format: Type.Optional(Type.Object({
-            kind: Type.Union(["auto", "text", "number", "compact", "percent", "currency", "date", "datetime", "duration", "boolean"].map((value) => Type.Literal(value))),
-            input: Type.Optional(Type.String({ description: "Required for percent (ratio|whole) and duration (milliseconds|seconds); optional for date/datetime (iso|epoch-ms|epoch-seconds); rejected for other kinds." })),
-            currency: Type.Optional(Type.String({ description: "Required for currency kind: uppercase ISO 4217 code such as USD." })),
-            style: Type.Optional(Type.String({ description: "date/datetime: short|medium|long. duration: short|clock." })),
-            timeZone: Type.Optional(Type.String({ description: "date/datetime only: local|UTC." })),
-            minimumFractionDigits: Type.Optional(Type.Number({ description: "number kind only." })),
-            maximumFractionDigits: Type.Optional(Type.Number({ description: "number, compact, percent, and currency kinds only." })),
-            trueLabel: Type.Optional(Type.String({ description: "boolean kind only." })),
-            falseLabel: Type.Optional(Type.String({ description: "boolean kind only." })),
+            kind: Type.String({ enum: ["auto", "text", "number", "compact", "percent", "currency", "date", "datetime", "duration", "boolean"] }),
+            input: Type.Optional(Type.String()),
+            currency: Type.Optional(Type.String()),
+            style: Type.Optional(Type.String()),
+            timeZone: Type.Optional(Type.String()),
+            minimumFractionDigits: Type.Optional(Type.Number()),
+            maximumFractionDigits: Type.Optional(Type.Number()),
+            trueLabel: Type.Optional(Type.String()),
+            falseLabel: Type.Optional(Type.String()),
             nullLabel: Type.Optional(Type.String()),
           }, { additionalProperties: false })),
         }, { additionalProperties: false }), { minItems: 1, maxItems: 32 }),
         layers: Type.Array(Type.Object({
-          mark: Type.Union(
-            ["bar", "line", "area", "point", "arc", "rect", "rule", "histogram", "boxplot", "funnel"].map((value) => Type.Literal(value)),
-            { description: CHART_MARK_RULES },
-          ),
+          mark: Type.String({ enum: ["bar", "line", "area", "point", "arc", "rect", "rule", "histogram", "boxplot", "funnel"] }),
           encoding: Type.Object({
             x: Type.Optional(Type.String()), y: Type.Optional(Type.String()), color: Type.Optional(Type.String()),
             size: Type.Optional(Type.String()), theta: Type.Optional(Type.String()),
@@ -573,9 +544,9 @@ export function createAgentTools(options: {
             additionalProperties: false,
             description: "Only these five channels exist. Every value must be a field id declared in fields, never a column name, label, or nested object.",
           }),
-          yAxis: Type.Optional(Type.Union([Type.Literal("left"), Type.Literal("right")])),
-          stack: Type.Optional(Type.Union([Type.Literal("none"), Type.Literal("normal"), Type.Literal("percent")], { description: "Only bar and area marks can stack." })),
-          bins: Type.Optional(Type.Number({ description: "Histogram marks only; integer 5-50." })),
+          yAxis: Type.Optional(Type.String({ enum: ["left", "right"] })),
+          stack: Type.Optional(Type.String({ enum: ["none", "normal", "percent"] })),
+          bins: Type.Optional(Type.Number()),
         }, { additionalProperties: false }), { minItems: 1, maxItems: 2 }),
       }),
       executionMode: "sequential",
@@ -615,7 +586,7 @@ export function createAgentTools(options: {
       name: "search_vault",
       label: "Search vault",
       description:
-        "Full-text search across the vault's Markdown notes, returning ranked notes (not raw lines). Every keyword is scored in one pass and notes matching more of them rank higher, so pass all your keywords at once. The result reports totalMatches/truncated so you can tell whether you saw everything.",
+        "Search Vault Markdown and return ranked notes with totalMatches/truncated. Pass related keywords together for one ranked search.",
       parameters: Type.Object({
         keyword: Type.Optional(Type.String({ description: "Single keyword for compatibility." })),
         keywords: Type.Optional(
@@ -684,49 +655,32 @@ export function createAgentTools(options: {
       execute: (toolCallId, params) => runTool("read_note", toolCallId, params, ctx, requestProposal),
     },
     {
-      name: "create_plan",
-      label: "Create execution plan",
+      name: "plan",
+      label: "Manage execution plan",
       description:
-        "Create a concise 2-8 step plan for multiple analytical branches, multiple datasets/connections, several verification cycles, or a multi-view Canvas/report. Skip routine locate-schema-query lookups.",
+        "Create, update, or recover a progress plan for complex analyses. Skip routine lookups; plans never gate answers.",
       parameters: Type.Object({
-        steps: Type.Array(
+        action: Type.String({ enum: ["create", "update", "get"] }),
+        steps: Type.Optional(Type.Array(
           Type.Object({
             id: Type.String(),
             title: Type.String(),
             intent: Type.String(),
             acceptance: Type.String(),
           }),
-        ),
-      }),
-      executionMode: "sequential",
-      execute: (toolCallId, params) => runTool("create_plan", toolCallId, params, ctx, requestProposal),
-    },
-    {
-      name: "update_plan",
-      label: "Update execution plan",
-      description:
-        "Record progress on one plan step so the user can follow a long run. Complete, block, or skip any step in any order; this is bookkeeping only and never blocks the analysis.",
-      parameters: Type.Object({
-        stepId: Type.String(),
-        status: Type.Union([Type.Literal("completed"), Type.Literal("blocked"), Type.Literal("skipped")]),
+        )),
+        stepId: Type.Optional(Type.String()),
+        status: Type.Optional(Type.String({ enum: ["completed", "blocked", "skipped"] })),
         evidence: Type.Optional(Type.String()),
         runId: Type.Optional(Type.String()),
       }),
       executionMode: "sequential",
-      execute: (toolCallId, params) => runTool("update_plan", toolCallId, params, ctx, requestProposal),
-    },
-    {
-      name: "get_plan",
-      label: "Get execution plan",
-      description: "Read the current execution plan before choosing the next analysis action.",
-      parameters: Type.Object({}),
-      executionMode: "sequential",
-      execute: (toolCallId) => runTool("get_plan", toolCallId, {}, ctx, requestProposal),
+      execute: (toolCallId, params) => runTool("plan", toolCallId, params, ctx, requestProposal),
     },
     {
       name: "load_skill",
       label: "Load Skill",
-      description: "Load one Skill by exact name. Fresh content is usable guidance; untracked content carries a verification warning, and explicit knowledge maintenance may inspect stale content only to repair it.",
+      description: "Load one exact Skill. System Skills are read-only Stela guidance; Vault Skills include freshness and verification status.",
       parameters: Type.Object({ name: Type.String({ description: "Exact Skill name from search_skills or the available Skills list." }) }),
       executionMode: "parallel",
       execute: (toolCallId, params) => runTool("load_skill", toolCallId, params, ctx, requestProposal),
@@ -750,7 +704,7 @@ export function createAgentTools(options: {
       description:
         "Save one compact verified data-knowledge Skill or archive an obsolete one when explicitly requested. Never store result rows, snapshots, one-off SQL, or user notes.",
       parameters: Type.Object({
-        action: Type.Optional(Type.Union([Type.Literal("save"), Type.Literal("archive")])),
+        action: Type.Optional(Type.String({ enum: ["save", "archive"] })),
         name: Type.String({ description: "Required lowercase Skill directory name, e.g. postgresql-demo-tasks." }),
         content: Type.Optional(
           Type.String({
@@ -935,12 +889,21 @@ async function runListTables(
         reason: "database_required",
         connectionName: name,
         databases,
-        instruction: "Call list_tables again with one exact database from this list.",
+        instruction: "Call list_catalog again with level=tables and one exact database from this list.",
       });
     }
   }
   const tables = await ctx.connector.listTables(connection.kind, connection.config, database);
   return ok({ connectionName: name, database, tables });
+}
+
+async function runListCatalog(
+  args: { level?: unknown; database?: string; connectionName?: unknown },
+  ctx: AgentToolContext,
+): Promise<ToolOutcome> {
+  if (args.level === "databases") return await runListDatabases(args, ctx);
+  if (args.level === "tables") return await runListTables(args, ctx);
+  return fail("level must be databases or tables.");
 }
 
 async function runSearchTables(args: { keywords?: unknown; limit?: unknown; connectionName?: unknown }, ctx: AgentToolContext): Promise<ToolOutcome> {
@@ -962,7 +925,7 @@ async function runSearchTables(args: { keywords?: unknown; limit?: unknown; conn
     },
   });
   if (targets.length === 0) {
-    return fail("No matching tables found. Try list_databases/list_tables, or broaden the keywords.");
+    return fail("No matching tables found. Try list_catalog, or broaden the keywords.");
   }
   const usage = await Promise.all(
     targets.map((target) => tableUsage(ctx, target.table)),
@@ -1970,6 +1933,7 @@ async function runLoadSkill(args: { name?: unknown }, ctx: AgentToolContext): Pr
   ctx.onSkillUsage?.({
     type: "loaded",
     source: "load",
+    origin: skill.metadata.origin,
     name: skill.metadata.name,
     category: skill.metadata.category,
   });
@@ -1977,8 +1941,9 @@ async function runLoadSkill(args: { name?: unknown }, ctx: AgentToolContext): Pr
   const truncated = content.length > MAX_AGENT_SKILL_CHARS;
   return ok({
     name: skill.metadata.name,
+    source: skill.metadata.origin,
     freshness,
-    usableForFacts: freshness === "fresh",
+    usableForFacts: skill.metadata.origin === "vault" && freshness === "fresh",
     ...(freshness === "stale"
       ? { warning: "Stale Skill body is inspection-only. Verify every retained rule against live evidence before saving." }
       : freshness === "untracked"
@@ -1996,9 +1961,10 @@ async function runSearchSkills(
   const query = typeof args.query === "string" ? args.query.trim() : "";
   const browsing = query.length === 0;
   const limit = boundedInt(args.limit, browsing ? 20 : 8, 1, browsing ? 50 : 20);
+  const searchable = ctx.skills.filter((skill) => skill.metadata.origin === "vault");
   const ranked = browsing
-    ? [...ctx.skills].sort((a, b) => a.metadata.name.localeCompare(b.metadata.name))
-    : rankAgentSkills(ctx.skills, query, ctx.skills.length);
+    ? [...searchable].sort((a, b) => a.metadata.name.localeCompare(b.metadata.name))
+    : rankAgentSkills(searchable, query, searchable.length);
   const offset = boundedInt(args.offset, 0, 0, ranked.length);
   const page = ranked.slice(offset, offset + limit);
   const checked = await Promise.all(page.map(async (skill) => ({
@@ -2020,6 +1986,7 @@ async function runSearchSkills(
       ctx.onSkillUsage?.({
         type: "candidate",
         source: "search",
+        origin: "vault",
         name: skill.name,
         category: skill.category,
       });
@@ -2029,7 +1996,7 @@ async function runSearchSkills(
   const nextOffset = consumed < ranked.length ? consumed : null;
   return ok({
     skills,
-    totalSkills: ctx.skills.length,
+    totalSkills: searchable.length,
     totalMatches: ranked.length,
     nextOffset,
     truncated: nextOffset !== null,
@@ -2050,6 +2017,12 @@ async function runSaveSkill(
 ): Promise<ToolOutcome> {
   const action = args.action ?? "save";
   const name = typeof args.name === "string" ? args.name : "";
+  const systemNames = Array.from(new Set([
+    ...(ctx.reservedSkillNames ?? []),
+    ...ctx.skills
+      .filter((skill) => skill.metadata.origin === "system")
+      .map((skill) => skill.metadata.name),
+  ]));
   const reason = typeof args.reason === "string" && args.reason.trim()
     ? args.reason
     : "Updated internal data knowledge.";
@@ -2084,12 +2057,13 @@ async function runSaveSkill(
           sourceTables: ctx.explicitSkillMaintenance
             ? requestedSourceTables
             : ctx.maintenanceTables,
+          reservedNames: systemNames,
         })
         : null
       : action === "archive"
         ? ctx.mode === "maintenance"
           ? null
-          : await archiveAgentSkill(ctx.vaultPath, name, reason)
+          : await archiveAgentSkill(ctx.vaultPath, name, reason, { reservedNames: systemNames })
         : null;
   if (!record) {
     return fail(
@@ -2099,7 +2073,14 @@ async function runSaveSkill(
     );
   }
   const refreshed = await loadAgentSkills(ctx.vaultPath);
-  ctx.skills.splice(0, ctx.skills.length, ...refreshed.loaded);
+  const system = ctx.skills.filter((skill) => skill.metadata.origin === "system");
+  const reserved = new Set(system.map((skill) => skill.metadata.name));
+  ctx.skills.splice(
+    0,
+    ctx.skills.length,
+    ...system,
+    ...refreshed.vault.filter((skill) => !reserved.has(skill.metadata.name)),
+  );
   ctx.onSkillMaintenance?.(record);
   return ok(record, RESULT_CHAR_BUDGET, ctx.mode === "maintenance" || ctx.mode === "refresh");
 }
@@ -2353,7 +2334,7 @@ async function runCreatePlan(
     return ok({
       created: false,
       plan: existing,
-      instruction: "A plan already exists. Use update_plan to record progress on it.",
+      instruction: "A plan already exists. Use plan with action=update to record progress on it.",
     });
   }
   if (!Array.isArray(args.steps)) return fail("steps must be an array.");
@@ -2387,6 +2368,23 @@ function runGetPlan(ctx: AgentToolContext): ToolOutcome {
   return snapshot ? ok(snapshot) : ok({ plan: null, instruction: ctx.plan.formatForContext() });
 }
 
+async function runPlan(
+  args: {
+    action?: unknown;
+    steps?: unknown;
+    stepId?: unknown;
+    status?: unknown;
+    evidence?: unknown;
+    runId?: unknown;
+  },
+  ctx: AgentToolContext,
+): Promise<ToolOutcome> {
+  if (args.action === "create") return await runCreatePlan(args, ctx);
+  if (args.action === "update") return await runUpdatePlan(args, ctx);
+  if (args.action === "get") return runGetPlan(ctx);
+  return fail("action must be create, update, or get.");
+}
+
 /** 把模型返回的 JSON 字符串参数安全 parse 成对象；失败时返回 `{}` 让工具自己报参数缺失。 */
 function parseArgs(raw: string): Record<string, unknown> {
   try {
@@ -2405,7 +2403,12 @@ function parseArgs(raw: string): Record<string, unknown> {
  */
 const MAX_CONSECUTIVE_TOOL_FAILURES = 3;
 /** `run_sql` 是 `run_query` 的别名，熔断豁免范围要和 ADR-0069 的探索类工具一致。 */
-const UNBREAKABLE_TOOLS = new Set([...DATA_ANALYSIS_TOOLS, "run_sql"]);
+const UNBREAKABLE_TOOLS = new Set([
+  ...DATA_ANALYSIS_TOOLS,
+  "run_sql",
+  "list_databases",
+  "list_tables",
+]);
 
 /** 工具异常不该崩循环——统一在这里捕获并转成 role:tool 的 error 文本，回喂模型自愈。 */
 export async function dispatchTool(
@@ -2435,8 +2438,12 @@ async function dispatchToolCall(
   const args = parseArgs(rawArguments);
   try {
     switch (name as AgentToolName) {
+      case "list_catalog":
+        return await runListCatalog(args, ctx);
+      /** @deprecated Old session trace compatibility. */
       case "list_databases":
         return await runListDatabases(args, ctx);
+      /** @deprecated Old session trace compatibility. */
       case "list_tables":
         return await runListTables(args, ctx);
       case "search_tables":
@@ -2464,10 +2471,15 @@ async function dispatchToolCall(
         return await runListVaultFiles(args, ctx);
       case "read_note":
         return await runReadNote(args, ctx);
+      case "plan":
+        return await runPlan(args, ctx);
+      /** @deprecated Old session trace compatibility. */
       case "create_plan":
         return await runCreatePlan(args, ctx);
+      /** @deprecated Old session trace compatibility. */
       case "update_plan":
         return await runUpdatePlan(args, ctx);
+      /** @deprecated Old session trace compatibility. */
       case "get_plan":
         return runGetPlan(ctx);
       case "load_skill":

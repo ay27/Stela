@@ -662,11 +662,11 @@ provide a true batch endpoint.
 
 ```typescript
 type AgentToolName =
-  | "list_databases" | "list_tables" | "search_tables" | "get_table_schema"
+  | "list_catalog" | "search_tables" | "get_table_schema"
   | "run_query" | "execute_python" | "create_chart" | "search_sql_usage"
   | "create_analysis_canvas" | "read_analysis_canvas" | "update_analysis_canvas"
   | "search_vault" | "list_vault_files" | "read_note"
-  | "create_plan" | "update_plan" | "get_plan"
+  | "plan"
   | "search_skills" | "load_skill" | "save_skill"
   | "propose_edit" | "ask_user";
 
@@ -896,9 +896,8 @@ Safety ([ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md)):
 - Read tools and `run_query` may execute in parallel. `execute_python`, plan mutations, chart creation, Canvas creation/update, and `propose_edit` are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0079](./adr/0079-sandbox-query-rpc.md)). NodeExecutionEnv is harness cwd only (not exposed as model tools)
 - Compaction uses `ai.contextWindow` + one overflow recovery ([ADR-0018](./adr/0018-pi-ai-agent-harness.md))
 - Execution plans are bounded and linear. Their active store is main-process runtime state; every versioned `AgentPlanSnapshot` is appended immutably to the pi session, and only the highest version for the current run is active ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md), [ADR-0046](./adr/0046-device-sharded-agent-session-history.md))
-- A plan grants no authority over the answer and never gates it. `create_plan` and `update_plan` are write-only records that report a note — unknown step id, out-of-order completion, overwritten terminal step — instead of failing the run, and evidence lines are optional. Answer correctness is defended at the point of use: a truncated `run_query` result returns only `sampleRows` plus an instruction that they cannot support an exact result, each sandbox `query()` prints its relation's row/column count and column types, and the stable prompt fixes the answer shape (conclusion, material caveats, one data-basis line, then the requested value alone on the last line without Markdown emphasis or thousands separators). Successful query/Python calls still register disposable same-run evidence metadata for chart and Canvas binding, and Python evidence retains its source run lineage; Stela does not pre-scan sources or persist an evidence catalog ([ADR-0078](./adr/0078-plans-as-progress-bookkeeping.md))
-- The Agent system prompt and tool list are request-invariant. The compact stable prompt defines grounding, evidence order, planning threshold, mutation approval, rendering, and answer policy. Dynamic context, including explicit availability states and deterministic current-run guidance for Canvas, RunSQL rewrite, Skills, and MongoDB, is bounded, redacted, and appended in the user turn immediately before the request; pi-ai uses short cache retention and session affinity ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md))
-- Data analysis is driven by material uncertainty rather than a mandatory checklist. Locate runs only when the source is unknown, Ground only when semantic ambiguity affects correctness, Verify only when plausible interpretations would change the answer, and Challenge only when evidence contradicts the working conclusion. Every tool call must compute a requested result or resolve such an uncertainty; the Agent stops once the requested conclusion is supported. Physical semantics prefer current context, live schema/DDL, small samples, then SQL usage; business semantics prefer current definitions, SQL usage, Vault notes, Skills, then clarification. Routine locate-schema-query lookups do not create execution plans.
+- A plan grants no authority over the answer and never gates it. The sequential `plan` tool uses `action=create|update|get`; create/update report a note — unknown step id, out-of-order completion, overwritten terminal step — instead of failing the run, evidence lines are optional, and get is for recovery only. Old plan names remain internal trace aliases but are absent from the provider schema. Answer correctness is defended at the point of use: a truncated `run_query` result returns only `sampleRows` plus an instruction that they cannot support an exact result, each sandbox `query()` prints its relation's row/column count and column types, and the stable prompt fixes the answer shape. Successful query/Python calls still register disposable same-run evidence metadata for chart and Canvas binding, and Python evidence retains its source run lineage; Stela does not pre-scan sources or persist an evidence catalog ([ADR-0084](./adr/0084-single-action-plan-tool.md))
+- The Agent system prompt and tool list are request-invariant. The compact stable prompt contains only Stela-wide trust, grounding, approval, locale, rendering, and final-answer contracts. Operation-specific guidance belongs in the relevant tool description or a deterministically named System Skill. Dynamic context, including explicit availability states and deterministic current-run guidance for Canvas, RunSQL rewrite, Vault Skills, and MongoDB, is bounded, redacted, and appended in the user turn immediately before the request; pi-ai uses short cache retention and session affinity ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md), [ADR-0083](./adr/0083-sourced-system-skills.md))
 - RunSQL fix/schema quick actions auto-submit in a new Agent tab; rewrite/question actions open editable drafts. `runsql_rewrite` proposals are bound to the original SQL snapshot and renderer target, then reuse the inline diff accept/discard UI ([ADR-0059](./adr/0059-agent-panel-quick-actions.md))
 - Note and Canvas references are paths only; the Agent reads them only when the task relies on their contents
 - Selection / RunSQL attachments are bounded current-turn evidence. Surrounding notes or live schema are retrieved only when missing context could materially change the answer
@@ -907,7 +906,21 @@ Safety ([ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md)):
 
 ### Agent Skills
 
-An Agent Skill is an internal, Vault-maintained pi-compatible `SKILL.md` below
+Agent Skills have an explicit runtime `origin`: `system` or `vault`. Both are
+loaded with pi-agent-core's `loadSourcedSkills` and read through the existing
+`load_skill(name)` tool. A successful load returns its `source`; only a System
+result is trusted as Stela-provided task guidance. Live schema, successful query
+results, validators, and the user's goal remain authoritative over any Skill.
+
+A System Skill is a read-only application method shipped below
+`resources/playbooks/<skill-name>/SKILL.md`. It is always fresh, has no Vault
+category/tags/provenance contract, and is absent from automatic prompt ranking,
+`search_skills`, maintenance, and Experience Knowledge. Capability descriptions
+must name it exactly at the point of use. System names are reserved against Vault
+save/archive and same-name Vault files are rejected at load
+([ADR-0083](./adr/0083-sourced-system-skills.md)).
+
+A Vault Skill is internal, user-maintained data knowledge in `SKILL.md` below
 `{vault}/.stela/skills/<skill-name>/`. Its YAML frontmatter must include a
 non-empty `description`, a `category` from `sql-dialect`, `metric-definition`,
 `business-glossary`, `data-lineage`, or `analysis-runbook`, and a non-empty inline
@@ -927,8 +940,8 @@ at most 160 characters; its body has at most 80 lines and two code examples of a
 most 20 lines each. Analysis narration, result rows, and one-off SQL belong to run
 history or Vault notes instead.
 
-The model calls `search_skills(query)` for ranked metadata or omits `query` to
-browse active metadata in stable name-ordered pages. Search pages default to eight
+The model calls `search_skills(query)` for ranked Vault metadata or omits `query` to
+browse active Vault metadata in stable name-ordered pages. Search pages default to eight
 and cap at 20; browse pages default to 20 and cap at 50. Both return `nextOffset`
 and a freshness state. Routine calls omit stale page rows; explicit knowledge
 maintenance includes them for repair. Browsing does not mark every returned item

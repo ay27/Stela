@@ -3,7 +3,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { loadSkills, type Skill } from "@earendil-works/pi-agent-core";
+import { loadSkills, loadSourcedSkills, type Skill } from "@earendil-works/pi-agent-core";
 
 import { AppError } from "@shared/errors";
 import { requestAgentMessage } from "@shared/agent-message";
@@ -33,10 +33,12 @@ export const AGENT_SKILL_LIMITS_PROMPT =
   `Skill limits: full file <= ${AGENT_SKILL_LIMITS.maxChars} characters; description <= ${AGENT_SKILL_LIMITS.maxDescriptionChars} characters; body <= ${AGENT_SKILL_LIMITS.maxBodyLines} lines; at most ${AGENT_SKILL_LIMITS.maxCodeBlocks} code examples, each <= ${AGENT_SKILL_LIMITS.maxCodeLines} lines.`;
 
 export type AgentSkillCategory = (typeof AGENT_SKILL_CATEGORIES)[number];
+export type AgentSkillOrigin = "system" | "vault";
 
 export interface AgentSkillMetadata {
   name: string;
   description: string;
+  origin: AgentSkillOrigin;
   category: AgentSkillCategory | null;
   tags: string[];
   sources: AgentSkillSource[];
@@ -51,7 +53,9 @@ export interface AgentSkillSource {
 
 export interface LoadedAgentSkills {
   loaded: LoadedAgentSkill[];
-  rejected: Array<{ relativePath: string; reason: string }>;
+  system: LoadedAgentSkill[];
+  vault: LoadedAgentSkill[];
+  rejected: Array<{ origin: AgentSkillOrigin; relativePath: string; reason: string }>;
 }
 
 export interface LoadedAgentSkill {
@@ -210,14 +214,38 @@ function assertTemplateShape(category: AgentSkillCategory, body: string): void {
   }
 }
 
-async function metadataForSkill(skill: Skill, vaultPath: string): Promise<AgentSkillMetadata> {
+async function metadataForVaultSkill(skill: Skill, vaultPath: string): Promise<AgentSkillMetadata> {
   // pi-agent-core intentionally exposes the Markdown body as `skill.content`;
   // Stela's category/tags stay in the source file frontmatter.
   const raw = await fs.readFile(skill.filePath, "utf-8").catch(() => skill.content);
   const metadata = validateSkillContent(skill.name, raw);
   return {
     ...metadata,
+    origin: "vault",
     relativePath: path.relative(vaultPath, skill.filePath).split(path.sep).join("/"),
+  };
+}
+
+function metadataForSystemSkill(skill: Skill, raw: string, systemSkillDir: string): AgentSkillMetadata {
+  if (raw.length > MAX_AGENT_SKILL_CHARS) {
+    throw new AppError("invalid_skill", `System Skill content must not exceed ${MAX_AGENT_SKILL_CHARS} characters.`);
+  }
+  if (skill.description.length > AGENT_SKILL_LIMITS.maxDescriptionChars) {
+    throw new AppError(
+      "invalid_skill",
+      `System Skill description must be ${AGENT_SKILL_LIMITS.maxDescriptionChars} characters or fewer.`,
+    );
+  }
+  if (!skill.content.trim()) throw new AppError("invalid_skill", "System Skill body must contain guidance.");
+  return {
+    name: skill.name,
+    description: skill.description,
+    origin: "system",
+    category: null,
+    tags: [],
+    sources: [],
+    sourceTables: [],
+    relativePath: `playbooks/${path.relative(systemSkillDir, skill.filePath).split(path.sep).join("/")}`,
   };
 }
 
@@ -307,7 +335,8 @@ export async function selectPromptAgentSkills(
 ): Promise<LoadedAgentSkill[]> {
   if (request.entryPoint === "knowledge-maintenance") return [];
   const selected: LoadedAgentSkill[] = [];
-  for (const candidate of rankAgentSkillsForRequest(skills, request, skills.length)) {
+  const vaultSkills = skills.filter((skill) => skill.metadata.origin === "vault");
+  for (const candidate of rankAgentSkillsForRequest(vaultSkills, request, vaultSkills.length)) {
     if (!(await isFresh(candidate))) continue;
     selected.push(candidate);
     if (selected.length >= limit) break;
@@ -370,6 +399,7 @@ function validateSkillContent(name: string, content: string): AgentSkillMetadata
   return {
     name,
     description,
+    origin: "vault",
     category: category as AgentSkillCategory,
     tags,
     sources,
@@ -384,28 +414,55 @@ async function atomicWrite(target: string, content: string): Promise<void> {
   await fs.rename(temp, target);
 }
 
-export async function loadAgentSkills(vaultPath: string): Promise<LoadedAgentSkills> {
-  const result = await loadSkills(skillEnv(vaultPath), skillDir(vaultPath));
+export async function loadAgentSkills(
+  vaultPath: string,
+  options: { systemSkillDir?: string } = {},
+): Promise<LoadedAgentSkills> {
+  const inputs: Array<{ path: string; source: AgentSkillOrigin }> = [
+    ...(options.systemSkillDir ? [{ path: options.systemSkillDir, source: "system" as const }] : []),
+    { path: skillDir(vaultPath), source: "vault" },
+  ];
+  const result = await loadSourcedSkills(skillEnv(vaultPath), inputs);
+  const systemNames = new Set(
+    result.skills.filter((item) => item.source === "system").map((item) => item.skill.name),
+  );
   const checked = await Promise.all(
-    result.skills.map(async (skill) => {
+    result.skills.map(async ({ skill, source }) => {
       try {
+        if (source === "vault" && systemNames.has(skill.name)) {
+          throw new AppError("invalid_skill", `Vault Skill '${skill.name}' conflicts with a read-only System Skill.`);
+        }
         const content = await fs.readFile(skill.filePath, "utf-8").catch(() => skill.content);
-        return { skill, metadata: await metadataForSkill(skill, vaultPath), content };
+        const metadata = source === "system"
+          ? metadataForSystemSkill(skill, content, options.systemSkillDir!)
+          : await metadataForVaultSkill(skill, vaultPath);
+        return { skill, metadata, content };
       } catch (err) {
         return {
           rejected: {
-            relativePath: path.relative(vaultPath, skill.filePath).split(path.sep).join("/"),
+            origin: source,
+            relativePath: source === "system" && options.systemSkillDir
+              ? `playbooks/${path.relative(options.systemSkillDir, skill.filePath).split(path.sep).join("/")}`
+              : path.relative(vaultPath, skill.filePath).split(path.sep).join("/"),
             reason: err instanceof Error ? err.message : String(err),
           },
         };
       }
     }),
   );
+  const loaded = checked.filter((item): item is LoadedAgentSkill => "skill" in item);
   return {
-    loaded: checked.filter((item): item is LoadedAgentSkill => "skill" in item),
+    loaded,
+    system: loaded.filter((item) => item.metadata.origin === "system"),
+    vault: loaded.filter((item) => item.metadata.origin === "vault"),
     rejected: checked
-      .filter((item): item is { rejected: { relativePath: string; reason: string } } => "rejected" in item)
-      .map((item) => item.rejected),
+      .filter((item): item is { rejected: { origin: AgentSkillOrigin; relativePath: string; reason: string } } => "rejected" in item)
+      .map((item) => item.rejected)
+      .concat(result.diagnostics.map((diagnostic) => ({
+        origin: diagnostic.source,
+        relativePath: diagnostic.path,
+        reason: diagnostic.message,
+      }))),
   };
 }
 
@@ -419,7 +476,7 @@ export async function listAgentSkills(vaultPath: string): Promise<AgentSkillList
     (await Promise.all(
       skills.map(async (skill) => {
         try {
-          return { ...(await metadataForSkill(skill, vaultPath)), status };
+          return { ...(await metadataForVaultSkill(skill, vaultPath)), status };
         } catch {
           return null;
         }
@@ -443,9 +500,13 @@ export async function saveAgentSkill(
     templateDriven?: boolean;
     sourcePaths?: string[];
     sourceTables?: string[];
+    reservedNames?: readonly string[];
   } = {},
 ): Promise<AgentSkillMaintenanceRecord> {
   const skillName = assertSkillName(name);
+  if (options.reservedNames?.includes(skillName)) {
+    throw new AppError("invalid_skill", `Vault Skill '${skillName}' conflicts with a read-only System Skill.`);
+  }
   const initialMetadata = validateSkillContent(skillName, content);
   if (options.automatic && initialMetadata.category === "analysis-runbook") {
     throw new AppError("invalid_skill", "Automatic maintenance cannot create analysis-runbook Skills.");
@@ -506,8 +567,12 @@ export async function archiveAgentSkill(
   vaultPath: string,
   name: string,
   reason: string,
+  options: { reservedNames?: readonly string[] } = {},
 ): Promise<AgentSkillMaintenanceRecord> {
   const skillName = assertSkillName(name);
+  if (options.reservedNames?.includes(skillName)) {
+    throw new AppError("invalid_skill", `System Skill '${skillName}' cannot be archived.`);
+  }
   const source = await vaultFs.ensureWithinVault(vaultPath, path.join(skillDir(vaultPath), skillName));
   const skillFile = path.join(source, "SKILL.md");
   if (!(await vaultFs.pathExists(skillFile))) {

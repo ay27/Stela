@@ -112,7 +112,7 @@ export async function readCaseOutcomes(directory: string): Promise<Map<string, C
       elapsedMs: typeof raw.elapsedMs === "number" ? raw.elapsedMs : 0,
       toolCalls: typeof raw.toolCalls === "number" ? raw.toolCalls : 0,
       outputTokens: usage.outputTokens ?? 0,
-      planned: (counts.create_plan ?? 0) > 0,
+      planned: (counts.plan ?? counts.create_plan ?? 0) > 0,
       resultReviewStatus: typeof review.status === "string" ? review.status : "legacy_unknown",
       error: typeof raw.error === "string" ? raw.error : null,
     }]);

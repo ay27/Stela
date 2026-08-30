@@ -815,7 +815,10 @@ export interface AgentStrategyCheckpoint {
 }
 
 export type AgentToolName =
+  | "list_catalog"
+  /** @deprecated Accepted only for old tests/session traces. */
   | "list_databases"
+  /** @deprecated Accepted only for old tests/session traces. */
   | "list_tables"
   | "search_tables"
   | "get_table_schema"
@@ -831,8 +834,12 @@ export type AgentToolName =
   | "search_sql_usage"
   | "list_vault_files"
   | "read_note"
+  | "plan"
+  /** @deprecated Accepted only for old tests/session traces. */
   | "create_plan"
+  /** @deprecated Accepted only for old tests/session traces. */
   | "update_plan"
+  /** @deprecated Accepted only for old tests/session traces. */
   | "get_plan"
   | "load_skill"
   | "search_skills"
