@@ -28,15 +28,27 @@ const EXTRA_PATHS = [
   "/bin",
 ];
 
-function gitEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  const sep = process.platform === "win32" ? ";" : ":";
-  const current = env.PATH ?? "";
-  const parts = current.split(sep).filter(Boolean);
-  for (const p of EXTRA_PATHS) {
-    if (!parts.includes(p)) parts.push(p);
+export function buildGitEnv(
+  sourceEnv: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const env = { ...sourceEnv };
+  if (platform === "win32") {
+    // Windows environment keys are case-insensitive, but spreading process.env
+    // produces a normal case-sensitive object. GitHub runners expose `Path`;
+    // adding a second `PATH` key can make Node pass only the empty/fallback one
+    // to Git. Preserve the runner's existing spelling and value unchanged.
+    const pathKeys = Object.keys(env).filter((key) => key.toLowerCase() === "path");
+    const pathKey = pathKeys[0] ?? "Path";
+    for (const duplicate of pathKeys.slice(1)) delete env[duplicate];
+    env[pathKey] = env[pathKey] ?? "";
+  } else {
+    const parts = (env.PATH ?? "").split(":").filter(Boolean);
+    for (const p of EXTRA_PATHS) {
+      if (!parts.includes(p)) parts.push(p);
+    }
+    env.PATH = parts.join(":");
   }
-  env.PATH = parts.join(sep);
   // 关掉交互式凭据弹窗 / 编辑器，避免 git 在子进程里挂起等待 stdin。
   env.GIT_TERMINAL_PROMPT = "0";
   env.GIT_OPTIONAL_LOCKS = "0";
@@ -45,6 +57,10 @@ function gitEnv(): NodeJS.ProcessEnv {
   env.GIT_EDITOR = "true";
   env.GIT_SEQUENCE_EDITOR = "true";
   return env;
+}
+
+function gitEnv(): NodeJS.ProcessEnv {
+  return buildGitEnv();
 }
 
 export interface GitRunOptions {
