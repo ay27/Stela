@@ -45,6 +45,10 @@ async function assertPendingPaths(repo: string, paths: string[]): Promise<void> 
   }
 }
 
+function normalizeNewlines(value: string): string {
+  return value.replaceAll("\r\n", "\n");
+}
+
 const root = await mkdtemp(path.join(tmpdir(), "stela-sync-orchestrator-"));
 
 try {
@@ -111,9 +115,17 @@ try {
   assert.equal(rebasedB.conflicted, false);
   assert.equal(rebasedB.changedDomains.includes("settings"), true);
 
-  await runGit(root, ["clone", remote, verifier]);
-  assert.equal(await readFile(path.join(verifier, "device-a.txt"), "utf-8"), "from a\n");
-  assert.equal(await readFile(path.join(verifier, "device-b.txt"), "utf-8"), "from b\n");
+  // Exercise the Windows checkout shape on every platform. Sync correctness is
+  // about the text content; a verifier worktree may use CRLF via autocrlf.
+  await runGit(root, ["-c", "core.autocrlf=true", "clone", remote, verifier]);
+  assert.equal(
+    normalizeNewlines(await readFile(path.join(verifier, "device-a.txt"), "utf-8")),
+    "from a\n",
+  );
+  assert.equal(
+    normalizeNewlines(await readFile(path.join(verifier, "device-b.txt"), "utf-8")),
+    "from b\n",
+  );
 
   await writeFile(path.join(deviceB, "single-flight.txt"), "serialized\n", "utf-8");
   const concurrent = await Promise.all([
