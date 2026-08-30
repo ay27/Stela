@@ -3,9 +3,11 @@ import {
   Plugin,
   PluginKey,
   Selection,
+  TextSelection,
   type SelectionBookmark,
   type Transaction,
 } from "@milkdown/prose/state";
+import { cellAround } from "@milkdown/prose/tables";
 import type { Mappable } from "@milkdown/prose/transform";
 import {
   Decoration,
@@ -292,6 +294,15 @@ function spanContains(outer: BlockSpan, inner: BlockSpan): boolean {
   return inner.from >= outer.from && inner.to <= outer.to;
 }
 
+/** Whether a text caret/range already belongs to the target table cell. */
+export function isTextSelectionInsideCell(
+  selection: Selection,
+  cellPos: number,
+): boolean {
+  if (!(selection instanceof TextSelection)) return false;
+  return cellAround(selection.$from)?.pos === cellPos;
+}
+
 class BlockSelectionView {
   private readonly host: HTMLElement;
   private readonly overlayRoot: HTMLElement;
@@ -443,6 +454,49 @@ class BlockSelectionView {
     );
   }
 
+  /**
+   * Crepe's TableNodeView uses a first click to select the cell's paragraph
+   * node, and only lets ProseMirror handle the pointer once a TextSelection is
+   * already inside that cell. The NodeView stops the latter mousedown while
+   * the browser still starts a native text drag, which produces an unmanaged
+   * text selection across cells.
+   *
+   * Move the selection into the clicked cell during capture. When the same
+   * event reaches TableNodeView it now follows its normal editing path, so
+   * prosemirror-tables owns cross-cell dragging as a CellSelection.
+   */
+  private enterTableCellBeforeNodeView(
+    event: MouseEvent,
+    target: Element | null,
+  ): boolean {
+    const cell = target?.closest("td, th");
+    if (!cell || !this.view.dom.contains(cell)) return false;
+    const tableBlock = cell.closest(".milkdown-table-block");
+    if (!tableBlock || cell.closest(".drag-preview")) {
+      return false;
+    }
+
+    const result = this.view.posAtCoords({
+      left: event.clientX,
+      top: event.clientY,
+    });
+    if (!result) return false;
+    const doc = this.view.state.doc;
+    const $cell =
+      (result.inside >= 0 ? cellAround(doc.resolve(result.inside)) : null) ??
+      cellAround(doc.resolve(result.pos));
+    if (!$cell) return false;
+
+    if (!isTextSelectionInsideCell(this.view.state.selection, $cell.pos)) {
+      this.view.dispatch(
+        this.view.state.tr.setSelection(
+          TextSelection.near(doc.resolve(result.pos)),
+        ),
+      );
+    }
+    return true;
+  }
+
   private onMouseDown = (event: MouseEvent): void => {
     if (event.button !== 0 || !this.view.editable) return;
     const target = eventElement(event);
@@ -456,6 +510,12 @@ class BlockSelectionView {
       event.stopPropagation();
       return;
     }
+
+    // Table cells are a special case: normalize the first click to the same
+    // editable state that Crepe otherwise reaches only after a double click.
+    // Do not prevent/stop the event—the tableEditing plugin still needs the
+    // original mousedown to establish CellSelection dragging.
+    if (this.enterTableCellBeforeNodeView(event, target)) return;
 
     if (!this.isInGutter(event)) {
       // A custom block selection still maps to a native DOM range. Without

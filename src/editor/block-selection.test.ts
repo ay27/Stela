@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 
 import { Schema, type Node as ProseNode } from "@milkdown/prose/model";
-import { EditorState, Selection } from "@milkdown/prose/state";
+import {
+  EditorState,
+  NodeSelection,
+  Selection,
+  TextSelection,
+} from "@milkdown/prose/state";
 
 import {
   BlockRangeSelection,
   collectSelectedBlockSpans,
   createBlockRangeSelection,
+  isTextSelectionInsideCell,
   resolveBlockSpanAtPos,
   type BlockSpan,
 } from "./block-selection";
@@ -162,9 +168,22 @@ function checkWholeDocumentDeletionAndSerialization(): void {
   assert.equal(tr.doc.textContent, "");
 }
 
+function checkTableCellEditingState(): void {
+  const doc = makeDoc();
+  const cellPos = positionsByType(doc, "table_cell")[0];
+  const cellText = TextSelection.create(doc, cellPos + 2);
+  const outsideText = TextSelection.create(doc, 1);
+  const cellParagraph = NodeSelection.create(doc, cellPos + 1);
+
+  assert.equal(isTextSelectionInsideCell(cellText, cellPos), true);
+  assert.equal(isTextSelectionInsideCell(outsideText, cellPos), false);
+  assert.equal(isTextSelectionInsideCell(cellParagraph, cellPos), false);
+}
+
 checkBoundaryResolution();
 checkForwardAndReverseRanges();
 checkClipboardAndDeletionSemantics();
 checkWholeDocumentDeletionAndSerialization();
+checkTableCellEditingState();
 
 console.log("block-selection: ok");

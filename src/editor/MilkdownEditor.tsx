@@ -15,6 +15,7 @@ import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
 
 import { useSettings } from "@/state/settings";
 import { useWorkspace } from "@/state/workspace";
+import { useLayout } from "@/state/layout";
 
 import { Crepe } from "@milkdown/crepe";
 import { Milkdown, MilkdownProvider, useEditor } from "@milkdown/react";
@@ -273,6 +274,10 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
   // 订阅全局 editorWidth 设置；切换立即通过 data-editor-width 反映到 DOM，不走
   // 重挂载——CSS 只改 max-width/padding，既不动 CM 实例也不丢光标。
   const editorWidth = useSettings((s) => s.settings.ui.editorWidth);
+  // Agent 栏展开时腾回目录占用的 168px，避免两条右侧栏同时压缩正文。
+  // 目录只做条件挂载：关闭 Agent 后会重新挂载并从当前文档 DOM 重建 heading，
+  // 不需要额外维护一份折叠状态。
+  const agentPanelCollapsed = useLayout((s) => s.agentPanelCollapsed);
 
   const dirtyRef = useRef(false);
   const lastPersistedBodyRef = useRef(body);
@@ -820,9 +825,10 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
   // 布局：横向 flex 行，从左到右 = 正文主列 | 目录 | 滚动条。
   //
   // .stela-editor-main 是 flex-1 的相对定位主列，滚动 host / 查找栏 / 图片
-  // 预览挂在它下面。DocumentTocRail 是它右边的**固定宽度** flex 列——用真实
-  // 布局宽度挤占空间（正文随之收窄居中），不是绝对定位悬浮，否则宽度不被
-  // 保留、窄窗口/长行时会跟正文重叠。
+  // 预览挂在它下面。Agent 栏收起时，DocumentTocRail 是它右边的**固定宽度**
+  // flex 列——用真实布局宽度挤占空间（正文随之收窄居中），不是绝对定位悬浮，
+  // 否则宽度不被保留、窄窗口/长行时会跟正文重叠。Agent 栏展开时目录不挂载，
+  // 避免两条右栏同时挤占正文。
   //
   // HostScrollbar 单独提到 .stela-editor-layout 这一层、绝对定位到整块布局
   // 的最右边（right:0），所以它落在目录**右侧**、贴着窗口边——目录因此夹在
@@ -855,7 +861,7 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         <FindBar viewRef={viewRef} />
         <ImagePreviewOverlay hostRef={hostRef} />
       </div>
-      <DocumentTocRail hostRef={hostRef} />
+      {agentPanelCollapsed ? <DocumentTocRail hostRef={hostRef} /> : null}
       <HostScrollbar hostRef={hostRef} />
     </div>
   );

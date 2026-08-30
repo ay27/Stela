@@ -168,6 +168,16 @@
   margin: 0 auto;
   outline: none;
   min-height: 100%;
+  caret-color: hsl(var(--foreground));
+  --prosemirror-virtual-cursor-color: hsl(var(--foreground));
+}
+
+/* Crepe 默认把虚拟光标绑到 --crepe-color-outline（即很浅的 border 色）。
+ * 同时显式设置原生 caret 与 ProseMirror virtual cursor，保证正文、标题和表格
+ * 单元格里的插入点都使用前景色；RunSQL 的 CodeMirror 光标不受此规则影响。 */
+.milkdown .ProseMirror.ProseMirror-focused {
+  caret-color: hsl(var(--foreground));
+  --prosemirror-virtual-cursor-color: hsl(var(--foreground));
 }
 
 /*
@@ -436,14 +446,20 @@
  *   2. prosemirror-tables 默认 table-layout:fixed + width:100%，无 colwidth 时
  *      各列等分整表宽度，不会随内容自适应。
  * 这里全部用 .milkdown 前缀压过 common 规则，把边框对齐 hsl(var(--border))，
- * 列宽改为按内容 auto-fit。 */
+ * 列宽改为按内容 auto-fit。外框只由 wrapper 绘制，cell 只画内部网格线，避免
+ * wrapper 描边与最外圈 cell border 叠成粗细不一的双层边界。 */
 .milkdown .milkdown-table-block .table-wrapper {
   overflow-x: auto;
-  margin: 8px 0;
+  margin: 10px 0;
+  box-sizing: border-box;
+  border: 1px solid hsl(var(--border));
   border-radius: var(--radius);
+  background: hsl(var(--background));
 }
 
 .milkdown .milkdown-table-block table {
+  border-collapse: separate;
+  border-spacing: 0;
   table-layout: auto;
   width: max-content;
   min-width: 100%;
@@ -452,25 +468,118 @@
 
 .milkdown .milkdown-table-block th,
 .milkdown .milkdown-table-block td {
-  border: 1px solid hsl(var(--border));
+  border: 0;
   padding: 6px 12px;
   vertical-align: top;
   white-space: normal;
   word-break: break-word;
   max-width: 360px;
+  caret-color: hsl(var(--foreground));
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease;
 }
 
 .milkdown .milkdown-table-block th {
-  background: hsl(var(--muted));
+  background: hsl(var(--muted) / 0.72);
   font-weight: 600;
   font-size: 13px;
-  color: hsl(var(--muted-foreground));
+  color: hsl(var(--foreground));
+}
+
+.milkdown .milkdown-table-block tr > th:not(:last-child),
+.milkdown .milkdown-table-block tr > td:not(:last-child) {
+  border-right: 1px solid hsl(var(--border));
+}
+
+.milkdown .milkdown-table-block tr:not(:last-child) > th,
+.milkdown .milkdown-table-block tr:not(:last-child) > td {
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.milkdown .milkdown-table-block tr:not(:last-child) > th {
   border-bottom-width: 2px;
+}
+
+.milkdown .milkdown-table-block th:has(.ProseMirror-selectednode),
+.milkdown .milkdown-table-block td:has(.ProseMirror-selectednode) {
+  outline: 2px solid hsl(var(--primary) / 0.45);
+  outline-offset: -2px;
 }
 
 .milkdown .milkdown-table-block .selectedCell::after {
   background: hsl(var(--primary) / 0.12);
   opacity: 1;
+}
+
+/* 表格行列控制柄。Crepe 默认使用 outline/border 色绘制图标和按钮，亮色主题下
+ * 看起来近似 disabled；这里提高前景、边框和 hover 对比度，并收紧弹出按钮组。 */
+.milkdown .milkdown-table-block .handle[data-show="true"] {
+  opacity: 0.88;
+}
+
+.milkdown .milkdown-table-block .handle svg {
+  fill: currentColor;
+}
+
+.milkdown .milkdown-table-block .cell-handle,
+.milkdown .milkdown-table-block .line-handle .add-button {
+  color: hsl(var(--foreground) / 0.72);
+  background: hsl(var(--popover));
+  border: 1px solid hsl(var(--foreground) / 0.2);
+  box-shadow:
+    0 1px 2px hsl(var(--foreground) / 0.12),
+    0 3px 8px hsl(var(--foreground) / 0.1);
+}
+
+.milkdown .milkdown-table-block .cell-handle:hover,
+.milkdown .milkdown-table-block .line-handle .add-button:hover {
+  color: hsl(var(--foreground));
+  background: hsl(var(--accent));
+  border-color: hsl(var(--foreground) / 0.38);
+  opacity: 1;
+}
+
+.milkdown .milkdown-table-block .cell-handle:has(.button-group:hover) {
+  background: hsl(var(--popover));
+}
+
+.milkdown .milkdown-table-block .line-handle {
+  background: hsl(var(--foreground) / 0.38);
+}
+
+.milkdown .milkdown-table-block .cell-handle .button-group {
+  gap: 2px;
+  padding: 3px;
+  background: hsl(var(--popover));
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) - 2px);
+  box-shadow: var(--crepe-shadow-2);
+}
+
+.milkdown .milkdown-table-block .cell-handle .button-group button {
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  padding: 6px;
+  color: hsl(var(--foreground) / 0.76);
+  border-radius: 5px;
+}
+
+.milkdown .milkdown-table-block .cell-handle .button-group button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.milkdown .milkdown-table-block .cell-handle .button-group button:hover {
+  color: hsl(var(--foreground));
+  background: hsl(var(--accent));
+  border-radius: 5px;
+}
+
+.milkdown .milkdown-table-block .cell-handle .button-group button:last-child:hover {
+  color: hsl(var(--destructive));
+  background: hsl(var(--destructive) / 0.1);
 }
 
 /* ============================================================================
@@ -1705,11 +1814,12 @@
 /* ---------------------------------------------------------------------------
  * 文档目录停靠栏（DocumentTocRail），夹在正文和最右侧滚动条之间
  *
- * 形态：.stela-editor-layout 里正文主列与滚动条之间的常驻固定宽度 flex 列，
+ * 形态：Agent 栏收起时，它是 .stela-editor-layout 里正文主列与滚动条之间的
+ * 固定宽度 flex 列；Agent 栏展开时 React 不挂载该栏，腾回正文宽度。显示时会
  * 真实占用布局空间（正文随之收窄居中），宽度是布局意义上"保留"的，不会
  * 跟随窗口变窄 / 正文行变长而跟文字重叠。无背景无分割线、字色刻意调淡，
  * 视觉上尽量融入正文。padding-right 给最右侧那条 10px 滚动条让出物理空间，
- * 避免目录文字被 thumb 压住。常驻显示，不提供收起。
+ * 避免目录文字被 thumb 压住。
  * ------------------------------------------------------------------------- */
 .stela-toc-rail {
   flex: 0 0 auto;
