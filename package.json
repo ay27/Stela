@@ -10,6 +10,8 @@
     "url": "git+ssh://git@github.com/ay27/Stela.git"
   },
   "scripts": {
+    "prepare": "node scripts/install-git-hooks.mjs",
+    "check:precommit": "git diff --cached --check && npm test && npm run check:release && npm run build",
     "predev": "npm run rebuild && npm run build:plugins && npm run prepare:pyodide",
     "dev": "electron-vite dev",
     "dev:fast": "electron-vite dev",

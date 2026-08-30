@@ -82,6 +82,8 @@ Stela is built for the kind of data work that starts with a question in a notebo
 
 For system design and contributor information, see [Architecture](./docs/ARCHITECTURE.md), [Abstractions](./docs/ABSTRACTIONS.md), and the [ADRs](./docs/adr/).
 
+For contributors, `npm install` configures the repository's tracked pre-commit hook. It runs the full test suite, public-release gate, and production build before each commit. Run the same gate manually with `npm run check:precommit`.
+
 ---
 
 ## Screenshots / 产品截图
@@ -203,3 +205,5 @@ Stela 适合那些从“我想看看数据”这个念头开始做分析的人�
 
 
 系统设计和贡献者相关细节见 [Architecture](./docs/ARCHITECTURE.md)、[Abstractions](./docs/ABSTRACTIONS.md) 与 [ADR](./docs/adr/)。
+
+贡献者执行 `npm install` 后会自动启用仓库内置的提交前检查：每次提交前运行完整测试、公开发布检查和生产构建。也可以手动执行 `npm run check:precommit`。

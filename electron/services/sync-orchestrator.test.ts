@@ -17,6 +17,32 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
 async function configureIdentity(repo: string): Promise<void> {
   await runGit(repo, ["config", "user.name", "Stela Sync Test"]);
   await runGit(repo, ["config", "user.email", "sync-test@stela.local"]);
+  // Test repositories must not inherit machine/runner Git behavior. In
+  // particular, Git for Windows may enable autocrlf, fsmonitor, or the
+  // untracked cache globally. Keep the fixture independent of those settings
+  // when checking whether the first checkpoint has files to commit.
+  await runGit(repo, ["config", "core.autocrlf", "false"]);
+  await runGit(repo, ["config", "core.filemode", "false"]);
+  await runGit(repo, ["config", "core.fsmonitor", "false"]);
+  await runGit(repo, ["config", "core.untrackedCache", "false"]);
+  await runGit(repo, ["config", "commit.gpgsign", "false"]);
+}
+
+async function assertPendingPaths(repo: string, paths: string[]): Promise<void> {
+  const status = await runGit(repo, [
+    "status",
+    "--porcelain=v1",
+    "--untracked-files=all",
+  ]);
+  for (const expected of paths) {
+    assert.equal(
+      status
+        .split("\n")
+        .some((line) => line.slice(3).replaceAll("\\", "/") === expected),
+      true,
+      `expected Git to see ${expected} before sync; status=${JSON.stringify(status)}`,
+    );
+  }
 }
 
 const root = await mkdtemp(path.join(tmpdir(), "stela-sync-orchestrator-"));
@@ -61,6 +87,7 @@ try {
   await writeFile(path.join(deviceA, "device-a.txt"), "from a\n", "utf-8");
   await mkdir(path.join(deviceA, ".stela"), { recursive: true });
   await writeFile(path.join(deviceA, ".stela", "settings.json"), "{}\n", "utf-8");
+  await assertPendingPaths(deviceA, ["device-a.txt", ".stela/settings.json"]);
   const pushedA = await syncNow(deviceA, {
     trigger: "auto",
     commit: true,
