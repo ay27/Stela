@@ -412,6 +412,7 @@ class DabRuntime:
         self.description = ""
         self.query_tool: Any = None
         self.list_tool: Any = None
+        self.fixture_mode = "owned"
         sys.path.insert(0, str(self.dab_root))
         with contextlib.redirect_stdout(sys.stderr):
             self.query_tool_class = importlib.import_module(
@@ -465,9 +466,17 @@ class DabRuntime:
             raise BridgeError("invalid_config", "config.dataset is required.")
         query_id_raw = config.get("queryId")
         query_id = int(query_id_raw) if query_id_raw is not None else None
+        fixture_mode = str(config.get("fixtureMode") or "owned").strip().lower()
+        if fixture_mode not in {"owned", "shared"}:
+            raise BridgeError("invalid_config", "config.fixtureMode must be 'owned' or 'shared'.")
         run_dir_raw = config.get("runDir")
         run_dir = Path(run_dir_raw).resolve() if run_dir_raw else self.dab_root / ".stela-dab-bridge"
-        if self.dataset == dataset and self.query_id == query_id and self.query_tool is not None:
+        if (
+            self.dataset == dataset
+            and self.query_id == query_id
+            and self.fixture_mode == fixture_mode
+            and self.query_tool is not None
+        ):
             return
         self.close()
         dataset_dir = self._dataset_dir(dataset)
@@ -480,7 +489,7 @@ class DabRuntime:
                 log_path=log_path,
                 name="query_db",
                 db_config_path=config_path,
-                check_load=True,
+                check_load=fixture_mode == "owned",
             )
             self.list_tool = self.list_tool_class(
                 log_path=log_path,
@@ -491,6 +500,7 @@ class DabRuntime:
         self.dataset = dataset
         self.query_id = query_id
         self.run_dir = run_dir
+        self.fixture_mode = fixture_mode
         self.description = description_path.read_text(encoding="utf-8")
 
     def databases(self) -> list[str]:
@@ -597,7 +607,7 @@ class DabRuntime:
         raise BridgeError("unknown_method", f"Unknown bridge method: {method}")
 
     def close(self) -> None:
-        if self.query_tool is not None:
+        if self.query_tool is not None and self.fixture_mode == "owned":
             try:
                 with contextlib.redirect_stdout(sys.stderr):
                     self.query_tool.clean_up()
@@ -608,6 +618,7 @@ class DabRuntime:
         self.dataset = None
         self.query_id = None
         self.run_dir = None
+        self.fixture_mode = "owned"
         self.description = ""
 
 

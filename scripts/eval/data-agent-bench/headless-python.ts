@@ -25,6 +25,7 @@ const EXECUTION_TIMEOUT_MS = 60_000;
  */
 const MAX_TOTAL_MS = 10 * 60 * 1000;
 const MAX_QUERIES_PER_JOB = 32;
+const MAX_QUERY_BYTES_PER_JOB = 2 * 1024 * 1024 * 1024;
 
 type WorkerMessage =
   | { type: "initialized" }
@@ -131,8 +132,17 @@ class PyodideSlot {
         byteSize: artifact.byteSize,
       })),
     };
+    const inputBytes = request.inputs.reduce((total, item) => total + item.byteSize, 0);
+    if (request.inputs.length > MAX_QUERIES_PER_JOB) {
+      throw new Error(`execute_python supports at most ${MAX_QUERIES_PER_JOB} total sources and dynamic queries`);
+    }
+    if (inputBytes > MAX_QUERY_BYTES_PER_JOB) {
+      throw new Error("execute_python sources exceed the total bytes budget for one execution");
+    }
     const deadlineAt = Date.now() + (input.runQuery ? MAX_TOTAL_MS : EXECUTION_TIMEOUT_MS);
-    let queryCount = 0;
+    let queryCount = request.inputs.length;
+    let queryAliasCounter = 0;
+    let queryBytes = inputBytes;
 
     return new Promise<PythonExecutionResult>((resolve, reject) => {
       let settled = false;
@@ -209,8 +219,17 @@ class PyodideSlot {
             connectionName: message.connectionName,
             request: message.request,
           });
+          queryBytes += artifact.byteSize;
+          if (queryBytes > MAX_QUERY_BYTES_PER_JOB) {
+            throw new Error("query() exceeded the total bytes budget for one execution; select fewer columns");
+          }
+          let alias: string;
+          do {
+            queryAliasCounter += 1;
+            alias = `q${queryAliasCounter}`;
+          } while (request.inputs.some((item) => item.alias === alias));
           descriptor = {
-            alias: `q${queryCount}`,
+            alias,
             runId: artifact.runId,
             format: artifact.format,
             columns: artifact.columns,

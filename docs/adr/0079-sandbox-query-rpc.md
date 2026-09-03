@@ -2,7 +2,8 @@
 type: ADR
 id: "0079"
 title: "Sandbox query() RPC instead of model-managed artifacts"
-status: active
+status: superseded
+superseded_by: "0086"
 date: 2026-08-27
 ---
 

@@ -33,7 +33,14 @@ const right = await writeBufferedQueryArtifact({
   columns: [{ name: "id", typeName: "BIGINT" }, { name: "weight", typeName: "BIGINT" }],
   rows: [[1, 2], [2, 3]],
 });
-assert.ok(left && right);
+const empty = await writeBufferedQueryArtifact({
+  vaultPath,
+  sessionId,
+  runId: "empty-run",
+  columns: [],
+  rows: [],
+});
+assert.ok(left && right && empty);
 
 await assertPyodideAssets(assetDir);
 const pool = new HeadlessPyodidePool(assetDir, 1);
@@ -55,6 +62,15 @@ try {
   });
   assert.equal(pandas.ok, true, pandas.error);
   assert.deepEqual(pandas.value, { kind: "scalar", value: 30 });
+
+  const emptyFrame = await pool.execute({
+    vaultPath,
+    sessionId,
+    artifacts: { empty },
+    code: "df = to_df('empty'); result = {'rows': len(df), 'columns': len(df.columns)}",
+  });
+  assert.equal(emptyFrame.ok, true, emptyFrame.error);
+  assert.deepEqual(emptyFrame.value, { kind: "scalar", value: { rows: 0, columns: 0 } });
 
   // Every result carries its input shapes and column types, so the model never
   // has to spend a call probing them.

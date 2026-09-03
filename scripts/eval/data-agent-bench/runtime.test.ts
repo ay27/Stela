@@ -14,6 +14,7 @@ import {
   endpointHash,
   mapWithConcurrency,
   mapWithResourceConcurrency,
+  readDabDatasetResources,
   readDabDatasetResourceLocks,
 } from "./runtime";
 
@@ -92,6 +93,22 @@ assert.deepEqual(resourceResults, ["MONGO-A", "MONGO-B", "SQL-A", "SQL-B"]);
 assert.equal(maxResourceWorkers, 2);
 assert.equal(maxMongoWorkers, 1);
 
+let activeCapacityWorkers = 0;
+let maxCapacityWorkers = 0;
+await mapWithResourceConcurrency(
+  ["mongo-a", "mongo-b", "mongo-c"],
+  3,
+  () => ["mongodb"],
+  async () => {
+    activeCapacityWorkers += 1;
+    maxCapacityWorkers = Math.max(maxCapacityWorkers, activeCapacityWorkers);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    activeCapacityWorkers -= 1;
+  },
+  { mongodb: 2 },
+);
+assert.equal(maxCapacityWorkers, 2);
+
 const prompt = buildDabUserPrompt({
   databaseDescription: "books_database has books_info",
   hintsText: "Join purchase_id to book_id",
@@ -103,6 +120,8 @@ assert.match(prompt, /run_query call targets exactly one logical database/);
 assert.match(prompt, /language=mongodb/);
 assert.match(prompt, /safe aggregate operations/);
 assert.match(prompt, /execute_python/);
+assert.match(prompt, /Prefer structured sources with an alias and an explicit database/);
+assert.match(prompt, /'database': logical_database/);
 assert.match(prompt, /QUERY:\nWhich decade wins\?$/);
 
 const legacyPrompt = buildDabUserPrompt({
@@ -120,11 +139,27 @@ try {
   await fs.writeFile(path.join(queryDir, "validate.py"), "def validate(x): return True, 'OK'");
   await fs.writeFile(
     path.join(root, "query_demo", "db_config.yaml"),
-    "db_clients:\n  docs:\n    db_type: mongo # shared service\n",
+    [
+      "db_clients:",
+      "  docs:",
+      "    db_type: mongo # shared service",
+      "    db_name: docs_fixture",
+      "  facts:",
+      "    db_type: postgres",
+      "    db_name: facts_fixture",
+      "",
+    ].join("\n"),
+  );
+  assert.deepEqual(
+    await readDabDatasetResources({ dataset: "demo", queryId: 2, queryDir }),
+    {
+      usesMongo: true,
+      fixtureLocks: ["dab:database:mongo:docs_fixture", "dab:database:postgres:facts_fixture"],
+    },
   );
   assert.deepEqual(
     await readDabDatasetResourceLocks({ dataset: "demo", queryId: 2, queryDir }),
-    ["dab:mongodb"],
+    ["dab:mongodb", "dab:database:mongo:docs_fixture", "dab:database:postgres:facts_fixture"],
   );
   assert.deepEqual(await discoverDabTasks(root), [{ dataset: "demo", queryId: 2, queryDir }]);
 

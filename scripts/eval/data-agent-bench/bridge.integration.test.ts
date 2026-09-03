@@ -19,9 +19,14 @@ try {
   await write("common_scaffold/tools/__init__.py", "");
   await write("common_scaffold/validate/__init__.py", "");
   await write("common_scaffold/tools/QueryDBTool.py", `
+from pathlib import Path
 class QueryDBTool:
     def __init__(self, **kwargs):
         self.db_clients = {"demo_database": {"db_type": "sqlite"}}
+        self.event_path = Path(kwargs["log_path"]).parent / "fixture-events.log"
+        self.event_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.event_path.open("a") as handle:
+            handle.write(f"init:{kwargs.get('check_load')}\\n")
     def exec(self, args):
         if "giant" in args["query"]:
             return {"success": True, "result": [{"value": "x" * 100000}]}
@@ -29,7 +34,8 @@ class QueryDBTool:
             return {"success": True, "result": [{"value": index} for index in range(500)]}
         return {"success": True, "result": [{"value": 1, "query": args["query"]}]}
     def clean_up(self):
-        pass
+        with self.event_path.open("a") as handle:
+            handle.write("cleanup\\n")
 `);
   await write("common_scaffold/tools/ListDBTool.py", `
 class ListDBTool:
@@ -113,6 +119,42 @@ def validate(query_dir, llm_answer, reason=None):
   });
   assert.equal(validation.is_valid, true);
   await bridge.close();
+  assert.equal(
+    await fs.readFile(path.join(root, "run", "fixture-events.log"), "utf-8"),
+    "init:True\ncleanup\n",
+  );
+
+  const owner = new DabBridgeClient({
+    dabRoot: root,
+    bridgePath: path.join(here, "bridge.py"),
+    python: "python3",
+  });
+  const child = new DabBridgeClient({
+    dabRoot: root,
+    bridgePath: path.join(here, "bridge.py"),
+    python: "python3",
+  });
+  const ownerConfig = { dataset: "demo", queryId: 1, runDir: path.join(root, "owner") };
+  const childConfig = {
+    dataset: "demo",
+    queryId: 1,
+    runDir: path.join(root, "child"),
+    fixtureMode: "shared",
+  };
+  await owner.call("test", { config: ownerConfig });
+  await child.call("test", { config: childConfig });
+  assert.deepEqual(await child.call("list_databases", { config: childConfig }), ["demo_database"]);
+  await child.close();
+  assert.equal(
+    await fs.readFile(path.join(root, "child", "fixture-events.log"), "utf-8"),
+    "init:False\n",
+    "a shared child must never clean the owner's fixture",
+  );
+  await owner.close();
+  assert.equal(
+    await fs.readFile(path.join(root, "owner", "fixture-events.log"), "utf-8"),
+    "init:True\ncleanup\n",
+  );
 } finally {
   await fs.rm(root, { recursive: true, force: true });
 }

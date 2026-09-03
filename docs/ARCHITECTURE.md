@@ -107,7 +107,7 @@ The renderer has **no Node privileges**. All desktop capabilities flow through a
 | Desktop shell | Electron | 41.5 |
 | Frontend | React + TypeScript | React 18, TS 5.6 |
 | Markdown editor | Milkdown 7 (Crepe preset) + ProseMirror | 7.20 |
-| SQL editing | CodeMirror 6 (`@codemirror/lang-sql`) | 6.x |
+| Source/SQL editing | CodeMirror 6 + lazy language data | 6.x |
 | RunSQL NodeView | Custom ProseMirror NodeView | `src/editor/runsql/` |
 | Styling | Tailwind CSS 3 + shadcn/ui (Radix) | — |
 | State | Zustand | 5.x |
@@ -164,6 +164,21 @@ Renderer triggers this via `window.stela.vault.setCurrent(path)`.
 
 ## Editor Stack
 
+Workspace files are routed before rendering: `.md` notes use Milkdown,
+`.stela.canvas` artifacts use the Canvas workspace, and recognized source/plain
+text files use a standalone CodeMirror editor. Unknown extensions and text that
+looks binary are not made editable. See
+[ADR-0085](./adr/0085-extension-routed-workspace-editors.md).
+
+### Source text files
+
+`src/editor/source-file-mode.ts` resolves known source languages from CodeMirror
+filename metadata plus a small explicit plain-text allowlist. The standalone
+`SourceTextEditor` loads syntax support lazily, preserves the file's LF/CRLF line
+separator, and participates in the same tab buffer, autosave, external-change,
+theme, and scroll-memory behavior as notes. Source SQL is editing-only; query
+execution and result persistence remain owned by RunSQL blocks in Markdown.
+
 ### Milkdown + RunSQL
 
 Stela uses Milkdown 7 with the Crepe preset for WYSIWYG Markdown editing. Crepe's built-in CodeMirror feature is **disabled** — Stela implements its own `CodeBlockNodeView` for both ordinary code blocks and `runsql` blocks.
@@ -198,6 +213,8 @@ Key files:
 | File | Role |
 |------|------|
 | `src/editor/MilkdownEditor.tsx` | React entry, Crepe setup, autosave listener |
+| `src/editor/SourceTextEditor.tsx` | Standalone line-preserving source editor |
+| `src/editor/source-file-mode.ts` | Extension routing, language lookup, binary-text guard |
 | `src/editor/runsql/stela-codeblock-schema.ts` | Extended codeBlock schema (`detail`, `detailRaw`, `blockId`) |
 | `src/editor/runsql/remark-detail-merge.ts` | mdast-layer `<detail>` absorption |
 | `src/editor/runsql/codeblock-nodeview.ts` | RunSQL UI + embedded BlockResult |
@@ -310,7 +327,7 @@ API v1/v2 connectors remain valid and default to SQL-only; Agent SQL uses their
 buffered result to create a size-limited JSONL artifact when possible. Renderer
 `connector.execute` keeps
 the existing `execution.maxRows` behavior, while this unbounded fallback is an
-internal Agent-only registry path. ([ADR-0079](./adr/0079-sandbox-query-rpc.md),
+internal Agent-only registry path. ([ADR-0086](./adr/0086-declarative-query-sources-for-python.md),
 [ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md))
 
 ## Git Sync
@@ -506,22 +523,28 @@ flowchart TB
    model-facing preview of at most 200 rows, 5 KiB total, and 4 KiB per string
    cell; a truncated result is returned as `sampleRows` rather than `rows`, so a
    partial result cannot be counted as a whole one.
-   `execute_python` takes no inputs. The sandbox fetches its own data with
-   `await query(connection, request)` — a SQL string, or a dict for MongoDB —
-   which is an authorized RPC back to main: only a connection *name* crosses the
-   boundary, main resolves it, forces read-only through `classifySql(sql, false)`
-   regardless of `agentAllowMutations`, journals a `runId`, and streams the
-   resulting artifact into the sandbox as a DuckDB relation. Artifacts remain the
-   transport and audit mechanism but no longer appear in the model's surface.
-   Per execution: 32 `query()` calls, 2 GiB materialized, a 60s inactivity timer
-   that each completed query refreshes, and a 10-minute wall clock. Code runs
+   `execute_python` accepts up to eight declarative query sources plus one fresh,
+   stateless code program. Main validates and executes every source read-only,
+   then stages it under a unique alias; Python reads `tables[alias]` as a DuckDB
+   relation or `to_df(alias)` as pandas. SQL and MongoDB use discriminated source
+   shapes: SQL row limits live inside the statement, while top-level `limit` is
+   MongoDB-only; cross-kind fields fail before connector execution.
+   `await query(connection, request)` stays
+   available only for a request built from earlier Python computation and is an
+   authorized RPC back to main: only a connection *name* crosses the boundary,
+   main resolves it, forces read-only through `classifySql(sql, false)` regardless
+   of `agentAllowMutations`, journals a `runId`, and streams the resulting artifact
+   into the sandbox. Sources are query specifications, never run ids or artifact
+   paths. Per execution, staged and dynamic queries share 32 calls and 2 GiB; a
+   60s inactivity timer refreshes on each completed query, with a 10-minute wall
+   clock. Code runs
    through `eval_code_async` so top-level `await` works. Injecting one JS
    callable ends the sandbox's airtight JS isolation; the retained defenses are
    self-only CSP on a `file://` opaque origin, no `window`/preload in a Worker,
    credentials never leaving main, main-side read-only enforcement, and a journal
    entry per call. DAB's headless runner implements the same `query` protocol in
    an isolated Node Worker; the desktop product remains Node-free.
-   ([ADR-0079](./adr/0079-sandbox-query-rpc.md),
+   ([ADR-0086](./adr/0086-declarative-query-sources-for-python.md),
    [ADR-0068](./adr/0068-headless-pyodide-agent-evaluation.md))
    Production CSP adds only `wasm-unsafe-eval` for Pyodide compilation; scripts
    and connections remain self-only and normal `unsafe-eval` stays disabled.

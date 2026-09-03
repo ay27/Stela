@@ -211,6 +211,8 @@ const MODEL_PREVIEW_MAX_BYTES = 5 * 1024;
 const MODEL_SAMPLE_ROWS = 5;
 const QUERY_ARTIFACT_MAX_BYTES = 1024 * 1024 * 1024;
 const PYTHON_CODE_MAX_CHARS = 50_000;
+const PYTHON_SOURCE_MAX_ITEMS = 8;
+const PYTHON_QUERY_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 function truncate(text: string, maxChars = RESULT_CHAR_BUDGET): string {
   return text.length <= maxChars
     ? text
@@ -479,7 +481,9 @@ export function createAgentTools(options: {
         language: Type.String({ enum: ["sql", "mongodb"] }),
         query: Type.Optional(Type.String({ description: "Required for SQL: one SQL statement." })),
         collection: Type.Optional(Type.String({ description: "Required for MongoDB: collection name." })),
-        database: Type.Optional(Type.String({ description: "Optional logical database." })),
+        database: Type.Optional(Type.String({
+          description: "Logical database. Required when the connection exposes more than one database.",
+        })),
         operation: Type.Optional(Type.String({ enum: ["find", "aggregate"] })),
         filter: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "MongoDB find filter." })),
         projection: Type.Optional(Type.Union([Type.Record(Type.String(), Type.Unknown()), Type.Null()])),
@@ -496,11 +500,33 @@ export function createAgentTools(options: {
       name: "execute_python",
       label: "Execute Python",
       description:
-        "Run sandboxed Python over complete read-only query results. Fetch with `await query(connection_name, request)` and assign the final value to result. duckdb, pandas, con, and tables are preloaded; files, network, packages, and host APIs are unavailable.",
+        "Run stateless Python on complete read-only sources. SQL selects needed columns and puts LIMIT in query. Use `to_df(alias)`; await query is only for dynamic requests. Assign result. pandas, duckdb, con, tables are preloaded; no host access.",
       parameters: Type.Object({
+        sources: Type.Optional(Type.Array(Type.Union([
+          Type.Object({
+            alias: Type.String(),
+            language: Type.Literal("sql"),
+            query: Type.String(),
+            database: Type.Optional(Type.String()),
+            connectionName: Type.Optional(Type.String()),
+          }, { additionalProperties: false }),
+          Type.Object({
+            alias: Type.String(),
+            language: Type.Literal("mongodb"),
+            collection: Type.String(),
+            database: Type.Optional(Type.String()),
+            operation: Type.Optional(Type.String({ enum: ["find", "aggregate"] })),
+            filter: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+            projection: Type.Optional(Type.Union([Type.Record(Type.String(), Type.Unknown()), Type.Null()])),
+            pipeline: Type.Optional(Type.Array(Type.Record(Type.String(), Type.Unknown()))),
+            limit: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+            connectionName: Type.Optional(Type.String()),
+          }, { additionalProperties: false }),
+        ]), {
+          maxItems: PYTHON_SOURCE_MAX_ITEMS,
+        })),
         code: Type.String({
           maxLength: PYTHON_CODE_MAX_CHARS,
-          description: "Python with top-level await; assign the final value to result.",
         }),
       }),
       executionMode: "sequential",
@@ -1457,15 +1483,43 @@ async function runQuery(
       ? {
           instruction:
             `Only ${modelPreview.rows.length} sample rows are shown; rowCount is the true size. ` +
-            "Do not count or aggregate these samples. Aggregate in the source query, or read every row " +
-            "inside execute_python with `await query(connection_name, request)`.",
+            "Do not count or aggregate these samples. Aggregate in the source query, or declare it in " +
+            "execute_python.sources and compute over the complete aliased input.",
         }
       : {}),
   });
 }
 
+function pythonFailureGuidance(error: string): string | null {
+  if (/unknown_database|missing_database_route|unknown data connection|collection must be a non-empty string/i.test(error)) {
+    return (
+      "Python guidance: prefer execute_python.sources for queries known before execution. " +
+      "Give every source an alias, language, and the required database/query or database/collection fields."
+    );
+  }
+  if (/coroutine.*has no attribute ['\"]df|has no attribute ['\"]df.*coroutine/i.test(error)) {
+    return (
+      "Python guidance: query() is async. Prefer to_df(alias) for a declared source; " +
+      "for a dynamic query use `(await query(connection_name, request)).df()`."
+    );
+  }
+  if (/DuckDBPyRelation|__getitem__\(\): incompatible function arguments|not subscriptable/i.test(error)) {
+    return (
+      "Python guidance: query() and tables[alias] return DuckDB relations, not row lists. " +
+      "Convert with `.df()` or use `to_df(alias)` before pandas-style indexing."
+    );
+  }
+  if (/name ['\"][^'\"]+['\"] is not defined/i.test(error)) {
+    return (
+      "Python guidance: every execute_python call starts a fresh stateless sandbox. " +
+      "Declare sources again and redefine every variable used by this code."
+    );
+  }
+  return null;
+}
+
 async function runExecutePython(
-  args: { code?: unknown },
+  args: { code?: unknown; sources?: unknown },
   ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
   if (!ctx.pythonExecutor || !ctx.queryArtifacts || !ctx.run.sessionId) {
@@ -1476,12 +1530,114 @@ async function runExecutePython(
   if (code.length > PYTHON_CODE_MAX_CHARS) {
     return fail(`code exceeds ${PYTHON_CODE_MAX_CHARS} characters.`);
   }
+  const rawSources = args.sources === undefined ? [] : args.sources;
+  if (!Array.isArray(rawSources)) return fail("sources must be an array when provided.");
+  if (rawSources.length > PYTHON_SOURCE_MAX_ITEMS) {
+    return fail(`sources supports at most ${PYTHON_SOURCE_MAX_ITEMS} queries per execution.`);
+  }
+  const aliases = new Set<string>();
+  const sources: Array<{
+    alias: string;
+    connectionName?: string;
+    query: DataQueryRequest;
+  }> = [];
+  for (let index = 0; index < rawSources.length; index += 1) {
+    const raw = rawSources[index];
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return fail(`sources[${index}] must be an object.`);
+    }
+    const source = raw as Record<string, unknown>;
+    const alias = typeof source.alias === "string" ? source.alias.trim() : "";
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(alias)) {
+      return fail(`sources[${index}].alias must be a Python identifier of at most 64 characters.`);
+    }
+    if (aliases.has(alias)) return fail(`sources[${index}].alias '${alias}' is duplicated.`);
+    aliases.add(alias);
+    if (source.language !== "sql" && source.language !== "mongodb") {
+      return fail(`sources[${index}].language must be sql or mongodb.`);
+    }
+    const allowedFields = source.language === "sql"
+      ? new Set(["alias", "language", "query", "database", "connectionName"])
+      : new Set([
+          "alias",
+          "language",
+          "collection",
+          "database",
+          "operation",
+          "filter",
+          "projection",
+          "pipeline",
+          "limit",
+          "connectionName",
+        ]);
+    const unexpectedFields = Object.keys(source).filter((key) => !allowedFields.has(key));
+    if (unexpectedFields.length > 0) {
+      const suffix = source.language === "sql" && unexpectedFields.includes("limit")
+        ? " Put LIMIT inside the SQL query; nothing was executed."
+        : " Nothing was executed.";
+      return fail(
+        `sources[${index}] (${alias}): ${source.language} source does not accept ` +
+          `${unexpectedFields.map((key) => `'${key}'`).join(", ")}.${suffix}`,
+      );
+    }
+    const normalized = normalizeDataQuery(source);
+    if (typeof normalized === "string") return fail(`sources[${index}] (${alias}): ${normalized}`);
+    sources.push({
+      alias,
+      ...(typeof source.connectionName === "string" && source.connectionName.trim()
+        ? { connectionName: source.connectionName.trim() }
+        : {}),
+      query: normalized,
+    });
+  }
+
   const sourceRunIds: string[] = [];
+  const artifacts: Record<string, QueryArtifactDescriptor> = {};
+  let sourceBytes = 0;
+  for (let index = 0; index < sources.length; index += 1) {
+    const source = sources[index]!;
+    let executed: DataQueryOutcome | { failure: string };
+    try {
+      executed = await executeDataQuery(ctx, {
+        requestedConnection: source.connectionName,
+        query: source.query,
+        allowMutations: false,
+      });
+    } catch (error) {
+      return fail(
+        `sources[${index}] (${source.alias}) failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if ("failure" in executed) return fail(`sources[${index}] (${source.alias}) failed: ${executed.failure}`);
+    if (!executed.artifact) {
+      return fail(
+        `sources[${index}] (${source.alias}) could not provide a complete Python input. ` +
+          "Aggregate or filter the query, or use a connector that supports complete query materialization.",
+      );
+    }
+    sourceBytes += executed.artifact.byteSize;
+    if (sourceBytes > PYTHON_QUERY_MAX_BYTES) {
+      return fail(
+        `sources exceed the ${Math.round(PYTHON_QUERY_MAX_BYTES / (1024 * 1024 * 1024))} GiB ` +
+          "data budget for one execute_python call; aggregate or select fewer columns.",
+      );
+    }
+    artifacts[source.alias] = executed.artifact;
+    sourceRunIds.push(executed.runId);
+    if (source.query.language === "sql") {
+      recordSkillTableEvidence(
+        ctx,
+        extractSqlFacts(source.query.query)
+          .flatMap((facts) => facts.readTables)
+          .map((table) => (table.db ? `${table.db}.${table.table}` : table.table)),
+      );
+    }
+  }
   const result = await ctx.pythonExecutor.execute({
     vaultPath: ctx.vaultPath,
     sessionId: ctx.run.sessionId,
     code,
-    artifacts: {},
+    artifacts,
     runQuery: async ({ connectionName, request }) => {
       let parsed: unknown;
       try {
@@ -1523,9 +1679,12 @@ async function runExecutePython(
     signal: ctx.signal,
   });
   if (!result.ok) {
+    const error = result.error ?? "Python execution failed.";
+    const guidance = pythonFailureGuidance(error);
     return fail(
-      `${result.error ?? "Python execution failed."}` +
-        (result.stdout ? `\nstdout:\n${result.stdout}` : ""),
+      error +
+        (result.stdout ? `\nstdout:\n${result.stdout}` : "") +
+        (guidance ? `\n\n${guidance}` : ""),
     );
   }
   const runId = `${ctx.run.runId}-python-${randomUUID()}`;
@@ -1539,7 +1698,20 @@ async function runExecutePython(
     sourceRunIds,
     summary: value,
   });
-  return ok({ runId, stdout: result.stdout, result: result.value, elapsedMs: result.elapsedMs });
+  return ok({
+    runId,
+    ...(value.kind === "none"
+      ? {
+          instruction:
+            "No structured result was assigned. If more analysis is needed, make one self-contained " +
+            "execute_python call that redeclares its sources and variables and assigns result; " +
+            "nothing carries over from this call.",
+        }
+      : {}),
+    stdout: result.stdout,
+    result: value,
+    elapsedMs: result.elapsedMs,
+  });
 }
 
 function runCreateChart(args: Record<string, unknown>, ctx: AgentToolContext): ToolOutcome {

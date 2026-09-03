@@ -46,6 +46,7 @@ interface PendingJob {
   sliceMs: number;
   deadlineAt: number;
   queryCount: number;
+  queryAliasCounter: number;
   queryBytes: number;
   runQuery?: PythonJobQueryRunner;
   signal?: AbortSignal;
@@ -110,6 +111,13 @@ export async function executePython(input: {
     rowCount: artifact.rowCount,
     byteSize: artifact.byteSize,
   }));
+  const inputBytes = inputs.reduce((total, item) => total + item.byteSize, 0);
+  if (inputs.length > MAX_QUERIES_PER_JOB) {
+    throw new Error(`execute_python supports at most ${MAX_QUERIES_PER_JOB} total sources and dynamic queries`);
+  }
+  if (inputBytes > MAX_QUERY_BYTES_PER_JOB) {
+    throw new Error("execute_python sources exceed the total bytes budget for one execution");
+  }
   const request: PythonExecutionRequest = {
     jobId,
     code: input.code,
@@ -128,8 +136,9 @@ export async function executePython(input: {
       timer: null,
       sliceMs: timeoutMs,
       deadlineAt: Date.now() + (input.runQuery ? MAX_TOTAL_MS : timeoutMs),
-      queryCount: 0,
-      queryBytes: 0,
+      queryCount: inputs.length,
+      queryAliasCounter: 0,
+      queryBytes: inputBytes,
       runQuery: input.runQuery,
       signal: input.signal,
     };
@@ -185,7 +194,11 @@ export async function queryForPythonJob(input: {
   if (job.queryBytes > MAX_QUERY_BYTES_PER_JOB) {
     throw new Error("query() exceeded the total bytes budget for one execution; select fewer columns");
   }
-  const alias = `q${job.queryCount}`;
+  let alias: string;
+  do {
+    job.queryAliasCounter += 1;
+    alias = `q${job.queryAliasCounter}`;
+  } while (job.artifacts.has(alias));
   job.artifacts.set(alias, artifact);
   armTimer(input.jobId, job);
   return {

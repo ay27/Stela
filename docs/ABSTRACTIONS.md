@@ -84,6 +84,18 @@ An Analysis Canvas is a separate ordinary Vault file ending in
 Canvas workspace; analysis content is Agent-owned while the user may adjust
 Flow layout. See `AnalysisCanvas` below.
 
+Other recognized source and plain-text files are ordinary editable Vault files,
+not Stela notes. Workspace rendering derives one of four modes from the path:
+
+```typescript
+type WorkspaceFileMode = "markdown" | "source" | "analysis" | "unsupported";
+```
+
+Source mode uses CodeMirror and preserves physical line separators. Unknown
+extensions and binary-like text are not editable. A source file is deliberately
+excluded from implicit `AgentWorkspaceContext`, whose public contract remains
+`note | canvas`.
+
 ## DetailMeta
 
 The parsed form of a `<detail>` HTML block. **Single canonical implementation** in `electron/shared/detail-meta.ts`; renderer re-exports from `src/editor/runsql/detail-meta.ts`.
@@ -848,24 +860,37 @@ interface QueryArtifactDescriptor {
 }
 ```
 
-`execute_python({ code })` takes no inputs. The sandbox fetches its own data:
+`execute_python({ sources?, code })` runs one fresh, stateless program. Queries
+known before execution should be declared as sources and read by alias:
 
 ```python
-orders = await query('warehouse', 'SELECT customer_id, amount, ts FROM orders')
-docs   = await query('crm', {'collection': 'contacts', 'filter': {}, 'limit': None})
+orders = to_df('orders')       # pandas DataFrame
+orders_rel = tables['orders']  # DuckDB relation
 result = ...  # bounded scalar / DataFrame / DuckDB relation
 ```
 
+Each source has a unique alias, optional connection name, and the same
+structured SQL or MongoDB request as `run_query`. The Harness validates all
+sources before running any of them, executes them read-only, and stages their
+complete results without exposing run ids or artifact paths to the model. Up to
+eight sources are accepted. A zero-row result without column metadata remains
+available through `to_df(alias)` as an empty DataFrame. SQL and MongoDB sources
+are discriminated contracts: SQL sampling limits must appear inside the SQL
+statement, while the top-level `limit` field belongs only to MongoDB. Fields
+from the other source kind are rejected before any query is executed.
+
 `query(connection, request)` returns a DuckDB relation over the **full** result
-(`.df()` for pandas) and is an authorized RPC back to main. `request` is a SQL
-string or a MongoDB dict, validated by the same `normalizeDataQuery` the
-`run_query` tool uses. Only a connection *name* crosses the sandbox boundary;
+(`.df()` for pandas) and remains the dynamic escape hatch when a request depends
+on earlier Python computation. It is an authorized RPC back to main. `request`
+is a SQL string or a MongoDB dict, validated by the same `normalizeDataQuery`
+the `run_query` tool uses. Only a connection *name* crosses the sandbox boundary;
 main resolves it, forces read-only via `classifySql(sql, false)` regardless of
 `agentAllowMutations`, journals a `runId`, materializes an artifact, and streams
 it in as bounded chunks under a host-generated alias. Artifacts stay the
 transport, audit, and replay mechanism, but the model never names one. Per
-execution: 32 `query()` calls, 2 GiB materialized, a 60s inactivity timer that
-each completed query refreshes, and a 10-minute wall clock.
+execution, staged sources and dynamic calls share 32 queries and 2 GiB
+materialized; a 60s inactivity timer refreshes on each completed query, with a
+10-minute wall clock.
 
 An app-owned Web Worker loads bundled Pyodide, DuckDB, pandas, NumPy, and their
 pinned offline dependencies, runs code through `eval_code_async` so top-level
@@ -880,7 +905,7 @@ Artifacts are disposable, capped, TTL-cleaned, and never written to Vault
 SQLite/JSONL, Markdown, Agent history, or Git. Headless evaluation implements
 the same `query` protocol over the same Python program inside isolated Node
 workers, without changing the desktop runtime or exposing a second model tool.
-([ADR-0079](./adr/0079-sandbox-query-rpc.md),
+([ADR-0086](./adr/0086-declarative-query-sources-for-python.md),
 [ADR-0068](./adr/0068-headless-pyodide-agent-evaluation.md))
 
 `search_sql_usage({ table })` finds a table in either read or write position;
@@ -893,7 +918,7 @@ Safety ([ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md)):
 - `sql-guard` classifies read-only vs mutation vs multi-statement
 - Mutations + `propose_edit` block on `ai:agent-respond-proposal`
 - Runs continue until model completion, error, or explicit user cancellation ([ADR-0017](./adr/0017-user-cancelled-agent-runs.md))
-- Read tools and `run_query` may execute in parallel. `execute_python`, plan mutations, chart creation, Canvas creation/update, and `propose_edit` are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0079](./adr/0079-sandbox-query-rpc.md)). NodeExecutionEnv is harness cwd only (not exposed as model tools)
+- Read tools and `run_query` may execute in parallel. `execute_python`, plan mutations, chart creation, Canvas creation/update, and `propose_edit` are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0086](./adr/0086-declarative-query-sources-for-python.md)). NodeExecutionEnv is harness cwd only (not exposed as model tools)
 - Compaction uses `ai.contextWindow` + one overflow recovery ([ADR-0018](./adr/0018-pi-ai-agent-harness.md))
 - Execution plans are bounded and linear. Their active store is main-process runtime state; every versioned `AgentPlanSnapshot` is appended immutably to the pi session, and only the highest version for the current run is active ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md), [ADR-0046](./adr/0046-device-sharded-agent-session-history.md))
 - A plan grants no authority over the answer and never gates it. The sequential `plan` tool uses `action=create|update|get`; create/update report a note — unknown step id, out-of-order completion, overwritten terminal step — instead of failing the run, evidence lines are optional, and get is for recovery only. Old plan names remain internal trace aliases but are absent from the provider schema. Answer correctness is defended at the point of use: a truncated `run_query` result returns only `sampleRows` plus an instruction that they cannot support an exact result, each sandbox `query()` prints its relation's row/column count and column types, and the stable prompt fixes the answer shape. Successful query/Python calls still register disposable same-run evidence metadata for chart and Canvas binding, and Python evidence retains its source run lineage; Stela does not pre-scan sources or persist an evidence catalog ([ADR-0084](./adr/0084-single-action-plan-tool.md))
@@ -1120,7 +1145,7 @@ Zustand stores in `src/state/`:
 
 | Store | File | Holds |
 |-------|------|-------|
-| Workspace | `workspace.ts` | Open Markdown/Canvas tabs, active file, vault path |
+| Workspace | `workspace.ts` | Open Markdown/source/Canvas tabs, active file, vault path |
 | Settings | `settings.ts` | Cached AppSettings |
 | Connections | `connections.ts` | ConnectionMap cache |
 | Git | `git.ts` | Status, modified files, sync state |

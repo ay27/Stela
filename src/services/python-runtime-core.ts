@@ -38,10 +38,40 @@ async def _stela_main(_code, _staged_json, _query_bridge):
     con = duckdb.connect(database=':memory:')
     tables = {}
 
+    class _EmptyCountRelation:
+        columns = ['count_star()']
+        types = ['BIGINT']
+
+        def fetchone(self):
+            return (0,)
+
+        def df(self):
+            return pd.DataFrame({'count_star()': [0]})
+
+    class _EmptyRelation:
+        """Pandas-compatible zero-column result for connectors without empty-result metadata."""
+        columns = []
+        types = []
+
+        def __len__(self):
+            return 0
+
+        def df(self):
+            return pd.DataFrame()
+
+        def count(self, _expression='*'):
+            return _EmptyCountRelation()
+
+        def limit(self, _count):
+            return self
+
     def _register(item):
         """Expose one materialized result as a DuckDB view and return its relation."""
         alias = item['alias']
         quoted = _quote_ident(alias)
+        if item['rowCount'] == 0 and not item['columns']:
+            tables[alias] = _EmptyRelation()
+            return tables[alias]
         if item['rowCount'] == 0:
             frame = '__stela_empty_' + alias
             con.register(frame, pd.DataFrame(columns=[c['name'] for c in item['columns']]))
@@ -143,6 +173,8 @@ async def _stela_main(_code, _staged_json, _query_bridge):
         value = namespace.get('result', None)
         if isinstance(value, duckdb.DuckDBPyRelation):
             payload = _table_payload(value.limit(200).df(), int(value.count('*').fetchone()[0]))
+        elif isinstance(value, _EmptyRelation):
+            payload = _table_payload(value.df(), 0)
         elif isinstance(value, pd.DataFrame):
             payload = _table_payload(value.head(200), len(value))
         elif value is None:

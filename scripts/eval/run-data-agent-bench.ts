@@ -77,7 +77,7 @@ import {
   discoverDabTasks,
   endpointHash,
   mapWithResourceConcurrency,
-  readDabDatasetResourceLocks,
+  readDabDatasetResources,
   readDabPrompt,
   safeSlug,
   writeJson,
@@ -113,6 +113,8 @@ interface CliOptions {
   timeoutMs: number;
   bridgeTimeoutMs: number;
   concurrency: number;
+  mongoConcurrency: number;
+  mongoFixtureMode: "per-run" | "shared";
   pythonConcurrency: number;
   pyodideAssets: string;
   noPython: boolean;
@@ -162,6 +164,12 @@ interface GitState {
   trackedDirty: boolean;
 }
 
+interface DabJob {
+  task: DabTask;
+  runNumber: number;
+  completed: FinalRun | null;
+}
+
 function intArg(value: string | undefined, name: string, minimum: number): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < minimum) throw new Error(`${name} must be an integer >= ${minimum}.`);
@@ -175,6 +183,11 @@ function parseArgs(argv: string[]): CliOptions {
   };
   const dabRoot = value("--dab-root") ?? process.env.DAB_ROOT ?? "";
   if (!dabRoot.trim()) throw new Error("Pass --dab-root or set DAB_ROOT.");
+  const concurrency = intArg(value("--concurrency") ?? "1", "--concurrency", 1);
+  const mongoFixtureMode = value("--mongo-fixture-mode") ?? "shared";
+  if (mongoFixtureMode !== "per-run" && mongoFixtureMode !== "shared") {
+    throw new Error("--mongo-fixture-mode must be 'per-run' or 'shared'.");
+  }
   return {
     dabRoot: path.resolve(dabRoot),
     output: value("--output") ? path.resolve(value("--output")!) : null,
@@ -191,7 +204,13 @@ function parseArgs(argv: string[]): CliOptions {
     maxToolCalls: intArg(value("--max-tool-calls") ?? "200", "--max-tool-calls", 1),
     timeoutMs: intArg(value("--timeout-ms") ?? "1800000", "--timeout-ms", 1000),
     bridgeTimeoutMs: intArg(value("--bridge-timeout-ms") ?? "600000", "--bridge-timeout-ms", 1000),
-    concurrency: intArg(value("--concurrency") ?? "1", "--concurrency", 1),
+    concurrency,
+    mongoConcurrency: intArg(
+      value("--mongo-concurrency") ?? String(Math.min(2, concurrency)),
+      "--mongo-concurrency",
+      1,
+    ),
+    mongoFixtureMode,
     pythonConcurrency: intArg(value("--python-concurrency") ?? "2", "--python-concurrency", 1),
     pyodideAssets: path.resolve(
       value("--pyodide-assets") ?? path.join(repoRoot, "node_modules", ".cache", "stela-pyodide"),
@@ -309,8 +328,117 @@ async function runSelfCheck(tasks: DabTask[], options: CliOptions): Promise<void
   }
 }
 
-function buildConnectionConfig(task: DabTask, runDir: string): Record<string, unknown> {
-  return { dataset: task.dataset, queryId: task.queryId, runDir };
+function buildConnectionConfig(
+  task: DabTask,
+  runDir: string,
+  fixtureMode: "owned" | "shared" = "owned",
+): Record<string, unknown> {
+  return {
+    dataset: task.dataset,
+    queryId: task.queryId,
+    runDir,
+    ...(fixtureMode === "shared" ? { fixtureMode } : {}),
+  };
+}
+
+type SchedulerEventWriter = (event: Record<string, unknown>) => Promise<void>;
+
+function createSchedulerEventWriter(output: string): SchedulerEventWriter {
+  let pending = Promise.resolve();
+  return (event) => {
+    pending = pending.then(() => appendJsonl(path.join(output, "scheduler.jsonl"), {
+      at: Date.now(),
+      ...event,
+    })).catch((error) => {
+      console.warn(`DAB scheduler event write failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    return pending;
+  };
+}
+
+class SharedFixturePool {
+  private readonly states = new Map<string, {
+    bridge: DabBridgeClient;
+    ready: Promise<void>;
+    remaining: number;
+  }>();
+
+  constructor(
+    private readonly options: CliOptions,
+    private readonly output: string,
+    private readonly remainingByDataset: ReadonlyMap<string, number>,
+    private readonly recordEvent: SchedulerEventWriter,
+  ) {}
+
+  async acquire(task: DabTask): Promise<void> {
+    const existing = this.states.get(task.dataset);
+    if (existing) return existing.ready;
+    const fixtureDir = path.join(this.output, ".fixtures", safeSlug(task.dataset));
+    const bridge = new DabBridgeClient({
+      dabRoot: this.options.dabRoot,
+      bridgePath,
+      condaEnv: this.options.condaEnv,
+      python: this.options.python ?? undefined,
+      stderrPath: path.join(fixtureDir, "bridge.stderr.log"),
+      callTimeoutMs: this.options.bridgeTimeoutMs,
+    });
+    const started = Date.now();
+    const state = {
+      bridge,
+      remaining: this.remainingByDataset.get(task.dataset) ?? 0,
+      ready: Promise.resolve(),
+    };
+    state.ready = (async () => {
+      await fs.mkdir(fixtureDir, { recursive: true });
+      await this.recordEvent({ type: "fixture_prepare_start", dataset: task.dataset });
+      try {
+        await bridge.call("test", {
+          config: buildConnectionConfig(task, fixtureDir),
+        });
+        await this.recordEvent({
+          type: "fixture_prepare_end",
+          dataset: task.dataset,
+          elapsedMs: Date.now() - started,
+        });
+      } catch (error) {
+        await this.recordEvent({
+          type: "fixture_prepare_error",
+          dataset: task.dataset,
+          elapsedMs: Date.now() - started,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    })();
+    this.states.set(task.dataset, state);
+    return state.ready;
+  }
+
+  async release(dataset: string): Promise<void> {
+    const state = this.states.get(dataset);
+    if (!state) return;
+    state.remaining -= 1;
+    if (state.remaining > 0) return;
+    this.states.delete(dataset);
+    const started = Date.now();
+    await this.recordEvent({ type: "fixture_cleanup_start", dataset });
+    await state.bridge.close();
+    await this.recordEvent({
+      type: "fixture_cleanup_end",
+      dataset,
+      elapsedMs: Date.now() - started,
+    });
+  }
+
+  async closeAll(): Promise<void> {
+    const states = [...this.states.entries()];
+    this.states.clear();
+    await Promise.all(states.map(async ([dataset, state]) => {
+      await state.ready.catch(() => {});
+      await state.bridge.close();
+      await this.recordEvent({ type: "fixture_cleanup_forced", dataset });
+    }));
+  }
 }
 
 function usageWithRate(usage: UsageTotals): UsageTotals & { cacheHitRate: number | null } {
@@ -325,8 +453,9 @@ async function runTask(input: {
   settings: AiSettings;
   credentials: ReturnType<typeof requireCredentials>;
   pythonPool: HeadlessPyodidePool | null;
+  sharedFixture: boolean;
 }): Promise<FinalRun> {
-  const { task, runNumber, runDir, options, settings, credentials, pythonPool } = input;
+  const { task, runNumber, runDir, options, settings, credentials, pythonPool, sharedFixture } = input;
   await fs.mkdir(runDir, { recursive: true });
   const vaultPath = path.join(runDir, "vault");
   await fs.mkdir(path.join(vaultPath, ".stela"), { recursive: true });
@@ -339,7 +468,7 @@ async function runTask(input: {
     callTimeoutMs: options.bridgeTimeoutMs,
   });
   try {
-  const bridgeConfig = buildConnectionConfig(task, runDir);
+  const bridgeConfig = buildConnectionConfig(task, runDir, sharedFixture ? "shared" : "owned");
   const connection: ConnectionEntry = { kind: "dab", config: bridgeConfig };
   await bridge.call("test", { config: bridgeConfig });
 
@@ -870,6 +999,27 @@ async function main(): Promise<void> {
     pythonPool = new HeadlessPyodidePool(options.pyodideAssets, options.pythonConcurrency);
   }
   const [stelaGit, dabGit] = await Promise.all([gitState(repoRoot), gitState(options.dabRoot)]);
+  const representativeTasks = new Map<string, DabTask>();
+  for (const task of tasks) representativeTasks.set(task.dataset, task);
+  const datasetResources = new Map(await Promise.all(
+    [...representativeTasks.entries()].map(async ([dataset, task]) =>
+      [dataset, await readDabDatasetResources(task)] as const),
+  ));
+  if (options.mongoFixtureMode === "shared") {
+    const owners = new Map<string, string>();
+    for (const [dataset, resources] of datasetResources) {
+      for (const lock of resources.fixtureLocks) {
+        const owner = owners.get(lock);
+        if (owner && owner !== dataset) {
+          throw new Error(
+            `Shared fixture collision: ${owner} and ${dataset} both manage ${lock}. ` +
+            "Use --mongo-fixture-mode per-run or give the datasets distinct physical databases.",
+          );
+        }
+        owners.set(lock, dataset);
+      }
+    }
+  }
   await writeJson(path.join(output, "manifest.json"), {
     generatedAt: new Date().toISOString(),
     stela: stelaGit,
@@ -885,6 +1035,9 @@ async function main(): Promise<void> {
     timeoutMs: options.timeoutMs,
     bridgeTimeoutMs: options.bridgeTimeoutMs,
     concurrency: options.concurrency,
+    mongoConcurrency: options.mongoConcurrency,
+    mongoFixtureMode: options.mongoFixtureMode,
+    datasetResources: Object.fromEntries(datasetResources),
     pythonRuntime: options.noPython ? "disabled" : "pyodide",
     pythonConcurrency: options.noPython ? 0 : options.pythonConcurrency,
     strategyReview: options.strategyReview,
@@ -893,52 +1046,82 @@ async function main(): Promise<void> {
     host: { platform: process.platform, arch: process.arch, node: process.version },
   });
 
-  const jobsByDataset = new Map<string, Array<{ task: DabTask; runNumber: number }>>();
+  const jobs: DabJob[] = [];
   for (const task of tasks) {
     for (let runNumber = 0; runNumber < options.runs; runNumber += 1) {
-      const jobs = jobsByDataset.get(task.dataset) ?? [];
-      jobs.push({ task, runNumber });
-      jobsByDataset.set(task.dataset, jobs);
+      const runDir = path.join(output, `query_${task.dataset}`, `query${task.queryId}`, `run_${runNumber}`);
+      const completed = options.resume
+        ? await readCompleted(
+          path.join(runDir, "final_agent.json"),
+          options.reasoningEffort,
+          options.reasoningEffort,
+        )
+        : null;
+      jobs.push({ task, runNumber, completed });
     }
   }
-  const datasetJobs = [...jobsByDataset.values()];
-  const datasetResourceLocks = new Map<string, string[]>();
-  await Promise.all(datasetJobs.map(async (jobs) => {
-    const task = jobs[0]?.task;
-    if (task) datasetResourceLocks.set(task.dataset, await readDabDatasetResourceLocks(task));
-  }));
+  const remainingByDataset = new Map<string, number>();
+  for (const job of jobs) {
+    if (job.completed || !datasetResources.get(job.task.dataset)?.usesMongo) continue;
+    remainingByDataset.set(job.task.dataset, (remainingByDataset.get(job.task.dataset) ?? 0) + 1);
+  }
+  const recordSchedulerEvent = createSchedulerEventWriter(output);
+  const fixturePool = new SharedFixturePool(options, output, remainingByDataset, recordSchedulerEvent);
+  let activeJobs = 0;
+  let activeMongoJobs = 0;
   try {
-    const resultGroups = await mapWithResourceConcurrency(
-      datasetJobs,
+    const results = await mapWithResourceConcurrency(
+      jobs,
       options.concurrency,
-      (jobs) => datasetResourceLocks.get(jobs[0]?.task.dataset ?? "") ?? [],
-      async (jobs): Promise<FinalRun[]> => {
-      const groupResults: FinalRun[] = [];
-      for (const { task, runNumber } of jobs) {
+      (job) => {
+        if (job.completed) return [];
+        const resources = datasetResources.get(job.task.dataset);
+        const datasetLock = `dab:dataset:${job.task.dataset}`;
+        if (!resources?.usesMongo) return [datasetLock, ...(resources?.fixtureLocks ?? [])];
+        if (options.mongoFixtureMode === "shared") return ["dab:mongodb"];
+        return ["dab:mongodb", datasetLock, ...resources.fixtureLocks];
+      },
+      async ({ task, runNumber, completed }): Promise<FinalRun> => {
         const runDir = path.join(output, `query_${task.dataset}`, `query${task.queryId}`, `run_${runNumber}`);
         const finalPath = path.join(runDir, "final_agent.json");
-        if (options.resume) {
-          const completed = await readCompleted(
-            finalPath,
-            options.reasoningEffort,
-            options.reasoningEffort,
-          );
-          if (completed) {
-            groupResults.push(completed);
-            console.log(`SKIP ${task.dataset}/query${task.queryId}/run_${runNumber}`);
-            continue;
-          }
+        if (completed) {
+          console.log(`SKIP ${task.dataset}/query${task.queryId}/run_${runNumber}`);
+          return completed;
         }
+        const usesMongo = datasetResources.get(task.dataset)?.usesMongo === true;
+        const sharedFixture = usesMongo && options.mongoFixtureMode === "shared";
+        activeJobs += 1;
+        if (usesMongo) activeMongoJobs += 1;
+        await recordSchedulerEvent({
+          type: "job_start",
+          dataset: task.dataset,
+          queryId: task.queryId,
+          runNumber,
+          usesMongo,
+          sharedFixture,
+          activeJobs,
+          activeMongoJobs,
+        });
         console.log(`RUN  ${task.dataset}/query${task.queryId}/run_${runNumber}`);
         try {
-          const result = await runTask({ task, runNumber, runDir, options, settings, credentials, pythonPool });
+          if (sharedFixture) await fixturePool.acquire(task);
+          const result = await runTask({
+            task,
+            runNumber,
+            runDir,
+            options,
+            settings,
+            credentials,
+            pythonPool,
+            sharedFixture,
+          });
           await writeJson(finalPath, result);
           await fs.rm(path.join(runDir, "runner_failure.json"), { force: true });
-          groupResults.push(result);
           console.log(
             `  ${result.valid ? "PASS" : "FAIL"} ${task.dataset}/query${task.queryId}/run_${runNumber} ` +
             `${result.elapsedMs}ms ${result.terminateReason}`,
           );
+          return result;
         } catch (caught) {
           const message = caught instanceof Error ? caught.stack ?? caught.message : String(caught);
           const failure: FinalRun = {
@@ -981,19 +1164,34 @@ async function main(): Promise<void> {
           };
           // Do not create final_agent.json: --resume must retry runner/environment failures.
           await writeJson(path.join(runDir, "runner_failure.json"), failure);
-          groupResults.push(failure);
           console.log(`  ERROR ${task.dataset}/query${task.queryId}/run_${runNumber} ${message.split("\n")[0]}`);
+          return failure;
+        } finally {
+          if (sharedFixture) await fixturePool.release(task.dataset);
+          activeJobs -= 1;
+          if (usesMongo) activeMongoJobs -= 1;
+          await recordSchedulerEvent({
+            type: "job_end",
+            dataset: task.dataset,
+            queryId: task.queryId,
+            runNumber,
+            usesMongo,
+            activeJobs,
+            activeMongoJobs,
+          });
         }
-      }
-      return groupResults;
       },
+      { "dab:mongodb": options.mongoConcurrency },
     );
-    const results = resultGroups.flat();
     await writeSummary(output, results);
     console.log(`\n${results.filter((result) => result.valid).length}/${results.length} valid -> ${output}`);
   } finally {
-    await pythonPool?.close();
-    if (artifactRoot) await fs.rm(artifactRoot, { recursive: true, force: true });
+    try {
+      await fixturePool.closeAll();
+    } finally {
+      await pythonPool?.close();
+      if (artifactRoot) await fs.rm(artifactRoot, { recursive: true, force: true });
+    }
   }
 }
 

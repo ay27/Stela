@@ -8,7 +8,8 @@ const labels = {
   timeout: "超时",
   bridge_terminated: "Bridge 被终止",
   cross_database: "跨库限制",
-  routing_error: "数据库路由错误",
+  routing_error: "数据库选择未恢复",
+  query_language_mismatch: "查询语言错配未恢复",
   infrastructure: "运行环境错误",
   no_answer: "无最终答案",
   validation_failure: "验证失败",
@@ -204,6 +205,49 @@ function renderSummary() {
   );
 }
 
+function analysisList(title, items) {
+  const section = element("section", "stela-analysis-list");
+  section.append(element("h3", "", title));
+  const list = element("ul", "");
+  list.append(...items.map((item) => element("li", "", item)));
+  section.append(list);
+  return section;
+}
+
+function renderRunAnalysis() {
+  const panel = document.getElementById("run-analysis");
+  const analysis = state.data.analysis;
+  if (!analysis) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  document.getElementById("analysis-title").textContent = analysis.title;
+  const status = document.getElementById("analysis-status");
+  status.dataset.status = analysis.status;
+  status.textContent = analysis.status === "partial"
+    ? "部分结果"
+    : analysis.status === "historical" ? "历史复盘" : "完整结果";
+  document.getElementById("analysis-summary").textContent = analysis.summary;
+  document.getElementById("analysis-metrics").replaceChildren(...analysis.headlineMetrics.map((item) =>
+    metric(item.label, item.value, item.note)));
+  document.getElementById("analysis-findings").replaceChildren(...analysis.findings.map((item) => {
+    const card = element("article", "stela-analysis-finding");
+    card.append(element("h3", "", item.title));
+    const evidence = element("ul", "");
+    evidence.append(...item.evidence.map((entry) => element("li", "", entry)));
+    card.append(evidence, element("p", "", item.interpretation));
+    return card;
+  }));
+  const boundarySections = [
+    ["可比性边界", analysis.comparability],
+    ["局限", analysis.limitations],
+    ["下一步", analysis.nextSteps],
+  ].filter(([, items]) => items.length > 0);
+  document.getElementById("analysis-boundaries").replaceChildren(...boundarySections.map(([title, items]) =>
+    analysisList(title, items)));
+}
+
 function historyRunLabel(run) {
   const date = run.sourceGeneratedAt ? new Date(run.sourceGeneratedAt).toLocaleString("zh-CN") : "未知时间";
   const expectedCases = Math.max(...(state.history?.runs ?? [run]).map((item) => item.totals.cases));
@@ -325,6 +369,8 @@ function renderSignals() {
     (sum, item) => sum + (item.capabilityFailures.query_language_mismatch ?? 0),
     0,
   );
+  const recoveredRoutes = state.data.cases.filter((item) => item.routing?.status === "recovered");
+  const unresolvedRoutes = state.data.cases.filter((item) => item.routing?.status === "unresolved");
   const strategyReviews = state.data.cases.filter((item) => item.efficiency?.reviewTriggered);
   const resultReviewIssues = state.data.cases.filter((item) =>
     ["exhausted_with_warning", "unavailable", "structural_failed"].includes(item.resultReview?.status)
@@ -346,8 +392,18 @@ function renderSignals() {
       className: "stela-signal-warning",
     },
     {
+      value: `${unresolvedRoutes.length} cases`,
+      text: "最后一次数据库选择或查询语言错误后没有成功的数据调用；失败 case 中仅这些轨迹会把路由问题视作主因。",
+      className: unresolvedRoutes.length > 0 ? "stela-signal-danger" : "",
+    },
+    {
+      value: `${recoveredRoutes.length} cases`,
+      text: "轨迹曾出现路由误用，但随后成功获得数据；这些瞬时错误只作为效率信号，不再覆盖最终答案归因。",
+      className: recoveredRoutes.length > 0 ? "stela-signal-warning" : "",
+    },
+    {
       value: `${languageMismatches} calls`,
-      text: "SQL 与 MongoDB 查询语言路由错配；即使最终重试成功，也会增加耗时和上下文噪声。",
+      text: "SQL 与 MongoDB 查询语言错配总调用数，包含后来已经恢复的尝试。",
       className: languageMismatches > 0 ? "stela-signal-warning" : "",
     },
     {
@@ -564,6 +620,7 @@ function renderDetail(item) {
     ["同族查询峰值", String(item.efficiency?.queryFamilyPeak ?? 0)],
     ["策略复盘", item.efficiency?.reviewStatus ?? "not_triggered"],
     ["结果审查", item.resultReview?.status ?? "legacy_unknown"],
+    ["路由状态", item.routing?.status ?? "legacy_unknown"],
   ];
   for (const [label, value] of metricValues) {
     const card = element("div", "stela-detail-metric");
@@ -761,6 +818,7 @@ function renderAll() {
   refreshFilters();
   renderHistory();
   renderSummary();
+  renderRunAnalysis();
   renderComparison();
   renderSignals();
   renderDatasetChart();
@@ -775,7 +833,7 @@ async function loadHistoryRun(runId) {
   if (state.runCache.has(runId)) return state.runCache.get(runId);
   const run = state.history?.runs.find((candidate) => candidate.id === runId);
   if (!run) throw new Error(`找不到历史评测 ${runId}`);
-  const response = await fetch(run.dataFile);
+  const response = await fetch(run.dataFile, { cache: "no-store" });
   if (!response.ok) throw new Error(`无法读取 ${run.dataFile} (${response.status})`);
   const data = await response.json();
   state.runCache.set(runId, data);
@@ -804,7 +862,7 @@ async function switchComparisonRun(runId) {
 }
 
 async function main() {
-  const historyResponse = await fetch("./history.json");
+  const historyResponse = await fetch("./history.json", { cache: "no-store" });
   if (historyResponse.ok) {
     state.history = await historyResponse.json();
     state.currentRunId = state.history.defaultRunId;
@@ -812,7 +870,7 @@ async function main() {
     state.data = await loadHistoryRun(state.currentRunId);
     state.comparisonData = await loadHistoryRun(state.comparisonRunId);
   } else {
-    const response = await fetch("./analysis-data.json");
+    const response = await fetch("./analysis-data.json", { cache: "no-store" });
     if (!response.ok) throw new Error(`无法读取 analysis-data.json (${response.status})`);
     state.data = await response.json();
   }

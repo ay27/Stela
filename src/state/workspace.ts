@@ -1179,6 +1179,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (idx < 0) return;
     const target = tabs[idx]!;
     if (!target.externalChange) return;
+    clearTabBuffer(id);
     // 接受变更：清 dirty/externalChange，bump reloadToken 让 EditorView 重读磁盘。
     // dirty=false 是因为本地未保存的内容被显式抛弃了，磁盘版本即真相。
     const updated: Tab = {
@@ -1279,6 +1280,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       if (!t.path) return t;
       // dirty tab 保护本地未保存改动，不重读（watcher 路径会按内容比对决定是否提示）
       if (t.dirty) return t;
+      clearTabBuffer(t.id);
       mutated = true;
       return { ...t, reloadToken: (t.reloadToken ?? 0) + 1 };
     });

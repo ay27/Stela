@@ -52,6 +52,7 @@ import { useWorkspace } from "@/state/workspace";
 import { useSettings } from "@/state/settings";
 import { firstConnectionName } from "@/services/connections";
 import { ConnectionPicker } from "@/components/connection-picker";
+import { isStelaFilePath } from "@/core/stela-file";
 
 import {
   AiPromptInput,
@@ -201,6 +202,12 @@ export function AgentPanel() {
   const activeWorkspaceTab = workspaceTabs.find((tab) => tab.id === workspaceActiveTabId) ?? null;
   const emptyWorkspace = useMemo<AgentEmptyWorkspace | null>(() => {
     if (!activeWorkspaceTab?.path) return null;
+    if (
+      activeWorkspaceTab.kind !== "analysis" &&
+      !isStelaFilePath(activeWorkspaceTab.path)
+    ) {
+      return null;
+    }
     const relativePath = relativeToVault(activeWorkspaceTab.path, vaultPath);
     if (!relativePath) return null;
     return {

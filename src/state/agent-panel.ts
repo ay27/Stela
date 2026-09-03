@@ -42,6 +42,7 @@ import {
 import { useLayout } from "@/state/layout";
 import { useWorkspace } from "@/state/workspace";
 import { scheduleAutoGit } from "@/services/auto-git";
+import { isStelaFilePath } from "@/core/stela-file";
 import {
   createAgentComposerState,
   emptyAgentComposerState,
@@ -244,6 +245,7 @@ export function currentWorkspaceContext(): AgentWorkspaceContext | undefined {
   const path = normalizedVault && normalizedPath.startsWith(`${normalizedVault}/`)
     ? normalizedPath.slice(normalizedVault.length + 1)
     : normalizedPath;
+  if (tab.kind !== "analysis" && !isStelaFilePath(path)) return undefined;
   return { kind: tab.kind === "analysis" ? "canvas" : "note", path };
 }
 

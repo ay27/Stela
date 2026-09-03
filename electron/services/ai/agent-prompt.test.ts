@@ -157,5 +157,7 @@ const mongoUser = buildUserContent(
 );
 assert.match(mongoUser, /active_guidance: \[\{"id":"mongodb"/);
 assert.match(mongoUser, /safe aggregate for grouping, ranking, expressions, and counts/);
+assert.match(mongoUser, /declare sources with alias, language='mongodb', database, collection/);
+assert.match(mongoUser, /Use await query only for a request built from earlier Python computation/);
 
 console.log("agent prompt cache-boundary tests passed.");

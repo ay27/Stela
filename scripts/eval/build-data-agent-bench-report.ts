@@ -97,6 +97,16 @@ export interface ReportTraceStep {
   usage: { input: number; output: number; cacheRead: number } | null;
 }
 
+export type ReportRoutingStatus = "none" | "recovered" | "unresolved" | "indeterminate";
+
+export interface ReportRoutingDiagnosis {
+  status: ReportRoutingStatus;
+  databaseErrors: number;
+  languageErrors: number;
+  successfulDataCalls: number;
+  recoveredBy: string | null;
+}
+
 export interface ReportCase {
   id: string;
   dataset: string;
@@ -121,10 +131,23 @@ export interface ReportCase {
   toolCalls: number;
   toolCallCounts: Record<string, number>;
   capabilityFailures: Record<string, number>;
+  routing: ReportRoutingDiagnosis;
   efficiency: ReportEfficiency;
   resultReview: ReportResultReview;
   usage: RawRun["usage"];
   trace: ReportTraceStep[];
+}
+
+export interface DataAgentBenchAnalysisNotes {
+  schemaVersion: 1;
+  status: "complete" | "partial" | "historical";
+  title: string;
+  summary: string;
+  headlineMetrics: Array<{ label: string; value: string; note: string }>;
+  findings: Array<{ title: string; evidence: string[]; interpretation: string }>;
+  comparability: string[];
+  limitations: string[];
+  nextSteps: string[];
 }
 
 export interface DataAgentBenchReport {
@@ -132,6 +155,7 @@ export interface DataAgentBenchReport {
   generatedAt: string;
   sourceGeneratedAt: string | null;
   manifest: Record<string, unknown>;
+  analysis: DataAgentBenchAnalysisNotes | null;
   totals: {
     cases: number;
     valid: number;
@@ -289,16 +313,88 @@ function extractQuestion(transcript: RawMessage[]): string {
   return truncate((queryIndex >= 0 ? request.slice(queryIndex + 6) : request).trim(), 12_000);
 }
 
-function failureCategory(run: RawRun): string {
+const DATA_QUERY_TOOLS = new Set(["run_query", "run_sql", "execute_python"]);
+const DATABASE_ROUTE_CODES = ["missing_database_route", "unknown_database"] as const;
+const LANGUAGE_ROUTE_CODES = ["query_language_mismatch"] as const;
+
+function rawToolResultText(message: RawMessage): string {
+  return `${contentText(message.content, "text")} ${stringifyArguments(message.details ?? "")}`.trim();
+}
+
+function routingDiagnosis(run: RawRun): ReportRoutingDiagnosis {
+  const messages = run.transcript ?? [];
+  let lastRoutingErrorIndex = -1;
+  let databaseErrorsInTrace = 0;
+  let languageErrorsInTrace = 0;
+  let successfulDataCalls = 0;
+  let recoveredBy: string | null = null;
+
+  for (const [index, message] of messages.entries()) {
+    if (message.role !== "toolResult") continue;
+    const text = rawToolResultText(message);
+    const databaseErrors = DATABASE_ROUTE_CODES.reduce(
+      (sum, code) => sum + (text.includes(code) ? 1 : 0),
+      0,
+    );
+    const languageErrors = LANGUAGE_ROUTE_CODES.reduce(
+      (sum, code) => sum + (text.includes(code) ? 1 : 0),
+      0,
+    );
+    if (databaseErrors > 0 || languageErrors > 0) {
+      databaseErrorsInTrace += databaseErrors;
+      languageErrorsInTrace += languageErrors;
+      lastRoutingErrorIndex = index;
+      recoveredBy = null;
+      continue;
+    }
+    if (DATA_QUERY_TOOLS.has(message.toolName ?? "") && message.isError !== true) {
+      successfulDataCalls += 1;
+      if (index > lastRoutingErrorIndex && lastRoutingErrorIndex >= 0) {
+        recoveredBy = message.toolName ?? null;
+      }
+    }
+  }
+
+  const databaseErrors = Math.max(
+    databaseErrorsInTrace,
+    DATABASE_ROUTE_CODES.reduce((sum, code) => sum + (run.capabilityFailures?.[code] ?? 0), 0),
+  );
+  const languageErrors = Math.max(
+    languageErrorsInTrace,
+    LANGUAGE_ROUTE_CODES.reduce((sum, code) => sum + (run.capabilityFailures?.[code] ?? 0), 0),
+  );
+  const totalErrors = databaseErrors + languageErrors;
+  if (totalErrors === 0) {
+    return { status: "none", databaseErrors, languageErrors, successfulDataCalls, recoveredBy: null };
+  }
+  if (lastRoutingErrorIndex >= 0) {
+    return {
+      status: recoveredBy ? "recovered" : "unresolved",
+      databaseErrors,
+      languageErrors,
+      successfulDataCalls,
+      recoveredBy,
+    };
+  }
+  return {
+    status: successfulDataCalls > 0 ? "indeterminate" : "unresolved",
+    databaseErrors,
+    languageErrors,
+    successfulDataCalls,
+    recoveredBy: null,
+  };
+}
+
+function failureCategory(run: RawRun, routing: ReportRoutingDiagnosis): string {
   if (run.valid) return "pass";
   const reason = `${run.validation?.reason ?? ""} ${run.error ?? ""}`.toLowerCase();
   if (run.terminateReason.includes("timeout") || reason.includes("timed out") || reason.includes("timeout")) return "timeout";
   if ((run.capabilityFailures.unsupported_mongodb ?? 0) > 0) return "mongodb_unavailable";
   if ((run.capabilityFailures.cross_database_query ?? 0) > 0) return "cross_database";
-  if ((run.capabilityFailures.missing_database_route ?? 0) > 0 ||
-      (run.capabilityFailures.unknown_database ?? 0) > 0) return "routing_error";
   if (reason.includes("dab bridge exited (sigterm)")) return "bridge_terminated";
   if (run.error || reason.includes("runner_error") || reason.includes("validator_error")) return "infrastructure";
+  if (routing.status === "unresolved" && routing.databaseErrors > 0) return "routing_error";
+  if (routing.status === "unresolved" && routing.languageErrors > 0) return "query_language_mismatch";
   if (!run.answer.trim()) return "no_answer";
   if (reason.includes("no matching") || reason.includes("ground truth") || reason.includes("incorrect")) {
     return "wrong_answer";
@@ -379,6 +475,71 @@ async function readJson<T>(filePath: string, fallback: T): Promise<T> {
   }
 }
 
+function analysisString(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`analysis-notes.json field ${field} must be a non-empty string`);
+  }
+  return value.trim();
+}
+
+function analysisStringList(value: unknown, field: string): string[] {
+  if (!Array.isArray(value)) throw new Error(`analysis-notes.json field ${field} must be an array`);
+  return value.map((item, index) => analysisString(item, `${field}[${index}]`));
+}
+
+async function readAnalysisNotes(input: string): Promise<DataAgentBenchAnalysisNotes | null> {
+  const filePath = path.join(input, "analysis-notes.json");
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await fs.readFile(filePath, "utf-8")) as unknown;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new Error(`Unable to read ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("analysis-notes.json must contain an object");
+  }
+  const record = raw as Record<string, unknown>;
+  if (record.schemaVersion !== 1) throw new Error("analysis-notes.json schemaVersion must be 1");
+  if (!["complete", "partial", "historical"].includes(String(record.status))) {
+    throw new Error("analysis-notes.json status must be complete, partial, or historical");
+  }
+  if (!Array.isArray(record.headlineMetrics) || !Array.isArray(record.findings)) {
+    throw new Error("analysis-notes.json headlineMetrics and findings must be arrays");
+  }
+  return {
+    schemaVersion: 1,
+    status: record.status as DataAgentBenchAnalysisNotes["status"],
+    title: analysisString(record.title, "title"),
+    summary: analysisString(record.summary, "summary"),
+    headlineMetrics: record.headlineMetrics.map((item, index) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        throw new Error(`analysis-notes.json headlineMetrics[${index}] must be an object`);
+      }
+      const metric = item as Record<string, unknown>;
+      return {
+        label: analysisString(metric.label, `headlineMetrics[${index}].label`),
+        value: analysisString(metric.value, `headlineMetrics[${index}].value`),
+        note: analysisString(metric.note, `headlineMetrics[${index}].note`),
+      };
+    }),
+    findings: record.findings.map((item, index) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        throw new Error(`analysis-notes.json findings[${index}] must be an object`);
+      }
+      const finding = item as Record<string, unknown>;
+      return {
+        title: analysisString(finding.title, `findings[${index}].title`),
+        evidence: analysisStringList(finding.evidence, `findings[${index}].evidence`),
+        interpretation: analysisString(finding.interpretation, `findings[${index}].interpretation`),
+      };
+    }),
+    comparability: analysisStringList(record.comparability, "comparability"),
+    limitations: analysisStringList(record.limitations, "limitations"),
+    nextSteps: analysisStringList(record.nextSteps, "nextSteps"),
+  };
+}
+
 async function findFinalRuns(input: string): Promise<string[]> {
   const files: string[] = [];
   const visit = async (directory: string): Promise<void> => {
@@ -398,35 +559,39 @@ export async function buildDataAgentBenchReport(input: string): Promise<DataAgen
   if (files.length === 0) throw new Error(`No final_agent.json files found below ${input}`);
   const runs = await Promise.all(files.map(async (filePath) =>
     JSON.parse(await fs.readFile(filePath, "utf-8")) as RawRun));
-  const cases: ReportCase[] = runs.map((run) => ({
-    id: `${run.dataset}/query${run.query}/run_${run.run}`,
-    dataset: run.dataset,
-    query: Number(run.query),
-    run: run.run,
-    valid: run.valid,
-    failureCategory: failureCategory(run),
-    validationReason: run.validation?.reason ?? "",
-    groundTruth: run.validation?.ground_truth ?? "",
-    question: extractQuestion(run.transcript ?? []),
-    answer: truncate(run.answer ?? "", 30_000),
-    terminateReason: run.terminateReason,
-    error: truncate(run.error ?? "", 8_000),
-    model: run.model,
-    requestedReasoningEffort: run.requestedReasoningEffort ?? "off",
-    effectiveReasoningEffort: run.effectiveReasoningEffort ?? "off",
-    hints: run.hints,
-    startedAt: run.startedAt,
-    elapsedMs: run.elapsedMs,
-    firstResultMs: run.firstResultMs,
-    modelTurns: run.modelTurns,
-    toolCalls: run.toolCalls,
-    toolCallCounts: run.toolCallCounts ?? {},
-    capabilityFailures: run.capabilityFailures ?? {},
-    efficiency: { ...EMPTY_EFFICIENCY, ...(run.efficiency ?? {}) },
-    resultReview: { ...EMPTY_RESULT_REVIEW, ...(run.resultReview ?? {}) },
-    usage: run.usage,
-    trace: compactTrace(run.transcript ?? []),
-  })).sort((a, b) => a.dataset.localeCompare(b.dataset) || a.query - b.query || a.run - b.run);
+  const cases: ReportCase[] = runs.map((run) => {
+    const routing = routingDiagnosis(run);
+    return {
+      id: `${run.dataset}/query${run.query}/run_${run.run}`,
+      dataset: run.dataset,
+      query: Number(run.query),
+      run: run.run,
+      valid: run.valid,
+      failureCategory: failureCategory(run, routing),
+      validationReason: run.validation?.reason ?? "",
+      groundTruth: run.validation?.ground_truth ?? "",
+      question: extractQuestion(run.transcript ?? []),
+      answer: truncate(run.answer ?? "", 30_000),
+      terminateReason: run.terminateReason,
+      error: truncate(run.error ?? "", 8_000),
+      model: run.model,
+      requestedReasoningEffort: run.requestedReasoningEffort ?? "off",
+      effectiveReasoningEffort: run.effectiveReasoningEffort ?? "off",
+      hints: run.hints,
+      startedAt: run.startedAt,
+      elapsedMs: run.elapsedMs,
+      firstResultMs: run.firstResultMs,
+      modelTurns: run.modelTurns,
+      toolCalls: run.toolCalls,
+      toolCallCounts: run.toolCallCounts ?? {},
+      capabilityFailures: run.capabilityFailures ?? {},
+      routing,
+      efficiency: { ...EMPTY_EFFICIENCY, ...(run.efficiency ?? {}) },
+      resultReview: { ...EMPTY_RESULT_REVIEW, ...(run.resultReview ?? {}) },
+      usage: run.usage,
+      trace: compactTrace(run.transcript ?? []),
+    };
+  }).sort((a, b) => a.dataset.localeCompare(b.dataset) || a.query - b.query || a.run - b.run);
 
   const datasetNames = [...new Set(cases.map((item) => item.dataset))].sort();
   const datasets = datasetNames.map((name) => {
@@ -508,11 +673,13 @@ export async function buildDataAgentBenchReport(input: string): Promise<DataAgen
   const valid = cases.filter((item) => item.valid).length;
   const summary = await readJson<{ generatedAt?: string }>(path.join(input, "summary.json"), {});
   const manifest = await readJson<Record<string, unknown>>(path.join(input, "manifest.json"), {});
+  const analysis = await readAnalysisNotes(input);
   return {
     schemaVersion: 2,
     generatedAt: new Date().toISOString(),
     sourceGeneratedAt: summary.generatedAt ?? null,
     manifest,
+    analysis,
     totals: {
       cases: cases.length,
       valid,

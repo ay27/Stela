@@ -94,6 +94,68 @@ async function writeRun(dataset: string, query: number, valid: boolean): Promise
   }), "utf-8");
 }
 
+async function writeRoutingRun(
+  routingInput: string,
+  dataset: string,
+  capabilityFailures: Record<string, number>,
+  results: Array<{ text: string; isError: boolean }>,
+): Promise<void> {
+  const directory = path.join(routingInput, `query_${dataset}`, "query1", "run_0");
+  await fs.mkdir(directory, { recursive: true });
+  const transcript: Array<Record<string, unknown>> = [{
+    role: "user",
+    content: [{ type: "text", text: "QUERY:\nReturn the requested value." }],
+  }];
+  for (const [index, result] of results.entries()) {
+    transcript.push({
+      role: "assistant",
+      content: [{
+        type: "toolCall",
+        name: "run_query",
+        arguments: { language: "sql", database: index === 0 ? "wrong" : "correct", query: "SELECT 1" },
+      }],
+    });
+    transcript.push({
+      role: "toolResult",
+      toolName: "run_query",
+      content: [{ type: "text", text: result.text }],
+      isError: result.isError,
+    });
+  }
+  transcript.push({ role: "assistant", content: [{ type: "text", text: "41" }] });
+  await fs.writeFile(path.join(directory, "final_agent.json"), JSON.stringify({
+    complete: true,
+    dataset,
+    query: "1",
+    run: 0,
+    answer: "41",
+    valid: false,
+    validation: {
+      reason: "No matching number found in LLM output.",
+      ground_truth: "42",
+    },
+    terminateReason: "final_answer",
+    error: null,
+    model: "mock-model",
+    hints: false,
+    startedAt: "2026-08-16T00:00:00.000Z",
+    elapsedMs: 1_000,
+    firstResultMs: 100,
+    modelTurns: results.length + 1,
+    toolCalls: results.length,
+    toolCallCounts: { run_query: results.length },
+    capabilityFailures,
+    usage: {
+      inputTokens: 10,
+      outputTokens: 10,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      cacheHitRate: 0,
+    },
+    transcript,
+  }), "utf-8");
+}
+
 try {
   await writeRun("demo", 1, true);
   await writeRun("mongo_demo", 2, false);
@@ -102,6 +164,21 @@ try {
     model: "mock-model",
     requestedReasoningEffort: "high",
     effectiveReasoningEffort: "medium",
+  }));
+  await fs.writeFile(path.join(input, "analysis-notes.json"), JSON.stringify({
+    schemaVersion: 1,
+    status: "complete",
+    title: "Mock run analysis",
+    summary: "The mock run establishes the report contract.",
+    headlineMetrics: [{ label: "Strict score", value: "1 / 2", note: "Fixture only" }],
+    findings: [{
+      title: "One deterministic failure",
+      evidence: ["mongo_demo/query2/run_0 failed."],
+      interpretation: "The report must keep evidence separate from interpretation.",
+    }],
+    comparability: ["Both cases use the same mock model."],
+    limitations: ["This is a fixture."],
+    nextSteps: ["Keep the narrative attached to the run."],
   }));
 
   const report = await buildDataAgentBenchReport(input);
@@ -120,12 +197,61 @@ try {
   assert.equal(report.cases[1]?.efficiency.reviewStatus, "not_triggered");
   assert.equal(report.cases[1]?.trace[1]?.toolName, "run_sql");
   assert.equal(report.failureCategories[0]?.count, 1);
+  assert.equal(report.analysis?.title, "Mock run analysis");
+  assert.equal(report.analysis?.findings[0]?.evidence[0], "mongo_demo/query2/run_0 failed.");
   const runSqlStats = report.toolStats.find((item) => item.tool === "run_sql");
   assert.equal(runSqlStats?.calls, 3);
   assert.equal(runSqlStats?.successCalls, 1);
   assert.equal(runSqlStats?.runtimeErrorCalls, 2);
   assert.equal(runSqlStats?.passedCaseCalls, 1);
   assert.equal(runSqlStats?.failedCaseCalls, 2);
+
+  const routingInput = path.join(root, "routing-results");
+  await writeRoutingRun(
+    routingInput,
+    "route_recovered",
+    { unknown_database: 1 },
+    [
+      { text: JSON.stringify({ code: "unknown_database", message: "Unknown logical database 'wrong'." }), isError: true },
+      { text: JSON.stringify({ columns: ["value"], rows: [[41]] }), isError: false },
+    ],
+  );
+  await writeRoutingRun(
+    routingInput,
+    "route_unresolved",
+    { missing_database_route: 1 },
+    [{ text: JSON.stringify({ code: "missing_database_route" }), isError: true }],
+  );
+  await writeRoutingRun(
+    routingInput,
+    "language_unresolved",
+    { query_language_mismatch: 1 },
+    [{ text: JSON.stringify({ code: "query_language_mismatch" }), isError: true }],
+  );
+  await writeRoutingRun(
+    routingInput,
+    "legacy_indeterminate",
+    { unknown_database: 1 },
+    [{ text: JSON.stringify({ columns: ["value"], rows: [[41]] }), isError: false }],
+  );
+  const routingReport = await buildDataAgentBenchReport(routingInput);
+  const recovered = routingReport.cases.find((item) => item.dataset === "route_recovered");
+  assert.equal(recovered?.routing.status, "recovered");
+  assert.equal(recovered?.routing.recoveredBy, "run_query");
+  assert.equal(recovered?.failureCategory, "wrong_answer");
+  const unresolved = routingReport.cases.find((item) => item.dataset === "route_unresolved");
+  assert.equal(unresolved?.routing.status, "unresolved");
+  assert.equal(unresolved?.failureCategory, "routing_error");
+  const language = routingReport.cases.find((item) => item.dataset === "language_unresolved");
+  assert.equal(language?.routing.status, "unresolved");
+  assert.equal(language?.failureCategory, "query_language_mismatch");
+  const legacy = routingReport.cases.find((item) => item.dataset === "legacy_indeterminate");
+  assert.equal(legacy?.routing.status, "indeterminate");
+  assert.equal(legacy?.failureCategory, "wrong_answer");
+  assert.deepEqual(
+    Object.fromEntries(routingReport.failureCategories.map((item) => [item.category, item.count])),
+    { wrong_answer: 2, query_language_mismatch: 1, routing_error: 1 },
+  );
 
   await writeDataAgentBenchReport(input, output);
   for (const name of ["index.html", "styles.css", "app.js", "analysis-data.json"]) {
@@ -163,6 +289,8 @@ try {
   assert.match(historyApp, /部分结果/);
   assert.match(historyApp, /工具成功率/);
   assert.match(historyApp, /案例相关/);
+  assert.match(historyApp, /function renderRunAnalysis\(\)/);
+  assert.match(historyApp, /cache: "no-store"/);
   assert.doesNotMatch(historyApp, /\$\{item\.passCalls\} pass/);
   for (const run of history.runs) {
     const stat = await fs.stat(path.join(historyOutput, run.dataFile));

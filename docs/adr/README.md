@@ -131,9 +131,11 @@ proposed → active → superseded
 | [0076](0076-event-driven-single-flight-git-sync.md) | Event-driven single-flight Git sync | active |
 | [0077](0077-independent-planned-result-review.md) | Independent planned-result review and bounded revision | rejected → [0078](0078-plans-as-progress-bookkeeping.md) |
 | [0078](0078-plans-as-progress-bookkeeping.md) | Execution plans are progress bookkeeping, not an answer gate | superseded → [0084](0084-single-action-plan-tool.md) |
-| [0079](0079-sandbox-query-rpc.md) | Sandbox query() RPC instead of model-managed artifacts | active |
+| [0079](0079-sandbox-query-rpc.md) | Sandbox query() RPC instead of model-managed artifacts | superseded → [0086](0086-declarative-query-sources-for-python.md) |
 | [0080](0080-guarded-native-fim-inline-completion.md) | Guarded native FIM for SQL inline completion | active |
 | [0081](0081-deterministic-tool-failure-circuit-breaker.md) | Deterministic tool failure circuit breaker | active |
 | [0082](0082-coverage-over-precision-in-bounded-tool-results.md) | Coverage over precision in bounded tool results | active |
 | [0083](0083-sourced-system-skills.md) | Sourced read-only System Skills | active |
 | [0084](0084-single-action-plan-tool.md) | Single action-based execution-plan tool | active |
+| [0085](0085-extension-routed-workspace-editors.md) | Extension-routed workspace editors | active |
+| [0086](0086-declarative-query-sources-for-python.md) | Declarative query sources for sandbox Python | active |

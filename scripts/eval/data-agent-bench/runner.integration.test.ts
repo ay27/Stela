@@ -28,9 +28,12 @@ const modelRequests: Array<{
 const server = http.createServer(async (request, response) => {
   let requestBody = "";
   for await (const chunk of request) requestBody += String(chunk);
-  modelRequests.push(JSON.parse(requestBody) as (typeof modelRequests)[number]);
+  const modelRequest = JSON.parse(requestBody) as (typeof modelRequests)[number];
+  modelRequests.push(modelRequest);
   modelCalls += 1;
   const isSalvage = requestBody.includes("The tool budget for this task is spent");
+  const previousToolRounds = (modelRequest.messages ?? []).filter((message) =>
+    message.role === "assistant" && (message.tool_calls?.length ?? 0) > 0).length;
   response.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
@@ -38,7 +41,7 @@ const server = http.createServer(async (request, response) => {
   });
   const delta = isSalvage
     ? { role: "assistant", content: "Best effort from the evidence gathered so far.\none" }
-    : modelCalls === 1
+    : previousToolRounds === 0
     ? {
         role: "assistant",
         tool_calls: [
@@ -47,8 +50,9 @@ const server = http.createServer(async (request, response) => {
             id: "call_stela_dab_plan",
             type: "function",
             function: {
-              name: "create_plan",
+              name: "plan",
               arguments: JSON.stringify({
+                action: "create",
                 steps: [{
                   id: "answer",
                   title: "Find the answer",
@@ -62,11 +66,11 @@ const server = http.createServer(async (request, response) => {
             index: 1,
             id: "call_stela_dab_list",
             type: "function",
-            function: { name: "list_databases", arguments: "{}" },
+            function: { name: "list_catalog", arguments: JSON.stringify({ level: "databases" }) },
           },
         ],
       }
-    : modelCalls === 2
+    : previousToolRounds === 1
       ? {
           role: "assistant",
           tool_calls: [
@@ -88,9 +92,10 @@ const server = http.createServer(async (request, response) => {
               id: "call_stela_dab_complete",
               type: "function",
               function: {
-                name: "update_plan",
-                arguments: JSON.stringify({
-                  stepId: "answer",
+                  name: "plan",
+                  arguments: JSON.stringify({
+                    action: "update",
+                    stepId: "answer",
                   status: "completed",
                   evidence: "The query returned the requested scalar.",
                 }),
@@ -111,7 +116,7 @@ const server = http.createServer(async (request, response) => {
     object: "chat.completion.chunk",
     created: Math.floor(Date.now() / 1000),
     model: "mock-model",
-    choices: [{ index: 0, delta: {}, finish_reason: !isSalvage && modelCalls <= 2 ? "tool_calls" : "stop" }],
+    choices: [{ index: 0, delta: {}, finish_reason: !isSalvage && previousToolRounds < 2 ? "tool_calls" : "stop" }],
     usage: { prompt_tokens: 100, completion_tokens: 1, total_tokens: 101 },
   })}\n\n`);
   response.end("data: [DONE]\n\n");
@@ -122,10 +127,18 @@ try {
   await write("common_scaffold/tools/__init__.py", "");
   await write("common_scaffold/validate/__init__.py", "");
   await write("common_scaffold/tools/QueryDBTool.py", `
+from pathlib import Path
 class QueryDBTool:
-    def __init__(self, **kwargs): self.db_clients = {"demo_database": {"db_type": "sqlite"}}
+    def __init__(self, **kwargs):
+        self.db_clients = {"demo_database": {"db_type": "sqlite"}}
+        self.event_path = Path(kwargs["log_path"]).parent / "fixture-events.log"
+        self.event_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.event_path.open("a") as handle:
+            handle.write(f"init:{kwargs.get('check_load')}\\n")
     def exec(self, args): return {"success": True, "result": [{"value": 1}]}
-    def clean_up(self): pass
+    def clean_up(self):
+        with self.event_path.open("a") as handle:
+            handle.write("cleanup\\n")
 `);
   await write("common_scaffold/tools/ListDBTool.py", `
 class ListDBTool:
@@ -136,7 +149,13 @@ class ListDBTool:
 def validate(query_dir, llm_answer, reason=None):
     return {"is_valid": "one" in llm_answer, "reason": reason, "llm_answer": llm_answer}
 `);
-  await write("query_demo/db_config.yaml", "db_clients: {}\n");
+  await write("query_demo/db_config.yaml", [
+    "db_clients:",
+    "  fixture_database:",
+    "    db_type: mongo",
+    "    db_name: demo_fixture",
+    "",
+  ].join("\n"));
   await write("query_demo/db_description.txt", "demo_database contains demo_table(value int)\n");
   await write("query_demo/db_description_withhint.txt", "The answer is available from demo_table.\n");
   await write("query_demo/query1/query.json", '"Return one"\n');
@@ -145,7 +164,11 @@ def validate(query_dir, llm_answer, reason=None):
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address === "object");
-  const runBenchmark = async (outputDir: string, extraArgs: string[] = []): Promise<void> => {
+  const runBenchmark = async (
+    outputDir: string,
+    extraArgs: string[] = [],
+    runs = 1,
+  ): Promise<void> => {
     modelCalls = 0;
     const child = spawn(
       path.join(repoRoot, "node_modules", ".bin", "tsx"),
@@ -154,7 +177,7 @@ def validate(query_dir, llm_answer, reason=None):
         "--dab-root", dabRoot,
         "--dataset", "demo",
         "--query-id", "1",
-        "--runs", "1",
+        "--runs", String(runs),
         "--output", outputDir,
         "--python", "python3",
         "--concurrency", "2",
@@ -224,18 +247,79 @@ def validate(query_dir, llm_answer, reason=None):
   );
   assert.ok(planSnapshotIndex > toolRequestIndex + 2, "plan snapshot must follow the complete tool-result batch");
   assert.doesNotMatch(toolLog, /finalize_analysis|revise_plan|salvage_start/);
+  assert.equal(
+    await fs.readFile(path.join(output, ".fixtures", "demo", "fixture-events.log"), "utf-8"),
+    "init:True\ncleanup\n",
+  );
+  assert.equal(
+    await fs.readFile(path.join(output, "query_demo", "query1", "run_0", "fixture-events.log"), "utf-8"),
+    "init:False\n",
+  );
+  const schedulerEvents = (await fs.readFile(path.join(output, "scheduler.jsonl"), "utf-8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { type: string; activeMongoJobs?: number });
+  assert.ok(schedulerEvents.some((event) => event.type === "fixture_prepare_end"));
+  assert.ok(schedulerEvents.some((event) => event.type === "fixture_cleanup_end"));
+  assert.ok(schedulerEvents.some((event) => event.type === "job_start" && event.activeMongoJobs === 1));
   const summary = JSON.parse(await fs.readFile(path.join(output, "summary.json"), "utf-8")) as { validRate: number };
   assert.equal(summary.validRate, 1);
   const manifest = JSON.parse(await fs.readFile(path.join(output, "manifest.json"), "utf-8")) as {
     concurrency: number;
+    mongoConcurrency: number;
+    mongoFixtureMode: string;
     bridgeTimeoutMs: number;
     strategyReview: boolean;
     salvageMs: number;
   };
   assert.equal(manifest.concurrency, 2);
+  assert.equal(manifest.mongoConcurrency, 2);
+  assert.equal(manifest.mongoFixtureMode, "shared");
   assert.equal(manifest.bridgeTimeoutMs, 10_000);
   assert.equal(manifest.strategyReview, true);
   assert.equal(manifest.salvageMs, 120_000);
+
+  const concurrentOutput = path.join(root, "results-shared-concurrent");
+  await runBenchmark(concurrentOutput, [], 2);
+  assert.equal(modelCalls, 6);
+  assert.equal(
+    await fs.readFile(path.join(concurrentOutput, ".fixtures", "demo", "fixture-events.log"), "utf-8"),
+    "init:True\ncleanup\n",
+    "two concurrent cases must share one owned fixture",
+  );
+  for (const runNumber of [0, 1]) {
+    assert.equal(
+      await fs.readFile(
+        path.join(concurrentOutput, "query_demo", "query1", `run_${runNumber}`, "fixture-events.log"),
+        "utf-8",
+      ),
+      "init:False\n",
+    );
+  }
+  const concurrentEvents = (await fs.readFile(path.join(concurrentOutput, "scheduler.jsonl"), "utf-8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { type: string; activeMongoJobs?: number });
+  assert.ok(concurrentEvents.some((event) => event.type === "job_start" && event.activeMongoJobs === 2));
+
+  const perRunOutput = path.join(root, "results-per-run-fixture");
+  await runBenchmark(perRunOutput, ["--mongo-fixture-mode", "per-run"], 2);
+  for (const runNumber of [0, 1]) {
+    assert.equal(
+      await fs.readFile(
+        path.join(perRunOutput, "query_demo", "query1", `run_${runNumber}`, "fixture-events.log"),
+        "utf-8",
+      ),
+      "init:True\ncleanup\n",
+    );
+  }
+  const perRunEvents = (await fs.readFile(path.join(perRunOutput, "scheduler.jsonl"), "utf-8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { type: string; activeMongoJobs?: number });
+  assert.ok(perRunEvents.every((event) =>
+    event.type !== "job_start" || (event.activeMongoJobs ?? 0) <= 1));
+  await assert.rejects(fs.stat(path.join(perRunOutput, ".fixtures")), { code: "ENOENT" });
 
   // Hitting the tool cap must still be scored on a best-effort answer, not "".
   const cappedOutput = path.join(root, "results-tool-cap");

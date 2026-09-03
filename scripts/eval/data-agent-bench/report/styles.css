@@ -159,6 +159,22 @@ button, input, select { font: inherit; }
 .stela-delta-up { color: var(--stela-pass); font-weight: 700; }
 .stela-delta-down { color: var(--stela-fail); font-weight: 700; }
 
+.stela-analysis-panel { border-color: #cbd7e7; background: linear-gradient(145deg, #fffdf9 0%, #f5f8fc 100%); }
+.stela-analysis-status { padding: 5px 9px; border-radius: 999px; color: var(--stela-pass); background: var(--stela-pass-soft); font-size: 11px; font-weight: 750; }
+.stela-analysis-status[data-status="partial"] { color: var(--stela-warning); background: #f5ead8; }
+.stela-analysis-status[data-status="historical"] { color: var(--stela-accent); background: var(--stela-accent-soft); }
+.stela-analysis-summary { max-width: 1100px; margin: -4px 0 18px; font-size: 15px; line-height: 1.7; }
+.stela-analysis-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.stela-analysis-metrics .stela-metric { min-height: 102px; box-shadow: none; }
+.stela-analysis-metrics .stela-metric-value { font-size: 24px; }
+.stela-analysis-findings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.stela-analysis-finding { padding: 16px; border: 1px solid var(--stela-line-soft); border-radius: 12px; background: rgba(255, 255, 255, 0.78); }
+.stela-analysis-finding h3, .stela-analysis-list h3 { margin: 0 0 9px; font-size: 13px; }
+.stela-analysis-finding ul, .stela-analysis-list ul { margin: 0; padding-left: 19px; color: var(--stela-muted); font-size: 12px; line-height: 1.6; }
+.stela-analysis-finding p { margin: 11px 0 0; padding-top: 10px; border-top: 1px solid var(--stela-line-soft); font-size: 13px; line-height: 1.6; }
+.stela-analysis-boundaries { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.stela-analysis-list { padding: 14px 16px; border-radius: 10px; background: #f1f3f4; }
+
 .stela-section-heading {
   display: flex;
   align-items: flex-end;
@@ -322,6 +338,7 @@ button, input, select { font: inherit; }
   .stela-case-detail { position: static; max-height: none; }
   .stela-filters { grid-template-columns: repeat(3, 1fr); }
   .stela-search-label { grid-column: span 2; }
+  .stela-analysis-boundaries { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 720px) {
@@ -336,6 +353,7 @@ button, input, select { font: inherit; }
   .stela-case-detail { margin-top: 14px; }
   .stela-dataset-row { grid-template-columns: minmax(100px, 1fr) minmax(90px, 1.4fr) 56px; }
   .stela-bar-count { display: none; }
+  .stela-analysis-findings { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 460px) {

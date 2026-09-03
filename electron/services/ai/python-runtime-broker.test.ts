@@ -98,6 +98,48 @@ setPythonRuntimeBroadcaster((channel, payload) => {
   );
 }
 
+// Staged sources count toward the shared budget, and generated dynamic aliases
+// skip any source aliases already present in the job.
+{
+  started = null;
+  const pending = executePython({
+    vaultPath: "/vault",
+    sessionId: "session-1",
+    code: "result = 1",
+    artifacts: { q1: descriptor("source-run") },
+    runQuery: async () => descriptor("dynamic-run"),
+  });
+  assert.ok(started);
+  const dynamic = await queryForPythonJob({
+    jobId: started.jobId,
+    connectionName: "warehouse",
+    request: JSON.stringify({ language: "sql", query: "SELECT 1" }),
+  });
+  assert.equal(dynamic.alias, "q2");
+  let served = 1;
+  let refusal = "";
+  while (served < 40) {
+    try {
+      await queryForPythonJob({
+        jobId: started.jobId,
+        connectionName: "warehouse",
+        request: JSON.stringify({ language: "sql", query: "SELECT 1" }),
+      });
+      served += 1;
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+      break;
+    }
+  }
+  assert.equal(served, 31, "one staged source leaves room for 31 dynamic queries");
+  assert.match(refusal, /limited to 32 calls/);
+  respondPythonRuntime({
+    jobId: started.jobId,
+    result: { ok: true, stdout: "", value: { kind: "none" }, elapsedMs: 1 },
+  });
+  await pending;
+}
+
 // Without a runner the capability is absent, not merely unused.
 {
   started = null;

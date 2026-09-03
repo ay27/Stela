@@ -507,6 +507,8 @@
   "editor.external.reload": "重新加载",
   "editor.external.keep": "保留当前内容",
   "editor.external.close": "关闭标签页",
+  "editor.source.unsupported": "Stela 暂不支持在应用内编辑这种文件格式。",
+  "editor.source.binary": "此文件包含疑似二进制内容，为避免损坏，Stela 未打开编辑器。",
   "exportNote.title": "导出为 Markdown",
   "exportNote.saveDialogTitle": "导出 Markdown",
   "exportNote.close": "关闭",

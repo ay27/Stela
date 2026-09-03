@@ -55,6 +55,42 @@ function resetWorkspace(tabs: Tab[]): void {
 }
 
 {
+  const tab: Tab = {
+    id: "file:/vault/dirty.sql",
+    kind: "file",
+    title: "dirty.sql",
+    path: "/vault/dirty.sql",
+    dirty: true,
+    externalChange: "changed",
+  };
+  resetWorkspace([tab]);
+  setTabBuffer(tab.id, "SELECT 'local';");
+
+  useWorkspace.getState().acceptExternalChange(tab.id);
+
+  assert.equal(getTabBuffer(tab.id), undefined);
+  assert.equal(useWorkspace.getState().tabs[0]?.dirty, false);
+  assert.equal(useWorkspace.getState().tabs[0]?.externalChange, undefined);
+  assert.equal(useWorkspace.getState().tabs[0]?.reloadToken, 1);
+}
+
+{
+  const tab: Tab = {
+    id: "file:/vault/clean.py",
+    kind: "file",
+    title: "clean.py",
+    path: "/vault/clean.py",
+  };
+  resetWorkspace([tab]);
+  setTabBuffer(tab.id, "print('old')\n");
+
+  useWorkspace.getState().reloadCleanFileTabsAfterSync();
+
+  assert.equal(getTabBuffer(tab.id), undefined);
+  assert.equal(useWorkspace.getState().tabs[0]?.reloadToken, 1);
+}
+
+{
   const canvasPath = "/vault/report.stela.canvas";
   resetWorkspace([]);
   useWorkspace.getState().openFile(canvasPath);

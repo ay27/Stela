@@ -12,6 +12,11 @@ import {
 } from "@/state/tab-buffer";
 import { useDialogs } from "@/state/dialogs";
 import { MilkdownEditor, type MilkdownEditorHandle } from "@/editor/MilkdownEditor";
+import { SourceTextEditor } from "@/editor/SourceTextEditor";
+import {
+  looksLikeBinaryText,
+  resolveWorkspaceFileMode,
+} from "@/editor/source-file-mode";
 import { ConnectionPicker } from "@/components/connection-picker";
 import { useConnections } from "@/state/connections";
 import { firstConnectionName } from "@/services/connections";
@@ -29,6 +34,7 @@ import { cn } from "@/lib/utils";
 
 export function EditorView({ tabId, path }: { tabId: string; path: string }) {
   const vaultPath = useWorkspace((state) => state.vaultPath);
+  const fileMode = resolveWorkspaceFileMode(path);
   const t = useT();
   const setDirty = useWorkspace((s) => s.setDirty);
   const openSettings = useDialogs((s) => s.setSettings);
@@ -58,10 +64,13 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
   const [pathCopied, setPathCopied] = useState(false);
   const [runAllBusy, setRunAllBusy] = useState(false);
   const [runAllHint, setRunAllHint] = useState<string | null>(null);
+  const discardOnNextEditorUnmountRef = useRef(false);
 
   useEffect(() => {
-    if (!connectionsLoaded) void reloadConnections();
-  }, [connectionsLoaded, reloadConnections]);
+    if (fileMode === "markdown" && !connectionsLoaded) {
+      void reloadConnections();
+    }
+  }, [connectionsLoaded, fileMode, reloadConnections]);
 
   // 当前已加载的磁盘内容快照（含 frontmatter），供外部变更时做"内容是否真的变了"
   // 的比对。clean tab 下它恒等于磁盘内容（刚加载 / 刚保存），所以可靠。
@@ -77,6 +86,12 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
     setRaw(null);
     setError(null);
     setReloadNonce((n) => n + 1);
+    if (fileMode === "unsupported") {
+      setRaw("");
+      return () => {
+        alive = false;
+      };
+    }
     const buffered = getTabBuffer(tabId);
     if (buffered !== undefined) {
       setRaw(buffered);
@@ -97,7 +112,7 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
     return () => {
       alive = false;
     };
-  }, [path, tabId]);
+  }, [fileMode, path, tabId]);
 
   // 外部变更自动重读（watcher 检测到 clean tab 被外部修改时 bump reloadToken）。
   //
@@ -151,12 +166,12 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
   // 兜底是「纯展示 + 运行时」行为：**不会**自动写回 frontmatter，避免打开个老
   // 文件就把它悄悄改 dirty。用户点 Picker 主动选中时才走 updateFrontmatterField。
   const connectionName = useMemo(() => {
-    if (raw === null) return null;
+    if (raw === null || fileMode !== "markdown") return null;
     const { frontmatter } = splitFrontmatter(raw);
     const explicit = parseFrontmatterField(frontmatter, "connection_name");
     if (explicit) return explicit;
     return firstConnectionName(entries);
-  }, [raw, entries]);
+  }, [fileMode, raw, entries]);
 
   const onPickConnection = useCallback(
     async (name: string) => {
@@ -177,6 +192,10 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
 
   const onEditorUnmountFlush = useCallback(
     (next: string) => {
+      if (discardOnNextEditorUnmountRef.current) {
+        discardOnNextEditorUnmountRef.current = false;
+        return;
+      }
       // 关 tab 时 workspace 已先清掉该 tab/buffer；不要让随后发生的 React unmount
       // 又把旧快照塞回 buffer，尤其会覆盖模板关闭守卫刚写入的 Untitled 兜底名。
       if (!useWorkspace.getState().tabs.some((tab) => tab.id === tabId)) return;
@@ -187,6 +206,45 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
     },
     [path, setDirty, tabId],
   );
+
+  const onSourceBufferChange = useCallback(
+    (next: string) => {
+      setTabBuffer(tabId, next);
+    },
+    [tabId],
+  );
+
+  const onSourcePersist = useCallback(
+    async (next: string) => {
+      await writeFile(path, next);
+      // Closing a tab unmounts the editor after removing it from workspace.
+      // The disk write must still finish, but a closed tab must not leak a new
+      // in-memory buffer back into the map.
+      if (!useWorkspace.getState().tabs.some((tab) => tab.id === tabId)) return;
+      setRaw(next);
+      setTabBuffer(tabId, next);
+    },
+    [path, tabId],
+  );
+
+  const shouldFlushSourceOnUnmount = useCallback(() => {
+    const shouldFlush = !discardOnNextEditorUnmountRef.current;
+    discardOnNextEditorUnmountRef.current = false;
+    return shouldFlush;
+  }, []);
+
+  const onAcceptExternalChange = useCallback(() => {
+    discardOnNextEditorUnmountRef.current = true;
+    // Unmount immediately so an editor-local debounce cannot write the buffer
+    // after the user explicitly chose the disk version.
+    setRaw(null);
+    acceptExternalChange(tabId);
+  }, [acceptExternalChange, tabId]);
+
+  const onCloseRemovedFile = useCallback(() => {
+    discardOnNextEditorUnmountRef.current = true;
+    closeTab(tabId);
+  }, [closeTab, tabId]);
 
   const onUpdateTemplateMetadata = useCallback(
     (key: "name" | "description", value: string) => {
@@ -250,7 +308,10 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
     );
   }
 
-  const { frontmatter } = splitFrontmatter(raw);
+  const sourceLooksBinary =
+    fileMode === "source" && looksLikeBinaryText(raw);
+  const { frontmatter } =
+    fileMode === "markdown" ? splitFrontmatter(raw) : { frontmatter: "" };
   const isSqlTemplate =
     isSqlTemplatePath(path, vaultPath ?? undefined) &&
     parseFrontmatterField(frontmatter, "type") === SQL_TEMPLATE_TYPE;
@@ -279,35 +340,37 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
             )}
           </button>
         </div>
-        <div className="flex flex-none items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => void onRunAllBlocks()}
-            disabled={runAllBusy || !connectionName}
-            className={cn(
-              "stela-app-no-drag inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-xs font-medium transition-colors",
-              "hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-40",
-            )}
-            title={
-              runAllHint ??
-              (connectionName
-                ? t("editor.runAll.title")
-                : t("editor.runAll.noConnection"))
-            }
-          >
-            {runAllBusy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <FastForward className="h-3.5 w-3.5" />
-            )}
-            <span className="hidden sm:inline">{t("editor.runAll")}</span>
-          </button>
-          <ConnectionPicker
-            value={connectionName}
-            onChange={onPickConnection}
-            onOpenSettings={() => openSettings(true)}
-          />
-        </div>
+        {fileMode === "markdown" ? (
+          <div className="flex flex-none items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => void onRunAllBlocks()}
+              disabled={runAllBusy || !connectionName}
+              className={cn(
+                "stela-app-no-drag inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-xs font-medium transition-colors",
+                "hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-40",
+              )}
+              title={
+                runAllHint ??
+                (connectionName
+                  ? t("editor.runAll.title")
+                  : t("editor.runAll.noConnection"))
+              }
+            >
+              {runAllBusy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FastForward className="h-3.5 w-3.5" />
+              )}
+              <span className="hidden sm:inline">{t("editor.runAll")}</span>
+            </button>
+            <ConnectionPicker
+              value={connectionName}
+              onChange={onPickConnection}
+              onOpenSettings={() => openSettings(true)}
+            />
+          </div>
+        ) : null}
       </div>
       {isSqlTemplate ? (
         <div className="grid flex-none gap-2 border-b border-border bg-muted/20 px-3 py-2 sm:grid-cols-[minmax(12rem,1fr)_minmax(18rem,2fr)]">
@@ -338,29 +401,55 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
       {externalChange ? (
         <ExternalChangeBanner
           kind={externalChange}
-          onReload={() => acceptExternalChange(tabId)}
+          onReload={onAcceptExternalChange}
           onKeep={() => dismissExternalChange(tabId)}
-          onClose={() => closeTab(tabId)}
+          onClose={onCloseRemovedFile}
         />
       ) : null}
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        <MilkdownEditor
-          ref={editorRef}
-          // 注意：不把 connectionName 放进 key，否则 connections store 异步
-          // 加载把 null → fallback 时会触发一次无意义的 editor 重挂。用户主动
-          // 切连接走 reloadNonce，该重挂的还是会重挂。
-          key={`${path}::${reloadNonce}`}
-          path={path}
-          initialRaw={raw}
-          connectionName={connectionName}
-          onDirtyChange={(dirty) => setDirty(tabId, dirty)}
-          onPersist={async (next) => {
-            setRaw(next);
-            setTabBuffer(tabId, next);
-            await writeFile(path, next);
-          }}
-          onUnmountFlush={onEditorUnmountFlush}
-        />
+        {fileMode === "markdown" ? (
+          <MilkdownEditor
+            ref={editorRef}
+            // 注意：不把 connectionName 放进 key，否则 connections store 异步
+            // 加载把 null → fallback 时会触发一次无意义的 editor 重挂。用户主动
+            // 切连接走 reloadNonce，该重挂的还是会重挂。
+            key={`${path}::${reloadNonce}`}
+            path={path}
+            initialRaw={raw}
+            connectionName={connectionName}
+            onDirtyChange={(dirty) => setDirty(tabId, dirty)}
+            onPersist={async (next) => {
+              setRaw(next);
+              setTabBuffer(tabId, next);
+              await writeFile(path, next);
+            }}
+            onUnmountFlush={onEditorUnmountFlush}
+          />
+        ) : fileMode === "source" && !sourceLooksBinary ? (
+          <SourceTextEditor
+            key={`${path}::${reloadNonce}`}
+            path={path}
+            initialText={raw}
+            onBufferChange={onSourceBufferChange}
+            onDirtyChange={(dirty) => setDirty(tabId, dirty)}
+            onPersist={onSourcePersist}
+            shouldFlushOnUnmount={shouldFlushSourceOnUnmount}
+          />
+        ) : (
+          <UnsupportedFileMessage binary={sourceLooksBinary} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UnsupportedFileMessage({ binary }: { binary: boolean }) {
+  const t = useT();
+  return (
+    <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
+      <div className="max-w-md rounded-lg border border-border bg-muted/20 px-5 py-4 text-center">
+        <AlertTriangle className="mx-auto mb-2 h-5 w-5 text-amber-500" />
+        {t(binary ? "editor.source.binary" : "editor.source.unsupported")}
       </div>
     </div>
   );

@@ -1,0 +1,29 @@
+.stela-source-editor {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: hsl(var(--background));
+}
+
+.stela-source-editor > .cm-editor {
+  height: 100%;
+  font-size: 13px;
+}
+
+.stela-source-editor .cm-scroller {
+  overflow: auto;
+  font-family: var(--font-mono);
+  line-height: 1.55;
+}
+
+.stela-source-editor .cm-content {
+  padding: 10px 0 32px;
+}
+
+.stela-source-editor .cm-gutters {
+  min-height: 100%;
+}
+
+.stela-source-editor .cm-editor.cm-focused {
+  outline: none;
+}

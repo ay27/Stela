@@ -12,6 +12,12 @@ export interface DabTask {
   queryDir: string;
 }
 
+export interface DabDatasetResources {
+  usesMongo: boolean;
+  /** Physical databases whose upstream fixture lifecycle performs load/drop. */
+  fixtureLocks: string[];
+}
+
 export interface DabValidation {
   timestamp?: string;
   query_name?: string;
@@ -69,6 +75,7 @@ export async function mapWithResourceConcurrency<T, R>(
   concurrency: number,
   resourcesForItem: (item: T, index: number) => readonly string[],
   mapper: (item: T, index: number) => Promise<R>,
+  resourceCapacities: Readonly<Record<string, number>> = {},
 ): Promise<R[]> {
   if (items.length === 0) return [];
   const results = new Array<R>(items.length);
@@ -77,7 +84,7 @@ export async function mapWithResourceConcurrency<T, R>(
     index,
     resources: [...new Set(resourcesForItem(item, index))],
   }));
-  const activeResources = new Set<string>();
+  const activeResources = new Map<string, number>();
   const limit = Math.min(items.length, Math.max(1, Math.floor(concurrency)));
   let active = 0;
   let completed = 0;
@@ -95,12 +102,15 @@ export async function mapWithResourceConcurrency<T, R>(
       }
       while (active < limit) {
         const pendingIndex = pending.findIndex((candidate) =>
-          candidate.resources.every((resource) => !activeResources.has(resource)));
+          candidate.resources.every((resource) =>
+            (activeResources.get(resource) ?? 0) < Math.max(1, Math.floor(resourceCapacities[resource] ?? 1))));
         if (pendingIndex < 0) return;
         const [job] = pending.splice(pendingIndex, 1);
         if (!job) return;
         active += 1;
-        for (const resource of job.resources) activeResources.add(resource);
+        for (const resource of job.resources) {
+          activeResources.set(resource, (activeResources.get(resource) ?? 0) + 1);
+        }
         void mapper(job.item, job.index)
           .then((result) => {
             results[job.index] = result;
@@ -111,7 +121,11 @@ export async function mapWithResourceConcurrency<T, R>(
           .finally(() => {
             active -= 1;
             completed += 1;
-            for (const resource of job.resources) activeResources.delete(resource);
+            for (const resource of job.resources) {
+              const remaining = (activeResources.get(resource) ?? 1) - 1;
+              if (remaining <= 0) activeResources.delete(resource);
+              else activeResources.set(resource, remaining);
+            }
             schedule();
           });
       }
@@ -120,9 +134,50 @@ export async function mapWithResourceConcurrency<T, R>(
   });
 }
 
-export async function readDabDatasetResourceLocks(task: DabTask): Promise<string[]> {
+function yamlScalar(value: string): string {
+  return value.replace(/\s+#.*$/, "").trim().replace(/^(["'])(.*)\1$/, "$2");
+}
+
+export async function readDabDatasetResources(task: DabTask): Promise<DabDatasetResources> {
   const config = await fs.readFile(path.join(path.dirname(task.queryDir), "db_config.yaml"), "utf-8");
-  return /^\s*db_type\s*:\s*["']?mongo\b/im.test(config) ? ["dab:mongodb"] : [];
+  const clients: Array<{ dbType: string; dbName: string }> = [];
+  let current: { dbType: string; dbName: string } | null = null;
+  let clientIndent: number | null = null;
+  for (const line of config.split(/\r?\n/)) {
+    if (!line.trim() || line.trimStart().startsWith("#") || /^\s*db_clients\s*:/.test(line)) continue;
+    const indent = line.length - line.trimStart().length;
+    const client = line.match(/^\s*([^\s:#][^:]*)\s*:\s*(?:#.*)?$/);
+    if (client && (clientIndent === null || indent === clientIndent)) {
+      if (current) clients.push(current);
+      current = { dbType: "", dbName: "" };
+      clientIndent = indent;
+      continue;
+    }
+    if (!current || clientIndent === null || indent <= clientIndent) continue;
+    const property = line.match(/^\s*(db_type|db_name)\s*:\s*(.*?)\s*$/);
+    if (!property) continue;
+    const value = yamlScalar(property[2] ?? "");
+    if (property[1] === "db_type") current.dbType = value.toLowerCase();
+    else current.dbName = value;
+  }
+  if (current) clients.push(current);
+  const mongoClients = clients.filter((client) => client.dbType === "mongo");
+  const managedClients = clients.filter((client) => client.dbType === "mongo" || client.dbType === "postgres");
+  const usesMongo = mongoClients.length > 0 || /^\s*db_type\s*:\s*["']?mongo\b/im.test(config);
+  const fixtureLocks = managedClients
+    .filter((client) => client.dbName)
+    .map((client) => `dab:database:${client.dbType}:${client.dbName}`);
+  if (usesMongo && mongoClients.some((client) => !client.dbName)) {
+    fixtureLocks.push("dab:database:mongo:unknown");
+  }
+  if (usesMongo && fixtureLocks.length === 0) fixtureLocks.push("dab:database:mongo:unknown");
+  return { usesMongo, fixtureLocks: [...new Set(fixtureLocks)] };
+}
+
+/** Compatibility helper for callers that only need exclusive fixture locks. */
+export async function readDabDatasetResourceLocks(task: DabTask): Promise<string[]> {
+  const resources = await readDabDatasetResources(task);
+  return resources.usesMongo ? ["dab:mongodb", ...resources.fixtureLocks] : resources.fixtureLocks;
 }
 
 export function buildDabBridgeCommand(options: DabBridgeOptions): { command: string; args: string[] } {
@@ -364,7 +419,7 @@ export function buildDabUserPrompt(input: {
       `- MongoDB supports structured read-only find and safe aggregate operations. Prefer aggregate for grouping, ranking, string expressions, and counts.\n` +
       `- Query different logical databases separately; do not join them in one database query.\n` +
       (capabilities.pythonAvailable
-        ? `- Join across logical databases inside execute_python: fetch each side with \`await query(connection_name, sql)\`, which returns a DuckDB relation over the full result (.df() for pandas).`
+        ? `- Join across logical databases in one execute_python call. Prefer structured sources with an alias and an explicit database, then use to_df(alias). Only when a query depends on earlier Python computation, use \`(await query(connection_name, {'database': logical_database, 'language': 'sql', 'query': sql})).df()\`.`
         : `- Python execution is disabled for this legacy baseline; report the capability boundary instead of inventing a cross-database answer.`),
     "QUERY:\n" + input.query,
   ];

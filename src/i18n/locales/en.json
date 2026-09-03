@@ -507,6 +507,8 @@
   "editor.external.reload": "Reload",
   "editor.external.keep": "Keep current buffer",
   "editor.external.close": "Close tab",
+  "editor.source.unsupported": "Stela does not support editing this file format in the app yet.",
+  "editor.source.binary": "This file appears to contain binary data. Stela did not open an editor to avoid corrupting it.",
   "exportNote.title": "Export as Markdown",
   "exportNote.saveDialogTitle": "Export Markdown",
   "exportNote.close": "Close",

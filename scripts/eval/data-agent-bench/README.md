@@ -18,8 +18,11 @@ The benchmark path is intentionally product-faithful:
 - Headless Linux exposes the existing `execute_python` tool through isolated
   Node workers running the same offline Pyodide, DuckDB, pandas, execution
   script, sandbox `query()` protocol, artifact authorization, and budgets as the
-  desktop. Inside Python, `await query(connection, request)` returns a DuckDB
-  relation over the full result; `execute_python` takes no inputs.
+  desktop. `execute_python.sources` stages known SQL/MongoDB reads under aliases
+  available through `tables` / `to_df`; dependent requests can still use
+  `await query(connection, request)` and receive a DuckDB relation. SQL sources
+  put sampling limits inside the SQL statement; top-level `limit` is MongoDB-only
+  and cross-kind fields are rejected before execution.
 - Query artifacts retain the complete result and carry it into the sandbox, while
   the model-facing `run_query` preview is bounded to 200 rows / 5 KiB and a
   truncated result is returned as `sampleRows` rather than `rows`.
@@ -62,11 +65,34 @@ npm run eval:data-agent-bench -- \
   --dab-root "$DAB_ROOT" \
   --all \
   --concurrency 3 \
+  --mongo-concurrency 2 \
   --python-concurrency 2 \
   --reasoning-effort medium \
   --bridge-timeout-ms 600000 \
   --resume
 ```
+
+MongoDB queries are read-only, but DAB's upstream `QueryDBTool` normally owns a
+destructive fixture lifecycle: it drops an existing physical database, restores
+the dump, and drops the database again on cleanup. Stela therefore keeps fixture
+isolation while allowing safe read concurrency:
+
+- `--mongo-concurrency` defaults to `min(2, --concurrency)` and limits active
+  Mongo cases independently of the global worker count.
+- `--mongo-fixture-mode shared` is the default. One owner bridge loads each
+  selected Mongo dataset once; child case bridges query it read-only and never
+  clean it up. Cases from the same dataset may run concurrently.
+- `--mongo-fixture-mode per-run` restores the conservative lifecycle. Different
+  physical Mongo databases may run concurrently, while cases sharing a physical
+  fixture remain serial. Combine it with `--mongo-concurrency 1` to reproduce
+  the old globally serial behavior.
+- The runner rejects ambiguous physical database collisions before starting a
+  shared run. Configs it cannot classify fall back to a conservative fixture
+  lock rather than running unsafely.
+
+The manifest records the effective Mongo settings and detected fixture locks.
+`scheduler.jsonl` records job concurrency plus fixture prepare/cleanup timings,
+so throughput changes and lock contention can be audited after the run.
 
 If `mongorestore` is supplied by a Docker wrapper and `DAB_ROOT` is below
 `/root`, make sure the wrapper does not let the Mongo image entrypoint drop
@@ -131,8 +157,52 @@ validator-passing versus validator-failing cases. The latter is correlation,
 not tool success. Cards also show calls per case and the delta from the selected
 comparison, so prompt changes can be checked for unnecessary planning or
 retrieval calls.
+
+Failure attribution distinguishes a transient database-routing mistake from an
+unrecovered blocker. An `unknown_database`, `missing_database_route`, or
+`query_language_mismatch` result is marked `recovered` when a later
+`run_query`, legacy `run_sql`, or `execute_python` call succeeds. Recovered
+mistakes remain visible as trajectory and efficiency signals but do not replace
+the validator's final `wrong_answer`/`validation_failure` attribution. Only a
+routing error with no later successful data call becomes the primary
+`routing_error` or `query_language_mismatch` category. Legacy runs that retain
+only aggregate capability counts, without an ordered matching tool result, are
+reported as `indeterminate` when another data call succeeded.
+
 Re-run the same command after copying in a new result directory; existing history
 remains available by directory identity and completion timestamp.
+
+To keep expert interpretation beside the raw numbers, add an optional
+`analysis-notes.json` to each result directory before generating the report. The
+history dashboard loads that narrative with the selected run, so conclusions do
+not get detached from the exact model, coverage, and artifacts that produced
+them. The file uses this versioned shape:
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "complete",
+  "title": "What this run established",
+  "summary": "One concise conclusion.",
+  "headlineMetrics": [
+    { "label": "Strict score", "value": "68 / 104", "note": "65.4%" }
+  ],
+  "findings": [
+    {
+      "title": "A finding",
+      "evidence": ["A trace-grounded observation."],
+      "interpretation": "What the evidence does and does not establish."
+    }
+  ],
+  "comparability": ["Same model and run count as the baseline."],
+  "limitations": ["Known coverage or instrumentation gaps."],
+  "nextSteps": ["The next bounded experiment."]
+}
+```
+
+Use `status: "partial"` for interrupted runs and `status: "historical"` when the
+analysis was reconstructed after the fact. Malformed notes fail report
+generation instead of being silently omitted.
 
 `--runs` defaults to 3 and reports a **valid rate**, not leaderboard Pass@1. A
 single run per case leaves roughly a five-point binomial standard error, which is

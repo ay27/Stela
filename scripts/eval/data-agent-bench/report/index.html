@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Stela DataAgentBench 分析</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=20260831-routing-attribution" />
   </head>
   <body>
     <div class="stela-report-shell">
@@ -43,6 +43,20 @@
         </section>
 
         <section id="summary" class="stela-summary-grid"></section>
+
+        <section id="run-analysis" class="stela-panel stela-analysis-panel" hidden>
+          <div class="stela-section-heading">
+            <div>
+              <p class="stela-section-kicker">EXPERT READOUT</p>
+              <h2 id="analysis-title">本轮分析</h2>
+            </div>
+            <span id="analysis-status" class="stela-analysis-status"></span>
+          </div>
+          <p id="analysis-summary" class="stela-analysis-summary"></p>
+          <div id="analysis-metrics" class="stela-analysis-metrics"></div>
+          <div id="analysis-findings" class="stela-analysis-findings"></div>
+          <div id="analysis-boundaries" class="stela-analysis-boundaries"></div>
+        </section>
 
         <section id="comparison" class="stela-panel" hidden>
           <div class="stela-section-heading">
@@ -188,6 +202,6 @@
 
       <div id="report-error" class="stela-error" hidden></div>
     </div>
-    <script type="module" src="./app.js"></script>
+    <script type="module" src="./app.js?v=20260831-routing-attribution"></script>
   </body>
 </html>

@@ -164,7 +164,7 @@ function buildActiveGuidance(
       id: "mongodb",
       instructions: [
         "Use structured read-only find for row retrieval and safe aggregate for grouping, ranking, expressions, and counts.",
-        "Inside execute_python, fetch collections with await query(name, {'collection': ..., 'filter': ..., 'limit': None}); MongoDB results cannot become Canvas SQL sources.",
+        "For execute_python queries known in advance, declare sources with alias, language='mongodb', database, collection, filter/pipeline, and limit; read them with to_df(alias). Use await query only for a request built from earlier Python computation. MongoDB results cannot become Canvas SQL sources.",
       ],
     });
   }

@@ -184,6 +184,15 @@ assert.equal(
 const note: Tab = { id: "file:/vault/current.md", kind: "file", title: "current.md", path: "/vault/current.md" };
 useWorkspace.setState({ vaultPath: "/vault", tabs: [note], activeTabId: note.id, mruTabIds: [note.id] });
 assert.deepEqual(currentWorkspaceContext(), { kind: "note", path: "current.md" });
+const source: Tab = {
+  id: "file:/vault/script.py",
+  kind: "file",
+  title: "script.py",
+  path: "/vault/script.py",
+};
+useWorkspace.setState({ tabs: [source], activeTabId: source.id });
+assert.equal(currentWorkspaceContext(), undefined);
+useWorkspace.setState({ tabs: [note], activeTabId: note.id });
 refreshCanvasTabIfOpen("reports/new.stela.canvas");
 assert.equal(useWorkspace.getState().tabs.length, 1);
 assert.equal(useWorkspace.getState().activeTabId, note.id);

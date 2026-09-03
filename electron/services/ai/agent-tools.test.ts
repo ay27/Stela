@@ -106,6 +106,18 @@ try {
       "object",
       "function providers require run_query parameters to have a top-level object schema",
     );
+    const executePython = tools.find((tool) => tool.name === "execute_python");
+    const sourceVariants = (
+      executePython?.parameters as {
+        properties?: { sources?: { items?: { anyOf?: Array<{ properties?: Record<string, unknown> }> } } };
+      } | undefined
+    )?.properties?.sources?.items?.anyOf ?? [];
+    const sqlSource = sourceVariants.find((variant) => variant.properties?.language && variant.properties?.query);
+    const mongoSource = sourceVariants.find((variant) => variant.properties?.language && variant.properties?.collection);
+    assert.ok(sqlSource, "execute_python exposes a distinct SQL source contract");
+    assert.ok(mongoSource, "execute_python exposes a distinct MongoDB source contract");
+    assert.equal("limit" in (sqlSource.properties ?? {}), false, "SQL source must not advertise MongoDB limit");
+    assert.equal("limit" in (mongoSource.properties ?? {}), true, "MongoDB source keeps its top-level limit");
     const searchSkills = tools.find((tool) => tool.name === "search_skills");
     assert.ok(searchSkills);
     const required = (searchSkills.parameters as { required?: string[] }).required ?? [];
@@ -701,23 +713,123 @@ try {
     assert.equal(ctx.analysisRuns.get(queryPayload.runId)?.tables[0], "facts");
     assert.deepEqual(recorded, [{ connectionName: "warehouse", rowCount: 3 }]);
 
-    // execute_python takes no inputs: the sandbox fetches its own data through
-    // the runQuery bridge, and only a connection name crosses the boundary.
+    // Queries known before execution are staged by alias; a dynamic query may
+    // still use the sandbox bridge in the same fresh Python call.
     const python = await dispatchTool(
       "execute_python",
-      JSON.stringify({ code: "result = 6" }),
+      JSON.stringify({
+        sources: [{
+          alias: "facts",
+          connectionName: "warehouse",
+          database: "analytics",
+          language: "sql",
+          query: "SELECT value FROM facts",
+        }],
+        code: "result = 6",
+      }),
       ctx,
     );
     assert.equal(python.ok, true, python.text);
-    assert.deepEqual(pythonAliases, [], "no artifact is staged up front");
+    assert.deepEqual(pythonAliases, ["facts"]);
     const pythonPayload = JSON.parse(python.text) as { runId: string; result: { value: number } };
     assert.equal(pythonPayload.result.value, 6);
     assert.deepEqual(sandboxDescriptors.map((item) => item.rowCount), [3]);
     assert.deepEqual(
       ctx.analysisRuns.get(pythonPayload.runId)?.sourceRunIds.length,
-      1,
-      "a sandbox query is credited as this Python run's source",
+      2,
+      "staged and dynamic queries are both credited as this Python run's sources",
     );
+
+    let invalidPythonStarts = 0;
+    const invalidCtx = {
+      ...ctx,
+      pythonExecutor: {
+        execute: async () => {
+          invalidPythonStarts += 1;
+          return {
+            ok: true,
+            stdout: "",
+            value: { kind: "none" as const },
+            elapsedMs: 1,
+          };
+        },
+      },
+    };
+    const invalidSource = await dispatchTool(
+      "execute_python",
+      JSON.stringify({
+        sources: [{ alias: "docs", language: "mongodb", database: "content" }],
+        code: "result = 1",
+      }),
+      invalidCtx,
+    );
+    assert.equal(invalidSource.ok, false);
+    assert.match(invalidSource.text, /sources\[0\] \(docs\): collection must be a non-empty string/);
+    const connectorCallsBeforeInvalidLimit = executedConnections.length;
+    const invalidSqlLimit = await dispatchTool(
+      "execute_python",
+      JSON.stringify({
+        sources: [{
+          alias: "rows",
+          language: "sql",
+          query: "SELECT updated_at FROM analytics.events",
+          limit: 10_000,
+        }],
+        code: "result = len(to_df('rows'))",
+      }),
+      invalidCtx,
+    );
+    assert.equal(invalidSqlLimit.ok, false);
+    assert.match(invalidSqlLimit.text, /sql source does not accept 'limit'/i);
+    assert.match(invalidSqlLimit.text, /Put LIMIT inside the SQL query; nothing was executed/);
+    assert.equal(
+      executedConnections.length,
+      connectorCallsBeforeInvalidLimit,
+      "a misplaced SQL limit is rejected before connector execution",
+    );
+    const duplicateAlias = await dispatchTool(
+      "execute_python",
+      JSON.stringify({
+        sources: [
+          { alias: "facts", language: "sql", query: "SELECT 1" },
+          { alias: "facts", language: "sql", query: "SELECT 2" },
+        ],
+        code: "result = 1",
+      }),
+      invalidCtx,
+    );
+    assert.equal(duplicateAlias.ok, false);
+    assert.match(duplicateAlias.text, /alias 'facts' is duplicated/);
+    assert.equal(invalidPythonStarts, 0, "invalid sources do not start Python");
+
+    const noResult = await dispatchTool(
+      "execute_python",
+      JSON.stringify({ code: "print('probe only')" }),
+      invalidCtx,
+    );
+    assert.equal(noResult.ok, true, noResult.text);
+    const noResultPayload = JSON.parse(noResult.text) as { instruction?: string };
+    assert.match(noResultPayload.instruction ?? "", /No structured result was assigned/);
+    assert.match(noResultPayload.instruction ?? "", /redeclares its sources and variables/);
+
+    const statelessFailure = await dispatchTool(
+      "execute_python",
+      JSON.stringify({ code: "result = docs" }),
+      {
+        ...ctx,
+        pythonExecutor: {
+          execute: async () => ({
+            ok: false,
+            stdout: "",
+            value: { kind: "none" as const },
+            elapsedMs: 1,
+            error: "NameError: name 'docs' is not defined",
+          }),
+        },
+      },
+    );
+    assert.equal(statelessFailure.ok, false);
+    assert.match(statelessFailure.text, /fresh stateless sandbox/);
 
     // Mutations are refused in the main process even with mutations enabled.
     sandboxDescriptors.length = 0;
