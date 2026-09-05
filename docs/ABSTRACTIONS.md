@@ -566,6 +566,7 @@ interface AiSettings {
   agentMaxIterations: number;      // legacy; ignored by harness agent
   agentWallClockMs: number;        // legacy; ignored by harness agent
   agentAllowMutations: boolean;    // still requires per-call user approve
+  agentAutoApplyEdits: boolean;    // default false; note/RunSQL propose_edit only
 }
 ```
 
@@ -612,7 +613,7 @@ type AiInlineCompletionEvent =
   | { type: "cancelled"; requestId: string };
 ```
 
-IPC uses `AI_INLINE_COMPLETION_START`, `AI_INLINE_COMPLETION_CANCEL`, and push event `ai:inline-completion-event`; preload exposes `window.stela.ai.startInlineCompletion`, `cancelInlineCompletion`, and `onInlineCompletionEvent`. Completion uses `completionProfileId` independently of chat/agent `activeProfileId`. Official `deepseek/deepseek-v4-flash` profiles use the native non-thinking FIM endpoint; other profiles retain bounded pi-ai chat simulation. Both transports return through the unchanged event union, and a failed native call never triggers a second chat call ([ADR-0080](./adr/0080-guarded-native-fim-inline-completion.md)).
+IPC uses `AI_INLINE_COMPLETION_START`, `AI_INLINE_COMPLETION_CANCEL`, and push event `ai:inline-completion-event`; preload exposes `window.stela.ai.startInlineCompletion`, `cancelInlineCompletion`, and `onInlineCompletionEvent`. Completion uses `completionProfileId` independently of chat/agent `activeProfileId`. Every profile uses the same bounded, reasoning-off, streamed pi-ai Chat transport; there is no provider-specific native FIM route in the application runtime ([ADR-0087](./adr/0087-chat-only-sql-inline-completion.md)).
 
 Schema context comes from two sources: `tableSchemas` carries columns from the renderer `column-cache` for tables in the cursor's FROM/JOIN scope, and main reads parsed columns/comments for referenced tables from the connection's local `schemaDir`. Renderer columns own membership and type; matching schemaDir columns may add comments, while schemaDir-only tables are compact fallback context. Full DDL, engine, distribution, and storage clauses are not sent. Focus still prewarms known tables, and a completion attempt awaits the same TTL-backed per-table ensure before making a paid model call. If any referenced physical table still has no columns in either source, main returns an empty completion without loading the API key.
 
@@ -783,9 +784,11 @@ Tool validation failures report zod issues as `path: message` pairs, adding the
 allowed values when a discriminated union rejected the payload, so a rejected
 Canvas or chart payload can be repaired rather than resent. `propose_edit`
 matches `oldText` exactly first, then retries ignoring CRLF and trailing
-whitespace per line, and still requires the match to be unique.
+whitespace per line, and still requires the match to be unique. Enabling
+`agentAutoApplyEdits` changes only who sends the proposal response; it does not
+relax matching, vault path, read-back, or RunSQL target validation.
 
-A `propose_edit` note approval carries a preview windowed on the changed region, not
+A `propose_edit` note proposal carries a preview windowed on the changed region, not
 the note's leading characters: main aligns the two versions by line, keeps twelve
 context lines around the changed span, and replaces each elided run with a marker
 whose line count is identical on both sides so the renderer's line diff folds it as
@@ -879,6 +882,14 @@ are discriminated contracts: SQL sampling limits must appear inside the SQL
 statement, while the top-level `limit` field belongs only to MongoDB. Fields
 from the other source kind are rejected before any query is executed.
 
+A source is staged as a complete artifact, so an omitted MongoDB `limit` means
+complete rather than `run_query`'s 200-row preview default; only `run_query`
+keeps that default. A source that returns exactly as many rows as it asked for
+is almost certainly cut off and nothing else in the response says so, because
+the sandbox only sees the row count it was handed. `execute_python` therefore
+returns an `incompleteSources` note naming each such alias and its limit, with
+omitting `limit` or aggregating inside the source query as the two ways out.
+
 `query(connection, request)` returns a DuckDB relation over the **full** result
 (`.df()` for pandas) and remains the dynamic escape hatch when a request depends
 on earlier Python computation. It is an authorized RPC back to main. `request`
@@ -916,14 +927,14 @@ conventions matter, not merely because a table name is known. `readTable` and
 Safety ([ADR-0067](./adr/0067-safe-mongodb-aggregation-queries.md)):
 
 - `sql-guard` classifies read-only vs mutation vs multi-statement
-- Mutations + `propose_edit` block on `ai:agent-respond-proposal`
+- Mutations, questions, and `propose_edit` resolve through `ai:agent-respond-proposal`. Mutations/questions are always manual; note and RunSQL edits may receive an automatic response only when `agentAutoApplyEdits` is enabled ([ADR-0088](./adr/0088-configurable-automatic-agent-edits.md))
 - Runs continue until model completion, error, or explicit user cancellation ([ADR-0017](./adr/0017-user-cancelled-agent-runs.md))
 - Read tools and `run_query` may execute in parallel. `execute_python`, plan mutations, chart creation, Canvas creation/update, and `propose_edit` are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0086](./adr/0086-declarative-query-sources-for-python.md)). NodeExecutionEnv is harness cwd only (not exposed as model tools)
 - Compaction uses `ai.contextWindow` + one overflow recovery ([ADR-0018](./adr/0018-pi-ai-agent-harness.md))
 - Execution plans are bounded and linear. Their active store is main-process runtime state; every versioned `AgentPlanSnapshot` is appended immutably to the pi session, and only the highest version for the current run is active ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md), [ADR-0046](./adr/0046-device-sharded-agent-session-history.md))
 - A plan grants no authority over the answer and never gates it. The sequential `plan` tool uses `action=create|update|get`; create/update report a note — unknown step id, out-of-order completion, overwritten terminal step — instead of failing the run, evidence lines are optional, and get is for recovery only. Old plan names remain internal trace aliases but are absent from the provider schema. Answer correctness is defended at the point of use: a truncated `run_query` result returns only `sampleRows` plus an instruction that they cannot support an exact result, each sandbox `query()` prints its relation's row/column count and column types, and the stable prompt fixes the answer shape. Successful query/Python calls still register disposable same-run evidence metadata for chart and Canvas binding, and Python evidence retains its source run lineage; Stela does not pre-scan sources or persist an evidence catalog ([ADR-0084](./adr/0084-single-action-plan-tool.md))
 - The Agent system prompt and tool list are request-invariant. The compact stable prompt contains only Stela-wide trust, grounding, approval, locale, rendering, and final-answer contracts. Operation-specific guidance belongs in the relevant tool description or a deterministically named System Skill. Dynamic context, including explicit availability states and deterministic current-run guidance for Canvas, RunSQL rewrite, Vault Skills, and MongoDB, is bounded, redacted, and appended in the user turn immediately before the request; pi-ai uses short cache retention and session affinity ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md), [ADR-0083](./adr/0083-sourced-system-skills.md))
-- RunSQL fix/schema quick actions auto-submit in a new Agent tab; rewrite/question actions open editable drafts. `runsql_rewrite` proposals are bound to the original SQL snapshot and renderer target, then reuse the inline diff accept/discard UI ([ADR-0059](./adr/0059-agent-panel-quick-actions.md))
+- RunSQL fix/schema quick actions auto-submit in a new Agent tab; rewrite/question actions open editable drafts. `runsql_rewrite` proposals are bound to the original SQL snapshot and renderer target, then reuse the inline diff accept/discard UI. Automatic edit mode keeps those target checks and applies through the same proposal response path ([ADR-0088](./adr/0088-configurable-automatic-agent-edits.md))
 - Note and Canvas references are paths only; the Agent reads them only when the task relies on their contents
 - Selection / RunSQL attachments are bounded current-turn evidence. Surrounding notes or live schema are retrieved only when missing context could materially change the answer
 - `ask_user` blocks on the same handshake with `kind: "question"`, resolving to the answer string; ≤3 questions per run, enforced in the tool ([ADR-0027](./adr/0027-agent-ask-user-clarification.md))

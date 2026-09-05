@@ -7,17 +7,20 @@ const parsed = parseInput<{
   patch: {
     ai?: {
       agentAllowMutations?: boolean;
+      agentAutoApplyEdits?: boolean;
     };
   };
 }>(IPC.SETTINGS_PATCH, {
   patch: {
     ai: {
       agentAllowMutations: true,
+      agentAutoApplyEdits: true,
     },
   },
 });
 
 assert.equal(parsed.patch.ai?.agentAllowMutations, true);
+assert.equal(parsed.patch.ai?.agentAutoApplyEdits, true);
 
 const profileSwitchPatch = {
   patch: {

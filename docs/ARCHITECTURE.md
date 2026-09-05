@@ -381,7 +381,7 @@ Stela AI is **search-first and provider-backed**, not on-device RAG. Retrieval u
 | Concern | Implementation |
 |---------|----------------|
 | Chat / agent transport | `@earendil-works/pi-ai` — built-in provider factories by `vendorId`, or `createProvider` + `openAICompletionsApi` for `custom` ([ADR-0022](./adr/0022-ai-multi-provider-profiles.md)) |
-| SQL inline transport | Official DeepSeek V4 Flash → native `/beta/completions`; other profiles → bounded pi-ai chat fallback ([ADR-0080](./adr/0080-guarded-native-fim-inline-completion.md)) |
+| SQL inline transport | Every completion profile → bounded, reasoning-off, streamed pi-ai Chat ([ADR-0087](./adr/0087-chat-only-sql-inline-completion.md)) |
 | Agent loop | `@earendil-works/pi-agent-core` `AgentHarness` + in-memory `Session` |
 | API key | `{vault}/.stela/secrets/ai_{deviceSlug}_{profileId}.json` via `safeStorage` (injected into pi `CredentialStore`; not pi `auth.json`) |
 | Settings | vault `.stela/settings.json` → shared `ai.profiles` (including requested reasoning effort), chat/agent `activeProfileId`, independent inline `completionProfileId` (+ policy flags); keys never in settings |
@@ -397,7 +397,7 @@ reasoning-off; changing the active chat profile does not change completion.
 Inline schema context reads the connection's local `schemaDir` plus columns in
 the renderer cache. Before a paid completion call, referenced tables are ensured
 through that existing TTL cache; if every referenced physical table still lacks
-columns, the request is suppressed ([ADR-0080](./adr/0080-guarded-native-fim-inline-completion.md),
+columns, the request is suppressed ([ADR-0087](./adr/0087-chat-only-sql-inline-completion.md),
 [ADR-0072](./adr/0072-profile-scoped-agent-reasoning-effort.md)). Vendor dropdown
 lists every pi built-in provider (no Stela allowlist) plus Custom.
 
@@ -408,7 +408,7 @@ flowchart TB
   UI["Renderer UI\nRunSQL / Schema quick actions / AgentSidebar"]
   PRE["window.stela.ai.* / agent.*"]
   INLINE["dedicated inline start/cancel/event\nprefix + suffix + compact cached schema"]
-  FIM["official DeepSeek native FIM\nor bounded pi-ai chat fallback"]
+  COMP["bounded streamed pi-ai Chat\nfor every completion profile"]
   PARSE["ai:parse-sql-query\nNL → SqlIndexFilter only"]
   AGENT["ai:agent-run\nAgentHarness loop"]
   PROV["provider.ts → pi-ai Models"]
@@ -420,8 +420,8 @@ flowchart TB
   GUARD["sql-guard + proposal IPC"]
 
   UI --> PRE
-  PRE --> INLINE --> FIM
-  FIM --> PROV
+  PRE --> INLINE --> COMP
+  COMP --> PROV
   PRE --> PARSE
   PRE --> AGENT
   PARSE --> PROV
@@ -432,7 +432,7 @@ flowchart TB
   TOOLS --> ART --> PY --> TOOLS
 ```
 
-1. **SQL inline completion** — `AI_INLINE_COMPLETION_START` / `AI_INLINE_COMPLETION_CANCEL` invoke channels and `ai:inline-completion-event` pushes insertion text correlated by `requestId`; preload exposes typed start/cancel/subscribe methods. Official DeepSeek V4 Flash profiles use main-process native non-thinking FIM with real prefix/suffix fields; other profiles use bounded pi-ai chat simulation. A failed native request never starts a paid chat retry. Total input is capped near 8K characters (4K prefix, 2K suffix, 2K auxiliary context), using at most three referenced tables, two table-related sibling blocks, and 300 prose characters. Renderer live columns own membership/type and schemaDir columns only add comments or serve as compact fallback; full engine/storage DDL is never sent. Referenced table columns are ensured through the existing per-table TTL cache before the paid call, and main suppresses the call if any referenced physical table still has no schema. Automatic completion waits 250 ms after an edit and may run at any SQL cursor position, while cursor movement alone stays free; a parser-clean `SELECT ... FROM ...` at the document tail is treated as finished and spends no tokens. `Alt+\` invokes completion manually and may deliberately extend such a statement. Comment/string positions, IME, blur, selections, semicolon-terminated statements, and native completion popups block requests. Candidates are buffered, bounded to three lines/360 characters, and pass confidence (when available), syntax-regression, schema, repetition, and suffix-overlap guards before display. With one referenced table whose columns are known, both qualified and bare candidate identifiers must exist in that schema; validation stays conservative when the candidate introduces another table. A 64-entry five-minute renderer LRU caches positive and suppressed results. Tab accepts and Escape dismisses. ([ADR-0080](./adr/0080-guarded-native-fim-inline-completion.md))
+1. **SQL inline completion** — `AI_INLINE_COMPLETION_START` / `AI_INLINE_COMPLETION_CANCEL` invoke channels and `ai:inline-completion-event` pushes insertion text correlated by `requestId`; preload exposes typed start/cancel/subscribe methods. Every completion profile uses the bounded, reasoning-off, streamed pi-ai Chat transport with prefix and suffix represented as explicit prompt sections; the application runtime has no provider-specific native FIM route. A failed request does not start a second paid transport attempt. Total input is capped near 8K characters (4K prefix, 2K suffix, 2K auxiliary context), using at most three referenced tables, two table-related sibling blocks, and 300 prose characters. Renderer live columns own membership/type and schemaDir columns only add comments or serve as compact fallback; full engine/storage DDL is never sent. Referenced table columns are ensured through the existing per-table TTL cache before the paid call, and main suppresses the call if any referenced physical table still has no schema. Automatic completion waits 250 ms after an edit and may run at any SQL cursor position, while cursor movement alone stays free; a parser-clean `SELECT ... FROM ...` at the document tail is treated as finished and spends no tokens. `Alt+\` invokes completion manually and may deliberately extend such a statement. Comment/string positions, IME, blur, selections, semicolon-terminated statements, and native completion popups block requests. Candidates are buffered, bounded to three lines/360 characters, and pass confidence (when available), syntax-regression, schema, repetition, and suffix-overlap guards before display. With one referenced table whose columns are known, both qualified and bare candidate identifiers must exist in that schema; validation stays conservative when the candidate introduces another table. A 64-entry five-minute renderer LRU caches positive and suppressed results. Tab accepts and Escape dismisses. ([ADR-0087](./adr/0087-chat-only-sql-inline-completion.md))
 2. **Harness agent** — `AgentHarness` tool loop with streaming `ai:agent-event`.
    Tools browse live connector schema, run structured SQL or MongoDB queries, execute bounded local Python,
    validate timeline charts against
@@ -487,8 +487,10 @@ flowchart TB
    deterministically rejected payload cannot be retried indefinitely. The run itself is
    never terminated and every other tool stays available
    ([ADR-0081](./adr/0081-deterministic-tool-failure-circuit-breaker.md)).
-   Mutations, note writes, and RunSQL rewrites
-   wait for user approval. Fix/schema quick actions auto-submit in a new Agent tab;
+   Mutations and Agent questions always wait for user approval. Note and RunSQL
+   rewrites use the same proposal handshake and may be applied automatically when
+   the vault-scoped `agentAutoApplyEdits` setting is enabled (default `false`).
+   Fix/schema quick actions auto-submit in a new Agent tab;
    rewrite/question actions open editable drafts. The unified `@` picker and Add to Chat
    insert resource pills at the current composer caret. The composer uses a small
    ProseMirror schema whose per-tab EditorState owns selection, undo history, IME,
@@ -510,7 +512,7 @@ flowchart TB
    [ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md),
    [ADR-0026](./adr/0026-ranked-lexical-retrieval-for-agent.md),
    [ADR-0027](./adr/0027-agent-ask-user-clarification.md),
-   [ADR-0059](./adr/0059-agent-panel-quick-actions.md),
+   [ADR-0088](./adr/0088-configurable-automatic-agent-edits.md),
    [ADR-0060](./adr/0060-cache-stable-agent-prompts.md),
    [ADR-0041](./adr/0041-agent-live-schema-authority.md),
    [ADR-0046](./adr/0046-device-sharded-agent-session-history.md),
@@ -710,12 +712,12 @@ bounded and passed through `redactForPrompt` in a
 last segment. `active_guidance` is app-generated and applies only to its current
 run; resource bodies and the user request remain untrusted data. Plan versions
 are appended as immutable run/version snapshots.
-Agent, chat-fallback inline completion, and SQL query parsing use pi-ai short
-cache retention; the Agent session id supplies session affinity. Native
-DeepSeek FIM keeps stable auxiliary context before the changing SQL prefix and
-relies on the provider's automatic prefix cache
+Agent, Chat-based inline completion, and SQL query parsing use pi-ai short
+cache retention; the Agent session id supplies session affinity. Inline
+completion keeps its stable system instructions separate from the changing,
+bounded cursor context
 ([ADR-0060](./adr/0060-cache-stable-agent-prompts.md),
-[ADR-0080](./adr/0080-guarded-native-fim-inline-completion.md)).
+[ADR-0087](./adr/0087-chat-only-sql-inline-completion.md)).
 
 ### Agent safety
 
@@ -723,9 +725,9 @@ relies on the provider's automatic prefix cache
 - Structured MongoDB queries allow read-only `find` fields only and reject server-side JavaScript operators
 - Multi-statement SQL blocked
 - Mutations require `agentAllowMutations` **and** `ai:agent-respond-proposal`
-- `propose_edit` handles both note and explicitly targeted RunSQL edits; it never writes until approved, and a RunSQL edit never changes the editor until the renderer target is still valid
+- `propose_edit` handles both note and explicitly targeted RunSQL edits. By default it waits for approval; `agentAutoApplyEdits` may auto-respond only for those two edit kinds. Note path/read-back checks and the RunSQL renderer target + original-SQL check still run before applying ([ADR-0088](./adr/0088-configurable-automatic-agent-edits.md))
 - `ask_user` reuses the same blocking proposal handshake with kind `question`, resolving to the answer string; at most 3 questions per run, and skipping never counts as approval ([ADR-0027](./adr/0027-agent-ask-user-clarification.md))
-- Same-turn tool batches may run in parallel; stateful plan, Canvas, chart, note-edit, and RunSQL-rewrite tools are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0059](./adr/0059-agent-panel-quick-actions.md))
+- Same-turn tool batches may run in parallel; stateful plan, Canvas, chart, note-edit, and RunSQL-rewrite tools are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0088](./adr/0088-configurable-automatic-agent-edits.md))
 - Agent runs are stopped by model completion, errors, or explicit user cancellation; legacy iteration/time settings are ignored
 - Sessions use native pi `JsonlSessionStorage` by `sessionId` at `.stela/agent-history/<deviceSlug>/`. Main caches open local sessions; other-device sessions are read-only and fork to a new local session before a new prompt.
 - Compaction: proactive `shouldCompact` against `ai.contextWindow`, plus one overflow recovery compact + continue; the current plan is re-injected from the Session custom-entry projector, and `plan_updated` joins `context_usage` / `compaction` on `ai:agent-event`

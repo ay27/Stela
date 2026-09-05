@@ -160,6 +160,8 @@ def validate(query_dir, llm_answer, reason=None):
   await write("query_demo/db_description_withhint.txt", "The answer is available from demo_table.\n");
   await write("query_demo/query1/query.json", '"Return one"\n');
   await write("query_demo/query1/validate.py", "def validate(x): return True, 'OK'\n");
+  await write("query_demo/query2/query.json", '"Return one again"\n');
+  await write("query_demo/query2/validate.py", "def validate(x): return True, 'OK'\n");
 
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -168,6 +170,7 @@ def validate(query_dir, llm_answer, reason=None):
     outputDir: string,
     extraArgs: string[] = [],
     runs = 1,
+    selectionArgs = ["--dataset", "demo", "--query-id", "1"],
   ): Promise<void> => {
     modelCalls = 0;
     const child = spawn(
@@ -175,8 +178,7 @@ def validate(query_dir, llm_answer, reason=None):
       [
         path.join(repoRoot, "scripts", "eval", "run-data-agent-bench.ts"),
         "--dab-root", dabRoot,
-        "--dataset", "demo",
-        "--query-id", "1",
+        ...selectionArgs,
         "--runs", String(runs),
         "--output", outputDir,
         "--python", "python3",
@@ -278,6 +280,33 @@ def validate(query_dir, llm_answer, reason=None):
   assert.equal(manifest.bridgeTimeoutMs, 10_000);
   assert.equal(manifest.strategyReview, true);
   assert.equal(manifest.salvageMs, 120_000);
+
+  const failedFrom = path.join(root, "previous-results");
+  const failedFinal = path.join(failedFrom, "query_demo", "query1", "run_0", "final_agent.json");
+  await fs.mkdir(path.dirname(failedFinal), { recursive: true });
+  await fs.writeFile(failedFinal, JSON.stringify({ complete: true, valid: false }), "utf-8");
+  const passedFinal = path.join(failedFrom, "query_demo", "query2", "run_0", "final_agent.json");
+  await fs.mkdir(path.dirname(passedFinal), { recursive: true });
+  await fs.writeFile(passedFinal, JSON.stringify({ complete: true, valid: true }), "utf-8");
+  const failedOutput = path.join(root, "failed-output");
+  await runBenchmark(failedOutput, [], 1, ["--failed-from", failedFrom]);
+  assert.equal(
+    JSON.parse(await fs.readFile(
+      path.join(failedOutput, "query_demo", "query1", "run_0", "final_agent.json"),
+      "utf-8",
+    )).valid,
+    true,
+  );
+  await assert.rejects(
+    fs.access(path.join(failedOutput, "query_demo", "query2", "run_0", "final_agent.json")),
+    (error: NodeJS.ErrnoException) => error.code === "ENOENT",
+  );
+  const failedManifest = JSON.parse(
+    await fs.readFile(path.join(failedOutput, "manifest.json"), "utf-8"),
+  ) as { selection: { mode: string; source: string; cases: Array<{ dataset: string; queryId: number }> } };
+  assert.equal(failedManifest.selection.mode, "failed_from");
+  assert.equal(failedManifest.selection.source, failedFrom);
+  assert.deepEqual(failedManifest.selection.cases, [{ dataset: "demo", queryId: 1 }]);
 
   const concurrentOutput = path.join(root, "results-shared-concurrent");
   await runBenchmark(concurrentOutput, [], 2);

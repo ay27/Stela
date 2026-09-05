@@ -22,7 +22,9 @@ The benchmark path is intentionally product-faithful:
   available through `tables` / `to_df`; dependent requests can still use
   `await query(connection, request)` and receive a DuckDB relation. SQL sources
   put sampling limits inside the SQL statement; top-level `limit` is MongoDB-only
-  and cross-kind fields are rejected before execution.
+  and cross-kind fields are rejected before execution. An omitted source `limit`
+  means complete, and a source returning exactly its requested row count is
+  flagged back to the model as `incompleteSources`.
 - Query artifacts retain the complete result and carry it into the sandbox, while
   the model-facing `run_query` preview is bounded to 200 rows / 5 KiB and a
   truncated result is returned as `sampleRows` rather than `rows`.
@@ -30,9 +32,11 @@ The benchmark path is intentionally product-faithful:
 - Product and evaluation runs keep a bounded in-memory analysis ledger. Repeated
   query families receive a deterministic hint, and a stalled run gets at most
   one tool-free strategy review from the current Agent model.
-- Every structurally finalized planned result also receives an isolated semantic
-  review with the same model and reasoning effort. Reviewer-requested corrections
-  append at most two plan revisions; the status is stored in `final_agent.json`.
+- There is no semantic review of a candidate answer. ADR-0078 removed the
+  planned-result reviewer and the plan finalization gate it depended on; a plan
+  is progress bookkeeping and never gates an answer. Older result directories
+  may still carry a `resultReview` field, which the report reads for history
+  only.
 
 ## Linux runner
 
@@ -71,6 +75,29 @@ npm run eval:data-agent-bench -- \
   --bridge-timeout-ms 600000 \
   --resume
 ```
+
+To rerun only the cases that were invalid in a previous completed result directory,
+keep the new output separate and select them with `--failed-from`:
+
+```bash
+npm run eval:data-agent-bench -- \
+  --dab-root "$DAB_ROOT" \
+  --failed-from /path/to/previous-results \
+  --output /path/to/failed-rerun \
+  --runs 1 \
+  --concurrency 3 \
+  --mongo-concurrency 2 \
+  --python-concurrency 2 \
+  --reasoning-effort high \
+  --bridge-timeout-ms 600000 \
+  --resume
+```
+
+Selection reads ordered `query_<dataset>/queryN/run_M/final_agent.json` files and
+includes each distinct case with at least one completed `valid=false` run. It does
+not select cases merely because an intermediate routing or tool error occurred.
+`--failed-from` is mutually exclusive with `--all`, `--dataset`, `--query-id`, and
+`--self-check`; the manifest records the source directory and exact selected cases.
 
 MongoDB queries are read-only, but DAB's upstream `QueryDBTool` normally owns a
 destructive fixture lifecycle: it drops an existing physical database, restores
@@ -157,6 +184,15 @@ validator-passing versus validator-failing cases. The latter is correlation,
 not tool success. Cards also show calls per case and the delta from the selected
 comparison, so prompt changes can be checked for unnecessary planning or
 retrieval calls.
+
+Rejection versus runtime failure is decided on the error head only. An
+`execute_python` failure appends `stdout:` and guidance after the real error,
+and any run with staged sources opens its stdout with an
+`[INPUTS] tables[alias] … pandas DataFrame` banner, so classifying on the whole
+payload reads every genuine Python exception as a contract rejection. A harness
+refusal is identified by its `nothing was executed` suffix. Comparing this
+split across runs that differ in staged-source adoption is only meaningful with
+this rule in place.
 
 Failure attribution distinguishes a transient database-routing mistake from an
 unrecovered blocker. An `unknown_database`, `missing_database_route`, or

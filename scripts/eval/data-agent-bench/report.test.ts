@@ -253,6 +253,74 @@ try {
     { wrong_answer: 2, query_language_mismatch: 1, routing_error: 1 },
   );
 
+  // A staged-source Python failure must be classified on its error head: the stdout banner
+  // names `tables[alias]` and `pandas DataFrame`, which used to read as a contract rejection.
+  const pythonInput = path.join(root, "python-results");
+  const pythonDirectory = path.join(pythonInput, "query_py_demo", "query1", "run_0");
+  await fs.mkdir(pythonDirectory, { recursive: true });
+  await fs.writeFile(path.join(pythonDirectory, "final_agent.json"), JSON.stringify({
+    complete: true,
+    dataset: "py_demo",
+    query: "1",
+    run: 0,
+    answer: "41",
+    valid: false,
+    validation: { reason: "No matching number found in LLM output.", ground_truth: "42" },
+    terminateReason: "final_answer",
+    error: null,
+    model: "mock-model",
+    hints: false,
+    startedAt: "2026-09-03T00:00:00.000Z",
+    elapsedMs: 1_000,
+    firstResultMs: 100,
+    modelTurns: 2,
+    toolCalls: 2,
+    toolCallCounts: { execute_python: 2 },
+    capabilityFailures: {},
+    usage: { inputTokens: 10, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, cacheHitRate: 0 },
+    transcript: [
+      { role: "user", content: [{ type: "text", text: "QUERY:\nReturn the requested value." }] },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "execute_python", arguments: { code: "result = df" } }],
+      },
+      {
+        role: "toolResult",
+        toolName: "execute_python",
+        content: [{
+          type: "text",
+          text: "NameError: name 'df' is not defined\nstdout:\n"
+            + "[INPUTS] tables[alias] is a DuckDB relation; to_df(alias) gives a pandas DataFrame.\n"
+            + "  rows: 30 rows x 2 cols | _id:VARCHAR, content:VARCHAR\n",
+        }],
+        isError: true,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "execute_python", arguments: { sources: [{ alias: "rows", language: "sql", query: "SELECT 1", limit: 5 }] } }],
+      },
+      {
+        role: "toolResult",
+        toolName: "execute_python",
+        content: [{
+          type: "text",
+          text: "sources[0] (rows): sql source does not accept 'limit'."
+            + " Put LIMIT inside the SQL query; nothing was executed.",
+        }],
+        isError: true,
+      },
+      { role: "assistant", content: [{ type: "text", text: "41" }] },
+    ],
+  }), "utf-8");
+  const pythonReport = await buildDataAgentBenchReport(pythonInput);
+  const pythonStats = pythonReport.toolStats.find((item) => item.tool === "execute_python");
+  assert.equal(pythonStats?.runtimeErrorCalls, 1);
+  assert.equal(pythonStats?.rejectedCalls, 1);
+  assert.deepEqual(
+    Object.fromEntries(pythonStats!.errorCauses.map((item) => [item.category, item.count])),
+    { python_runtime: 1, python_contract: 1 },
+  );
+
   await writeDataAgentBenchReport(input, output);
   for (const name of ["index.html", "styles.css", "app.js", "analysis-data.json"]) {
     const stat = await fs.stat(path.join(output, name));

@@ -11,10 +11,6 @@ import type { SyntaxNode } from "@lezer/common";
 import * as connectionsStore from "../connections-store";
 import { getLogger } from "../logger";
 import * as settingsStore from "../settings-store";
-import {
-  completeNativeDeepSeekFim,
-  usesNativeDeepSeekFim,
-} from "./inline-completion-transport";
 import { loadApiKey, streamChatCompletions } from "./provider";
 import { redactForPrompt } from "./redaction";
 import { loadSchemaDirTableSchemas } from "./schema-context";
@@ -458,45 +454,26 @@ export async function runInlineCompletion(
     }
     const apiKey = await loadApiKey(vaultPath, slug, profile.id);
     let rawText = "";
-    let averageLogprob: number | null = null;
-    let preparedSchemas: AiSchemaTargetContext[];
-
-    if (usesNativeDeepSeekFim(profile)) {
-      const fim = buildInlineFimInput({ request, dialect, tables, schemas });
-      preparedSchemas = fim.schemas;
-      const result = await completeNativeDeepSeekFim({
-        apiKey,
-        model: profile.model,
-        prompt: fim.prompt,
-        suffix: fim.suffix,
-        signal,
-      });
-      rawText = result.text;
-      averageLogprob = result.averageLogprob;
-      log.info("native FIM completed", {
-        requestId: request.requestId,
-        promptTokens: result.usage?.promptTokens,
-        completionTokens: result.usage?.completionTokens,
-        cacheHitTokens: result.usage?.cacheHitTokens,
-        cacheMissTokens: result.usage?.cacheMissTokens,
-      });
-    } else {
-      const prompt = buildInlineCompletionPrompt({ request, dialect, tables, schemas });
-      preparedSchemas = prepareInlineCompletionContext({ request, dialect, tables, schemas }).schemas;
-      await streamChatCompletions({
-        settings: settings.ai,
-        apiKey,
-        system: prompt.system,
-        user: prompt.user,
-        profileId: profile.id,
-        sessionId: `stela-inline:${profile.id}`,
-        signal,
-        maxTokens: 64,
-        onDelta: (text) => {
-          rawText += text;
-        },
-      });
-    }
+    const prompt = buildInlineCompletionPrompt({ request, dialect, tables, schemas });
+    const preparedSchemas = prepareInlineCompletionContext({
+      request,
+      dialect,
+      tables,
+      schemas,
+    }).schemas;
+    await streamChatCompletions({
+      settings: settings.ai,
+      apiKey,
+      system: prompt.system,
+      user: prompt.user,
+      profileId: profile.id,
+      sessionId: `stela-inline:${profile.id}`,
+      signal,
+      maxTokens: 64,
+      onDelta: (text) => {
+        rawText += text;
+      },
+    });
 
     const text = sanitizeCompletionCandidate(rawText);
     if (
@@ -506,7 +483,7 @@ export async function runInlineCompletion(
         suffix: request.suffix.slice(0, MAX_SUFFIX_CHARS),
         dialect,
         schemas: preparedSchemas,
-        averageLogprob,
+        averageLogprob: null,
       })
     ) {
       onEvent({ type: "delta", requestId: request.requestId, text });

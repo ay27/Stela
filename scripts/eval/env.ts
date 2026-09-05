@@ -98,6 +98,7 @@ export function buildEvalSettings(
     agentWallClockMs: 60_000,
     // 评测永不写库：mutation 一律在 proposal 环节拒掉。
     agentAllowMutations: false,
+    agentAutoApplyEdits: false,
   } as AiSettings;
 }
 

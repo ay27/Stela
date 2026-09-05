@@ -222,6 +222,8 @@ function asAgentEvent(value: unknown): AgentEvent | null {
       const payload = asRecord(event.payload);
       return typeof event.callId === "string" &&
         (event.kind === "edit_note" || event.kind === "runsql_rewrite" || event.kind === "mutation_sql" || event.kind === "question") &&
+        (event.approvalMode === undefined ||
+          event.approvalMode === "manual" || event.approvalMode === "automatic") &&
         isProposalPayload(payload)
         ? event as AgentEvent
         : null;

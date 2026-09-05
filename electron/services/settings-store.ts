@@ -161,6 +161,7 @@ const AI_DEFAULT: AiSettings = syncActiveMirrors({
   agentMaxIterations: 200,
   agentWallClockMs: 300_000,
   agentAllowMutations: false,
+  agentAutoApplyEdits: false,
   automaticSkillMaintenanceEnabled: true,
 });
 
@@ -257,6 +258,7 @@ function sanitizeAi(input: unknown): AiSettings {
     agentMaxIterations,
     agentWallClockMs,
     agentAllowMutations: r.agentAllowMutations === true,
+    agentAutoApplyEdits: r.agentAutoApplyEdits === true,
     automaticSkillMaintenanceEnabled:
       r.automaticSkillMaintenanceEnabled === undefined
         ? AI_DEFAULT.automaticSkillMaintenanceEnabled

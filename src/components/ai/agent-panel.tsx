@@ -1281,8 +1281,14 @@ function ProposalCard({
           {entry.resolution === "expired"
             ? t("agent.panel.proposal.expired")
             : entry.resolution === "approved"
-            ? t("agent.panel.proposal.approved")
+            ? entry.approvalMode === "automatic"
+              ? t("agent.panel.proposal.autoApplied")
+              : t("agent.panel.proposal.approved")
             : t("agent.panel.proposal.rejected")}
+        </div>
+      ) : entry.approvalMode === "automatic" ? (
+        <div className="text-xs text-muted-foreground">
+          {t("agent.panel.proposal.autoApplying")}
         </div>
       ) : (
         <div className="flex gap-2">

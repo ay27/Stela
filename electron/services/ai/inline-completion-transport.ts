@@ -1,9 +1,7 @@
 import { AppError } from "@shared/errors";
-import type { AiProviderProfile } from "@shared/types";
 
+/** Explicit evaluator-only adapter; the application runtime always uses streamed Chat. */
 const DEEPSEEK_FIM_URL = "https://api.deepseek.com/beta/completions";
-const DEEPSEEK_VENDOR_ID = "deepseek";
-const DEEPSEEK_FIM_MODEL = "deepseek-v4-flash";
 const MAX_OUTPUT_TOKENS = 64;
 const LOGPROBS = 5;
 
@@ -32,13 +30,6 @@ interface DeepSeekCompletionResponse {
     prompt_cache_miss_tokens?: unknown;
   };
   error?: { message?: unknown };
-}
-
-export function usesNativeDeepSeekFim(profile: AiProviderProfile): boolean {
-  return (
-    profile.vendorId === DEEPSEEK_VENDOR_ID &&
-    profile.model === DEEPSEEK_FIM_MODEL
-  );
 }
 
 function finiteNumber(value: unknown): number {

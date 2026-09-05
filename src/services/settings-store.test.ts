@@ -15,6 +15,7 @@ const legacy = normalizeSettings({
 assert.equal(legacy.ai.agentMaxIterations, 200);
 assert.equal(legacy.ai.agentWallClockMs, 300_000);
 assert.equal(legacy.ai.agentAllowMutations, false);
+assert.equal(legacy.ai.agentAutoApplyEdits, false);
 assert.equal(legacy.ai.automaticSkillMaintenanceEnabled, true);
 assert.equal(legacy.ai.contextWindow, 128_000);
 assert.equal(legacy.ai.profiles.length >= 1, true);
@@ -27,10 +28,12 @@ const patched = normalizeSettings({
     model: "gpt-4o-mini",
     hasApiKey: true,
     agentAllowMutations: true,
+    agentAutoApplyEdits: true,
   },
 } as AppSettings);
 
 assert.equal(patched.ai.agentAllowMutations, true);
+assert.equal(patched.ai.agentAutoApplyEdits, true);
 assert.equal(patched.ai.agentMaxIterations, 200);
 assert.equal(patched.ai.automaticSkillMaintenanceEnabled, true);
 

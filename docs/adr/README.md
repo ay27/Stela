@@ -111,7 +111,7 @@ proposed → active → superseded
 | [0056](0056-user-adjustable-react-flow-cards.md) | User-adjustable React Flow cards | active |
 | [0057](0057-bounded-mark-encoding-visualizations.md) | Bounded mark-encoding visualizations | active |
 | [0058](0058-offline-interactive-canvas-html-export.md) | Offline interactive Canvas HTML export | active |
-| [0059](0059-agent-panel-quick-actions.md) | Agent Panel quick actions instead of one-shot AI actions | active |
+| [0059](0059-agent-panel-quick-actions.md) | Agent Panel quick actions instead of one-shot AI actions | superseded → [0088](0088-configurable-automatic-agent-edits.md) |
 | [0060](0060-cache-stable-agent-prompts.md) | Cache-stable Agent prompts and immutable plan snapshots | active |
 | [0061](0061-ordered-inline-agent-message-resources.md) | Ordered inline Agent message resources | superseded → [0062](0062-implicit-workspace-context-explicit-inline-resources.md) |
 | [0062](0062-implicit-workspace-context-explicit-inline-resources.md) | Implicit Workspace context and explicit inline resources | active |
@@ -132,10 +132,12 @@ proposed → active → superseded
 | [0077](0077-independent-planned-result-review.md) | Independent planned-result review and bounded revision | rejected → [0078](0078-plans-as-progress-bookkeeping.md) |
 | [0078](0078-plans-as-progress-bookkeeping.md) | Execution plans are progress bookkeeping, not an answer gate | superseded → [0084](0084-single-action-plan-tool.md) |
 | [0079](0079-sandbox-query-rpc.md) | Sandbox query() RPC instead of model-managed artifacts | superseded → [0086](0086-declarative-query-sources-for-python.md) |
-| [0080](0080-guarded-native-fim-inline-completion.md) | Guarded native FIM for SQL inline completion | active |
+| [0080](0080-guarded-native-fim-inline-completion.md) | Guarded native FIM for SQL inline completion | superseded → [0087](0087-chat-only-sql-inline-completion.md) |
 | [0081](0081-deterministic-tool-failure-circuit-breaker.md) | Deterministic tool failure circuit breaker | active |
 | [0082](0082-coverage-over-precision-in-bounded-tool-results.md) | Coverage over precision in bounded tool results | active |
 | [0083](0083-sourced-system-skills.md) | Sourced read-only System Skills | active |
 | [0084](0084-single-action-plan-tool.md) | Single action-based execution-plan tool | active |
 | [0085](0085-extension-routed-workspace-editors.md) | Extension-routed workspace editors | active |
 | [0086](0086-declarative-query-sources-for-python.md) | Declarative query sources for sandbox Python | active |
+| [0087](0087-chat-only-sql-inline-completion.md) | Chat-only SQL inline completion transport | active |
+| [0088](0088-configurable-automatic-agent-edits.md) | Configurable automatic Agent edits | active |

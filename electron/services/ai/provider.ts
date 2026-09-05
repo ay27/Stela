@@ -233,6 +233,8 @@ export async function configureProvider(
       agentMaxIterations: settingsPatch.agentMaxIterations ?? current.ai.agentMaxIterations,
       agentWallClockMs: settingsPatch.agentWallClockMs ?? current.ai.agentWallClockMs,
       agentAllowMutations: settingsPatch.agentAllowMutations ?? current.ai.agentAllowMutations,
+      agentAutoApplyEdits:
+        settingsPatch.agentAutoApplyEdits ?? current.ai.agentAutoApplyEdits,
       automaticSkillMaintenanceEnabled:
         settingsPatch.automaticSkillMaintenanceEnabled
         ?? current.ai.automaticSkillMaintenanceEnabled,

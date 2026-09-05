@@ -6,7 +6,11 @@ import { tmpdir } from "node:os";
 import type { AiSettings } from "@shared/types";
 
 import { ExecutionPlanStore } from "./execution-plan";
-import { createAgentTools, dispatchTool as dispatchToolRaw } from "./agent-tools";
+import {
+  createAgentTools,
+  dispatchTool as dispatchToolRaw,
+  proposalApprovalMode,
+} from "./agent-tools";
 import { updateAnalysisCanvasFlowLayout } from "../analysis-canvas";
 
 /**
@@ -27,10 +31,17 @@ const AI_SETTINGS = {
   agentMaxIterations: 12,
   agentWallClockMs: 90_000,
   agentAllowMutations: false,
+  agentAutoApplyEdits: false,
 } satisfies AiSettings;
 
 const root = await mkdtemp(join(tmpdir(), "stela-agent-tools-"));
 try {
+  assert.equal(proposalApprovalMode(false, "edit_note"), "manual");
+  assert.equal(proposalApprovalMode(true, "edit_note"), "automatic");
+  assert.equal(proposalApprovalMode(true, "runsql_rewrite"), "automatic");
+  assert.equal(proposalApprovalMode(true, "mutation_sql"), "manual");
+  assert.equal(proposalApprovalMode(true, "question"), "manual");
+
   await writeFile(join(root, "note.md"), "# Hello\n\nAgent target note.\n");
 
   const fakeConnector = {
@@ -440,6 +451,115 @@ try {
     }), ctx);
     assert.equal(unknownLanguage.ok, false);
     assert.match(unknownLanguage.text, /unsupported query language/);
+
+    // A Python source is handed the complete artifact, so an omitted limit must mean complete
+    // rather than run_query's 200-row preview default.
+    const previewDefault = await dispatchTool("run_query", JSON.stringify({
+      language: "mongodb",
+      collection: "books",
+    }), ctx);
+    assert.equal(previewDefault.ok, true, previewDefault.text);
+    assert.equal((received[2] as { limit?: number | null }).limit, 200);
+  }
+
+  // MongoDB Python sources default to the complete result and flag a result that stops at its cap.
+  {
+    const received: Array<{ limit?: number | null }> = [];
+    let artifactRows = 1;
+    const descriptor = {
+      runId: "placeholder",
+      sessionId: "session-1",
+      format: "jsonl" as const,
+      mode: "jsonl-buffered" as const,
+      columns: [{ name: "name", typeName: "TEXT" }],
+      rowCount: 1,
+      byteSize: 12,
+      createdAt: 1,
+      lastAccessedAt: 1,
+    };
+    const ctx = {
+      ...withConnection,
+      run: { runId: "mongo-sources", sessionId: "session-1", notePath: null, questionsAsked: 0, toolFailureStreak: new Map<string, number>() },
+      connection: { kind: "mongodb", config: {} },
+      connector: {
+        ...fakeConnector,
+        listKinds: () => [{
+          kind: "mongodb",
+          displayName: "MongoDB",
+          configSchema: {},
+          defaultConfig: {},
+          subprocess: false,
+          queryLanguages: ["mongodb" as const],
+          mongoOperations: ["find" as const, "aggregate" as const],
+        }],
+        executeQuery: async (_kind: string, _config: unknown, query: { limit?: number | null }) => {
+          received.push(query);
+          return {
+            kind: "query" as const,
+            columns: descriptor.columns,
+            rows: Array.from({ length: artifactRows }, (_, index) => [`doc-${index}`]),
+            elapsedMs: 1,
+          };
+        },
+      },
+      queryArtifacts: {
+        createTarget: async () => { throw new Error("streaming path should not be used"); },
+        finalize: async () => { throw new Error("streaming path should not be used"); },
+        writeBuffered: async (input: { runId: string }) => ({
+          ...descriptor,
+          runId: input.runId,
+          rowCount: artifactRows,
+        }),
+        resolve: async () => null,
+        discard: async () => {},
+      },
+      pythonExecutor: {
+        execute: async () => ({
+          ok: true,
+          stdout: "",
+          value: { kind: "scalar" as const, value: 1 },
+          elapsedMs: 1,
+        }),
+      },
+      analysisRuns: new Map(),
+    };
+
+    artifactRows = 3;
+    const complete = await dispatchTool("execute_python", JSON.stringify({
+      sources: [{ alias: "books", language: "mongodb", collection: "books" }],
+      code: "result = len(to_df('books'))",
+    }), ctx);
+    assert.equal(complete.ok, true, complete.text);
+    assert.equal(received[0]?.limit, null, "an omitted source limit asks the connector for everything");
+    assert.equal(
+      (JSON.parse(complete.text) as { incompleteSources?: string }).incompleteSources,
+      undefined,
+      "a complete source carries no truncation warning",
+    );
+
+    // The real truncation risk is a model-chosen small limit, not an omitted one.
+    artifactRows = 50;
+    const capped = await dispatchTool("execute_python", JSON.stringify({
+      sources: [{ alias: "books", language: "mongodb", collection: "books", limit: 50 }],
+      code: "result = len(to_df('books'))",
+    }), ctx);
+    assert.equal(capped.ok, true, capped.text);
+    assert.equal(received[1]?.limit, 50);
+    const cappedPayload = JSON.parse(capped.text) as { incompleteSources?: string };
+    assert.match(cappedPayload.incompleteSources ?? "", /books \(limit 50\) returned exactly the requested limit/);
+    assert.match(cappedPayload.incompleteSources ?? "", /omit limit for the complete result/);
+
+    artifactRows = 20;
+    const underCap = await dispatchTool("execute_python", JSON.stringify({
+      sources: [{ alias: "books", language: "mongodb", collection: "books", limit: 50 }],
+      code: "result = len(to_df('books'))",
+    }), ctx);
+    assert.equal(underCap.ok, true, underCap.text);
+    assert.equal(
+      (JSON.parse(underCap.text) as { incompleteSources?: string }).incompleteSources,
+      undefined,
+      "a source that stops short of its limit is complete",
+    );
   }
 
   // create_chart 只能引用本轮真实 run_query 结果，并校验字段。

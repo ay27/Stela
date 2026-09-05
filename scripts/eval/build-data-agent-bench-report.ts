@@ -260,12 +260,15 @@ function toolOutcome(step: ReportTraceStep): { kind: ToolOutcomeKind; cause: str
     }
     return { kind: "success", cause: null };
   }
-  const lower = text.toLowerCase();
+  // `execute_python` failures append `stdout:` and guidance after the real error, and every
+  // staged-source run's stdout opens with an `[INPUTS] tables[alias] … pandas DataFrame` banner.
+  // Classify on the error head only, or that banner reads as a python_contract rejection.
+  const lower = text.split("\nstdout:\n")[0]!.toLowerCase();
   if (/timed? out|timeout/.test(lower)) return { kind: "runtime_error", cause: "timeout" };
   if (/terminated|cancelled|aborted|task_timeout/.test(lower)) return { kind: "runtime_error", cause: "termination" };
   if (/bridge|readline|invalid string length/.test(lower)) return { kind: "runtime_error", cause: "bridge" };
   if (step.toolName === "execute_python") {
-    if (/duckdbpyrelation|dataframe|alias|runid|artifact|inputs supports|valid identifier/.test(lower)) {
+    if (/nothing was executed|duckdbpyrelation|dataframe|alias|runid|artifact|inputs supports|valid identifier/.test(lower)) {
       return { kind: "rejected", cause: "python_contract" };
     }
     return { kind: "runtime_error", cause: "python_runtime" };

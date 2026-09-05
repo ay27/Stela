@@ -103,6 +103,7 @@ interface CliOptions {
   output: string | null;
   dataset: string | null;
   queryId: number | null;
+  failedFrom: string | null;
   runs: number;
   hints: boolean;
   all: boolean;
@@ -170,6 +171,16 @@ interface DabJob {
   completed: FinalRun | null;
 }
 
+interface FailedCaseSelection {
+  source: string;
+  cases: Array<{ dataset: string; queryId: number }>;
+  keys: Set<string>;
+}
+
+function taskKey(dataset: string, queryId: number): string {
+  return `${dataset}\u0000${queryId}`;
+}
+
 function intArg(value: string | undefined, name: string, minimum: number): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < minimum) throw new Error(`${name} must be an integer >= ${minimum}.`);
@@ -193,6 +204,7 @@ function parseArgs(argv: string[]): CliOptions {
     output: value("--output") ? path.resolve(value("--output")!) : null,
     dataset: value("--dataset") ?? null,
     queryId: value("--query-id") ? intArg(value("--query-id"), "--query-id", 1) : null,
+    failedFrom: value("--failed-from") ? path.resolve(value("--failed-from")!) : null,
     // One run per case leaves a ~5 point binomial standard error, which is larger
     // than the differences these comparisons try to resolve.
     runs: intArg(value("--runs") ?? "3", "--runs", 1),
@@ -232,8 +244,71 @@ async function gitState(root: string): Promise<GitState> {
   return { commit, trackedDirty: status.length > 0 };
 }
 
-function selectTasks(tasks: DabTask[], options: CliOptions): DabTask[] {
-  if (options.selfCheck && !options.dataset && !options.queryId && !options.all) {
+async function readFailedCaseSelection(source: string): Promise<FailedCaseSelection> {
+  let datasetEntries: Awaited<ReturnType<typeof fs.readdir>>;
+  try {
+    datasetEntries = await fs.readdir(source, { withFileTypes: true });
+  } catch (error) {
+    throw new Error(
+      `Cannot read --failed-from directory '${source}': ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const selected = new Map<string, { dataset: string; queryId: number }>();
+  for (const datasetEntry of datasetEntries) {
+    if (!datasetEntry.isDirectory() || !datasetEntry.name.startsWith("query_")) continue;
+    const dataset = datasetEntry.name.slice("query_".length);
+    const datasetDir = path.join(source, datasetEntry.name);
+    const queryEntries = await fs.readdir(datasetDir, { withFileTypes: true });
+    for (const queryEntry of queryEntries) {
+      const match = queryEntry.isDirectory() ? /^query(\d+)$/.exec(queryEntry.name) : null;
+      if (!match) continue;
+      const queryId = Number(match[1]);
+      const queryDir = path.join(datasetDir, queryEntry.name);
+      const runEntries = await fs.readdir(queryDir, { withFileTypes: true });
+      for (const runEntry of runEntries) {
+        if (!runEntry.isDirectory() || !/^run_\d+$/.test(runEntry.name)) continue;
+        const finalPath = path.join(queryDir, runEntry.name, "final_agent.json");
+        let text: string;
+        try {
+          text = await fs.readFile(finalPath, "utf-8");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw error;
+        }
+        let result: unknown;
+        try {
+          result = JSON.parse(text) as unknown;
+        } catch (error) {
+          throw new Error(
+            `Invalid final_agent.json at '${finalPath}': ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        if (!result || typeof result !== "object" || Array.isArray(result)) continue;
+        const record = result as Record<string, unknown>;
+        if (record.complete === true && record.valid === false) {
+          selected.set(taskKey(dataset, queryId), { dataset, queryId });
+          break;
+        }
+      }
+    }
+  }
+  const cases = [...selected.values()]
+    .sort((left, right) => left.dataset.localeCompare(right.dataset) || left.queryId - right.queryId);
+  if (cases.length === 0) {
+    throw new Error(`No failed completed DAB cases found under '${source}'.`);
+  }
+  return { source, cases, keys: new Set(cases.map((item) => taskKey(item.dataset, item.queryId))) };
+}
+
+function selectTasks(
+  tasks: DabTask[],
+  options: CliOptions,
+  failedSelection: FailedCaseSelection | null,
+): DabTask[] {
+  if (failedSelection && (options.all || options.dataset !== null || options.queryId !== null || options.selfCheck)) {
+    throw new Error("--failed-from cannot be combined with --all, --dataset, --query-id, or --self-check.");
+  }
+  if (options.selfCheck && !options.dataset && !options.queryId && !options.all && !failedSelection) {
     const seen = new Set<string>();
     return tasks.filter((task) => {
       if (seen.has(task.dataset)) return false;
@@ -241,13 +316,24 @@ function selectTasks(tasks: DabTask[], options: CliOptions): DabTask[] {
       return true;
     });
   }
-  if (!options.all && !options.dataset) {
-    throw new Error("Select --all or --dataset [--query-id].");
+  if (!options.all && !options.dataset && !failedSelection) {
+    throw new Error("Select --all, --dataset [--query-id], or --failed-from <results-dir>.");
   }
   const selected = tasks.filter((task) =>
-    (options.all || task.dataset === options.dataset) &&
+    (failedSelection?.keys.has(taskKey(task.dataset, task.queryId)) || options.all || task.dataset === options.dataset) &&
     (options.queryId === null || task.queryId === options.queryId));
   if (selected.length === 0) throw new Error("No matching DAB tasks found.");
+  if (failedSelection) {
+    const discovered = new Set(selected.map((task) => taskKey(task.dataset, task.queryId)));
+    const missing = failedSelection.cases.filter((item) => !discovered.has(taskKey(item.dataset, item.queryId)));
+    if (missing.length > 0) {
+      throw new Error(
+        "Failed cases are absent from the current DAB root: " +
+          missing.slice(0, 20).map((item) => `${item.dataset}/query${item.queryId}`).join(", ") +
+          (missing.length > 20 ? `, and ${missing.length - 20} more` : ""),
+      );
+    }
+  }
   return selected;
 }
 
@@ -964,7 +1050,13 @@ async function writeSummary(output: string, results: FinalRun[]): Promise<void> 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const allTasks = await discoverDabTasks(options.dabRoot);
-  const tasks = selectTasks(allTasks, options);
+  const failedSelection = options.failedFrom
+    ? await readFailedCaseSelection(options.failedFrom)
+    : null;
+  const tasks = selectTasks(allTasks, options, failedSelection);
+  if (failedSelection) {
+    console.log(`Selected ${tasks.length} failed case(s) from ${failedSelection.source}`);
+  }
   if (options.selfCheck) {
     await runSelfCheck(tasks, options);
     return;
@@ -1042,7 +1134,13 @@ async function main(): Promise<void> {
     pythonConcurrency: options.noPython ? 0 : options.pythonConcurrency,
     strategyReview: options.strategyReview,
     salvageMs: options.salvageMs,
-    selection: { mode: options.all ? "all" : "dataset" },
+    selection: failedSelection
+      ? {
+          mode: "failed_from",
+          source: failedSelection.source,
+          cases: failedSelection.cases,
+        }
+      : { mode: options.all ? "all" : "dataset" },
     host: { platform: process.platform, arch: process.arch, node: process.version },
   });
 

@@ -324,6 +324,15 @@ export interface ProposalRequest {
   payload: AgentProposalPayload;
 }
 
+export function proposalApprovalMode(
+  autoApplyEdits: boolean,
+  kind: AgentProposalKind,
+): "manual" | "automatic" {
+  return autoApplyEdits && (kind === "edit_note" || kind === "runsql_rewrite")
+    ? "automatic"
+    : "manual";
+}
+
 /**
  * 单次 run 的提问上限。硬限在工具侧而不是只写在 prompt 里——prompt 约束是建议，
  * 这里是保证：模型再怎么犹豫也不会把对话变成问答轰炸。
@@ -500,7 +509,7 @@ export function createAgentTools(options: {
       name: "execute_python",
       label: "Execute Python",
       description:
-        "Run stateless Python on complete read-only sources. SQL selects needed columns and puts LIMIT in query. Use `to_df(alias)`; await query is only for dynamic requests. Assign result. pandas, duckdb, con, tables are preloaded; no host access.",
+        "Run stateless Python on complete read-only sources. SQL selects needed columns and puts LIMIT in query; no MongoDB limit means complete. Use `to_df(alias)`; await query is only for dynamic requests. Assign result. pandas, duckdb, con, tables are preloaded; no host access.",
       parameters: Type.Object({
         sources: Type.Optional(Type.Array(Type.Union([
           Type.Object({
@@ -755,7 +764,7 @@ export function createAgentTools(options: {
       name: "propose_edit",
       label: "Propose edit",
       description:
-        "Propose one user-reviewed RunSQL or note edit. Use targetId/sql for an attached RunSQL target, or path plus full/local note replacement parameters; never mix the two forms. Leave trailing <detail> blocks unchanged unless explicitly asked.",
+        "Propose one RunSQL or note edit. Use targetId/sql for an attached RunSQL target, or path plus note replacement fields; never mix the two forms. Preserve trailing <detail> blocks unless explicitly asked.",
       parameters: Type.Object({
         targetId: Type.Optional(
           Type.String({ description: "Exact rewrite target id from the attached RunSQL block." }),
@@ -1580,7 +1589,9 @@ async function runExecutePython(
           `${unexpectedFields.map((key) => `'${key}'`).join(", ")}.${suffix}`,
       );
     }
-    const normalized = normalizeDataQuery(source);
+    // `normalizeDataQuery`'s 200-row default exists for the `run_query` preview. A Python source
+    // is handed the complete artifact, so an omitted limit means complete, not 200.
+    const normalized = normalizeDataQuery({ ...source, limit: source.limit ?? null });
     if (typeof normalized === "string") return fail(`sources[${index}] (${alias}): ${normalized}`);
     sources.push({
       alias,
@@ -1593,6 +1604,7 @@ async function runExecutePython(
 
   const sourceRunIds: string[] = [];
   const artifacts: Record<string, QueryArtifactDescriptor> = {};
+  const limitedAtCap: string[] = [];
   let sourceBytes = 0;
   for (let index = 0; index < sources.length; index += 1) {
     const source = sources[index]!;
@@ -1624,6 +1636,12 @@ async function runExecutePython(
     }
     artifacts[source.alias] = executed.artifact;
     sourceRunIds.push(executed.runId);
+    // A source that returns exactly as many rows as it asked for is almost certainly cut off,
+    // and nothing else says so: the sandbox only sees the row count it was handed.
+    if (source.query.language === "mongodb" && source.query.limit !== null
+      && executed.artifact.rowCount === source.query.limit) {
+      limitedAtCap.push(`${source.alias} (limit ${source.query.limit})`);
+    }
     if (source.query.language === "sql") {
       recordSkillTableEvidence(
         ctx,
@@ -1700,6 +1718,14 @@ async function runExecutePython(
   });
   return ok({
     runId,
+    ...(limitedAtCap.length > 0
+      ? {
+          incompleteSources:
+            `${limitedAtCap.join(", ")} returned exactly the requested limit, so the source is ` +
+            "probably cut off. Do not treat it as the complete set: omit limit for the complete " +
+            "result, or aggregate inside the source query.",
+        }
+      : {}),
     ...(value.kind === "none"
       ? {
           instruction:

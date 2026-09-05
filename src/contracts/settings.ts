@@ -102,6 +102,7 @@ export interface AiSettings {
   agentMaxIterations: number;
   agentWallClockMs: number;
   agentAllowMutations: boolean;
+  agentAutoApplyEdits: boolean;
   automaticSkillMaintenanceEnabled: boolean;
 }
 
@@ -165,6 +166,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     agentMaxIterations: 200,
     agentWallClockMs: 300_000,
     agentAllowMutations: false,
+    agentAutoApplyEdits: false,
     automaticSkillMaintenanceEnabled: true,
   },
 };

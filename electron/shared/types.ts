@@ -389,6 +389,8 @@ export interface AiSettings {
    * after user confirmation. Default false = mutations are always blocked.
    */
   agentAllowMutations: boolean;
+  /** Apply propose_edit note and RunSQL rewrites without per-call approval. */
+  agentAutoApplyEdits: boolean;
   /** Run opportunistic post-answer Skill maintenance and stale-Skill refresh. */
   automaticSkillMaintenanceEnabled: boolean;
 }
@@ -1092,6 +1094,8 @@ export type AgentEvent =
       kind: AgentProposalKind;
       /** edit_note: notePath + diff 描述；mutation_sql: sql 文本；question: question + options。 */
       payload: AgentProposalPayload;
+      /** Automatic is valid only for edit_note and runsql_rewrite. */
+      approvalMode: "manual" | "automatic";
     }
   | {
       type: "context_usage";

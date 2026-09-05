@@ -2,10 +2,7 @@ import assert from "node:assert/strict";
 
 import type { AiProviderProfile } from "@shared/types";
 
-import {
-  completeNativeDeepSeekFim,
-  usesNativeDeepSeekFim,
-} from "./inline-completion-transport";
+import { completeNativeDeepSeekFim } from "./inline-completion-transport";
 
 const profile: AiProviderProfile = {
   id: "completion",
@@ -17,10 +14,6 @@ const profile: AiProviderProfile = {
   reasoningEffort: "max",
   hasApiKey: true,
 };
-
-assert.equal(usesNativeDeepSeekFim(profile), true);
-assert.equal(usesNativeDeepSeekFim({ ...profile, vendorId: "custom" }), false);
-assert.equal(usesNativeDeepSeekFim({ ...profile, model: "deepseek-v4-pro" }), false);
 
 let capturedUrl = "";
 let capturedBody: Record<string, unknown> | null = null;

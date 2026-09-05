@@ -82,6 +82,7 @@ const history: AgentHistorySession = {
           callId: "proposal_1",
           kind: "question",
           payload: { description: "Which region?", question: "Which region?" },
+          approvalMode: "manual",
         },
       ],
       proposalResponses: [],
@@ -109,6 +110,7 @@ assert.equal(timeline[1]?.kind, "strategy");
 assert.equal(timeline[2]?.kind, "canvas");
 assert.equal(timeline[3]?.kind, "proposal");
 assert.equal(timeline[3]?.kind === "proposal" && timeline[3].resolution, "expired");
+assert.equal(timeline[3]?.kind === "proposal" && timeline[3].approvalMode, "manual");
 assert.equal(timeline[4]?.kind, "interrupted");
 
 const completedProgressHistory: AgentHistorySession = {

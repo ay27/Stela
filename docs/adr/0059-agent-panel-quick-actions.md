@@ -2,7 +2,8 @@
 type: ADR
 id: "0059"
 title: "Agent Panel quick actions instead of one-shot AI actions"
-status: active
+status: superseded
+superseded_by: "0088"
 date: 2026-08-11
 ---
 

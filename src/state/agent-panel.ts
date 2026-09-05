@@ -80,6 +80,7 @@ export type AgentTimelineEntry =
       callId: string;
       proposalKind: AgentProposalKind;
       payload: AgentProposalPayload;
+      approvalMode: "manual" | "automatic";
       resolution: "pending" | "approved" | "rejected" | "expired";
       /** `question` kind：用户实际给出的答案，供 timeline 回看。 */
       answer?: string;
@@ -361,6 +362,7 @@ function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTim
           callId: event.callId,
           proposalKind: event.kind,
           payload: event.payload,
+          approvalMode: event.approvalMode ?? "manual",
           resolution: "pending",
         },
       ];
@@ -715,7 +717,7 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
       .find((entry) => entry.kind === "proposal" && entry.runId === runId && entry.callId === callId);
     if (proposal?.kind === "proposal" && proposal.proposalKind === "runsql_rewrite") {
       const targetId = proposal.payload.targetId;
-      if (!targetId || (approve && !hasRunsqlRewriteProposal(targetId, runId, callId))) {
+      if (approve && (!targetId || !hasRunsqlRewriteProposal(targetId, runId, callId))) {
         set((state) => ({
           tabs: state.tabs.map((tab) => tab.runId === runId
             ? { ...tab, timeline: [...tab.timeline, { kind: "error", id: nextId(), message: "The RunSQL block changed or is no longer available." }] }
@@ -762,7 +764,7 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
           ? (() => {
               const timeline: AgentTimelineEntry[] = tab.timeline.map((entry) =>
                 entry.kind === "proposal" && entry.callId === callId
-                  ? { ...entry, resolution: "pending" }
+                  ? { ...entry, resolution: "pending", approvalMode: "manual" }
                   : entry,
               );
               timeline.push({
@@ -828,13 +830,27 @@ if (typeof window !== "undefined") {
           onApprove: () => void useAgentPanel.getState().respondProposal(event.runId, event.callId, true),
           onReject: () => void useAgentPanel.getState().respondProposal(event.runId, event.callId, false),
         });
-      if (!showProposal()) {
+      if (showProposal()) {
+        if (event.approvalMode === "automatic") {
+          void useAgentPanel.getState().respondProposal(event.runId, event.callId, true);
+        }
+      } else {
         window.setTimeout(() => {
-          if (!showProposal()) {
+          if (showProposal()) {
+            if (event.approvalMode === "automatic") {
+              void useAgentPanel.getState().respondProposal(event.runId, event.callId, true);
+            }
+          } else {
             void useAgentPanel.getState().respondProposal(event.runId, event.callId, false);
           }
         }, 100);
       }
+    } else if (
+      event.type === "proposal" &&
+      event.kind === "edit_note" &&
+      event.approvalMode === "automatic"
+    ) {
+      void useAgentPanel.getState().respondProposal(event.runId, event.callId, true);
     }
   });
 }

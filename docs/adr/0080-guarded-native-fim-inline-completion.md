@@ -2,7 +2,8 @@
 type: ADR
 id: "0080"
 title: "Guarded native FIM for SQL inline completion"
-status: active
+status: superseded
+superseded_by: "0087"
 date: 2026-08-27
 ---
 

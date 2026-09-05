@@ -244,6 +244,7 @@ export function AiTab() {
         {
           providerMode: settings.providerMode,
           agentAllowMutations: settings.agentAllowMutations,
+          agentAutoApplyEdits: settings.agentAutoApplyEdits,
           activeProfileId: draft.id,
           profiles: nextProfiles,
         },
@@ -785,6 +786,15 @@ export function AiTab() {
           <Toggle
             checked={settings.agentAllowMutations}
             onChange={(v) => void patch({ ai: { agentAllowMutations: v } })}
+          />
+        </Row>
+        <Row
+          label={t("ai.agent.autoApplyEdits.label")}
+          description={t("ai.agent.autoApplyEdits.description")}
+        >
+          <Toggle
+            checked={settings.agentAutoApplyEdits}
+            onChange={(v) => void patch({ ai: { agentAutoApplyEdits: v } })}
           />
         </Row>
         <Row

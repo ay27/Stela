@@ -71,6 +71,7 @@ import {
 } from "./execution-plan";
 import {
   createAgentTools,
+  proposalApprovalMode,
   type AgentAnalysisRunEvidence,
   type AgentRunRecorder,
   type ProposalRequest,
@@ -273,9 +274,10 @@ function makeRequestProposal(
   onEvent: (event: AgentEvent) => void,
   pending: Map<string, ProposalResolver>,
   signal: AbortSignal,
+  autoApplyEdits: boolean,
 ): (proposal: ProposalRequest) => Promise<boolean | string> {
   return (proposal) => {
-    onEvent({ type: "proposal", runId, callId, kind: proposal.kind, payload: proposal.payload });
+    const approvalMode = proposalApprovalMode(autoApplyEdits, proposal.kind);
     return new Promise<boolean | string>((resolve) => {
       const onAbort = () => {
         pending.delete(callId);
@@ -286,6 +288,16 @@ function makeRequestProposal(
         resolve(outcome);
       });
       signal.addEventListener("abort", onAbort, { once: true });
+      // Register before emitting: automatic renderer responses can arrive in the
+      // same event turn, unlike a human click.
+      onEvent({
+        type: "proposal",
+        runId,
+        callId,
+        kind: proposal.kind,
+        payload: proposal.payload,
+        approvalMode,
+      });
     });
   };
 }
@@ -891,7 +903,14 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           },
         },
         requestProposal: (toolCallId, proposal) =>
-          makeRequestProposal(runId, toolCallId, emit, pending, signal)(proposal),
+          makeRequestProposal(
+            runId,
+            toolCallId,
+            emit,
+            pending,
+            signal,
+            settings.ai.agentAutoApplyEdits,
+          )(proposal),
       }),
     });
 

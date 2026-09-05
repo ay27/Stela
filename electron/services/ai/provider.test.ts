@@ -32,6 +32,7 @@ function customSettings(reasoningEffort: AiReasoningEffort): AiSettings {
     agentMaxIterations: 200,
     agentWallClockMs: 300_000,
     agentAllowMutations: false,
+    agentAutoApplyEdits: false,
     automaticSkillMaintenanceEnabled: true,
   };
 }
