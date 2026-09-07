@@ -360,6 +360,17 @@ const stela = {
   },
 
   pythonRuntime: {
+    status: (sessionId: string) => call<string>(IPC.AI_PYTHON_WORKSPACE_STATUS, { sessionId }),
+    reset: (sessionId: string, cancelActive?: boolean) => call<void>(IPC.AI_PYTHON_WORKSPACE_RESET, { sessionId, cancelActive }),
+    revokeSemantic: () => call<void>(IPC.AI_SEMANTIC_REVOKE, {}),
+    semantic: (jobId: string, request: string) =>
+      call<import("../shared/semantic").ISemanticResponse>(IPC.AI_PYTHON_RUNTIME_SEMANTIC, { jobId, request }),
+    lost: (workspaceId: string) => call<{ accepted: boolean }>(IPC.AI_PYTHON_WORKSPACE_LOST, { workspaceId }),
+    onReset: (callback: (workspaceId: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: { workspaceId: string }) => callback(payload.workspaceId);
+      ipcRenderer.on(IPC_EVENTS.AI_PYTHON_WORKSPACE_RESET, handler);
+      return () => ipcRenderer.removeListener(IPC_EVENTS.AI_PYTHON_WORKSPACE_RESET, handler);
+    },
     readInput: (jobId: string, alias: string, offset: number, length: number) =>
       call<PythonRuntimeInputChunk>(IPC.AI_PYTHON_RUNTIME_READ_INPUT, {
         jobId,

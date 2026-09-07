@@ -254,6 +254,12 @@ interface StelaBridge {
     onEvent: (callback: (event: AgentEvent) => void) => () => void;
   };
   pythonRuntime: {
+    status(sessionId: string): Promise<string>;
+    reset(sessionId: string, cancelActive?: boolean): Promise<void>;
+    revokeSemantic(): Promise<void>;
+    semantic(jobId: string, request: string): Promise<import("../../electron/shared/semantic").ISemanticResponse>;
+    lost(workspaceId: string): Promise<{ accepted: boolean }>;
+    onReset(callback: (workspaceId: string) => void): () => void;
     readInput: (
       jobId: string,
       alias: string,

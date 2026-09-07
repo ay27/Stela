@@ -187,20 +187,14 @@
  * 主题规则特异性会压过单 class；`.stela-milkdown-host[data-editor-width="wide"]
  * .milkdown .ProseMirror` 特异性等于 0,2,2，能稳压 common frame。
  *
- * 左右 padding 在 wide 模式下加到 88px（narrow 是 56px）：
- *   - milkdown-block-handle 是 absolute 定位，参照 ProseMirror 节点左边再向左
- *     偏 ~32px。narrow 模式下节点本身居中，handle 离 host 左侧很远（host 中心
- *     往左 460-32 ≈ 428px），不会贴边
- *   - wide 模式下节点占满 host，handle 直接挨到 host 左边，56px padding 给它
- *     的活动区只剩 ~24px，会与左侧 sidebar / 正文之间的视觉边界混在一起，
- *     甚至遮挡内容边缘。88px 让 handle 离 host 左侧仍有 ~56px 空间
+ * 左右 padding 在 wide 模式下收窄到 52px（narrow 是 56px）。
  *
  * 底部 padding 保留 96px，最后一段有呼吸空间。
  */
 .stela-milkdown-host[data-editor-width="wide"] .milkdown .ProseMirror {
   max-width: none;
-  padding-left: 88px;
-  padding-right: 88px;
+  padding-left: 52px;
+  padding-right: 52px;
 }
 
 .milkdown .ProseMirror h1,
@@ -787,6 +781,18 @@
 }
 
 /* ---- block handle (左侧拖把) ---- */
+
+.milkdown .stela-compact-block-handle .operation-item:not(.stela-block-action) {
+  display: none;
+}
+
+.milkdown .stela-compact-block-handle .stela-block-action {
+  cursor: grab;
+}
+
+.milkdown .stela-compact-block-handle .stela-block-action:active {
+  cursor: grabbing;
+}
 
 .milkdown .milkdown-block-handle .operation-item {
   width: 24px;
@@ -1823,7 +1829,7 @@
  * ------------------------------------------------------------------------- */
 .stela-toc-rail {
   flex: 0 0 auto;
-  width: 168px;
+  width: 220px;
   height: 100%;
   display: flex;
   flex-direction: column;

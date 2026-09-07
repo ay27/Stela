@@ -65,7 +65,13 @@ import {
   type AnalysisEfficiencyMetrics,
 } from "../../electron/services/ai/analysis-efficiency";
 import { createTransportForProfile } from "../../electron/services/ai/provider";
+import { SemanticExecution } from "../../electron/services/ai/semantic-execution";
+import { withGenerationRecovery } from "../../electron/services/ai/generation-recovery";
+import { closeoutGeneration, type ICloseoutResult } from "../../electron/services/ai/generation-closeout";
+import { semanticBudgetSchema, DEFAULT_SEMANTIC_BUDGET, type SemanticBudget } from "../../electron/shared/semantic";
+import { loadAgentSkills } from "../../electron/services/ai/agent-skills";
 import { buildEvalSettings, evalReasoningEffort, requireCredentials } from "./env";
+import { sourceFingerprint } from "./source-fingerprint";
 import {
   appendJsonl,
   buildDabUserPrompt,
@@ -92,11 +98,6 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../..");
 const bridgePath = path.join(here, "data-agent-bench", "bridge.py");
 const EXECUTION_PLAN_ENTRY = "execution_plan";
-const SALVAGE_PROMPT =
-  "The tool budget for this task is spent, so no further tool calls are possible. " +
-  "Answer now from the query and Python results already in this conversation: state your best conclusion, " +
-  "name the evidence it rests on, flag anything you could not verify, and put the requested value alone on the last line. " +
-  "A best-effort answer with its caveats is required; refusing to answer is not an option.";
 
 interface CliOptions {
   dabRoot: string;
@@ -119,6 +120,10 @@ interface CliOptions {
   pythonConcurrency: number;
   pyodideAssets: string;
   noPython: boolean;
+  statefulPython: boolean;
+  semantic: boolean;
+  semanticModel: string | null;
+  semanticBudget: SemanticBudget;
   strategyReview: boolean;
   /** Slice of timeoutMs held back so a capped run still produces its best answer. */
   salvageMs: number;
@@ -135,6 +140,10 @@ interface UsageTotals {
 }
 
 interface FinalRun {
+  executionFailure?: string | null;
+  closeout?: { status: ICloseoutResult["status"]; reason: string; error?: string };
+  generationUsage?: { unknownAttempts: number; partialAttempts: number };
+  semanticExecution?: { enabled: boolean; model: string; effectiveReasoningEffort: AiReasoningEffort; usage: SemanticBudget };
   complete: true;
   dataset: string;
   query: string;
@@ -228,6 +237,14 @@ function parseArgs(argv: string[]): CliOptions {
       value("--pyodide-assets") ?? path.join(repoRoot, "node_modules", ".cache", "stela-pyodide"),
     ),
     noPython: argv.includes("--no-python"),
+    statefulPython: !argv.includes("--stateless-python"),
+    semantic: argv.includes("--allow-semantic-transmission"),
+    semanticModel: value("--semantic-model") ?? null,
+    semanticBudget: semanticBudgetSchema.parse({
+      records: intArg(value("--semantic-records") ?? String(DEFAULT_SEMANTIC_BUDGET.records), "--semantic-records", 1),
+      requests: intArg(value("--semantic-requests") ?? String(DEFAULT_SEMANTIC_BUDGET.requests), "--semantic-requests", 1),
+      tokens: intArg(value("--semantic-tokens") ?? String(DEFAULT_SEMANTIC_BUDGET.tokens), "--semantic-tokens", 1000),
+    }),
     strategyReview: !argv.includes("--no-strategy-review"),
     salvageMs: intArg(value("--salvage-ms") ?? "120000", "--salvage-ms", 0),
     reasoningEffort: evalReasoningEffort(value("--reasoning-effort")),
@@ -553,6 +570,7 @@ async function runTask(input: {
     stderrPath: path.join(runDir, "bridge.stderr.log"),
     callTimeoutMs: options.bridgeTimeoutMs,
   });
+  const pythonLease = pythonPool && options.statefulPython ? await pythonPool.lease() : null;
   try {
   const bridgeConfig = buildConnectionConfig(task, runDir, sharedFixture ? "shared" : "owned");
   const connection: ConnectionEntry = { kind: "dab", config: bridgeConfig };
@@ -609,9 +627,39 @@ async function runTask(input: {
   let error: string | null = null;
   let answer = "";
   let salvagedAnswer = false;
+  let closeoutResult: FinalRun["closeout"];
+  const generationUsage = { unknownAttempts: 0, partialAttempts: 0 };
+  let generationStatus: number | undefined;
+  const recordGeneration = (event: import("../../electron/services/ai/generation-recovery").IGenerationDiagnostic, phase = "analysis") => {
+    toolEvents.push({ at: Date.now(), ...event, phase });
+    if (phase === "analysis") generationStatus = event.status;
+    if (event.requestStarted && event.usageCompleteness === "unknown") generationUsage.unknownAttempts++;
+    if (event.requestStarted && event.usageCompleteness === "partial") generationUsage.partialAttempts++;
+  };
   const started = Date.now();
   let abortAgent = (): void => {};
   const reviewAbort = new AbortController();
+  const semanticTransport = pythonPool && options.semantic && options.semanticModel
+    ? createTransportForProfile(buildEvalSettings(options.semanticModel, credentials.baseUrl, reasoning.effective), credentials.apiKey, "eval")
+    : { models, model, reasoning };
+  const semantic = new SemanticExecution({
+    identity: JSON.stringify([semanticTransport.model.id, semanticTransport.reasoning.effective]),
+    signal: reviewAbort.signal, budget: options.semanticBudget,
+    authorize: async () => options.semantic,
+    complete: async (system, user, maxTokens, signal) => {
+      if (Buffer.byteLength(system + user) + maxTokens > semanticTransport.model.contextWindow) throw new Error("Semantic input exceeds model context");
+      const response = await semanticTransport.models.completeSimple(semanticTransport.model, {
+        systemPrompt: system, messages: [{ role: "user", content: user, timestamp: Date.now() }],
+      }, { signal, maxTokens, maxRetries: 0, reasoning: semanticTransport.reasoning.effective });
+      usage.inputTokens += response.usage.input;
+      usage.outputTokens += response.usage.output;
+      usage.cacheReadTokens += response.usage.cacheRead;
+      usage.cacheWriteTokens += response.usage.cacheWrite;
+      if (response.stopReason === "error" || response.stopReason === "aborted") throw new Error(response.errorMessage ?? "Semantic inference failed");
+      return { text: assistantText(response), tokens: response.usage.totalTokens };
+    },
+    onProgress: (response) => toolEvents.push({ at: Date.now(), type: response.phase === "preflight" ? "semantic_preflight" : "semantic_batch", response }),
+  });
   const efficiency = new AnalysisEfficiencyLedger({ advisoriesEnabled: options.strategyReview });
   let pendingStrategyCheckpoint: AgentStrategyCheckpoint | null = null;
 
@@ -636,11 +684,15 @@ async function runTask(input: {
   };
 
   const requestProposal = async (_toolCallId: string, _proposal: ProposalRequest): Promise<boolean | string> => false;
+  const systemSkills = await loadAgentSkills(vaultPath, { systemSkillDir: path.join(repoRoot, "resources", "playbooks") });
 
   const harness = new AgentHarness({
     env: new NodeExecutionEnv({ cwd: vaultPath }),
     session,
-    models,
+    models: withGenerationRecovery(models, {
+      signal: reviewAbort.signal,
+      onDiagnostic: recordGeneration,
+    }),
     model,
     thinkingLevel: reasoning.effective,
     systemPrompt: buildSystemPrompt(),
@@ -695,11 +747,15 @@ async function runTask(input: {
                 resolve: resolveQueryArtifact,
                 discard: discardQueryArtifactTarget,
               },
-              pythonExecutor: pythonPool,
+              pythonExecutor: pythonLease ?? pythonPool,
+              pythonStateful: options.statefulPython,
+              ...(options.semantic ? { runSemantic: (raw: string, signal?: AbortSignal) => semantic.execute(raw, signal) } : {}),
             }
           : {}),
         sqlIndex: { query: async () => [] },
-        skills: [],
+        skills: systemSkills.loaded,
+        reservedSkillNames: systemSkills.system.map((s) => s.metadata.name),
+        signal: reviewAbort.signal,
         mode: "normal",
         run: { runId: request.runId, sessionId: request.runId, notePath: null, questionsAsked: 0, toolFailureStreak: new Map() },
         chartRuns: new Map(),
@@ -845,36 +901,37 @@ async function runTask(input: {
         },
       }));
       if (result.stopReason === "error") error = result.errorMessage ?? "agent error";
+      if (result.stopReason === "aborted") error = forcedStop ?? result.errorMessage ?? "generation_aborted";
       answer = assistantText(result);
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
     }
 
-    // A wall-clock or tool cap is a harness artifact the product does not have.
-    // Scoring an empty answer measures the timer, not the agent, so spend the
-    // reserved slice on one tool-less turn over the evidence already gathered.
-    if (forcedStop && !answer.trim()) {
+    // Same evidence-only policy as desktop. Preserve failure even when delivery succeeds.
+    if ((forcedStop || error) && !answer.trim()) {
       clearTimeout(timer);
-      toolEvents.push({ at: Date.now(), type: "salvage_start", reason: forcedStop });
-      const salvageTimer = setTimeout(() => { void harness.abort(); }, options.salvageMs);
-      try {
-        await harness.setActiveTools([]);
-        const salvaged = assistantText(await harness.prompt(SALVAGE_PROMPT));
-        if (salvaged.trim()) {
-          answer = salvaged;
-          salvagedAnswer = true;
-          error = null;
-        }
-      } catch (caught) {
-        toolEvents.push({
-          at: Date.now(),
-          type: "salvage_error",
-          message: caught instanceof Error ? caught.message : String(caught),
-        });
-      } finally {
-        clearTimeout(salvageTimer);
-        toolEvents.push({ at: Date.now(), type: "salvage_end", salvaged: salvagedAnswer });
+      error ??= forcedStop;
+      toolEvents.push({ at: Date.now(), type: "salvage_start", reason: forcedStop ?? error });
+      const closeout = await closeoutGeneration({ models, model,
+        context: { ...await session.buildContext(), systemPrompt: buildSystemPrompt() },
+        streamOptions: { reasoning: reasoning.effective === "off" ? undefined : reasoning.effective, cacheRetention: "short" },
+        failure: forcedStop ?? error ?? "agent_error", providerError: error ?? undefined, failureStatus: generationStatus, hasEvidence: analysisRuns.size > 0,
+        remainingMs: Math.min(options.salvageMs, started + options.timeoutMs - Date.now()),
+        onDiagnostic: event => recordGeneration(event, "closeout"),
+      });
+      closeoutResult = { status: closeout.status, reason: closeout.reason, error: closeout.error };
+      if (closeout.message) {
+        usage.inputTokens += closeout.message.usage.input;
+        usage.outputTokens += closeout.message.usage.output;
+        usage.cacheReadTokens += closeout.message.usage.cacheRead;
+        usage.cacheWriteTokens += closeout.message.usage.cacheWrite;
+        modelTurns++;
       }
+      if (closeout.status === "completed" && closeout.message && closeout.answer) {
+        answer = closeout.answer; salvagedAnswer = true;
+        await session.appendMessage(closeout.message);
+      }
+      toolEvents.push({ at: Date.now(), type: "salvage_end", salvaged: salvagedAnswer, ...closeoutResult, executionFailure: error });
     }
   } catch (caught) {
     error ??= caught instanceof Error ? caught.message : String(caught);
@@ -891,8 +948,9 @@ async function runTask(input: {
   }
 
   const terminateReason = salvagedAnswer
-    ? `${forcedStop}_salvaged`
+    ? `${forcedStop ?? "generation_error"}_salvaged`
     : forcedStop ?? (error ? "error" : "final_answer");
+  const executionFailure = error ?? forcedStop;
 
   let validation: DabValidation;
   const validatorBridge = new DabBridgeClient({
@@ -928,6 +986,9 @@ async function runTask(input: {
     validation,
     terminateReason,
     error,
+    executionFailure,
+    closeout: closeoutResult,
+    generationUsage,
     model: credentials.model,
     requestedReasoningEffort: reasoning.requested,
     effectiveReasoningEffort: reasoning.effective,
@@ -941,10 +1002,12 @@ async function runTask(input: {
     capabilityFailures,
     efficiency: efficiency.metrics(),
     usage: usageWithRate(usage),
+    semanticExecution: { enabled: pythonPool !== null && options.semantic, model: semanticTransport.model.id,
+      effectiveReasoningEffort: semanticTransport.reasoning.effective, usage: semantic.usage },
     transcript,
   };
   } finally {
-    await bridge.close();
+    try { await bridge.close(); } finally { await pythonLease?.close(); }
   }
 }
 
@@ -1074,6 +1137,35 @@ async function main(): Promise<void> {
     `stela-product-${safeSlug(credentials.model)}-${options.hints ? "hints" : "no-hints"}`,
   );
   await fs.mkdir(output, { recursive: true });
+  const featureConditions = {
+    sourceFingerprint: await sourceFingerprint(repoRoot),
+    executionPolicy: "semantic-operation-v1-generation-lifecycle-v2-answer-contract-v1",
+    runtimeConditions: {
+      model: credentials.model, endpointHash: endpointHash(credentials.baseUrl), reasoningEffort: options.reasoningEffort,
+      concurrency: options.concurrency, mongoConcurrency: options.mongoConcurrency, mongoFixtureMode: options.mongoFixtureMode,
+      pythonConcurrency: options.noPython ? 0 : options.pythonConcurrency, hints: options.hints, strategyReview: options.strategyReview,
+      timeoutMs: options.timeoutMs, bridgeTimeoutMs: options.bridgeTimeoutMs, salvageMs: options.salvageMs,
+      maxModelTurns: options.maxModelTurns, maxToolCalls: options.maxToolCalls,
+    },
+    statefulPython: !options.noPython && options.statefulPython,
+    semanticExecution: { enabled: !options.noPython && options.semantic, budget: options.semanticBudget, model: options.semanticModel ?? credentials.model },
+  };
+  if (options.resume) {
+    const existing = await fs.readFile(path.join(output, "manifest.json"), "utf8").catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    if (existing) {
+      const manifest = JSON.parse(existing) as Record<string, unknown>;
+      const previous = { sourceFingerprint: manifest.sourceFingerprint, executionPolicy: manifest.executionPolicy,
+        runtimeConditions: manifest.runtimeConditions,
+        statefulPython: manifest.statefulPython ?? false,
+        semanticExecution: manifest.semanticExecution ?? { enabled: false, budget: DEFAULT_SEMANTIC_BUDGET, model: credentials.model } };
+      if (JSON.stringify(previous) !== JSON.stringify(featureConditions)) {
+        throw new Error("Resume refused: source fingerprint, execution policy, model/endpoint/reasoning/concurrency/limits, or semantic budget differs from this output's manifest. Use a new output directory for the comparison.");
+      }
+    }
+  }
   let pythonPool: HeadlessPyodidePool | null = null;
   let artifactRoot: string | null = null;
   if (!options.noPython) {
@@ -1132,6 +1224,7 @@ async function main(): Promise<void> {
     datasetResources: Object.fromEntries(datasetResources),
     pythonRuntime: options.noPython ? "disabled" : "pyodide",
     pythonConcurrency: options.noPython ? 0 : options.pythonConcurrency,
+    ...featureConditions,
     strategyReview: options.strategyReview,
     salvageMs: options.salvageMs,
     selection: failedSelection

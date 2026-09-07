@@ -248,7 +248,8 @@ function asAgentEvent(value: unknown): AgentEvent | null {
         ? event as AgentEvent
         : null;
     case "error":
-      return typeof event.message === "string" ? event as AgentEvent : null;
+      return typeof event.message === "string" &&
+        (event.partialAnswer === undefined || typeof event.partialAnswer === "string") ? event as AgentEvent : null;
     default:
       return null;
   }

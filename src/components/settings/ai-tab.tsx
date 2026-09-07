@@ -19,6 +19,7 @@ import { useSettings } from "@/state/settings";
 import { cn } from "@/lib/utils";
 
 import { FormHint, Row, Section, TabContainer, Toggle } from "./atoms";
+import { DEFAULT_SEMANTIC_BUDGET, semanticBudgetSchema } from "@shared/semantic";
 
 const CONTEXT_WINDOWS: AiContextWindow[] = [
   64_000, 128_000, 200_000, 256_000, 1_000_000,
@@ -99,6 +100,7 @@ export function AiTab() {
   >(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [semanticNotice, setSemanticNotice] = useState<string | null>(null);
 
   const vendors = status?.vendors ?? [];
   const profiles = status?.profiles ?? settings.profiles ?? [];
@@ -774,6 +776,33 @@ export function AiTab() {
           <FormHint>{t("ai.status.noRag")}</FormHint>
         </div>
       </div>
+
+      <Section title={t("ai.semantic.title")} description={t("ai.semantic.description")}>
+        <Row label={t("ai.semantic.model")}>
+          <select className={fieldClass} value={settings.semanticProfileId ?? ""}
+            onChange={(event) => void patch({ ai: { semanticProfileId: event.target.value || null } })}>
+            <option value="">{t("ai.semantic.follow")}</option>
+            {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.model}</option>)}
+          </select>
+        </Row>
+        {(["records", "requests", "tokens"] as const).map((name) => (
+          <Row key={name} label={t(`ai.semantic.${name}`)}>
+            <input className={fieldClass} type="number" min={name === "tokens" ? 1000 : 1}
+              key={`${name}-${settings.semanticBudget?.[name]}`}
+              defaultValue={(settings.semanticBudget ?? DEFAULT_SEMANTIC_BUDGET)[name]}
+              onBlur={(event) => {
+                const budget = semanticBudgetSchema.safeParse({ ...DEFAULT_SEMANTIC_BUDGET, ...settings.semanticBudget, [name]: Number(event.target.value) });
+                if (!budget.success) { setError(t("ai.semantic.invalidBudget")); return; }
+                void patch({ ai: { semanticBudget: budget.data } });
+              }} />
+          </Row>
+        ))}
+        <button type="button" className="stela-semantic-revoke rounded border border-border px-2 py-1 text-xs"
+          onClick={() => { void window.stela.pythonRuntime.revokeSemantic().then(() => setSemanticNotice(t("ai.semantic.revoked"))).catch((e) => setError(String(e))); }}>
+          {t("ai.semantic.revoke")}
+        </button>
+        {semanticNotice && <FormHint>{semanticNotice}</FormHint>}
+      </Section>
 
       <Section
         title={t("ai.policy.title")}

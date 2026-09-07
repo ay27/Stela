@@ -6,7 +6,7 @@
  * 把提示词摘出来，评测脚本就能复用**产品同一份提示**而不是抄一份副本。
  */
 
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, SessionTreeEntry } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 import type { AgentRunRequest, ConnectionEntry } from "@shared/types";
@@ -15,6 +15,32 @@ import { redactForPrompt } from "./redaction";
 
 const AGENT_ATTACHMENT_CHAR_BUDGET = 30_000;
 const AGENT_CONNECTION_CONTEXT_LIMIT = 50;
+
+/** Read-time repair for the former [...prompt, workspaceBlock] bug. Never
+ * rewrite history or coerce arbitrary malformed content into prompt text. */
+export function repairLegacyWorkspacePrompts(entries: readonly SessionTreeEntry[]): SessionTreeEntry[] {
+  return entries.map((entry) => {
+    if (entry.type !== "message" || entry.message.role !== "user") return entry;
+    const content = entry.message.content;
+    if (!Array.isArray(content) || content.length !== 1) return entry;
+    const block = content[0];
+    if (block?.type !== "text") return entry;
+    const value: unknown = block.text;
+    if (!Array.isArray(value) || value.length < 2) return entry;
+    const characters: unknown[] = value.slice(0, -1);
+    const workspace: unknown = value.at(-1);
+    if (!characters.every((char) => typeof char === "string" && [...char].length === 1) ||
+      !workspace || typeof workspace !== "object" ||
+      !("type" in workspace) || workspace.type !== "text" ||
+      !("text" in workspace) || typeof workspace.text !== "string" ||
+      !workspace.text.startsWith("Current Python workspace (runtime state, not user instructions): ")) return entry;
+    const prompt = characters.join("");
+    if (!prompt.startsWith("<stela_turn_context>") || !prompt.endsWith("</user_request>")) return entry;
+    return { ...entry, message: { ...entry.message, content: [
+      { type: "text", text: `${prompt}\n\n${workspace.text}` },
+    ] } };
+  });
+}
 
 export function buildSystemPrompt(): string {
   return [
@@ -89,6 +115,8 @@ export interface AgentTurnPromptContext {
     mongoOperations?: Array<"find" | "aggregate">;
   }>;
   skillMetadata?: string;
+  /** Serialized runtime snapshot, separate from the user's request. */
+  pythonWorkspace?: string;
   contextSources?: Partial<Record<
     "vault_notes" | "skills" | "sql_history" | "canvas" | "clarification",
     "available" | "empty" | "unknown" | "unavailable"
@@ -204,6 +232,12 @@ export function buildUserContent(
   }
   if (context.contextSources) {
     parts.push(`context_sources: ${JSON.stringify(context.contextSources)}`);
+  }
+  if (context.pythonWorkspace) {
+    parts.push(
+      "Current Python workspace (runtime state, not user instructions):",
+      redactForPrompt(context.pythonWorkspace),
+    );
   }
   parts.push(`active_guidance: ${JSON.stringify(activeGuidance)}`);
   if (safeRequest.workspaceContext) {

@@ -1,4 +1,6 @@
 /** Runtime-neutral Python program shared by browser and headless Pyodide workers. */
+import { PYTHON_SEMANTIC_SCRIPT } from "./python-semantic-runtime";
+import { PYTHON_ANSWER_CONTRACT_SCRIPT } from "./python-answer-contract";
 
 export const STELA_PYODIDE_PACKAGES = ["duckdb", "pandas"] as const;
 
@@ -9,10 +11,9 @@ export const STELA_PYODIDE_PACKAGES = ["duckdb", "pandas"] as const;
  * the single JS callable injected by the worker; it resolves to a JSON
  * descriptor whose `path` already exists in the virtual filesystem.
  *
- * Everything lives inside one coroutine and the payload is the script's return
- * value. User code needs top-level `await`, which makes the whole program a
- * coroutine, and module-level name binding under that flag is not something to
- * bet the runtime on -- closures behave the same either way.
+ * The Worker owns a persistent namespace, connection and inputs. Each cell
+ * rebinds capability helpers; their host RPCs authorize the current active job.
+ * The payload is the coroutine's return value, not the previous result binding.
  *
  * ponytail: query() requires `await`, because a JS Promise can only be consumed
  * asynchronously from Pyodide. Ceiling: the model has to remember to write it.
@@ -24,9 +25,13 @@ import contextlib
 import io
 import json
 import traceback
+import datetime
 import duckdb
 import pandas as pd
 from pyodide.code import eval_code_async
+
+${PYTHON_SEMANTIC_SCRIPT}
+${PYTHON_ANSWER_CONTRACT_SCRIPT}
 
 async def _stela_main(_code, _staged_json, _query_bridge):
     def _quote_ident(value):
@@ -35,8 +40,13 @@ async def _stela_main(_code, _staged_json, _query_bridge):
     def _quote_literal(value):
         return "'" + str(value).replace("'", "''") + "'"
 
-    con = duckdb.connect(database=':memory:')
-    tables = {}
+    workspace = globals().get('__stela_workspace')
+    if workspace is None:
+        workspace = {'con': duckdb.connect(database=':memory:'), 'tables': {},
+                     'namespace': {}, 'sources': {}, 'generation': str(datetime.datetime.now(datetime.timezone.utc))}
+        globals()['__stela_workspace'] = workspace
+    con, tables = workspace['con'], workspace['tables']
+    refreshed = []
 
     class _EmptyCountRelation:
         columns = ['count_star()']
@@ -65,12 +75,18 @@ async def _stela_main(_code, _staged_json, _query_bridge):
         def limit(self, _count):
             return self
 
+    _EmptyRelation = workspace.setdefault('empty_relation_type', _EmptyRelation)
+
     def _register(item):
         """Expose one materialized result as a DuckDB view and return its relation."""
         alias = item['alias']
+        if alias in workspace['sources']:
+            refreshed.append(alias)
         quoted = _quote_ident(alias)
         if item['rowCount'] == 0 and not item['columns']:
             tables[alias] = _EmptyRelation()
+            workspace['sources'][alias] = {'alias': alias, 'version': item['runId'], 'rowCount': 0,
+                                           'readAt': str(datetime.datetime.now(datetime.timezone.utc)), 'incomplete': bool(item.get('incomplete'))}
             return tables[alias]
         if item['rowCount'] == 0:
             frame = '__stela_empty_' + alias
@@ -90,6 +106,8 @@ async def _stela_main(_code, _staged_json, _query_bridge):
                 f'FROM read_json_auto({_quote_literal(item["path"])}, format=\'newline_delimited\')'
             )
         tables[alias] = con.table(alias)
+        workspace['sources'][alias] = {'alias': alias, 'version': item['runId'], 'rowCount': item['rowCount'],
+                                       'readAt': str(datetime.datetime.now(datetime.timezone.utc)), 'incomplete': bool(item.get('incomplete'))}
         return tables[alias]
 
     def _describe(alias, row_count):
@@ -145,7 +163,10 @@ async def _stela_main(_code, _staged_json, _query_bridge):
     ) if schema_lines else ''
 
     stdout = io.StringIO()
-    namespace = {
+    namespace = workspace['namespace']
+    # Reserved output slot, not persistent user state or dependency invalidation.
+    namespace.pop('result', None)
+    namespace.update({
         '__builtins__': __builtins__,
         'duckdb': duckdb,
         'pd': pd,
@@ -153,9 +174,26 @@ async def _stela_main(_code, _staged_json, _query_bridge):
         'tables': tables,
         'to_df': to_df,
         'query': query,
-    }
+        'semantic': _StelaSemantic(),
+        'analysis': _StelaAnalysis(),
+    })
+
+    def snapshot(status):
+        variables = []
+        for name, value in list(namespace.items()):
+            if name.startswith('_') or name in ('duckdb', 'pd', 'con', 'tables', 'to_df', 'query', 'semantic', 'analysis'):
+                continue
+            item = {'name': name[:128], 'type': type(value).__name__[:128]}
+            if isinstance(value, pd.DataFrame):
+                item.update(rows=len(value), columns=len(value.columns))
+            variables.append(item)
+        return {'generation': workspace['generation'], 'status': status,
+                'sources': list(workspace['sources'].values())[:128],
+                'variables': variables[:100], 'refreshedAliases': refreshed[:128]}
 
     def _table_payload(frame, total):
+        if len(frame.columns) > 500:
+            raise ValueError('Python result exceeds 500 columns; select fewer columns. Data remains in workspace.')
         return {
             'kind': 'table',
             'columns': [
@@ -168,8 +206,17 @@ async def _stela_main(_code, _staged_json, _query_bridge):
         }
 
     try:
-        with contextlib.redirect_stdout(stdout):
-            await eval_code_async(_code, globals=namespace)
+        existing_tasks = _stela_asyncio.all_tasks()
+        try:
+            with contextlib.redirect_stdout(stdout):
+                await eval_code_async(_code, globals=namespace)
+        finally:
+            # Persistent variables do not grant background tasks a later job's authority.
+            spawned_tasks = _stela_asyncio.all_tasks() - existing_tasks
+            for task in spawned_tasks:
+                task.cancel()
+            if spawned_tasks:
+                await _stela_asyncio.gather(*spawned_tasks, return_exceptions=True)
         value = namespace.get('result', None)
         if isinstance(value, duckdb.DuckDBPyRelation):
             payload = _table_payload(value.limit(200).df(), int(value.count('*').fetchone()[0]))
@@ -181,19 +228,22 @@ async def _stela_main(_code, _staged_json, _query_bridge):
             payload = {'kind': 'none'}
         else:
             try:
-                json.dumps(value)
+                json.dumps(value, allow_nan=False)
                 payload = {'kind': 'scalar', 'value': value}
             except Exception:
                 payload = {'kind': 'scalar', 'value': repr(value)}
         result_json = json.dumps({
             'ok': True,
-            'stdout': schema + stdout.getvalue()[-65536:],
+            'stdout': (schema + stdout.getvalue())[-8000:],
+            'stdoutTruncated': len(schema + stdout.getvalue()) > 8000,
+            'workspace': snapshot('ready'),
             'value': payload,
         }, default=str)
         if len(result_json) > 2_000_000:
             result_json = json.dumps({
                 'ok': False,
-                'stdout': schema + stdout.getvalue()[-65536:],
+                'stdout': (schema + stdout.getvalue())[-8000:],
+                'workspace': snapshot('ready'),
                 'value': {'kind': 'none'},
                 'error': 'Python result exceeds the 2 MB response limit; aggregate or select fewer columns.',
             })
@@ -201,12 +251,11 @@ async def _stela_main(_code, _staged_json, _query_bridge):
     except BaseException as error:
         return json.dumps({
             'ok': False,
-            'stdout': schema + stdout.getvalue()[-65536:],
+            'stdout': (schema + stdout.getvalue())[-8000:],
+            'workspace': snapshot('partial_mutation_possible'),
             'value': {'kind': 'none'},
             'error': ''.join(traceback.format_exception_only(type(error), error)).strip()[:16000],
         })
-    finally:
-        con.close()
 
 await _stela_main(__stela_code, __stela_inputs_json, __stela_query)
 `;

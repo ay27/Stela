@@ -403,6 +403,31 @@ lists every pi built-in provider (no Stela allowlist) plus Custom.
 
 ### Agent, inline completion, and one translator
 
+Desktop and DAB wrap main-agent model streams with the same generation recovery
+adapter ([ADR-0095](./adr/0095-generation-lifecycle-and-safe-closeout.md)). Normal
+generations have no default three-minute deadline. Response, first-delta, idle and
+total limits are opt-in; caller cancellation/task deadlines remain authoritative.
+At most three attempts are allowed, with a 180-second recovery window starting only
+after the first transient failure. SDK retries are disabled. Failures retry only the current generation,
+never the task or completed tools. Safety/auth/quota errors and user cancellation
+are terminal. Attempts are consumed privately and only a successful final snapshot
+enters the harness. A separate ephemeral callback preserves visible-text UI previews;
+failed attempts clear those previews without persisting them or dispatching tools
+([ADR-0094](./adr/0094-uncommitted-generation-previews.md)). Diagnostics
+retain bounded redacted error/status/request ID and per-attempt usage; total known
+attempt usage is charged once on the final assistant message. Unknown usage remains
+unknown, not an invented billing estimate. Diagnostics include generation ID, stop
+cause, last delta, largest gap, counts/bytes and usage completeness; thinking and
+tool-argument deltas count as activity. `firstEventMs` measures per-attempt initial
+provider output; `model_generation_committed` is not time-to-first-token.
+Compaction/review transports are unchanged. On eligible execution failure, desktop
+and DAB may make one tool-free closeout request over committed query/Python evidence,
+bounded by available time and at most 120 seconds. No evidence, cancellation,
+safety/auth/quota failures or exhausted time means no closeout. This bypasses tool
+dispatch entirely and has no retries. An error event may carry a partial answer;
+the Panel displays it alongside the original error and retains error status.
+DAB likewise preserves executionFailure and records closeout separately from valid.
+
 ```mermaid
 flowchart TB
   UI["Renderer UI\nRunSQL / Schema quick actions / AgentSidebar"]
@@ -525,8 +550,8 @@ flowchart TB
    model-facing preview of at most 200 rows, 5 KiB total, and 4 KiB per string
    cell; a truncated result is returned as `sampleRows` rather than `rows`, so a
    partial result cannot be counted as a whole one.
-   `execute_python` accepts up to eight declarative query sources plus one fresh,
-   stateless code program. Main validates and executes every source read-only,
+   `execute_python` accepts up to eight declarative query sources plus a code
+   cell in a Vault/session-isolated Python workspace. Main validates every source read-only,
    then stages it under a unique alias; Python reads `tables[alias]` as a DuckDB
    relation or `to_df(alias)` as pandas. SQL and MongoDB use discriminated source
    shapes: SQL row limits live inside the statement, while top-level `limit` is
@@ -537,16 +562,45 @@ flowchart TB
    main resolves it, forces read-only through `classifySql(sql, false)` regardless
    of `agentAllowMutations`, journals a `runId`, and streams the resulting artifact
    into the sandbox. Sources are query specifications, never run ids or artifact
-   paths. Per execution, staged and dynamic queries share 32 calls and 2 GiB; a
-   60s inactivity timer refreshes on each completed query, with a 10-minute wall
-   clock. Code runs
-   through `eval_code_async` so top-level `await` works. Injecting one JS
+   paths. Omitted sources reuse snapshots; redeclaration refreshes aliases, not old
+   DataFrames. Variables, DuckDB and lazy input files remain in the workspace.
+   Desktop retains at most two Workers with a 15-minute idle timeout. Inputs are
+   capped at 2 GiB per workspace (not an RSS guarantee); staged/dynamic queries
+   share a 32-call per-cell budget. Ordinary errors report partial mutation;
+   reset, cancellation, eviction and fatal errors discard state without replay.
+   Computation has a 60s inactivity limit; semantic RPC waits use provider timeouts
+   and retain the ten-minute total cell ceiling. Code runs
+   through `eval_code_async` so top-level `await` works. Injecting a JS
    callable ends the sandbox's airtight JS isolation; the retained defenses are
    self-only CSP on a `file://` opaque origin, no `window`/preload in a Worker,
    credentials never leaving main, main-side read-only enforcement, and a journal
-   entry per call. DAB's headless runner implements the same `query` protocol in
-   an isolated Node Worker; the desktop product remains Node-free.
-   ([ADR-0086](./adr/0086-declarative-query-sources-for-python.md),
+   entry per call. `semantic.classify/extract/resolve` sends explicitly selected
+   columns through a typed main-process broker, never a generic network bridge.
+   Main enforces recipient-scoped local grants, per-run budgets, schema/record/evidence
+   validation and bounded retries/cache; unresolved records are not counted as facts.
+   Whole-operation preflight probes at most eight cached records and compares the
+   remaining total with host capacity before inference. It is conservative, not a
+   reservation or token-cost guarantee. Full-coverage intent is the default; explicit
+   partial mode never implies random sampling. Budget exhaustion stops scheduling
+   additional RPC groups. Named result objects retain an immutable resume snapshot,
+   bound to full input/order/definition and host model identity, in the same workspace.
+   Complete JSON fences are unwrapped locally; malformed batches are narrowed and
+   only invalid/missing rows retried. SDK retries are disabled on this budgeted path.
+   Local `analysis.contract` objects retain sourced claims and deterministic checks
+   for material scope/grain/denominator risks, without a reviewer model or final gate.
+   The semantic model defaults to the run's Agent profile but can be selected separately.
+   The Python tool advertises classification/extraction/entity matching and points
+   to the bundled `semantic-analysis` Skill for helper signatures. It also declares
+   source aliases versus Python variables and the per-cell-only `result` slot.
+   `npm run test:semantic-workflow` exercises tools, real Pyodide, the main job broker,
+   grants and provider serialization using synthetic data and mocked HTTP/IPC transport;
+   it does not replace [desktop UI acceptance](./testing/semantic-workspace-acceptance.md).
+   DAB shares the core and broker policies; each stateful case leases an isolated
+   Node Worker until completion. The desktop product remains Node-free.
+   ([ADR-0089](./adr/0089-session-python-workspaces.md),
+   [ADR-0090](./adr/0090-bounded-semantic-execution.md),
+   [ADR-0091](./adr/0091-semantic-operation-completeness.md),
+   [ADR-0093](./adr/0093-evidence-backed-answer-contract.md),
    [ADR-0068](./adr/0068-headless-pyodide-agent-evaluation.md))
    Production CSP adds only `wasm-unsafe-eval` for Pyodide compilation; scripts
    and connections remain self-only and normal `unsafe-eval` stays disabled.

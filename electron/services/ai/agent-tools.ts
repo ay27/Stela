@@ -143,10 +143,12 @@ export interface AgentQueryArtifactOps {
 }
 
 export interface AgentPythonExecutorOps {
+  reset?(vaultPath: string, sessionId: string): Promise<void>;
   execute(input: {
     vaultPath: string;
     sessionId: string;
     code: string;
+    runSemantic?: import("../../shared/semantic").SemanticRunner;
     artifacts: Record<string, QueryArtifactDescriptor>;
     /**
      * Serves `await query(connection, request)` from inside the sandbox. The
@@ -367,6 +369,8 @@ export interface AgentToolContext {
   connector: AgentConnectorOps;
   queryArtifacts?: AgentQueryArtifactOps;
   pythonExecutor?: AgentPythonExecutorOps;
+  pythonStateful?: boolean;
+  runSemantic?: import("../../shared/semantic").SemanticRunner;
   signal?: AbortSignal;
   sqlIndex: AgentSqlIndexOps;
   skills: LoadedAgentSkill[];
@@ -509,8 +513,14 @@ export function createAgentTools(options: {
       name: "execute_python",
       label: "Execute Python",
       description:
-        "Run stateless Python on complete read-only sources. SQL selects needed columns and puts LIMIT in query; no MongoDB limit means complete. Use `to_df(alias)`; await query is only for dynamic requests. Assign result. pandas, duckdb, con, tables are preloaded; no host access.",
+        (ctx.pythonStateful === false
+          ? "Run fresh stateless Python: redeclare sources and variables every call. Use to_df(alias), pandas, duckdb; await query for dynamic reads. Assign result."
+          : "Python workspace: omitted sources reuse; redeclaring refreshes aliases, not DataFrames. Aliases are not variables: to_df('t') gives pandas, tables['t'] a DuckDB relation. result is cleared before EVERY cell; retain other variables, assign result for output. await query for dynamic reads; reset clears state.") +
+        (ctx.runSemantic
+          ? " Batch classification/extraction/entity matching: await semantic.classify/extract/resolve inside Python. First load_skill name=semantic-analysis. No database needed; host authorizes and budgets calls. Retain batches for resume."
+          : "") + " For material scope/grain/denominator risks, load_skill name=analysis-verification: analysis.contract retains sourced claims/checks. Skip trivial arithmetic.",
       parameters: Type.Object({
+        reset: Type.Optional(Type.Boolean()),
         sources: Type.Optional(Type.Array(Type.Union([
           Type.Object({
             alias: Type.String(),
@@ -1499,7 +1509,7 @@ async function runQuery(
   });
 }
 
-function pythonFailureGuidance(error: string): string | null {
+function pythonFailureGuidance(error: string, sourceAliases: readonly string[] = []): string | null {
   if (/unknown_database|missing_database_route|unknown data connection|collection must be a non-empty string/i.test(error)) {
     return (
       "Python guidance: prefer execute_python.sources for queries known before execution. " +
@@ -1518,17 +1528,28 @@ function pythonFailureGuidance(error: string): string | null {
       "Convert with `.df()` or use `to_df(alias)` before pandas-style indexing."
     );
   }
-  if (/name ['\"][^'\"]+['\"] is not defined/i.test(error)) {
+  const missingName = /name ['\"]([^'\"]+)['\"] is not defined/i.exec(error)?.[1];
+  if (missingName && sourceAliases.includes(missingName)) {
+    const alias = JSON.stringify(missingName);
+    return `Python guidance: ${alias} is a registered source alias, not a Python variable. ` +
+      `Use to_df(${alias}) for pandas or tables[${alias}] for a DuckDB relation. ` +
+      "The source is present; do not reset or reload it to fix this NameError.";
+  }
+  if (missingName === "result") {
+    return "Python guidance: result is the per-cell output slot, cleared before every cell. " +
+      "Keep reusable values under another variable name and assign result again. This alone does not indicate workspace loss.";
+  }
+  if (missingName) {
     return (
-      "Python guidance: every execute_python call starts a fresh stateless sandbox. " +
-      "Declare sources again and redefine every variable used by this code."
+      "Python guidance: inspect the workspace snapshot. Define missing variables; " +
+      "reload sources only if the workspace was lost or fresh data is required."
     );
   }
   return null;
 }
 
 async function runExecutePython(
-  args: { code?: unknown; sources?: unknown },
+  args: { code?: unknown; sources?: unknown; reset?: unknown },
   ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
   if (!ctx.pythonExecutor || !ctx.queryArtifacts || !ctx.run.sessionId) {
@@ -1539,6 +1560,7 @@ async function runExecutePython(
   if (code.length > PYTHON_CODE_MAX_CHARS) {
     return fail(`code exceeds ${PYTHON_CODE_MAX_CHARS} characters.`);
   }
+  if (args.reset !== undefined && typeof args.reset !== "boolean") return fail("reset must be boolean");
   const rawSources = args.sources === undefined ? [] : args.sources;
   if (!Array.isArray(rawSources)) return fail("sources must be an array when provided.");
   if (rawSources.length > PYTHON_SOURCE_MAX_ITEMS) {
@@ -1603,6 +1625,10 @@ async function runExecutePython(
   }
 
   const sourceRunIds: string[] = [];
+  if (args.reset === true) {
+    if (!ctx.pythonExecutor.reset) return fail("Workspace reset is unavailable");
+    await ctx.pythonExecutor.reset(ctx.vaultPath, ctx.run.sessionId);
+  }
   const artifacts: Record<string, QueryArtifactDescriptor> = {};
   const limitedAtCap: string[] = [];
   let sourceBytes = 0;
@@ -1641,6 +1667,7 @@ async function runExecutePython(
     if (source.query.language === "mongodb" && source.query.limit !== null
       && executed.artifact.rowCount === source.query.limit) {
       limitedAtCap.push(`${source.alias} (limit ${source.query.limit})`);
+      artifacts[source.alias] = { ...executed.artifact, incomplete: true };
     }
     if (source.query.language === "sql") {
       recordSkillTableEvidence(
@@ -1655,6 +1682,7 @@ async function runExecutePython(
     vaultPath: ctx.vaultPath,
     sessionId: ctx.run.sessionId,
     code,
+    runSemantic: ctx.runSemantic,
     artifacts,
     runQuery: async ({ connectionName, request }) => {
       let parsed: unknown;
@@ -1668,7 +1696,8 @@ async function runExecutePython(
       }
       // Same normalizer the run_query tool uses, so both paths reject the same
       // malformed and forbidden requests.
-      const query = normalizeDataQuery(parsed as Record<string, unknown>);
+      const spec = parsed as Record<string, unknown>;
+      const query = normalizeDataQuery({ ...spec, limit: spec.limit ?? null });
       if (typeof query === "string") throw new Error(query);
       const executed = await executeDataQuery(ctx, {
         requestedConnection: connectionName,
@@ -1692,20 +1721,24 @@ async function runExecutePython(
             .map((table) => (table.db ? `${table.db}.${table.table}` : table.table)),
         );
       }
-      return executed.artifact;
+      return { ...executed.artifact, incomplete: query.language === "mongodb" && query.limit !== null && executed.artifact.rowCount === query.limit };
     },
     signal: ctx.signal,
   });
   if (!result.ok) {
     const error = result.error ?? "Python execution failed.";
-    const guidance = pythonFailureGuidance(error);
-    return fail(
-      error +
-        (result.stdout ? `\nstdout:\n${result.stdout}` : "") +
-        (guidance ? `\n\n${guidance}` : ""),
-    );
+    const guidance = pythonFailureGuidance(error, result.workspace?.sources.map((source) => source.alias));
+    return { ok: false, text: JSON.stringify({ error: error.slice(0, 16000),
+      workspace: result.workspace ? { ...result.workspace, variables: result.workspace.variables.slice(0, 10),
+        sources: result.workspace.sources.slice(0, 10), refreshedAliases: result.workspace.refreshedAliases.slice(0, 10) } : undefined,
+      workspacePreviewTruncated: Boolean(result.workspace && (result.workspace.variables.length > 10 || result.workspace.sources.length > 10)),
+      stdout: result.stdout.slice(-4000), guidance }) };
   }
   const runId = `${ctx.run.runId}-python-${randomUUID()}`;
+  for (const source of result.workspace?.sources ?? []) {
+    if (!sourceRunIds.includes(source.version)) sourceRunIds.push(source.version);
+    if (source.incomplete && !limitedAtCap.some((s) => s.startsWith(source.alias + " "))) limitedAtCap.push(`${source.alias} (retained limited snapshot)`);
+  }
   const value = result.value;
   ctx.analysisRuns?.set(runId, {
     kind: "python",
@@ -1716,8 +1749,10 @@ async function runExecutePython(
     sourceRunIds,
     summary: value,
   });
-  return ok({
+  const response = {
     runId,
+    workspace: result.workspace,
+    stdoutTruncated: result.stdoutTruncated,
     ...(limitedAtCap.length > 0
       ? {
           incompleteSources:
@@ -1729,15 +1764,34 @@ async function runExecutePython(
     ...(value.kind === "none"
       ? {
           instruction:
-            "No structured result was assigned. If more analysis is needed, make one self-contained " +
-            "execute_python call that redeclares its sources and variables and assigns result; " +
-            "nothing carries over from this call.",
+            "No structured result was assigned. Reuse the workspace and assign result in the next cell.",
         }
       : {}),
     stdout: result.stdout,
     result: value,
     elapsedMs: result.elapsedMs,
-  });
+  };
+  // Never slice serialized JSON: prioritize the result and state over stdout.
+  if (JSON.stringify(response).length > RESULT_CHAR_BUDGET) {
+    response.stdout = response.stdout.slice(-1000);
+    response.stdoutTruncated = true;
+  }
+  if (response.result.kind === "table") {
+    while (response.result.rows.length && JSON.stringify(response).length > RESULT_CHAR_BUDGET) {
+      response.result.rows.pop();
+      response.result.truncated = true;
+    }
+  }
+  if (JSON.stringify(response).length > RESULT_CHAR_BUDGET) {
+    response.result = { kind: "none" };
+    Object.assign(response, { instruction: "Result exceeds response budget. Retained in workspace; aggregate or select fewer fields." });
+  }
+  if (response.workspace && JSON.stringify(response).length > RESULT_CHAR_BUDGET) {
+    response.workspace = { ...response.workspace, variables: response.workspace.variables.slice(0, 10),
+      sources: response.workspace.sources.slice(0, 10), refreshedAliases: response.workspace.refreshedAliases.slice(0, 10) };
+    Object.assign(response, { workspacePreviewTruncated: true });
+  }
+  return { ok: true, text: JSON.stringify(response) };
 }
 
 function runCreateChart(args: Record<string, unknown>, ctx: AgentToolContext): ToolOutcome {

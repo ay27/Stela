@@ -16,6 +16,10 @@ import {
   readPythonRuntimeInput,
   respondPythonRuntime,
   setPythonRuntimeBroadcaster,
+  semanticForPythonJob,
+  describePythonWorkspace,
+  resetPythonWorkspace,
+  pythonWorkspaceLost,
 } from "./python-runtime-broker";
 
 function descriptor(runId: string): QueryArtifactDescriptor {
@@ -64,14 +68,14 @@ setPythonRuntimeBroadcaster((channel, payload) => {
     connectionName: "warehouse",
     request: JSON.stringify({ language: "sql", query: "SELECT 1" }),
   });
-  assert.equal(first.alias, "q1");
+  assert.match(first.alias, /^q_[a-f0-9]{32}_1$/);
   assert.equal(first.runId, "run-1");
   const second = await queryForPythonJob({
     jobId,
     connectionName: "crm",
     request: JSON.stringify({ language: "sql", query: "SELECT 2" }),
   });
-  assert.equal(second.alias, "q2", "aliases must not collide within one execution");
+  assert.match(second.alias, /^q_[a-f0-9]{32}_2$/, "aliases must not collide within one execution");
   assert.deepEqual(requests, [
     'warehouse:{"language":"sql","query":"SELECT 1"}',
     'crm:{"language":"sql","query":"SELECT 2"}',
@@ -115,7 +119,7 @@ setPythonRuntimeBroadcaster((channel, payload) => {
     connectionName: "warehouse",
     request: JSON.stringify({ language: "sql", query: "SELECT 1" }),
   });
-  assert.equal(dynamic.alias, "q2");
+  assert.match(dynamic.alias, /^q_[a-f0-9]{32}_1$/);
   let served = 1;
   let refusal = "";
   while (served < 40) {
@@ -197,6 +201,55 @@ setPythonRuntimeBroadcaster((channel, payload) => {
     result: { ok: true, stdout: "", value: { kind: "none" }, elapsedMs: 1 },
   });
   await pending;
+}
+
+{
+  const controller = new AbortController();
+  let child: AbortSignal | undefined;
+  const execution = executePython({ vaultPath: "/vault", sessionId: "semantic-cancel", code: "result = 1", artifacts: {},
+    signal: controller.signal,
+    runSemantic: async (_raw, signal) => {
+      child = signal;
+      await new Promise<void>((_resolve, reject) => signal!.addEventListener("abort", () => reject(new Error("child aborted")), { once: true }));
+      throw new Error("unreachable");
+    },
+  });
+  const executionRejected = assert.rejects(execution, /cancelled/);
+  assert.ok(started);
+  const semanticCall = semanticForPythonJob({ jobId: started.jobId, request: "{}" });
+  const childRejected = assert.rejects(semanticCall, /child aborted/);
+  controller.abort();
+  await Promise.all([executionRejected, childRejected]);
+  assert.equal(child?.aborted, true);
+  assert.match(describePythonWorkspace("/vault", "semantic-cancel"), /lost/);
+  await resetPythonWorkspace("/vault", "semantic-cancel");
+  assert.match(describePythonWorkspace("/vault", "semantic-cancel"), /empty/);
+  await assert.rejects(semanticForPythonJob({ jobId: started.jobId, request: "{}" }), /unavailable/);
+}
+
+{
+  const input = { vaultPath: "/vault", sessionId: "unexpected-loss", code: "result = 42", artifacts: {} };
+  const first = executePython(input);
+  assert.ok(started?.workspaceId);
+  const lostId = started.workspaceId;
+  respondPythonRuntime({ jobId: started.jobId, result: {
+    ok: true, stdout: "", value: { kind: "scalar", value: 42 }, elapsedMs: 1,
+  } });
+  await first;
+  assert.equal(pythonWorkspaceLost({ workspaceId: lostId }).accepted, true);
+  assert.match(describePythonWorkspace(input.vaultPath, input.sessionId), /lost/);
+  started = null;
+  await assert.rejects(executePython(input), /workspace_lost.*Rebuild explicitly/);
+  assert.equal(started, null, "loss is reported before any new cell is dispatched");
+  const rebuilt = executePython(input);
+  assert.ok(started);
+  const next = started as PythonExecutionRequest;
+  assert.notEqual(next.workspaceId, lostId);
+  assert.deepEqual(next.inputs, [], "no source replay after loss");
+  respondPythonRuntime({ jobId: next.jobId, result: {
+    ok: true, stdout: "", value: { kind: "scalar", value: 42 }, elapsedMs: 1,
+  } });
+  await rebuilt;
 }
 
 cancelAllPythonRuntimeJobs();

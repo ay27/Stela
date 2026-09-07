@@ -270,6 +270,7 @@ function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTim
   switch (event.type) {
     case "started":
     case "context_usage":
+    case "semantic_progress":
     case "compaction":
     case "history_updated":
       return timeline;
@@ -387,6 +388,7 @@ function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTim
         ...timeline.map((entry) => entry.kind === "progress" && entry.runId === event.runId && entry.phase === "streaming"
           ? { ...entry, phase: "completed" as const }
           : entry),
+        ...(event.partialAnswer ? [{ kind: "final" as const, id: nextId(), runId: event.runId, content: event.partialAnswer }] : []),
         { kind: "error", id: nextId(), message: event.message },
       ];
     case "cancelled":
@@ -604,6 +606,7 @@ export const useAgentPanel = create<AgentPanelState>((set, get) => ({
     const tab = state.tabs.find((item) => item.id === tabId);
     if (!tab || state.tabs.length <= 1) return;
     if (tab.status === "running" && tab.runId) void cancelAgent(tab.runId).catch(() => {});
+    void window.stela.pythonRuntime?.reset(tab.sessionId, true).catch(() => {});
     const index = state.tabs.findIndex((item) => item.id === tabId);
     const tabs = state.tabs.filter((item) => item.id !== tabId);
     const activeTabId =

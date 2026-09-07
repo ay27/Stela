@@ -135,6 +135,8 @@ export interface MaterializedQueryResult {
 
 /** Machine-local descriptor. Absolute paths never cross a model or renderer API. */
 export interface QueryArtifactDescriptor {
+  /** Execution-local warning; not an assertion that unflagged data is complete. */
+  incomplete?: boolean;
   runId: string;
   sessionId: string;
   format: QueryArtifactFormat;
@@ -365,6 +367,8 @@ export interface AiVendorInfo {
 }
 
 export interface AiSettings {
+  semanticProfileId?: string | null;
+  semanticBudget?: import("./semantic").SemanticBudget;
   providerMode: AiProviderMode;
   activeProfileId: string;
   profiles: AiProviderProfile[];
@@ -850,6 +854,7 @@ export type AgentToolName =
   | "ask_user";
 
 export interface PythonExecutionInput {
+  incomplete?: boolean;
   alias: string;
   runId: string;
   format: QueryArtifactFormat;
@@ -860,11 +865,21 @@ export interface PythonExecutionInput {
 
 export interface PythonExecutionRequest {
   jobId: string;
+  workspaceId?: string;
   code: string;
   inputs: PythonExecutionInput[];
   timeoutMs: number;
   /** When true the sandbox may call `await query(connection, sql)`. */
   canQuery?: boolean;
+  canSemantic?: boolean;
+}
+
+export interface IPythonWorkspaceSnapshot {
+  generation: string;
+  status: "ready" | "partial_mutation_possible" | "lost";
+  sources: Array<{ alias: string; version: string; rowCount: number; readAt: string; incomplete?: boolean }>;
+  variables: Array<{ name: string; type: string; rows?: number; columns?: number }>;
+  refreshedAliases: string[];
 }
 
 export type PythonExecutionValue =
@@ -878,6 +893,8 @@ export interface PythonExecutionResult {
   value: PythonExecutionValue;
   elapsedMs: number;
   error?: string;
+  workspace?: IPythonWorkspaceSnapshot;
+  stdoutTruncated?: boolean;
 }
 
 export interface PythonRuntimeInputChunk {
@@ -1046,6 +1063,7 @@ export interface AgentProposalPayload {
 }
 
 export type AgentEvent =
+  | { type: "semantic_progress"; runId: string; sessionId: string; records: number; requests: number; tokens: number; failed: number; unresolved: number }
   | { type: "started"; runId: string }
   | {
       type: "assistant_progress";
@@ -1134,7 +1152,7 @@ export type AgentEvent =
       /** Present on new runs for progress-bubble promotion. */
       stepIndex?: number;
     }
-  | { type: "error"; runId: string; message: string }
+  | { type: "error"; runId: string; message: string; partialAnswer?: string }
   | { type: "cancelled"; runId: string };
 
 /**

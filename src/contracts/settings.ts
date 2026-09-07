@@ -90,6 +90,8 @@ export interface AiProviderProfile {
 }
 
 export interface AiSettings {
+  semanticProfileId?: string | null;
+  semanticBudget?: import("../../electron/shared/semantic").SemanticBudget;
   providerMode: AiProviderMode;
   activeProfileId: string;
   profiles: AiProviderProfile[];

@@ -93,7 +93,7 @@ import { AppError } from "@shared/errors";
 import { registerHandler } from "./ipc-router";
 import { syncTitleBarFromApp } from "./titlebar-overlay";
 import { openExternalIfAllowed } from "./security";
-import { getCurrentVault, setCurrentVault } from "./vault-context";
+import { getCurrentVault, setCurrentVault, setBeforeVaultChange } from "./vault-context";
 import { getLogger } from "../services/logger";
 
 import * as vaultFs from "../services/vault-fs";
@@ -123,8 +123,14 @@ import { runInlineCompletion } from "../services/ai/inline-completion";
 import {
   queryForPythonJob,
   readPythonRuntimeInput,
+  semanticForPythonJob,
+  pythonWorkspaceLost,
+  describePythonWorkspace,
+  resetPythonWorkspace,
   respondPythonRuntime,
 } from "../services/ai/python-runtime-broker";
+import { revokeSemanticGrants } from "../services/ai/semantic-grants";
+import { clearSemanticWorkspace } from "../services/ai/semantic-agent";
 
 /** 共用：所有 vault-级 handler 的入口拿当前 vault；没有时按 IPC 错误返回。 */
 function requireVault(): string {
@@ -141,6 +147,7 @@ function requireVault(): string {
 /** runId -> 该次 agent run 的 AbortController，供 AI_AGENT_CANCEL 查找。 */
 const agentRunControllers = new Map<string, AbortController>();
 const activeAgentSessions = new Map<string, string>();
+const pendingWorkspaceResets = new Set<string>();
 const inlineCompletionControllers = new Map<string, AbortController>();
 const savedExportPaths = new Map<string, string>();
 let agentHistoryLock: Promise<void> = Promise.resolve();
@@ -205,6 +212,10 @@ export interface HandlerCtx {
 }
 
 export function registerAllHandlers(ctx: HandlerCtx): void {
+  setBeforeVaultChange(() => {
+    for (const controller of agentRunControllers.values()) controller.abort("Vault changed");
+    for (const controller of inlineCompletionControllers.values()) controller.abort("Vault changed");
+  });
   // ---------- Vault FS ----------
   registerHandler<{ path: string }, FileNode[]>(
     IPC.VAULT_LIST_DIR,
@@ -650,6 +661,24 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
     { jobId: string; connectionName: string; request: string },
     PythonExecutionInput
   >(IPC.AI_PYTHON_RUNTIME_QUERY, queryForPythonJob);
+  registerHandler(IPC.AI_PYTHON_RUNTIME_SEMANTIC, semanticForPythonJob);
+  registerHandler(IPC.AI_PYTHON_WORKSPACE_LOST, pythonWorkspaceLost);
+  registerHandler<{ sessionId: string }, string>(IPC.AI_PYTHON_WORKSPACE_STATUS,
+    ({ sessionId }) => describePythonWorkspace(requireVault(), sessionId));
+  registerHandler<{ sessionId: string; cancelActive?: boolean }, void>(IPC.AI_PYTHON_WORKSPACE_RESET, async ({ sessionId, cancelActive }) => {
+    const vault = requireVault();
+    const key = `${vault}\0${sessionId}`;
+    const activeRun = activeAgentSessions.get(key);
+    if (activeRun) {
+      if (!cancelActive) throw new AppError("agent_session_busy", "Stop the Agent before resetting its workspace.");
+      pendingWorkspaceResets.add(key);
+      agentRunControllers.get(activeRun)?.abort("Chat closed; clear workspace");
+      return;
+    }
+    await resetPythonWorkspace(vault, sessionId);
+    clearSemanticWorkspace(vault, sessionId);
+  });
+  registerHandler<Record<string, never>, void>(IPC.AI_SEMANTIC_REVOKE, () => revokeSemanticGrants(requireVault()));
   registerHandler<
     { jobId: string; result: PythonExecutionResult },
     { accepted: boolean }
@@ -702,6 +731,10 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
             agentRunControllers.delete(request.runId);
             if (activeAgentSessions.get(sessionKey) === request.runId) {
               activeAgentSessions.delete(sessionKey);
+            }
+            if (pendingWorkspaceResets.delete(sessionKey)) {
+              await resetPythonWorkspace(vaultPath, sessionId);
+              clearSemanticWorkspace(vaultPath, sessionId);
             }
             if (maintenanceJob) agent.startSkillMaintenanceJob(vaultPath, maintenanceJob);
             if (activeAgentSessionIds(vaultPath).size > 0) return;

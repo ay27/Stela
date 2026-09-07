@@ -138,6 +138,13 @@ proposed → active → superseded
 | [0083](0083-sourced-system-skills.md) | Sourced read-only System Skills | active |
 | [0084](0084-single-action-plan-tool.md) | Single action-based execution-plan tool | active |
 | [0085](0085-extension-routed-workspace-editors.md) | Extension-routed workspace editors | active |
-| [0086](0086-declarative-query-sources-for-python.md) | Declarative query sources for sandbox Python | active |
+| [0086](0086-declarative-query-sources-for-python.md) | Declarative query sources for sandbox Python | superseded → [0089](0089-session-python-workspaces.md) |
 | [0087](0087-chat-only-sql-inline-completion.md) | Chat-only SQL inline completion transport | active |
 | [0088](0088-configurable-automatic-agent-edits.md) | Configurable automatic Agent edits | active |
+| [0089](0089-session-python-workspaces.md) | Session Python analysis workspaces | active |
+| [0090](0090-bounded-semantic-execution.md) | Bounded host-mediated semantic execution | active |
+| [0091](0091-semantic-operation-completeness.md) | Preflight and resumable semantic operations | active |
+| [0092](0092-bounded-generation-recovery.md) | Bounded model generation recovery | superseded → [0095](0095-generation-lifecycle-and-safe-closeout.md) |
+| [0093](0093-evidence-backed-answer-contract.md) | Evidence-backed Python answer contracts | active |
+| [0094](0094-uncommitted-generation-previews.md) | Uncommitted generation previews | active |
+| [0095](0095-generation-lifecycle-and-safe-closeout.md) | Generation lifecycle and evidence-only closeout | active |

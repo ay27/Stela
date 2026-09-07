@@ -47,7 +47,7 @@ import {
   resolveQueryArtifact,
   writeBufferedQueryArtifact,
 } from "../query-artifacts";
-import { assistantText, buildSystemPrompt, buildUserContent, visibleAssistantText } from "./agent-prompt";
+import { assistantText, buildSystemPrompt, buildUserContent, repairLegacyWorkspacePrompts, visibleAssistantText } from "./agent-prompt";
 import {
   AnalysisEfficiencyLedger,
   efficiencyHintContent,
@@ -77,7 +77,10 @@ import {
   type ProposalRequest,
 } from "./agent-tools";
 import { createTransportForProfile, getActiveProfile, loadApiKey } from "./provider";
-import { executePython } from "./python-runtime-broker";
+import { executePython, resetPythonWorkspace, describePythonWorkspace, setPythonWorkspaceClearListener } from "./python-runtime-broker";
+import { createSemanticAgent, clearSemanticWorkspace } from "./semantic-agent";
+import { withGenerationRecovery } from "./generation-recovery";
+import { closeoutGeneration } from "./generation-closeout";
 import { redactForPrompt } from "./redaction";
 import * as agentMetrics from "./agent-metrics";
 import {
@@ -158,6 +161,7 @@ const activeProposals = new Map<string, Map<string, ProposalResolver>>();
 
 /** `vaultPath + sessionId` -> 已打开的本地 JSONL session，避免每轮重复解析文件。 */
 const sessions = new Map<string, { session: Session; storage: JsonlSessionStorage }>();
+setPythonWorkspaceClearListener(clearSemanticWorkspace);
 const historyResponses = new Map<string, AgentProposalResponse[]>();
 
 /** IPC 入口：用户在前端 approve/reject 一个 proposal 时调用。找不到（已超时/run 已结束）返回 false。 */
@@ -198,6 +202,8 @@ export async function prunePersistentAgentHistory(
   const pruned = await pruneLocalAgentHistory(vaultPath, deviceSlug, getProtectedSessionIds);
   for (const removed of pruned) {
     sessions.delete(`${vaultPath}\0${removed.sessionId}`);
+    clearSemanticWorkspace(vaultPath, removed.sessionId);
+    await resetPythonWorkspace(vaultPath, removed.sessionId);
   }
 }
 
@@ -357,6 +363,7 @@ function conversationForMaintenance(messages: unknown[]): string {
 
 function createSession(storage: InMemorySessionStorage | JsonlSessionStorage = new InMemorySessionStorage()): Session {
   return new Session(storage, {
+    entryTransforms: [repairLegacyWorkspacePrompts],
     entryProjectors: {
       [EXECUTION_PLAN_ENTRY]: (entry) => {
         const data = entry.data as { runId?: string; plan?: AgentPlanSnapshot } | undefined;
@@ -756,6 +763,21 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       async (skill) => await resolveSkillFreshness(skill) === "fresh",
     );
     const { models, model, reasoning } = createTransportForProfile(settings.ai, apiKey, profile.id);
+    const semantic = createSemanticAgent({
+      vault: vaultPath, session: request.sessionId!, slug, settings: settings.ai, profile, signal,
+      chinese: request.locale === "zh",
+      approve: (description, allow, approvalSignal) => makeRequestProposal(runId, `semantic-${randomUUID()}`, emit, pending, approvalSignal)({
+        kind: "question", payload: { description, question: description, options: [allow, request.locale === "zh" ? "拒绝" : "Deny"] },
+      }),
+      onProgress: (response, semanticModel) => {
+        emit({ type: "semantic_progress", runId, sessionId: request.sessionId!, ...response.usage,
+          failed: response.rows.filter((r) => r.status === "failed" || r.status === "unprocessed").length,
+          unresolved: response.rows.filter((r) => r.status === "unresolved").length });
+        if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: response.phase === "preflight" ? "semantic_preflight" : "semantic_batch", name: semanticModel,
+          payload: { usage: response.usage, cached: response.cached, rows: response.rows.map(({ id, status }) => ({ id, status })) } });
+      },
+      onUsage: (usage) => { if (agentMetrics.isOpen()) agentMetrics.addUsage(metricRunId, usage); },
+    });
     const contextWindow = model.contextWindow;
     const systemPrompt = buildSystemPrompt();
     const skillMetadata = formatSkillsForSystemPrompt(promptSkills.map((item) => item.skill));
@@ -800,10 +822,27 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
     };
 
     const harnessThinkingLevel = reasoning.effective;
+    let generationStatus: number | undefined;
     harness = new AgentHarness({
       env: new NodeExecutionEnv({ cwd: vaultPath }),
       session,
-      models,
+      models: withGenerationRecovery(models, { signal, onPreview: (message) => {
+        if (message) scheduleStreamingProgress(message);
+        else {
+          clearProgressTimer();
+          progressContent = "";
+          progressLastSnapshot = "";
+          onEvent({ type: "assistant_progress", runId, stepIndex: harnessStepIndex, content: "", phase: "streaming" });
+        }
+      }, onDiagnostic: (event) => {
+        generationStatus = event.status;
+        if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "generation_attempt", payload: event });
+        if (agentMetrics.isOpen() && event.attempt === 1 && event.firstEventMs !== undefined) {
+          agentMetrics.addEvent(metricRunId, { type: "model_first_token", name: `step:${harnessStepIndex}`,
+            occurredAt: event.startedAt + event.firstEventMs, durationMs: event.firstEventMs,
+            payload: { stepIndex: harnessStepIndex } });
+        }
+      } }),
       model,
       thinkingLevel: harnessThinkingLevel,
       systemPrompt,
@@ -835,7 +874,11 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
             resolve: resolveQueryArtifact,
             discard: discardQueryArtifactTarget,
           },
-          pythonExecutor: { execute: executePython },
+          pythonExecutor: { execute: executePython, reset: async (vault, sessionId) => {
+            await resetPythonWorkspace(vault, sessionId);
+            clearSemanticWorkspace(vault, sessionId);
+          } },
+          runSemantic: (raw, jobSignal, onAuthorizationWait) => semantic.execute(raw, jobSignal, onAuthorizationWait),
           signal,
           sqlIndex: { query: sqlIndex.query },
           skills: skills.loaded,
@@ -1206,7 +1249,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       if (event.type === "message_start" && event.message.role === "assistant" && agentMetrics.isOpen()) {
         const now = Date.now();
         agentMetrics.addEvent(metricRunId, {
-          type: "model_first_token",
+          type: "model_generation_committed",
           name: `step:${harnessStepIndex}`,
           occurredAt: now,
           durationMs: modelRequestStartedAt === null ? null : now - modelRequestStartedAt,
@@ -1259,6 +1302,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           clarification: "available",
         },
         skillMetadata,
+        pythonWorkspace: describePythonWorkspace(vaultPath, request.sessionId!),
         availableConnections: Object.entries(available.connections)
           .sort(([left], [right]) => left.localeCompare(right))
           .map(([name, entry]) => ({
@@ -1310,10 +1354,27 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       }
 
       if (result.stopReason === "error") {
+        const failure = result.errorMessage ?? "Agent run failed.";
+        const closeout = await closeoutGeneration({ models, model, context: { ...await session.buildContext(), systemPrompt },
+          streamOptions: { reasoning: reasoning.effective === "off" ? undefined : reasoning.effective, cacheRetention: "short" },
+          failure, failureStatus: generationStatus, hasEvidence: analysisRuns.size > 0, remainingMs: 120_000, signal,
+          onDiagnostic: event => {
+            if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "generation_attempt", payload: { ...event, phase: "closeout" } });
+          },
+        });
+        if (agentMetrics.isOpen()) {
+          if (closeout.message) agentMetrics.addUsage(metricRunId, closeout.message.usage);
+          agentMetrics.addEvent(metricRunId, { type: "generation_closeout", payload: {
+            executionFailure: failure, status: closeout.status, reason: closeout.reason, error: closeout.error,
+          } });
+        }
+        if (closeout.status === "cancelled" || signal.aborted) { emit({ type: "cancelled", runId }); return; }
+        if (closeout.status === "completed" && closeout.message) await session.appendMessage(closeout.message);
         emit({
           type: "error",
           runId,
-          message: result.errorMessage ?? "Agent run failed.",
+          message: failure,
+          ...(closeout.answer ? { partialAnswer: closeout.answer } : {}),
         });
         return;
       }

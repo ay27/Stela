@@ -8,6 +8,17 @@ if (!parentPort) throw new Error("Pyodide evaluation worker requires parentPort"
 const { assetDir, executeScript, packages } = workerData;
 let pyodide;
 let active = null;
+let retainedBytes = 0;
+const semanticPending = new Map();
+function requestSemantic(request) {
+  const job = active;
+  if (!job?.request.canSemantic) return Promise.reject(new Error("Semantic execution is unavailable"));
+  const requestId = 's' + (++job.queryCounter);
+  return new Promise((resolve, reject) => {
+    semanticPending.set(requestId, { resolve, reject });
+    parentPort.postMessage({ type: "semantic", jobId: job.request.jobId, requestId, request: String(request) });
+  });
+}
 
 function inputPath(jobId, alias, format) {
   return `/stela-inputs/${jobId}/${alias}.${format === "parquet" ? "parquet" : "jsonl"}`;
@@ -17,6 +28,7 @@ function inputPath(jobId, alias, format) {
 function requestQuery(connectionName, request) {
   const job = active;
   if (!job) return Promise.reject(new Error("Pyodide worker has no active job"));
+  if (!job.request.canQuery) return Promise.reject(new Error("query() is unavailable in this execution; no data connection was granted"));
   job.queryCounter += 1;
   const requestId = `r${job.queryCounter}`;
   return new Promise((resolve, reject) => {
@@ -42,7 +54,8 @@ async function executeActive() {
     }));
     pyodide.globals.set("__stela_code", job.request.code);
     pyodide.globals.set("__stela_inputs_json", JSON.stringify(config));
-    pyodide.globals.set("__stela_query", job.request.canQuery ? requestQuery : null);
+    pyodide.globals.set("__stela_query", requestQuery);
+    pyodide.globals.set("__stela_semantic", requestSemantic);
     const raw = await pyodide.runPythonAsync(executeScript);
     const parsed = JSON.parse(String(raw));
     raw?.destroy?.();
@@ -65,13 +78,12 @@ async function executeActive() {
       },
     });
   } finally {
-    for (const key of ["__stela_code", "__stela_inputs_json", "__stela_query"]) {
+    for (const key of ["__stela_code", "__stela_inputs_json", "__stela_query", "__stela_semantic"]) {
       pyodide.globals.delete(key);
     }
-    for (const input of [...job.inputs.values(), ...job.fetched.values()]) {
-      try { pyodide.FS.unlink(input.path); } catch {}
-    }
-    try { pyodide.FS.rmdir(`/stela-inputs/${job.request.jobId}`); } catch {}
+    for (const pending of semanticPending.values()) pending.reject(new Error("Python job finished"));
+    semanticPending.clear();
+    // Inputs remain alive with their workspace's lazy relations.
     active = null;
   }
 }
@@ -125,6 +137,8 @@ async function chunk(message) {
   const job = active;
   if (!job || job.request.jobId !== message.jobId) return;
   const data = new Uint8Array(message.data);
+  retainedBytes += data.byteLength;
+  if (retainedBytes > 2 * 1024 ** 3) throw new Error("workspace_lost: workspace input limit exceeded");
   const requestId = job.queriesByAlias.get(message.alias);
   if (requestId) {
     let target = job.fetched.get(message.alias);
@@ -158,6 +172,14 @@ async function chunk(message) {
 }
 
 function handle(message) {
+  if (message.type === "semantic-result") {
+    if (active?.request.jobId !== message.jobId) return;
+    const pending = semanticPending.get(message.requestId);
+    semanticPending.delete(message.requestId);
+    if (message.error) pending?.reject(new Error(message.error));
+    else pending?.resolve(message.result ?? "{}");
+    return;
+  }
   if (message.type === "start") return start(message.request);
   if (message.type === "chunk") return chunk(message);
   if (message.type === "query-input") return queryInput(message);

@@ -21,10 +21,13 @@ import * as vaultIndex from "../services/vault-index";
 import * as vaultWatcher from "../services/vault-watcher";
 import { cancelSkillMaintenance } from "../services/ai/skill-maintenance-queue";
 import * as agentMetrics from "../services/ai/agent-metrics";
+import { cancelAllPythonRuntimeJobs } from "../services/ai/python-runtime-broker";
 
 const log = getLogger("vault-context");
 
 let currentVaultPath: string | null = null;
+let beforeVaultChange: () => void = () => {};
+export function setBeforeVaultChange(callback: () => void): void { beforeVaultChange = callback; }
 
 export function getCurrentVault(): string | null {
   return currentVaultPath;
@@ -50,6 +53,8 @@ export async function setCurrentVault(
     to: vaultPath,
   });
   if (currentVaultPath) cancelSkillMaintenance(currentVaultPath);
+  beforeVaultChange();
+  cancelAllPythonRuntimeJobs("Vault changed; workspace state was cleared");
   agentMetrics.close();
   if (vaultPath) {
     await maybeSeedFromLegacy(vaultPath).catch((err: unknown) => {
@@ -130,6 +135,7 @@ export async function setCurrentVault(
 
 /** 主进程最终退出前调用。Connector 由 main 的独立 shutdown 步骤处理。 */
 export async function shutdownVaultContext(): Promise<void> {
+  cancelAllPythonRuntimeJobs("Vault closed; workspace state was cleared");
   cancelSkillMaintenance();
   agentMetrics.close();
   await Promise.all([

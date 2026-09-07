@@ -32,6 +32,8 @@ import type {
 import { withAgentResourceId } from "@shared/agent-message";
 
 import { ProposalLineDiff } from "./proposal-diff";
+import { PythonWorkspaceStatus } from "./python-workspace-status";
+import { ContextUsageIndicator } from "./context-usage-indicator";
 import { i18n } from "@/i18n";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
@@ -91,61 +93,6 @@ function relativeToVault(path: string | null | undefined, vaultPath: string | nu
     return normalizedPath.slice(normalizedVault.length + 1);
   }
   return normalizedPath;
-}
-
-/** Compact SVG ring for approximate context-window usage. */
-function ContextUsageRing({
-  usedTokens,
-  contextWindow,
-  estimated,
-}: {
-  usedTokens: number;
-  contextWindow: number;
-  estimated: boolean;
-}) {
-  const percent = Math.min(100, Math.max(0, Math.round((usedTokens / contextWindow) * 100)));
-  const size = 16;
-  const stroke = 2;
-  const radius = (size - stroke) / 2;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference * (1 - percent / 100);
-  const tone =
-    percent >= 90 ? "text-destructive" : percent >= 70 ? "text-amber-500" : "text-primary";
-
-  return (
-    <span
-      className={cn("relative flex h-4 w-4 flex-none items-center justify-center", tone)}
-      title={
-        estimated
-          ? `Context ~${percent}% · ${usedTokens} / ${contextWindow} (estimated)`
-          : `Context ~${percent}% · ${usedTokens} / ${contextWindow}`
-      }
-      aria-label={`Context ~${percent}%`}
-    >
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90" aria-hidden>
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={stroke}
-          className="opacity-20"
-        />
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={stroke}
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-        />
-      </svg>
-    </span>
-  );
 }
 
 /**
@@ -556,8 +503,12 @@ export function AgentPanel() {
           <Bot className="h-3.5 w-3.5 flex-none text-primary" />
           {t("agent.panel.title")}
         </span>
+        <PythonWorkspaceStatus key={`python:${activeTab.sessionId}`} sessionId={activeTab.sessionId} busy={busy} />
         {contextUsage && contextUsage.contextWindow > 0 ? (
-          <ContextUsageRing
+          <ContextUsageIndicator
+            key={`context:${activeTab.sessionId}`}
+            runId={activeTab.runId}
+            busy={busy}
             usedTokens={contextUsage.usedTokens}
             contextWindow={contextUsage.contextWindow}
             estimated={contextUsage.estimated}

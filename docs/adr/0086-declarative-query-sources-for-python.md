@@ -2,7 +2,8 @@
 type: ADR
 id: "0086"
 title: "Declarative query sources for sandbox Python"
-status: active
+status: superseded
+superseded_by: "0089"
 date: 2026-09-03
 ---
 

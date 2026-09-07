@@ -20,6 +20,7 @@ const write = async (relative: string, content: string): Promise<void> => {
 };
 
 let modelCalls = 0;
+let failFinalRequests = false;
 const modelRequests: Array<{
   messages?: Array<{ role?: string; content?: unknown; tool_calls?: unknown[] }>;
   reasoning_effort?: string;
@@ -31,9 +32,14 @@ const server = http.createServer(async (request, response) => {
   const modelRequest = JSON.parse(requestBody) as (typeof modelRequests)[number];
   modelRequests.push(modelRequest);
   modelCalls += 1;
-  const isSalvage = requestBody.includes("The tool budget for this task is spent");
+  const isSalvage = requestBody.includes("The analysis stopped before verified completion");
   const previousToolRounds = (modelRequest.messages ?? []).filter((message) =>
     message.role === "assistant" && (message.tool_calls?.length ?? 0) > 0).length;
+  if (failFinalRequests && previousToolRounds >= 2 && !isSalvage) {
+    response.writeHead(503, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: { message: "temporarily unavailable", type: "server_error" } }));
+    return;
+  }
   response.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
@@ -350,9 +356,17 @@ def validate(query_dir, llm_answer, reason=None):
     event.type !== "job_start" || (event.activeMongoJobs ?? 0) <= 1));
   await assert.rejects(fs.stat(path.join(perRunOutput, ".fixtures")), { code: "ENOENT" });
 
-  // Hitting the tool cap must still be scored on a best-effort answer, not "".
+  // A cap before any committed query/Python evidence must not manufacture a closeout.
+  const emptyCapOutput = path.join(root, "results-empty-tool-cap");
+  await runBenchmark(emptyCapOutput, ["--max-tool-calls", "1"]);
+  const emptyCap = JSON.parse(await fs.readFile(path.join(emptyCapOutput, "query_demo/query1/run_0/final_agent.json"), "utf-8"));
+  assert.equal(emptyCap.answer, "");
+  assert.equal(emptyCap.closeout.status, "skipped");
+  assert.equal(emptyCap.executionFailure, "tool_call_cap");
+
+  // Once evidence exists, delivery may recover but execution failure remains recorded.
   const cappedOutput = path.join(root, "results-tool-cap");
-  await runBenchmark(cappedOutput, ["--max-tool-calls", "1"]);
+  await runBenchmark(cappedOutput, ["--max-tool-calls", "3"]);
   const cappedDir = path.join(cappedOutput, "query_demo", "query1", "run_0");
   const capped = JSON.parse(await fs.readFile(path.join(cappedDir, "final_agent.json"), "utf-8")) as {
     answer: string;
@@ -362,10 +376,27 @@ def validate(query_dir, llm_answer, reason=None):
   };
   const cappedLog = await fs.readFile(path.join(cappedDir, "tool_calls.jsonl"), "utf-8");
   assert.equal(capped.terminateReason, "tool_call_cap_salvaged", cappedLog);
-  assert.equal(capped.error, null);
+  assert.equal(capped.error, "tool_call_cap", "successful delivery must not erase execution failure");
   assert.equal(capped.valid, true);
   assert.match(capped.answer, /Best effort/);
   assert.match(cappedLog, /"type":"salvage_start"/);
+
+  // Provider failure without forcedStop follows the same closeout policy.
+  failFinalRequests = true;
+  const providerFailedOutput = path.join(root, "results-provider-failure");
+  await runBenchmark(providerFailedOutput);
+  failFinalRequests = false;
+  const failedDir = path.join(providerFailedOutput, "query_demo/query1/run_0");
+  const failed = JSON.parse(await fs.readFile(path.join(failedDir, "final_agent.json"), "utf-8"));
+  assert.equal(failed.terminateReason, "generation_error_salvaged", JSON.stringify({ error: failed.error, closeout: failed.closeout }));
+  assert.equal(failed.closeout.status, "completed");
+  assert.match(failed.executionFailure, /temporarily unavailable/);
+  assert.equal(failed.error, failed.executionFailure);
+  const failedEvents = (await fs.readFile(path.join(failedDir, "tool_calls.jsonl"), "utf-8")).trim().split("\n")
+    .map(line => JSON.parse(line) as { type: string; name?: string; phase?: string; status?: number });
+  assert.equal(failedEvents.filter(e => e.type === "tool_execution_start" && e.name === "run_query").length, 1);
+  assert.equal(failedEvents.filter(e => e.type === "generation_attempt" && e.status === 503).length, 3);
+  assert.equal(failedEvents.filter(e => e.type === "generation_attempt" && e.phase === "closeout").length, 1);
 } finally {
   server.close();
   await fs.rm(root, { recursive: true, force: true });

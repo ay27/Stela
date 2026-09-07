@@ -287,6 +287,7 @@ function eventElement(event: Event): Element | null {
 function isDragHandleTarget(target: Element | null): boolean {
   const item = target?.closest(".milkdown-block-handle .operation-item");
   if (!item) return false;
+  if (item.classList.contains("stela-block-action")) return true;
   return item.parentElement?.lastElementChild === item;
 }
 

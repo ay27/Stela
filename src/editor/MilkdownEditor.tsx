@@ -18,6 +18,7 @@ import { useWorkspace } from "@/state/workspace";
 import { useLayout } from "@/state/layout";
 
 import { Crepe } from "@milkdown/crepe";
+import { placeholderConfig } from "@milkdown/crepe/feature/placeholder";
 import { Milkdown, MilkdownProvider, useEditor } from "@milkdown/react";
 import { listenerCtx } from "@milkdown/kit/plugin/listener";
 import { commandsCtx, prosePluginsCtx } from "@milkdown/kit/core";
@@ -82,6 +83,7 @@ import { addFocusedContextToChat } from "@/components/ai/add-to-chat";
 import { i18n } from "@/i18n";
 import { formatHotkey } from "@/lib/hotkeys";
 import { blockSelectionPlugin } from "./block-selection";
+import { configureCompactBlockHandle } from "./compact-block-handle";
 
 // Crepe 内置 frame 主题（@milkdown/crepe/theme/frame.css）会把 14 个 --crepe-color-* token
 // 硬编码写到 .milkdown 上（白底 / 黑字 / Noto Serif），特异性高于外层 host，会反向覆盖
@@ -363,6 +365,9 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         [Crepe.Feature.TopBar]: false,
       },
       featureConfigs: {
+        [Crepe.Feature.Placeholder]: {
+          text: i18n.t("editor.placeholder"),
+        },
         [Crepe.Feature.BlockEdit]: {
           // 在 Advanced 分组追加「执行 SQL」+「Mermaid 图表」两项，分别以
           // runsql / mermaid 作为 code_block 的 language attr。
@@ -439,6 +444,7 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     crepe.editor.use(wikiLinkPlugins);
     crepe.editor.use(searchHighlightPlugin);
     crepe.editor.use(blockSelectionPlugin);
+    crepe.editor.config(configureCompactBlockHandle);
 
     // 视图捕获插件：闭包持有本组件的 viewRef / lineMapRef，PM `view()` 钩子触发后
     // 把当前 EditorView 暂存到 ref；同时立即基于 initialBody 构建 LineMap。
@@ -450,6 +456,17 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       view(editorView) {
         viewRef.current = editorView;
         setActiveEditorView(editorView);
+        const updatePlaceholder = () => {
+          crepe.editor.action((ctx) => {
+            ctx.update(placeholderConfig.key, (config) => ({
+              ...config,
+              text: i18n.t("editor.placeholder"),
+            }));
+          });
+          // Refresh decorations without changing the document or undo history.
+          editorView.updateState(editorView.state);
+        };
+        i18n.on("languageChanged", updatePlaceholder);
         try {
           lineMapRef.current = buildLineMap(initialBody, editorView);
         } catch (err) {
@@ -461,6 +478,7 @@ const MilkdownView = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         setViewReady(true);
         return {
           destroy: () => {
+            i18n.off("languageChanged", updatePlaceholder);
             if (viewRef.current === editorView) {
               viewRef.current = null;
             }

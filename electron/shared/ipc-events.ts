@@ -26,6 +26,7 @@ export const IPC_EVENTS = {
   AI_PYTHON_RUNTIME_REQUEST: "ai:python-runtime-request",
   /** Abort an active Pyodide job and reset its worker namespace. */
   AI_PYTHON_RUNTIME_CANCEL: "ai:python-runtime-cancel",
+  AI_PYTHON_WORKSPACE_RESET: "ai:python-workspace-reset",
   /** 应用开始退出前的最后 Git checkpoint。payload: void */
   APP_QUIT_CHECKPOINT_STARTED: "app:quit-checkpoint-started",
 } as const;

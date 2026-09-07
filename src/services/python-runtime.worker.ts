@@ -37,7 +37,8 @@ type QueryErrorMessage = {
   requestId: string;
   error: string;
 };
-type InboundMessage = StartMessage | ChunkMessage | QueryInputMessage | QueryErrorMessage;
+type SemanticReply = { type: "semantic-result"; jobId: string; requestId: string; result?: string; error?: string };
+type InboundMessage = StartMessage | ChunkMessage | QueryInputMessage | QueryErrorMessage | SemanticReply;
 
 interface ActiveInput {
   path: string;
@@ -66,6 +67,18 @@ interface ActiveJob {
 const runtimeGlobals = Object.freeze({});
 let pyodidePromise: Promise<PyodideInterface> | null = null;
 let active: ActiveJob | null = null;
+const semanticPending = new Map<string, { resolve: (value: string) => void; reject: (error: Error) => void }>();
+let retainedBytes = 0;
+
+function requestSemantic(request: unknown): Promise<string> {
+  const job = active;
+  if (!job?.request.canSemantic) return Promise.reject(new Error("Semantic execution is unavailable"));
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve, reject) => {
+    semanticPending.set(requestId, { resolve, reject });
+    post({ type: "semantic", jobId: job.request.jobId, requestId, request: String(request) });
+  });
+}
 
 function post(message: unknown): void {
   self.postMessage(message);
@@ -97,6 +110,7 @@ function safeInputPath(jobId: string, alias: string, format: "parquet" | "jsonl"
 function requestQuery(connectionName: unknown, request: unknown): Promise<string> {
   const job = active;
   if (!job) return Promise.reject(new Error("Python runtime has no active job"));
+  if (!job.request.canQuery) return Promise.reject(new Error("query() is unavailable in this execution; no data connection was granted"));
   job.queryCounter += 1;
   const requestId = `r${job.queryCounter}`;
   return new Promise<string>((resolve, reject) => {
@@ -178,6 +192,8 @@ async function chunk(message: ChunkMessage): Promise<void> {
     }
     if (target.complete) return;
     if (message.data.byteLength > 0) {
+      retainedBytes += message.data.byteLength;
+      if (retainedBytes > 2 * 1024 ** 3) throw new Error("workspace_lost: workspace input limit exceeded");
       py.FS.write(target.stream, message.data, 0, message.data.byteLength);
     }
     if (!message.eof) return;
@@ -194,6 +210,8 @@ async function chunk(message: ChunkMessage): Promise<void> {
   const input = job.inputs.get(message.alias);
   if (!input || input.complete) return;
   if (message.data.byteLength > 0) {
+    retainedBytes += message.data.byteLength;
+    if (retainedBytes > 2 * 1024 ** 3) throw new Error("workspace_lost: workspace input limit exceeded");
     py.FS.write(input.stream, message.data, 0, message.data.byteLength);
   }
   if (message.eof) {
@@ -216,7 +234,8 @@ async function executeActive(py: PyodideInterface): Promise<void> {
     }));
     py.globals.set("__stela_code", job.request.code);
     py.globals.set("__stela_inputs_json", JSON.stringify(config));
-    py.globals.set("__stela_query", job.request.canQuery ? requestQuery : null);
+    py.globals.set("__stela_query", requestQuery);
+    py.globals.set("__stela_semantic", requestSemantic);
     const raw = await py.runPythonAsync(PYTHON_EXECUTE_SCRIPT);
     const parsed = JSON.parse(String(raw)) as Omit<PythonExecutionResult, "elapsedMs">;
     post({
@@ -241,23 +260,23 @@ async function executeActive(py: PyodideInterface): Promise<void> {
     py.globals.delete("__stela_code");
     py.globals.delete("__stela_inputs_json");
     py.globals.delete("__stela_query");
-    for (const input of [...job.inputs.values(), ...job.fetched.values()]) {
-      try {
-        py.FS.unlink(input.path);
-      } catch {
-        // best effort
-      }
-    }
-    try {
-      py.FS.rmdir(`/stela-inputs/${job.request.jobId}`);
-    } catch {
-      // best effort
-    }
+    py.globals.delete("__stela_semantic");
+    for (const pending of semanticPending.values()) pending.reject(new Error("Python job finished"));
+    semanticPending.clear();
+    // Lazy relations retain their inputs until this workspace Worker is terminated.
     active = null;
   }
 }
 
 function handle(message: InboundMessage): Promise<void> | void {
+  if (message.type === "semantic-result") {
+    if (active?.request.jobId !== message.jobId) return;
+    const pending = semanticPending.get(message.requestId);
+    semanticPending.delete(message.requestId);
+    if (message.error) pending?.reject(new Error(message.error));
+    else pending?.resolve(message.result ?? "{}");
+    return;
+  }
   if (message.type === "start") return start(message);
   if (message.type === "chunk") return chunk(message);
   if (message.type === "query-input") return queryInput(message);

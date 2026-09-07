@@ -863,7 +863,10 @@ interface QueryArtifactDescriptor {
 }
 ```
 
-`execute_python({ sources?, code })` runs one fresh, stateless program. Queries
+`execute_python({ sources?, code, reset? })` runs a cell in the current chat's
+Vault/session-isolated workspace. Omitted sources reuse snapshots; redeclaring
+an alias refreshes it without updating previously computed DataFrames. `reset`
+clears state. Every cell clears the old `result` binding before execution. Queries
 known before execution should be declared as sources and read by alias:
 
 ```python
@@ -907,8 +910,8 @@ An app-owned Web Worker loads bundled Pyodide, DuckDB, pandas, NumPy, and their
 pinned offline dependencies, runs code through `eval_code_async` so top-level
 `await` works, and requires a bounded scalar/DataFrame/relation in `result`.
 There is no Node API, host filesystem, subprocess, package installation, or
-general network bridge, and `query()` is the only injected JS callable. That one
-callable ends the sandbox's airtight JS isolation, so containment rests on
+general network bridge. Only read-only `query()` and bounded semantic RPC are
+injected JS capabilities. These end the sandbox's airtight JS isolation, so containment rests on
 self-only CSP over a `file://` opaque origin, a Worker with no `window` or
 preload, credentials never leaving main, main-side read-only enforcement, and
 one journal entry per call. Timeout/cancellation terminates the Worker.
@@ -916,8 +919,90 @@ Artifacts are disposable, capped, TTL-cleaned, and never written to Vault
 SQLite/JSONL, Markdown, Agent history, or Git. Headless evaluation implements
 the same `query` protocol over the same Python program inside isolated Node
 workers, without changing the desktop runtime or exposing a second model tool.
-([ADR-0086](./adr/0086-declarative-query-sources-for-python.md),
+([ADR-0089](./adr/0089-session-python-workspaces.md),
 [ADR-0068](./adr/0068-headless-pyodide-agent-evaluation.md))
+
+`IPythonWorkspaceSnapshot` reports generation, ready/partial-mutation/lost status,
+source versions/read times/incompleteness, refreshed aliases and bounded variable
+types/shapes. It is runtime state, not proof of current database contents. Python
+objects and inputs are memory-only and lost on application shutdown/Worker disposal.
+Ordinary exceptions retain partial mutations; there is no transactional rollback.
+Source aliases do not create Python variables: `tables['t']` is the relation and
+`t_df = to_df('t')` explicitly creates a pandas snapshot. A missing name matching
+a retained source gets alias-specific guidance, not a recommendation to reload.
+`result` is a reserved output slot removed before **every** cell, regardless of
+source refresh. Reusable intermediate values need other variable names. This is
+not dependency invalidation. Explicit reset followed by NameError does not prove
+unexpected Worker-loss handling; only `workspace_lost` establishes that path.
+
+`semantic.classify`, `semantic.extract`, and `semantic.resolve` return a batch object
+with `.rows` (stable positional id, status, value, evidence, error) and `.summary`
+(coverage counts, cached results and cumulative per-run usage). Resolve additionally
+returns `.mapping` with canonical IDs from actual input records. Candidate scopes
+are explicit blocking fields, normalized with NFKC/case folding/whitespace, ranked
+by token overlap and capped at 20 per record. Missing/truncated/contradictory
+candidates remain unresolved; matching edges are not automatically transitive.
+These helpers are discoverable through the `execute_python` description and the
+bundled `load_skill(name='semantic-analysis')` instructions, not separate tools.
+Synthetic DataFrames need no database connection. See the
+[Chinese acceptance checklist](./testing/semantic-workspace-acceptance.md) for
+offline service integration coverage and the separate desktop UI checks.
+
+The typed host broker accepts at most eight records per request, validates a
+documented JSON-schema subset, and checks evidence against original selected fields.
+Selected data is redacted using the existing secret filter and treated as untrusted
+data, not instructions. Schema/evidence validation does not establish semantic truth.
+Each row receives at most two extra attempts. Shared run defaults are 1000 records
+or pairs, 200 requests and 200000 tokens; token reservations use conservative UTF-8
+input estimates and bounded output, reconciled with provider usage when available.
+No dollar estimate is fabricated. The app-wide inference concurrency limit is four.
+
+Semantic operation additions ([ADR-0091](./adr/0091-semantic-operation-completeness.md)):
+
+- `phase=preflight`, `totalRecords` and up to eight probe records inspect cache/capacity
+  through the existing authorized broker, without provider inference. `control` carries
+  remaining budget, `canStartFull`, bounded/complete cache coverage, conservative
+  required-record upper bound, minimum requests, ledger revision and opaque model identity.
+  Preflight is not a reservation; subsequent execution always enforces the shared budget.
+- Python defaults to full intent; `allow_partial=True` is explicit partial work, not sampling.
+  Exhaustion drains in-flight batches then synthesizes remaining unprocessed rows locally.
+- `required_fields` must be selected and are validated again by the host. This does not
+  infer natural-language dependencies. classify/extract optionally accept unique `id_column`.
+- `.rows` remains a DataFrame; `.to_records()` returns dictionaries. `.summary.complete`
+  and `.require_complete()` expose unresolved/failed/unprocessed coverage explicitly.
+  `.summary.reused` counts retained rows, separately from cache hits and run usage.
+- `resume=previous_batch` requires identical full input/order/definition and host model
+  identity. A private copied row snapshot preserves successful/unresolved rows even if
+  the displayed DataFrame is edited. Only failed/unprocessed rows are retried. A model
+  switch requires an explicit new operation. Workspace reset/loss destroys this state.
+
+Generation lifecycle ([ADR-0095](./adr/0095-generation-lifecycle-and-safe-closeout.md))
+separates caller cancellation, opt-in response/first-delta/idle/total deadlines, and
+a retry window starting at the first transient failure. `IGenerationDiagnostic`
+retains delta timing/counts/bytes and complete/partial/unknown usage, never extra
+thinking text. Normal generation has no fixed three-minute ceiling. Shared evidence
+closeout makes at most one tool-free request, only after eligible failure with
+committed query/Python evidence and remaining time. `AgentEvent.error.partialAnswer`
+is optional: it displays recoverable evidence without converting error to completed.
+Legacy errors remain compatible. DAB preserves executionFailure, closeout status
+and generationUsage uncertainty separately from evaluator validity.
+
+`analysis.contract(required=[...])` is local evidence bookkeeping, available without
+semantic transmission ([ADR-0093](./adr/0093-evidence-backed-answer-contract.md)).
+Supported fields: population/metric/granularity/denominator/business_rule/time_range.
+`claim(field,value,source=...,evidence=...)` rejects missing evidence or silent conflicts.
+`check_equal`, `check_granularity` and `check_coverage` verify supplied observations;
+`report()` exposes unresolved claims/failed checks and `structurallyReady`.
+`require_ready()` rejects missing or failed evidence but is not an Agent final-answer
+gate. Model-authored claims and completeness of a filtered input are not certified.
+Recipes are in the bundled `analysis-verification` Skill; skip trivial tasks.
+
+`AiSettings.semanticProfileId` defaults to the current run profile;
+`semanticBudget` supplies configurable limits. Grants are local under application
+userData, keyed by Vault and endpoint/vendor/model, never in Vault settings or Git.
+First transmission and budget increases require explicit confirmation. Revocation
+aborts active semantic calls. `semantic_progress` exposes counts and usage; child
+inference tokens are charged to the parent Agent run. See [ADR-0090](./adr/0090-bounded-semantic-execution.md).
 
 `search_sql_usage({ table })` finds a table in either read or write position;
 the Agent uses it when established joins, filters, write direction, or business

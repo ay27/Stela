@@ -8,6 +8,7 @@
  */
 
 import { z } from "zod";
+import { semanticBudgetSchema } from "./semantic";
 
 import { IPC, type IpcChannel } from "./ipc-channels";
 import { analysisCanvasFlowLayoutPatchSchema } from "./analysis-canvas";
@@ -123,6 +124,8 @@ const partialSettingsSchema = z
         automaticSkillMaintenanceEnabled: z.boolean(),
         inlineCompletionEnabled: z.boolean(),
         completionProfileId: z.string().min(1).max(128).nullable(),
+        semanticProfileId: z.string().min(1).max(128).nullable(),
+        semanticBudget: semanticBudgetSchema,
       })
       .partial()
       .optional(),
@@ -613,10 +616,26 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
           ]),
           elapsedMs: z.number().int().nonnegative(),
           error: z.string().max(16_000).optional(),
+          stdoutTruncated: z.boolean().optional(),
+          workspace: z.object({
+            generation: stringMin1.max(128),
+            status: z.enum(["ready", "partial_mutation_possible", "lost"]),
+            sources: z.array(z.object({ alias: stringMin1.max(64), version: stringMin1.max(256),
+              rowCount: z.number().int().nonnegative(), readAt: stringMin1.max(128), incomplete: z.boolean().optional() }).strict()).max(128),
+            variables: z.array(z.object({ name: stringMin1.max(128), type: stringMin1.max(128),
+              rows: z.number().int().nonnegative().optional(), columns: z.number().int().nonnegative().optional() }).strict()).max(100),
+            refreshedAliases: z.array(stringMin1.max(64)).max(128),
+          }).strict().optional(),
         })
         .strict(),
     })
     .strict(),
+
+  [IPC.AI_PYTHON_RUNTIME_SEMANTIC]: z.object({ jobId: z.string().uuid(), request: stringMin1.max(100_000) }).strict(),
+  [IPC.AI_PYTHON_WORKSPACE_LOST]: z.object({ workspaceId: z.string().uuid() }).strict(),
+  [IPC.AI_PYTHON_WORKSPACE_STATUS]: z.object({ sessionId: agentHistorySegment }).strict(),
+  [IPC.AI_PYTHON_WORKSPACE_RESET]: z.object({ sessionId: agentHistorySegment, cancelActive: z.boolean().optional() }).strict(),
+  [IPC.AI_SEMANTIC_REVOKE]: z.object({}).strict(),
 
   // Git 版本控制
   [IPC.GIT_IS_REPO]: z.object({}).strict(),

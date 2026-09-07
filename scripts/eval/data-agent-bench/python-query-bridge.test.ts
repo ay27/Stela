@@ -67,8 +67,8 @@ try {
     query: "SELECT region, amount FROM orders",
   });
   // Each fetched relation reports its own shape, so the model never probes it.
-  assert.match(result.stdout, /\[query\] q1: 3 rows x 2 cols \| region:VARCHAR, amount:BIGINT/);
-  assert.match(result.stdout, /\[query\] q2: 2 rows x 2 cols/);
+  assert.match(result.stdout, /\[query\] q_[a-f0-9]{32}_1: 3 rows x 2 cols \| region:VARCHAR, amount:BIGINT/);
+  assert.match(result.stdout, /\[query\] q_[a-f0-9]{32}_2: 2 rows x 2 cols/);
 
   // Aliases must not collide across calls in one execution.
   const twice = await pool.execute({

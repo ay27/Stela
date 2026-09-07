@@ -11,6 +11,7 @@
  */
 
 import { promises as fs } from "node:fs";
+import { semanticBudgetSchema, DEFAULT_SEMANTIC_BUDGET } from "../shared/semantic";
 
 import { AppError } from "@shared/errors";
 import type {
@@ -255,6 +256,9 @@ function sanitizeAi(input: unknown): AiSettings {
     inlineCompletionEnabled:
       r.inlineCompletionEnabled === true && completionProfileId !== null,
     completionProfileId,
+    semanticProfileId: typeof r.semanticProfileId === "string" && profiles.some((p) => p.id === r.semanticProfileId) ? r.semanticProfileId : null,
+    semanticBudget: semanticBudgetSchema.safeParse(r.semanticBudget).success
+      ? semanticBudgetSchema.parse(r.semanticBudget) : { ...DEFAULT_SEMANTIC_BUDGET },
     agentMaxIterations,
     agentWallClockMs,
     agentAllowMutations: r.agentAllowMutations === true,

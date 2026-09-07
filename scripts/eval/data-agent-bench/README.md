@@ -1,5 +1,64 @@
 # Stela × DataAgentBench
 
+## 2026-09-06 执行修复后的对照
+
+主模型启用与桌面一致的生成级恢复：最多三次尝试、共享单次生成 180 秒期限，
+不重放已执行工具；取消、敏感内容、鉴权与额度错误不盲重试。
+`generation_attempt` 记录有界脱敏诊断，已知失败尝试 usage 计入总量。
+批量语义默认全量意图 preflight，预算不足提前返回未处理；不是自动抽样。
+
+Manifest 新增源码 SHA-256 指纹和执行策略版本，无 `.git` 的同步目录也能核对。
+`--resume` 拒绝不同源码/策略、模型/端点/推理等级/并发/限制，或缺少指纹的旧目录；
+本次请使用**新的 output**。
+指纹覆盖源码、共享 Python、playbooks、评测和依赖锁，不读取凭据或结果目录。
+
+小型边界校准入口：
+
+```bash
+npm run eval:semantic-boundaries
+# 以下命令会使用 STELA_EVAL_* 环境变量发起真实模型请求；不会自动执行。
+npm run eval:semantic-boundaries -- --run-model --split dev --reasoning-effort high --output /tmp/stela-semantic-dev-1
+npm run eval:semantic-boundaries -- --run-model --split test --reasoning-effort high --output /tmp/stela-semantic-test-1
+```
+
+默认仅校验 11 个合成样本，不代表模型准确率；开发/保留集分开，expected 不进入
+请求。输出保存模型、推理等级、源码/样本指纹、逐项结果和用量，不冒充 DAB 得分。
+先扩充真实业务标注保留集，再判断模型或提示改动收益。
+完整 DAB 使用同一源码下的 stateful-only 与 stateful+semantic 配对多次对照；
+先覆盖历史语义任务及退步任务，并带原来通过的控制组，最后再跑全量。
+不要将失败子集拼接成正式总分，也不要把提前失败带来的耗时下降计为收益。
+
+## 有状态工作区与批量语义对照
+
+默认启用同一 case 内的 Python 工作区；每个 case/trial 独占 Worker 到结束，
+超过 `--python-concurrency` 的 case 排队，不会中途驱逐变量。不同 case 不共享状态。
+`--stateless-python` 用于无状态消融。
+
+批量文本发送默认关闭。显式加 `--allow-semantic-transmission` 才允许 Python
+调用 `semantic.classify/extract/resolve`，相当于本次评测的发送预授权。
+`--semantic-model MODEL` 可在同一个已配置 endpoint/API key 下选择独立语义模型；
+省略则沿用主 Agent。预算为每个 case/run 共享，而非每次 Python 调用重新计算：
+
+```bash
+npm run eval:data-agent-bench -- \
+  --dab-root /root/data_agent_bench --all --runs 3 \
+  --output /root/dab-results/stela-workspace-semantic \
+  --concurrency 3 --mongo-concurrency 2 --python-concurrency 2 \
+  --reasoning-effort high --bridge-timeout-ms 600000 \
+  --allow-semantic-transmission \
+  --semantic-records 1000 --semantic-requests 200 --semantic-tokens 200000
+```
+
+分别使用不同 output 运行四组：`--stateless-python`、默认工作区、
+`--stateless-python --allow-semantic-transmission`、默认工作区加语义授权。
+Manifest 记录模式、模型和预算；`--resume` 不允许混合不同条件。语义子调用的
+token 计入总 usage，逐批状态记录在 trace。主模型轮次不包含子模型请求，因此
+比较成本必须同时看总 token、semantic request 数和时间。
+
+本地无付费推理验证：`npm run test:semantic`、`npm run test:python-workspace`。
+功能测试不能证明准确率提升；真实 DAB 应做配对重复测试并同时报告覆盖率和成本，
+失败子集复跑不能替代全量成绩。
+
 This eval runs Stela's real system prompt, `AgentHarness`, provider transport,
 and Agent tools headlessly on the Linux machine that hosts
 [DataAgentBench](https://github.com/ucbepic/DataAgentBench). Electron is not

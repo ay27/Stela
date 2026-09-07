@@ -31,6 +31,7 @@ type WorkerMessage =
   | { type: "initialized" }
   | { type: "ready"; jobId: string }
   | { type: "query"; jobId: string; requestId: string; connectionName: string; request: string }
+  | { type: "semantic"; jobId: string; requestId: string; request: string }
   | { type: "result"; jobId: string; result: PythonExecutionResult; fatal?: boolean }
   | { type: "fatal"; jobId: string | null; error: string };
 
@@ -49,6 +50,7 @@ export async function assertPyodideAssets(assetDir: string): Promise<void> {
 }
 
 class PyodideSlot {
+  private lost = false;
   private worker: Worker | null = null;
   private initialized: Promise<void> | null = null;
   private terminating: Promise<number> | null = null;
@@ -114,15 +116,18 @@ class PyodideSlot {
   }
 
   async execute(input: Parameters<AgentPythonExecutorOps["execute"]>[0]): Promise<PythonExecutionResult> {
+    if (this.lost) { this.lost = false; throw new Error("workspace_lost: rebuild sources and variables explicitly in the next call"); }
     await this.ensureWorker();
     const worker = this.worker;
     if (!worker) throw new Error("Pyodide worker is unavailable.");
     const jobId = randomUUID();
     const request: PythonExecutionRequest = {
       jobId,
+      workspaceId: input.sessionId,
       code: input.code,
       timeoutMs: EXECUTION_TIMEOUT_MS,
       canQuery: Boolean(input.runQuery),
+      canSemantic: Boolean(input.runSemantic),
       inputs: Object.entries(input.artifacts).map(([alias, artifact]) => ({
         alias,
         runId: artifact.runId,
@@ -130,6 +135,7 @@ class PyodideSlot {
         columns: artifact.columns,
         rowCount: artifact.rowCount,
         byteSize: artifact.byteSize,
+        incomplete: artifact.incomplete,
       })),
     };
     const inputBytes = request.inputs.reduce((total, item) => total + item.byteSize, 0);
@@ -139,29 +145,32 @@ class PyodideSlot {
     if (inputBytes > MAX_QUERY_BYTES_PER_JOB) {
       throw new Error("execute_python sources exceed the total bytes budget for one execution");
     }
-    const deadlineAt = Date.now() + (input.runQuery ? MAX_TOTAL_MS : EXECUTION_TIMEOUT_MS);
+    const deadlineAt = Date.now() + (input.runQuery || input.runSemantic ? MAX_TOTAL_MS : EXECUTION_TIMEOUT_MS);
     let queryCount = request.inputs.length;
     let queryAliasCounter = 0;
     let queryBytes = inputBytes;
+    let externalWaits = 0;
 
     return new Promise<PythonExecutionResult>((resolve, reject) => {
+      const jobAbort = new AbortController();
       let settled = false;
       let timer: ReturnType<typeof setTimeout>;
       const finish = (callback: () => void, reset = false): void => {
         if (settled) return;
         settled = true;
+        jobAbort.abort("Python job finished or cancelled");
         clearTimeout(timer);
         input.signal?.removeEventListener("abort", onAbort);
         worker.off("message", onMessage);
         worker.off("error", onError);
         worker.off("exit", onExit);
-        if (reset) this.reset();
+        if (reset) { this.reset(); this.lost = true; }
         callback();
       };
       const fail = (error: Error, reset = true): void => finish(() => reject(error), reset);
       const armTimer = (): void => {
         clearTimeout(timer);
-        const slice = EXECUTION_TIMEOUT_MS + 2_000;
+        const slice = externalWaits ? MAX_TOTAL_MS : EXECUTION_TIMEOUT_MS + 2_000;
         const remaining = deadlineAt - Date.now();
         const totalExhausted = remaining <= slice;
         timer = setTimeout(
@@ -226,7 +235,7 @@ class PyodideSlot {
           let alias: string;
           do {
             queryAliasCounter += 1;
-            alias = `q${queryAliasCounter}`;
+            alias = `q_${jobId.replaceAll("-", "")}_${queryAliasCounter}`;
           } while (request.inputs.some((item) => item.alias === alias));
           descriptor = {
             alias,
@@ -235,6 +244,7 @@ class PyodideSlot {
             columns: artifact.columns,
             rowCount: artifact.rowCount,
             byteSize: artifact.byteSize,
+            incomplete: artifact.incomplete,
           };
         } catch (error) {
           reply({ type: "query-error", error: error instanceof Error ? error.message : String(error) });
@@ -249,7 +259,19 @@ class PyodideSlot {
         }
       };
       const onMessage = (message: WorkerMessage): void => {
-        if (message.type === "ready" && message.jobId === jobId) {
+        if (message.type === "semantic" && message.jobId === jobId) {
+          externalWaits++;
+          armTimer();
+          void (async () => {
+            try {
+              if (!input.runSemantic || settled || input.signal?.aborted) throw new Error("Semantic execution unavailable");
+              const response = await input.runSemantic(message.request, jobAbort.signal);
+              if (!settled) worker.postMessage({ type: "semantic-result", jobId, requestId: message.requestId, result: JSON.stringify(response) });
+            } catch (error) {
+              if (!settled) worker.postMessage({ type: "semantic-result", jobId, requestId: message.requestId, error: String(error) });
+            } finally { externalWaits--; if (!settled) armTimer(); }
+          })();
+        } else if (message.type === "ready" && message.jobId === jobId) {
           void stream().catch((error) => fail(error instanceof Error ? error : new Error(String(error))));
         } else if (message.type === "query" && message.jobId === jobId) {
           void serveQuery(message).catch((error) =>
@@ -280,6 +302,7 @@ class PyodideSlot {
   async close(): Promise<void> {
     this.reset();
     if (this.terminating) await this.terminating;
+    this.lost = false;
   }
 }
 
@@ -319,10 +342,36 @@ export class HeadlessPyodidePool implements AgentPythonExecutorOps {
   async execute(input: Parameters<AgentPythonExecutorOps["execute"]>[0]): Promise<PythonExecutionResult> {
     const slot = await this.acquire();
     try {
-      return await slot.execute(input);
+      const result = await slot.execute(input);
+      return { ...result, workspace: undefined };
     } finally {
+      await slot.close();
       this.release(slot);
     }
+  }
+
+  /** Reserve for an entire case, never interleave another case's Python state. */
+  async lease(): Promise<AgentPythonExecutorOps & { close(): Promise<void> }> {
+    const slot = await this.acquire();
+    let closed = false;
+    let busy = false;
+    let owner: string | null = null;
+    return {
+      execute: async (input) => {
+        const key = `${input.vaultPath}\0${input.sessionId}`;
+        if (closed || busy || (owner !== null && owner !== key)) throw new Error("Workspace lease is closed, busy, or belongs to another session");
+        owner = key;
+        busy = true;
+        try { return await slot.execute(input); } finally { busy = false; }
+      },
+      reset: async () => { if (busy) throw new Error("Workspace is busy"); await slot.close(); },
+      close: async () => {
+        if (closed) return;
+        closed = true;
+        await slot.close();
+        this.release(slot);
+      },
+    };
   }
 
   async close(): Promise<void> {

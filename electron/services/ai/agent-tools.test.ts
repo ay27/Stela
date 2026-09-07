@@ -101,10 +101,22 @@ try {
       requestProposal: async () => false,
     });
     assert.equal(tools.length, 19, "the provider-facing tool list must remain compact");
+    const pythonDescription = tools.find((tool) => tool.name === "execute_python")!.description;
+    assert.match(pythonDescription, /Aliases are not variables/);
+    assert.match(pythonDescription, /result is cleared before EVERY cell/);
+    assert.doesNotMatch(pythonDescription, /semantic\.classify/);
+    const semanticTools = createAgentTools({ ctx: {
+      ...baseCtx, queryArtifacts: {} as never, pythonExecutor: {} as never,
+      runSemantic: async () => { throw new Error("not invoked"); },
+    }, requestProposal: async () => false });
+    assert.match(semanticTools.find((tool) => tool.name === "execute_python")!.description,
+      /semantic\.classify\/extract\/resolve.*load_skill name=semantic-analysis/);
+    // Semantic-capable runs include the helper discovery contract (~220 chars).
+    assert.ok(JSON.stringify(semanticTools).length <= 17_000, `semantic discovery stays within tool prompt budget: ${JSON.stringify(semanticTools).length}`);
     const serializedTools = JSON.stringify(tools);
     assert.ok(
-      serializedTools.length <= 16_500,
-      `provider-facing tools must stay <= 16500 chars, got ${serializedTools.length}`,
+      serializedTools.length <= 17_000,
+      `provider-facing tools must stay <= 17000 chars, got ${serializedTools.length}`,
     );
     assert.equal(tools.some((tool) => tool.name === "list_catalog"), true);
     assert.equal(tools.some((tool) => tool.name === "plan"), true);
@@ -930,7 +942,7 @@ try {
     assert.equal(noResult.ok, true, noResult.text);
     const noResultPayload = JSON.parse(noResult.text) as { instruction?: string };
     assert.match(noResultPayload.instruction ?? "", /No structured result was assigned/);
-    assert.match(noResultPayload.instruction ?? "", /redeclares its sources and variables/);
+    assert.match(noResultPayload.instruction ?? "", /Reuse the workspace/);
 
     const statelessFailure = await dispatchTool(
       "execute_python",
@@ -949,7 +961,28 @@ try {
       },
     );
     assert.equal(statelessFailure.ok, false);
-    assert.match(statelessFailure.text, /fresh stateless sandbox/);
+    assert.match(statelessFailure.text, /inspect the workspace snapshot/);
+
+    for (const missing of ["docs", "result"]) {
+      const failure = await dispatchTool("execute_python", JSON.stringify({ code: `result = ${missing}` }), {
+        ...ctx,
+        pythonExecutor: { execute: async () => ({
+          ok: false, stdout: "", value: { kind: "none" as const }, elapsedMs: 1,
+          error: `NameError: name '${missing}' is not defined`,
+          workspace: { generation: "fixture", status: "partial_mutation_possible" as const,
+            variables: [], refreshedAliases: [], sources: [
+              { alias: "docs", version: "source-run", readAt: "fixture", rowCount: 3 },
+            ] },
+        }) },
+      });
+      const payload = JSON.parse(failure.text) as { guidance: string };
+      assert.equal(failure.ok, false);
+      if (missing === "docs") {
+        assert.match(payload.guidance, /registered source alias, not a Python variable/);
+        assert.ok(payload.guidance.includes('to_df("docs")'));
+        assert.match(payload.guidance, /do not reset or reload/);
+      } else assert.match(payload.guidance, /per-cell output slot, cleared before every cell/);
+    }
 
     // Mutations are refused in the main process even with mutations enabled.
     sandboxDescriptors.length = 0;

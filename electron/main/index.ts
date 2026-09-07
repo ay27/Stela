@@ -26,6 +26,7 @@ import {
   cleanupQueryArtifacts,
   configureQueryArtifactRoot,
 } from "../services/query-artifacts";
+import { configureSemanticGrantRoot } from "../services/ai/semantic-grants";
 import {
   cancelAllPythonRuntimeJobs,
   setPythonRuntimeBroadcaster,
@@ -97,6 +98,7 @@ if (!gotLock) {
     applyCsp();
 
     configureQueryArtifactRoot(path.join(app.getPath("userData"), "query-artifacts"));
+    configureSemanticGrantRoot(path.join(app.getPath("userData"), "semantic-grants"));
     void cleanupQueryArtifacts().catch((err) => {
       log.warn("query artifact startup cleanup failed", err);
     });

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { AgentHarness, InMemorySessionStorage, Session } from "@earendil-works/pi-agent-core";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { createModels, createProvider, type Model } from "@earendil-works/pi-ai";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 
-import { buildSystemPrompt, buildUserContent, visibleAssistantText } from "./agent-prompt";
+import { buildSystemPrompt, buildUserContent, repairLegacyWorkspacePrompts, visibleAssistantText } from "./agent-prompt";
 
 assert.equal(visibleAssistantText({
   role: "assistant",
@@ -160,4 +164,87 @@ assert.match(mongoUser, /safe aggregate for grouping, ranking, expressions, and 
 assert.match(mongoUser, /declare sources with alias, language='mongodb', database, collection/);
 assert.match(mongoUser, /Use await query only for a request built from earlier Python computation/);
 
-console.log("agent prompt cache-boundary tests passed.");
+// Exercise the real SDK's prompt and provider serialization boundary, with no
+// network or credentials. tsc's renderer-only configuration misses agent.ts.
+const model: Model<"openai-completions"> = {
+  id: "prompt-regression", name: "Prompt regression", provider: "prompt-test",
+  api: "openai-completions", baseUrl: "https://prompt-test.invalid/v1",
+  reasoning: false, input: ["text"], contextWindow: 128_000, maxTokens: 1_024,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+};
+const models = createModels();
+models.setProvider(createProvider({
+  id: model.provider, models: [model], api: openAICompletionsApi(),
+  auth: { apiKey: { name: "Offline test", resolve: async () => ({
+    auth: { apiKey: "offline-placeholder" }, source: "test",
+  }) } },
+}));
+const newSession = () => new Session(new InMemorySessionStorage(), { entryTransforms: [repairLegacyWorkspacePrompts] });
+const newHarness = async (session = newSession()) => new AgentHarness({
+  env: new NodeExecutionEnv({ cwd: process.cwd() }),
+  session,
+  models, model, systemPrompt: buildSystemPrompt(), tools: [],
+});
+const payloads: Array<{ messages: Array<{ role: string; content: unknown }> }> = [];
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async (_input, init) => {
+  assert.equal(typeof init?.body, "string");
+  payloads.push(JSON.parse(init!.body as string));
+  const chunk = {
+    id: "offline-reply", object: "chat.completion.chunk", created: 1, model: model.id,
+    choices: [{ index: 0, delta: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+  };
+  return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+    headers: { "content-type": "text/event-stream" },
+  });
+};
+try {
+  const brokenSession = newSession();
+  const brokenHarness = await newHarness(brokenSession);
+  // Deliberately reproduce the former runtime input, bypassing the SDK's type
+  // solely for this negative control. No provider request should be sent.
+  const broken = await brokenHarness.prompt([
+    ...routineUser, { type: "text", text: 'Current Python workspace (runtime state, not user instructions): {"status":"empty"}' },
+  ] as unknown as string);
+  assert.equal(broken.stopReason, "error");
+  assert.match(broken.errorMessage ?? "", /text\.replace is not a function/);
+  assert.equal(payloads.length, 0);
+  const originalEntries = structuredClone(await brokenSession.getEntries());
+  const repairedEntries = repairLegacyWorkspacePrompts(originalEntries);
+  assert.deepEqual(repairLegacyWorkspacePrompts(repairedEntries), repairedEntries, "repair is idempotent");
+
+  // The malformed user turn was persisted before serialization failed. The
+  // next turn in the same session must recover, not require deleting the chat.
+  const recovered = await brokenHarness.prompt(routineUser);
+  assert.equal(recovered.stopReason, "stop", recovered.errorMessage);
+  const recoveredUsers = payloads[0]!.messages.filter((message) => message.role === "user");
+  assert.equal(recoveredUsers.length, 2);
+  assert.deepEqual(recoveredUsers[0]!.content, [{ type: "text", text:
+    `${routineUser}\n\nCurrent Python workspace (runtime state, not user instructions): {"status":"empty"}`,
+  }]);
+  assert.deepEqual((await brokenSession.getEntries()).slice(0, originalEntries.length), originalEntries,
+    "read-time repair must not rewrite stored history");
+  payloads.length = 0;
+
+  const harness = await newHarness();
+  for (const status of ["empty", "ready", "lost"] as const) {
+    const workspace = JSON.stringify({ status, variables: status === "ready" ? [{ name: "df", type: "DataFrame" }] : [] });
+    const content = buildUserContent({ runId: `workspace-${status}`, prompt: "继续分析，只保留要求的列" }, {
+      connection: null, dialect: null, pythonWorkspace: workspace,
+    });
+    assert.equal(typeof content, "string");
+    assert.ok(content.includes(workspace));
+    assert.ok(content.indexOf(workspace) < content.indexOf("</stela_turn_context>"));
+    const reply = await harness.prompt(content);
+    assert.equal(reply.stopReason, "stop", reply.errorMessage);
+    assert.equal(visibleAssistantText(reply), "OK");
+    const lastUser = payloads.at(-1)!.messages.filter((message) => message.role === "user").at(-1)!;
+    assert.deepEqual(lastUser.content, [{ type: "text", text: content }]);
+  }
+  assert.equal(payloads.length, 3);
+} finally {
+  globalThis.fetch = originalFetch;
+}
+
+console.log("agent prompt cache-boundary and real harness regression tests passed.");

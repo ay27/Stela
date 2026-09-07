@@ -283,6 +283,13 @@ try {
     (await listAgentHistory(vaultPath, "retention")).filter((summary) => summary.deviceSlug === "retention").length,
     20,
   );
+  const closeoutStorage = await openLocalAgentSessionStorage(vaultPath, "closeout", "partial");
+  await appendAgentHistoryStarted(closeoutStorage, { runId: "partial", sessionId: "partial", prompt: "Calculate a value" });
+  const partialEvent = { type: "error" as const, runId: "partial", message: "terminated", partialAnswer: "Incomplete: committed value is 42." };
+  await appendAgentHistoryEvent(closeoutStorage, partialEvent);
+  await appendAgentHistoryFinished(closeoutStorage, "partial");
+  const partialHistory = await loadAgentHistory(vaultPath, { deviceSlug: "closeout", sessionId: "partial" });
+  assert.deepEqual(partialHistory.runs[0]?.events, [partialEvent], "error and partial answer both persist without a final success event");
 } finally {
   await rm(vaultPath, { force: true, recursive: true });
 }

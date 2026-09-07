@@ -1,6 +1,8 @@
 /** Main-process broker between Agent tools and the app-owned renderer Worker. */
 
 import { randomUUID } from "node:crypto";
+import type { SemanticRunner, ISemanticResponse } from "../../shared/semantic";
+import type { IPythonWorkspaceSnapshot } from "../../shared/types";
 
 import type {
   PythonExecutionInput,
@@ -49,6 +51,11 @@ interface PendingJob {
   queryAliasCounter: number;
   queryBytes: number;
   runQuery?: PythonJobQueryRunner;
+  runSemantic?: SemanticRunner;
+  externalWaits: number;
+  abort: AbortController;
+  authorizationWaits: number;
+  authorizationStartedAt: number;
   signal?: AbortSignal;
   onAbort?: () => void;
 }
@@ -57,6 +64,32 @@ type Broadcaster = (channel: IpcEventChannel, payload: unknown) => boolean;
 
 let broadcaster: Broadcaster | null = null;
 const pending = new Map<string, PendingJob>();
+const workspaces = new Map<string, { id: string; snapshot?: IPythonWorkspaceSnapshot; lost: boolean }>();
+let onWorkspaceCleared: (vault: string, session: string) => void = () => {};
+export function setPythonWorkspaceClearListener(callback: typeof onWorkspaceCleared): void { onWorkspaceCleared = callback; }
+const keyFor = (vaultPath: string, sessionId: string): string => `${vaultPath}\0${sessionId}`;
+export function describePythonWorkspace(vaultPath: string, sessionId: string): string {
+  const workspace = workspaces.get(keyFor(vaultPath, sessionId));
+  return JSON.stringify(workspace?.lost ? { status: "lost", instruction: "Old Python variables are unavailable. Rebuild explicitly." } : workspace?.snapshot ?? { status: "empty" });
+}
+export async function resetPythonWorkspace(vaultPath: string, sessionId: string): Promise<void> {
+  const key = keyFor(vaultPath, sessionId);
+  const workspace = workspaces.get(key);
+  if (!workspace) return;
+  if ([...pending.values()].some((j) => j.request.workspaceId === workspace.id)) throw new Error("Cannot reset an active Python workspace");
+  broadcaster?.(IPC_EVENTS.AI_PYTHON_WORKSPACE_RESET, { workspaceId: workspace.id });
+  workspaces.delete(key);
+  onWorkspaceCleared(vaultPath, sessionId);
+}
+export function pythonWorkspaceLost(input: { workspaceId: string }): { accepted: boolean } {
+  const workspace = [...workspaces.values()].find((w) => w.id === input.workspaceId);
+  if (!workspace) return { accepted: false };
+  workspace.lost = true;
+  workspace.snapshot = undefined;
+  const key = [...workspaces.entries()].find(([, w]) => w === workspace)?.[0];
+  if (key) { const [vault, session] = key.split("\0"); onWorkspaceCleared(vault!, session!); }
+  return { accepted: true };
+}
 
 export function setPythonRuntimeBroadcaster(next: Broadcaster | null): void {
   broadcaster = next;
@@ -66,6 +99,7 @@ function finish(jobId: string): PendingJob | null {
   const job = pending.get(jobId) ?? null;
   if (!job) return null;
   pending.delete(jobId);
+  job.abort.abort("Python job finished or cancelled");
   if (job.timer) clearTimeout(job.timer);
   if (job.signal && job.onAbort) job.signal.removeEventListener("abort", job.onAbort);
   return job;
@@ -73,13 +107,15 @@ function finish(jobId: string): PendingJob | null {
 
 function armTimer(jobId: string, job: PendingJob): void {
   if (job.timer) clearTimeout(job.timer);
-  const slice = job.sliceMs + 2_000;
+  if (job.authorizationWaits > 0) return;
+  const slice = job.externalWaits > 0 ? MAX_TOTAL_MS : job.sliceMs + 2_000;
   const remaining = job.deadlineAt - Date.now();
   const totalExhausted = remaining <= slice;
   job.timer = setTimeout(() => {
     const active = finish(jobId);
     if (!active) return;
     broadcaster?.(IPC_EVENTS.AI_PYTHON_RUNTIME_CANCEL, { jobId });
+    pythonWorkspaceLost({ workspaceId: job.request.workspaceId! });
     active.reject(
       new Error(
         totalExhausted
@@ -94,6 +130,7 @@ export async function executePython(input: {
   vaultPath: string;
   sessionId: string;
   code: string;
+  runSemantic?: SemanticRunner;
   artifacts: Record<string, QueryArtifactDescriptor>;
   runQuery?: PythonJobQueryRunner;
   signal?: AbortSignal;
@@ -101,6 +138,16 @@ export async function executePython(input: {
 }): Promise<PythonExecutionResult> {
   if (!broadcaster) throw new Error("Python runtime is unavailable; the renderer is not ready");
   if (input.signal?.aborted) throw new Error("Python execution cancelled");
+  const workspaceKey = keyFor(input.vaultPath, input.sessionId);
+  let workspace = workspaces.get(workspaceKey);
+  if (workspace?.lost) {
+    workspaces.delete(workspaceKey);
+    throw new Error("workspace_lost: prior variables and sources are gone. Rebuild explicitly in the next call.");
+  }
+  if (!workspace) {
+    workspace = { id: randomUUID(), lost: false };
+    workspaces.set(workspaceKey, workspace);
+  }
   const jobId = randomUUID();
   const timeoutMs = Math.min(60_000, Math.max(1_000, input.timeoutMs ?? DEFAULT_TIMEOUT_MS));
   const inputs: PythonExecutionInput[] = Object.entries(input.artifacts).map(([alias, artifact]) => ({
@@ -110,6 +157,7 @@ export async function executePython(input: {
     columns: artifact.columns,
     rowCount: artifact.rowCount,
     byteSize: artifact.byteSize,
+    incomplete: artifact.incomplete,
   }));
   const inputBytes = inputs.reduce((total, item) => total + item.byteSize, 0);
   if (inputs.length > MAX_QUERIES_PER_JOB) {
@@ -120,10 +168,12 @@ export async function executePython(input: {
   }
   const request: PythonExecutionRequest = {
     jobId,
+    workspaceId: workspace.id,
     code: input.code,
     inputs,
     timeoutMs,
     canQuery: Boolean(input.runQuery),
+    canSemantic: Boolean(input.runSemantic),
   };
   return new Promise<PythonExecutionResult>((resolve, reject) => {
     const job: PendingJob = {
@@ -135,11 +185,16 @@ export async function executePython(input: {
       reject,
       timer: null,
       sliceMs: timeoutMs,
-      deadlineAt: Date.now() + (input.runQuery ? MAX_TOTAL_MS : timeoutMs),
+      deadlineAt: Date.now() + (input.runQuery || input.runSemantic ? MAX_TOTAL_MS : timeoutMs),
       queryCount: inputs.length,
       queryAliasCounter: 0,
       queryBytes: inputBytes,
       runQuery: input.runQuery,
+      runSemantic: input.runSemantic,
+      externalWaits: 0,
+      abort: new AbortController(),
+      authorizationWaits: 0,
+      authorizationStartedAt: 0,
       signal: input.signal,
     };
     if (input.signal) {
@@ -147,6 +202,7 @@ export async function executePython(input: {
         const active = finish(jobId);
         if (!active) return;
         broadcaster?.(IPC_EVENTS.AI_PYTHON_RUNTIME_CANCEL, { jobId });
+        pythonWorkspaceLost({ workspaceId: request.workspaceId! });
         reject(new Error("Python execution cancelled"));
       };
       input.signal.addEventListener("abort", job.onAbort, { once: true });
@@ -197,7 +253,7 @@ export async function queryForPythonJob(input: {
   let alias: string;
   do {
     job.queryAliasCounter += 1;
-    alias = `q${job.queryAliasCounter}`;
+    alias = `q_${input.jobId.replaceAll("-", "")}_${job.queryAliasCounter}`;
   } while (job.artifacts.has(alias));
   job.artifacts.set(alias, artifact);
   armTimer(input.jobId, job);
@@ -208,6 +264,7 @@ export async function queryForPythonJob(input: {
     columns: artifact.columns,
     rowCount: artifact.rowCount,
     byteSize: artifact.byteSize,
+    incomplete: artifact.incomplete,
   };
 }
 
@@ -236,6 +293,9 @@ export function respondPythonRuntime(input: {
 }): { accepted: boolean } {
   const job = finish(input.jobId);
   if (!job) return { accepted: false };
+  const workspace = workspaces.get(keyFor(job.vaultPath, job.sessionId));
+  if (workspace && input.result.workspace) workspace.snapshot = input.result.workspace;
+  if (input.result.error?.startsWith("workspace_lost")) pythonWorkspaceLost({ workspaceId: job.request.workspaceId! });
   job.resolve(input.result);
   return { accepted: true };
 }
@@ -245,5 +305,35 @@ export function cancelAllPythonRuntimeJobs(reason = "Python runtime stopped"): v
     const job = finish(jobId);
     if (!job) continue;
     job.reject(new Error(reason));
+  }
+  for (const [key, workspace] of workspaces) {
+    const [vault, session] = key.split("\0");
+    onWorkspaceCleared(vault!, session!);
+    workspace.lost = true;
+    workspace.snapshot = undefined;
+    broadcaster?.(IPC_EVENTS.AI_PYTHON_WORKSPACE_RESET, { workspaceId: workspace.id });
+  }
+}
+
+export async function semanticForPythonJob(input: { jobId: string; request: string }): Promise<ISemanticResponse> {
+  const job = pending.get(input.jobId);
+  if (!job?.runSemantic || job.signal?.aborted) throw new Error("Semantic job is unavailable or no longer active");
+  job.externalWaits++;
+  armTimer(input.jobId, job);
+  try {
+    const result = await job.runSemantic(input.request, job.abort.signal, (waiting) => {
+      if (pending.get(input.jobId) !== job) return;
+      if (waiting) {
+        if (job.authorizationWaits++ === 0) job.authorizationStartedAt = Date.now();
+      } else if (job.authorizationWaits > 0 && --job.authorizationWaits === 0) {
+        job.deadlineAt += Date.now() - job.authorizationStartedAt;
+      }
+      armTimer(input.jobId, job);
+    });
+    if (pending.get(input.jobId) !== job || job.signal?.aborted) throw new Error("Semantic job is no longer active");
+    return result;
+  } finally {
+    job.externalWaits--;
+    if (pending.get(input.jobId) === job) armTimer(input.jobId, job);
   }
 }
