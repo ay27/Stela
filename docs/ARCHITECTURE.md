@@ -641,7 +641,18 @@ After a normal Agent completion with successful tool evidence, the conversationa
 run persists its history and releases its session lock before enqueueing an
 independent Vault-scoped maintenance job. Each Vault runs at most one job and
 keeps only the newest pending job; each job is bounded to 60 seconds and five
-model turns. Deterministic code extracts evidence tables, retrieves SQL usage,
+model turns.
+Startup, source collection, and model execution share one failure boundary; failed
+jobs record their stage and original error immediately, rather than remaining
+`running` until the next launch labels them interrupted. The queue catches escaped
+job rejections and continues with the newest pending job. Cancellation and timeout
+remain distinct terminal outcomes; an SDK error response is not `no_change`.
+Maintenance events carry explicit outcomes and bounded redacted diagnostics.
+Post-answer events are appended to the existing session history even after the
+interactive run has finished. Failures appear as inline warnings in Agent Panel;
+safe skips/cancellation stay neutral, and legacy empty-action records are unknown,
+not evidence of successful maintenance ([ADR-0096](./adr/0096-explicit-knowledge-maintenance-outcomes.md)).
+Deterministic code extracts evidence tables, retrieves SQL usage,
 orders notes by document update time, reads at most three source notes, and finds
 related Skill metadata. The maintenance model receives that material plus the
 complete current-task conversation and can only call `save_skill` once or do

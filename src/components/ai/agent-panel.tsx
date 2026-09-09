@@ -910,15 +910,24 @@ function SkillMaintenanceIndicator({
   const [expanded, setExpanded] = useState(false);
   const working = maintenance.status === "working";
   const updated = maintenance.status === "updated";
+  const failed = maintenance.status === "error";
+  const timedOut = maintenance.status === "timeout";
+  const needsAttention = failed || timedOut;
   const names = maintenance.actions.map((action) => action.name).join("、");
   const detail = working
     ? t("agent.panel.skillWorking")
+    : failed ? t("agent.panel.skillFailed")
+    : timedOut ? t("agent.panel.skillTimedOut")
+    : maintenance.status === "cancelled" ? t("agent.panel.skillCancelled")
+    : maintenance.status === "skipped" ? t("agent.panel.skillSkipped")
+    : maintenance.status === "unknown" ? t("agent.panel.skillUnknown")
     : updated
       ? t("agent.panel.skillUpdated", { names })
       : t("agent.panel.skillAllMaintained");
   return (
     <div
-      className="absolute bottom-1.5 right-2"
+      className={needsAttention ? "stela-maintenance-warning relative mt-3 border-t border-border pt-2" : "absolute bottom-1.5 right-2"}
+      role={needsAttention ? "status" : undefined}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) setExpanded(false);
       }}
@@ -926,28 +935,37 @@ function SkillMaintenanceIndicator({
       <button
         type="button"
         aria-label={detail}
+        aria-expanded={expanded}
         title={detail}
         onClick={() => setExpanded((value) => !value)}
         className={cn(
-          "flex h-4 w-4 items-center justify-center rounded-full transition-colors",
-          working
+          needsAttention ? "flex items-center gap-1.5 text-left text-xs" : "flex h-4 w-4 items-center justify-center rounded-full transition-colors",
+          failed ? "text-destructive" : timedOut ? "text-muted-foreground" : working
             ? "text-muted-foreground"
             : updated
               ? "bg-primary/10 text-primary hover:bg-primary/20"
               : "text-muted-foreground/60 hover:bg-muted hover:text-muted-foreground",
         )}
       >
-        {working ? (
+        {needsAttention ? <ShieldAlert className="h-3.5 w-3.5 shrink-0" /> : working ? (
           <Loader2 className="h-3 w-3 animate-spin" />
         ) : (
           <Brain className="h-3 w-3" />
         )}
+        {needsAttention ? detail : null}
       </button>
       {expanded ? (
-        <div className="absolute bottom-6 right-0 z-10 w-64 rounded-md border border-border bg-popover p-2 text-[11px] text-popover-foreground shadow-md">
+        <div className={cn("rounded-md border border-border bg-popover p-2 text-[11px] text-popover-foreground shadow-md",
+          needsAttention ? "mt-2" : "absolute bottom-6 right-0 z-10 w-64")}>
           <div className="font-medium">{t("agent.panel.skillMaintenance")}</div>
           <p className="mt-1 text-muted-foreground">{detail}</p>
-          {updated ? (
+          {maintenance.summary ? <p className="mt-1 whitespace-pre-wrap break-words">{maintenance.summary}</p> : null}
+          {maintenance.diagnostic ? <div className="mt-2 space-y-1 border-t border-border pt-2">
+            <p>{t("agent.panel.skillDiagnosticHelp")}</p>
+            <pre className="whitespace-pre-wrap break-all font-mono">{maintenance.diagnostic.stage}{"\n"}{maintenance.diagnostic.message}</pre>
+            <p className="break-all font-mono">{maintenance.diagnostic.metricRunId}</p>
+          </div> : null}
+          {maintenance.actions.length > 0 ? (
             <div className="mt-2 space-y-1 border-t border-border pt-2">
               {maintenance.actions.map((action) => (
                 <div key={`${action.action}-${action.path}`}>

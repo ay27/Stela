@@ -148,3 +148,4 @@ proposed → active → superseded
 | [0093](0093-evidence-backed-answer-contract.md) | Evidence-backed Python answer contracts | active |
 | [0094](0094-uncommitted-generation-previews.md) | Uncommitted generation previews | active |
 | [0095](0095-generation-lifecycle-and-safe-closeout.md) | Generation lifecycle and evidence-only closeout | active |
+| [0096](0096-explicit-knowledge-maintenance-outcomes.md) | Explicit knowledge-maintenance outcomes | active |

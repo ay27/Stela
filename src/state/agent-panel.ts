@@ -91,7 +91,9 @@ export type AgentTimelineEntry =
       runId: string;
       content: string;
       maintenance?: {
-        status: "working" | "updated" | "none";
+        status: "working" | "updated" | "none" | "error" | "timeout" | "cancelled" | "skipped" | "unknown";
+        outcome?: Extract<AgentEvent, { type: "skill_maintenance" }>["outcome"];
+        diagnostic?: Extract<AgentEvent, { type: "skill_maintenance" }>["diagnostic"];
         actions: Array<{ action: "saved" | "archived"; name: string; path: string; reason: string }>;
         summary?: string;
       };
@@ -322,7 +324,14 @@ function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTim
           ? {
               ...entry,
               maintenance: {
-                status: event.actions.length > 0 ? "updated" : "none",
+                status: event.outcome === "error" ? "error"
+                  : event.outcome === "timeout" || event.outcome === "turn_limit" ? "timeout"
+                  : event.outcome === "cancelled" ? "cancelled"
+                  : event.outcome === "no_source" || event.outcome === "input_too_large" || event.outcome === "dropped" ? "skipped"
+                  : event.outcome === "no_change" ? "none"
+                  : event.actions.length > 0 ? "updated" : "unknown",
+                outcome: event.outcome,
+                diagnostic: event.diagnostic,
                 actions: event.actions,
                 summary: event.summary,
               },

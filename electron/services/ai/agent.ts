@@ -59,6 +59,7 @@ import {
 import {
   AGENT_SKILL_LIMITS_PROMPT,
   loadAgentSkills,
+  rankAgentSkillsForRequest,
   selectPromptAgentSkills,
   type AgentSkillMaintenanceRecord,
   type LoadedAgentSkill,
@@ -415,7 +416,7 @@ async function getOrCreateSession(
   return created;
 }
 
-async function runSkillMaintenance(options: {
+export async function runSkillMaintenance(options: {
   vaultPath: string;
   request: AgentRunRequest;
   conversation: string;
@@ -431,26 +432,17 @@ async function runSkillMaintenance(options: {
   refreshSkill?: LoadedAgentSkill;
   emitStatus?: boolean;
   metricRunId?: string;
+  historyStorage?: JsonlSessionStorage | null;
 }): Promise<boolean> {
   const { vaultPath, request, conversation, evidence, models, model, skills, connection, dialect, aiSettings, onEvent, signal, refreshSkill } = options;
   const metricRunId = options.metricRunId ?? `maintenance:${request.runId}:${randomUUID()}`;
   const metricStartedAt = Date.now();
-  if (agentMetrics.isOpen() && !options.metricRunId) {
-    const profile = getActiveProfile(aiSettings, request.profileId);
-    agentMetrics.startRun({
-      runId: metricRunId,
-      parentRunId: `agent:${request.runId}`,
-      surface: "skill_maintenance",
-      operation: refreshSkill ? "stale_refresh" : "post_run_create",
-      startedAt: metricStartedAt,
-      profileId: profile.id,
-      vendorId: profile.vendorId,
-      model: profile.model,
-      request: { conversation, evidence, refreshSkill: refreshSkill?.metadata ?? null },
-    });
-    agentMetrics.addEvent(metricRunId, { type: "eligible" });
-  }
-  if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "started" });
+  let metricRegistered = !!options.metricRunId;
+  const maintenanceEvents: AgentEvent[] = [];
+  const notify = (event: AgentEvent) => {
+    maintenanceEvents.push(event);
+    onEvent(event);
+  };
   const finishMetric = (
     status: "completed" | "error" | "cancelled" | "timeout" | "dropped",
     outcome: string,
@@ -458,6 +450,14 @@ async function runSkillMaintenance(options: {
     error?: unknown,
   ) => {
     if (!agentMetrics.isOpen()) return;
+    if (!metricRegistered) {
+      agentMetrics.startRun({
+        runId: metricRunId, parentRunId: `agent:${request.runId}`,
+        surface: "skill_maintenance", operation: refreshSkill ? "stale_refresh" : "post_run_create",
+        startedAt: metricStartedAt, model: model.id,
+      });
+      metricRegistered = true;
+    }
     agentMetrics.finishRun(metricRunId, {
       status,
       outcome,
@@ -470,106 +470,136 @@ async function runSkillMaintenance(options: {
     const response = { reasonCode, message, ...details };
     if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "skipped", payload: response });
     finishMetric("completed", "no_source", response);
+    if (options.emitStatus !== false) notify({
+      type: "skill_maintenance", runId: request.runId, outcome: "no_source", actions: [], summary: message,
+    });
     return false;
   };
   const actions: AgentSkillMaintenanceRecord[] = [];
-  const promptSkills = rankAgentSkillsForRequest(skills.vault, request, SKILL_PROMPT_LIMIT);
-  const maintenanceTables = refreshSkill
-    ? tablesFromSkill(refreshSkill)
-    : Array.from(new Set(evidence.flatMap((item) => item.tables ?? []))).slice(0, 8);
-  if (refreshSkill?.metadata.category === "analysis-runbook" && refreshSkill.metadata.sources.length === 0) {
-    return finishWithoutSource(
-      "untracked_analysis_runbook",
-      "The analysis-runbook has no tracked source documents, so it cannot be refreshed safely.",
-      { skill: refreshSkill.metadata.name, sourceDocuments: [] },
-    );
-  }
-  let sourceNotes;
+  let unsubscribe: (() => void) | undefined;
+  let onAbort: (() => void) | undefined;
+  let stage = "initialization";
   try {
-    sourceNotes = await collectSkillSourceNotes(vaultPath, maintenanceTables, sqlIndex.query);
-  } catch (err) {
-    finishMetric("error", "error", undefined, err);
-    return false;
-  }
-  if (sourceNotes.length === 0) {
-    return finishWithoutSource(
-      "no_matching_source_documents",
-      "No verified Vault Markdown source documents matched the tables found in this run, so the maintenance model was not called.",
-      {
-        sourceTables: maintenanceTables,
-        evidenceItems: evidence.length,
-        suggestion: "Link reusable knowledge to a Vault Markdown note, then run the Agent again.",
-      },
-    );
-  }
-  const maxInputChars = Math.max(16_000, Math.floor(model.contextWindow * 2.5));
-  if (conversation.length > maxInputChars - 8_000) {
-    finishMetric("completed", "input_too_large");
-    return false;
-  }
-  let remaining = Math.max(4_000, maxInputChars - conversation.length - 8_000);
-  const boundedNotes = sourceNotes.map((note) => {
-    const content = note.content.slice(0, remaining);
-    remaining = Math.max(0, remaining - content.length);
-    return { ...note, content };
-  }).filter((note) => note.content.length > 0);
-  if (boundedNotes.length === 0) {
-    finishMetric("completed", "input_too_large");
-    return false;
-  }
-  if (options.emitStatus !== false) onEvent({ type: "skill_maintenance_started", runId: request.runId });
-  const maintenanceHarness = new AgentHarness({
-    env: new NodeExecutionEnv({ cwd: vaultPath }),
-    session: createSession(),
-    models,
-    model,
-    thinkingLevel: "off",
-    streamOptions: { cacheRetention: "short" },
-    systemPrompt: refreshSkill
-      ? `${SKILL_REFRESH_PROMPT}\nRequired headings: ${refreshTemplate(refreshSkill.metadata.category)}`
-      : SKILL_MAINTENANCE_PROMPT,
-    resources: { skills: [] },
-    tools: createAgentTools({
-      ctx: {
-        vaultPath,
-        connectionName: request.connectionName ?? null,
-        connection,
-        maintenanceDialect: dialect,
-        maintenanceTables,
-        maintenanceSourcePaths: boundedNotes.map((note) => note.path),
-        maintenanceRefreshName: refreshSkill?.metadata.name ?? null,
-        aiSettings,
-        connector: {
-          listKinds: connectorRegistry.listKinds,
-          listDatabases: connectorRegistry.listDatabases,
-          listTables: connectorRegistry.listTables,
-          execute: connectorRegistry.execute,
-          describeTables: connectorRegistry.describeTables,
+    const profile = getActiveProfile(aiSettings, request.profileId);
+    if (agentMetrics.isOpen() && !options.metricRunId) {
+      agentMetrics.startRun({
+        runId: metricRunId,
+        parentRunId: `agent:${request.runId}`,
+        surface: "skill_maintenance",
+        operation: refreshSkill ? "stale_refresh" : "post_run_create",
+        startedAt: metricStartedAt,
+        profileId: profile.id,
+        vendorId: profile.vendorId,
+        model: profile.model,
+        request: { conversation, evidence, refreshSkill: refreshSkill?.metadata ?? null },
+      });
+      metricRegistered = true;
+      agentMetrics.addEvent(metricRunId, { type: "eligible" });
+    }
+    if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "started" });
+    signal.throwIfAborted();
+    const promptSkills = rankAgentSkillsForRequest(skills.vault, request, SKILL_PROMPT_LIMIT);
+    const maintenanceTables = refreshSkill
+      ? tablesFromSkill(refreshSkill)
+      : Array.from(new Set(evidence.flatMap((item) => item.tables ?? []))).slice(0, 8);
+    if (refreshSkill?.metadata.category === "analysis-runbook" && refreshSkill.metadata.sources.length === 0) {
+      return finishWithoutSource(
+        "untracked_analysis_runbook",
+        "The analysis-runbook has no tracked source documents, so it cannot be refreshed safely.",
+        { skill: refreshSkill.metadata.name, sourceDocuments: [] },
+      );
+    }
+    stage = "source_collection";
+    const sourceNotes = await collectSkillSourceNotes(vaultPath, maintenanceTables, sqlIndex.query);
+    signal.throwIfAborted();
+    if (sourceNotes.length === 0) {
+      return finishWithoutSource(
+        "no_matching_source_documents",
+        "No verified Vault Markdown source documents matched the tables found in this run, so the maintenance model was not called.",
+        {
+          sourceTables: maintenanceTables,
+          evidenceItems: evidence.length,
+          suggestion: "Link reusable knowledge to a Vault Markdown note, then run the Agent again.",
         },
-        sqlIndex: { query: sqlIndex.query },
-        skills: skills.vault,
-        reservedSkillNames: skills.system.map((skill) => skill.metadata.name),
-        mode: refreshSkill ? "refresh" : "maintenance",
-        run: { runId: request.runId, sessionId: request.sessionId, notePath: request.notePath ?? null, questionsAsked: 0, toolFailureStreak: new Map() },
-        recordRun: recordAgentRun(vaultPath),
-        onSkillMaintenance: (record) => actions.push(record),
-      },
-      requestProposal: async () => false,
-    }),
-  });
-  let turns = 0;
-  const unsubscribe = maintenanceHarness.subscribe((event) => {
-    if (event.type === "turn_end" && ++turns >= SKILL_MAINTENANCE_MAX_TURNS) {
-      void maintenanceHarness.abort();
+      );
     }
-    if (event.type === "message_end" && event.message.role === "assistant" && agentMetrics.isOpen()) {
-      agentMetrics.addUsage(metricRunId, event.message.usage);
-      agentMetrics.addEvent(metricRunId, { type: "assistant_message", payload: event.message });
+    const maxInputChars = Math.max(16_000, Math.floor(model.contextWindow * 2.5));
+    if (conversation.length > maxInputChars - 8_000) {
+      finishMetric("completed", "input_too_large");
+      if (options.emitStatus !== false) notify({
+        type: "skill_maintenance", runId: request.runId, outcome: "input_too_large", actions: [],
+        summary: "Knowledge maintenance input exceeds the context budget.",
+      });
+      return false;
     }
-  });
-  const onAbort = () => void maintenanceHarness.abort();
-  signal.addEventListener("abort", onAbort, { once: true });
-  try {
+    let remaining = Math.max(4_000, maxInputChars - conversation.length - 8_000);
+    const boundedNotes = sourceNotes.map((note) => {
+      const content = note.content.slice(0, remaining);
+      remaining = Math.max(0, remaining - content.length);
+      return { ...note, content };
+    }).filter((note) => note.content.length > 0);
+    if (boundedNotes.length === 0) {
+      finishMetric("completed", "input_too_large");
+      if (options.emitStatus !== false) notify({
+        type: "skill_maintenance", runId: request.runId, outcome: "input_too_large", actions: [],
+        summary: "No source content fits within the maintenance context budget.",
+      });
+      return false;
+    }
+    stage = "harness_initialization";
+    if (options.emitStatus !== false) notify({ type: "skill_maintenance_started", runId: request.runId });
+    const maintenanceHarness = new AgentHarness({
+      env: new NodeExecutionEnv({ cwd: vaultPath }),
+      session: createSession(),
+      models,
+      model,
+      thinkingLevel: "off",
+      streamOptions: { cacheRetention: "short" },
+      systemPrompt: refreshSkill
+        ? `${SKILL_REFRESH_PROMPT}\nRequired headings: ${refreshTemplate(refreshSkill.metadata.category)}`
+        : SKILL_MAINTENANCE_PROMPT,
+      resources: { skills: [] },
+      tools: createAgentTools({
+        ctx: {
+          vaultPath,
+          connectionName: request.connectionName ?? null,
+          connection,
+          maintenanceDialect: dialect,
+          maintenanceTables,
+          maintenanceSourcePaths: boundedNotes.map((note) => note.path),
+          maintenanceRefreshName: refreshSkill?.metadata.name ?? null,
+          aiSettings,
+          connector: {
+            listKinds: connectorRegistry.listKinds,
+            listDatabases: connectorRegistry.listDatabases,
+            listTables: connectorRegistry.listTables,
+            execute: connectorRegistry.execute,
+            describeTables: connectorRegistry.describeTables,
+          },
+          sqlIndex: { query: sqlIndex.query },
+          skills: skills.vault,
+          reservedSkillNames: skills.system.map((skill) => skill.metadata.name),
+          mode: refreshSkill ? "refresh" : "maintenance",
+          run: { runId: request.runId, sessionId: request.sessionId, notePath: request.notePath ?? null, questionsAsked: 0, toolFailureStreak: new Map() },
+          recordRun: recordAgentRun(vaultPath),
+          onSkillMaintenance: (record) => actions.push(record),
+        },
+        requestProposal: async () => false,
+      }),
+    });
+    let turns = 0;
+    unsubscribe = maintenanceHarness.subscribe((event) => {
+      if (event.type === "turn_end" && ++turns >= SKILL_MAINTENANCE_MAX_TURNS) {
+        void maintenanceHarness.abort();
+      }
+      if (event.type === "message_end" && event.message.role === "assistant" && agentMetrics.isOpen()) {
+        agentMetrics.addUsage(metricRunId, event.message.usage);
+        agentMetrics.addEvent(metricRunId, { type: "assistant_message", payload: event.message });
+      }
+    });
+    onAbort = () => void maintenanceHarness.abort();
+    signal.addEventListener("abort", onAbort, { once: true });
+    signal.throwIfAborted();
     const maintenanceInput = buildSkillMaintenanceInput(
       conversation,
       evidence,
@@ -580,12 +610,18 @@ async function runSkillMaintenance(options: {
     if (agentMetrics.isOpen()) {
       agentMetrics.addEvent(metricRunId, { type: "provider_prompt", payload: maintenanceInput });
     }
+    stage = "model_execution";
     const result = await maintenanceHarness.prompt(maintenanceInput);
+    if (result.stopReason === "error") {
+      throw new Error(result.errorMessage || "Knowledge maintenance model failed.");
+    }
     const completed = !signal.aborted && result.stopReason !== "aborted";
     if (options.emitStatus !== false) {
-      onEvent({
+      notify({
         type: "skill_maintenance",
         runId: request.runId,
+        outcome: completed ? (actions.length > 0 ? "saved" : "no_change")
+          : signal.reason === "timeout" ? "timeout" : signal.aborted ? "cancelled" : "turn_limit",
         actions,
         summary: !completed
           ? "Knowledge maintenance stopped at its time or turn limit."
@@ -596,7 +632,8 @@ async function runSkillMaintenance(options: {
     }
     if (!completed) {
       const timeout = signal.reason === "timeout";
-      finishMetric(timeout ? "timeout" : "cancelled", timeout ? "timeout" : "cancelled", result);
+      const turnLimit = !signal.aborted && turns >= SKILL_MAINTENANCE_MAX_TURNS;
+      finishMetric(timeout || turnLimit ? "timeout" : "cancelled", timeout ? "timeout" : turnLimit ? "turn_limit" : "cancelled", result);
     } else {
       for (const action of actions) {
         if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "skill_action", name: action.name, payload: action });
@@ -609,23 +646,53 @@ async function runSkillMaintenance(options: {
     }
     return completed && actions.length > 0;
   } catch (err) {
-    log.warn("skill maintenance failed", {
+    const cancelled = signal.aborted;
+    const timeout = cancelled && signal.reason === "timeout";
+    finishMetric(
+      timeout ? "timeout" : cancelled ? "cancelled" : "error",
+      timeout ? "timeout" : cancelled ? "cancelled" : "error",
+      { stage, actions, ...(!cancelled && err instanceof Error && err.stack
+        ? { stack: redactForPrompt(err.stack).slice(0, 8000) } : {}) },
+      cancelled ? undefined : err,
+    );
+    const diagnostic = {
+      stage,
+      message: String(redactForPrompt(err instanceof Error ? err.message : String(err))).slice(0, 2000),
+      metricRunId,
+    };
+    (cancelled ? log.info : log.error)("skill maintenance failed", {
       runId: request.runId,
-      err: err instanceof Error ? err.message : String(err),
+      ...diagnostic,
     });
     if (options.emitStatus !== false) {
-      onEvent({
+      notify({
         type: "skill_maintenance",
         runId: request.runId,
+        outcome: timeout ? "timeout" : cancelled ? "cancelled" : "error",
+        ...(!cancelled ? { diagnostic } : {}),
         actions,
-        summary: "Skill maintenance could not complete; the answer above is unaffected.",
+        summary: cancelled
+          ? "Knowledge maintenance stopped at its time limit or was cancelled."
+          : "Skill maintenance could not complete; the answer above is unaffected.",
       });
     }
-    finishMetric("error", "error", undefined, err);
     return false;
   } finally {
-    unsubscribe();
-    signal.removeEventListener("abort", onAbort);
+    unsubscribe?.();
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+    if (options.historyStorage && maintenanceEvents.length > 0) {
+      try {
+        for (const event of maintenanceEvents) await appendAgentHistoryEvent(options.historyStorage, event);
+        onEvent({ type: "history_updated", runId: request.runId });
+      } catch (error) {
+        log.error("maintenance history write failed", {
+          metricRunId, error: redactForPrompt(error instanceof Error ? error.message : String(error)),
+        });
+        if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, {
+          type: "history_write_failed", payload: { message: error instanceof Error ? error.message : String(error) },
+        });
+      }
+    }
   }
 }
 
@@ -1389,6 +1456,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         emit({
           type: "skill_maintenance",
           runId,
+          outcome: "saved",
           actions: normalSkillActions,
           summary: `Updated ${normalSkillActions.length} internal knowledge Skill${normalSkillActions.length === 1 ? "" : "s"}.`,
         });
@@ -1422,6 +1490,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           aiSettings: settings.ai,
           onEvent,
           metricRunId: maintenanceMetricRunId,
+          historyStorage,
         };
         maintenanceJob = {
           run: async (maintenanceSignal) => {
@@ -1434,6 +1503,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
             onEvent({
               type: "skill_maintenance",
               runId,
+              outcome: "dropped",
               actions: [],
               summary: "A newer knowledge-maintenance task replaced this pending task.",
             });

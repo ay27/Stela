@@ -1111,6 +1111,14 @@ current empty conversation ([ADR-0073](./adr/0073-three-state-skill-freshness.md
 
 ### Agent observability
 
+`AgentEvent.skill_maintenance` adds optional `outcome` and `diagnostic` fields
+([ADR-0096](./adr/0096-explicit-knowledge-maintenance-outcomes.md)). Outcomes separate
+saved/no-change from safe skips, cancellation, timeout/turn-limit, dropped work,
+and errors. Diagnostics contain a bounded redacted message, stage, and metric run
+ID. Legacy events remain readable; no outcome plus no actions means unknown, not
+success. Saved actions do not override an explicit failure. Background terminal
+events are persisted to the existing conversation history after the answer.
+
 Agent observability is local and Vault-scoped but not Git-synced. A metric run
 has a `surface` (`agent`, `tool`, `skill_maintenance`, `ai_action`, or
 `sql_query_parse`), operation, terminal status, optional

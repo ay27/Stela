@@ -1,3 +1,8 @@
+import { getLogger } from "../logger";
+import { redactForPrompt } from "./redaction";
+
+const log = getLogger("skill-maintenance-queue");
+
 export const SKILL_MAINTENANCE_TIMEOUT_MS = 60_000;
 export const SKILL_MAINTENANCE_MAX_TURNS = 5;
 
@@ -34,6 +39,12 @@ async function drain(vaultPath: string): Promise<void> {
   const timer = setTimeout(() => controller.abort("timeout"), SKILL_MAINTENANCE_TIMEOUT_MS);
   try {
     await job.run(controller.signal);
+  } catch (err) {
+    // A failed job must neither become an unhandled rejection nor block the next job.
+    // runSkillMaintenance owns the detailed metric and user-visible failure record.
+    log.error("background maintenance job failed", {
+      err: redactForPrompt(err instanceof Error ? err.stack ?? err.message : String(err)).slice(0, 8000),
+    });
   } finally {
     clearTimeout(timer);
     queue.active = null;

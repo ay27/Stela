@@ -207,3 +207,5 @@ Stela 适合那些从“我想看看数据”这个念头开始做分析的人�
 系统设计和贡献者相关细节见 [Architecture](./docs/ARCHITECTURE.md)、[Abstractions](./docs/ABSTRACTIONS.md) 与 [ADR](./docs/adr/)。
 
 贡献者执行 `npm install` 后会自动启用仓库内置的提交前检查：每次提交前运行完整测试、公开发布检查和生产构建。也可以手动执行 `npm run check:precommit`。
+
+`npm run build` 同时执行 Renderer 类型检查和 Electron 未定义符号／导入检查（`check:main-symbols`）。后者是过渡门禁，不代表主进程完整严格类型检查通过；`npm run check:main-types` 可查看尚未清理的历史类型错误。`npm run test:skill-maintenance` 使用离线模型替身、真实维护链路和临时 Vault 验证知识保存及异常收尾，不访问真实数据库或模型服务。
