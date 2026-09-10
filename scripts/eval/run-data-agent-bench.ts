@@ -122,6 +122,8 @@ interface CliOptions {
   noPython: boolean;
   statefulPython: boolean;
   semantic: boolean;
+  semanticOptimization: boolean;
+  analysisContracts: boolean;
   semanticModel: string | null;
   semanticBudget: SemanticBudget;
   strategyReview: boolean;
@@ -239,6 +241,8 @@ function parseArgs(argv: string[]): CliOptions {
     noPython: argv.includes("--no-python"),
     statefulPython: !argv.includes("--stateless-python"),
     semantic: argv.includes("--allow-semantic-transmission"),
+    semanticOptimization: argv.includes("--semantic-optimization"),
+    analysisContracts: argv.includes("--analysis-contracts"),
     semanticModel: value("--semantic-model") ?? null,
     semanticBudget: semanticBudgetSchema.parse({
       records: intArg(value("--semantic-records") ?? String(DEFAULT_SEMANTIC_BUDGET.records), "--semantic-records", 1),
@@ -644,7 +648,7 @@ async function runTask(input: {
     : { models, model, reasoning };
   const semantic = new SemanticExecution({
     identity: JSON.stringify([semanticTransport.model.id, semanticTransport.reasoning.effective]),
-    signal: reviewAbort.signal, budget: options.semanticBudget,
+    signal: reviewAbort.signal, budget: options.semanticBudget, optimizationEnabled: options.semanticOptimization,
     authorize: async () => options.semantic,
     complete: async (system, user, maxTokens, signal) => {
       if (Buffer.byteLength(system + user) + maxTokens > semanticTransport.model.contextWindow) throw new Error("Semantic input exceeds model context");
@@ -704,6 +708,7 @@ async function runTask(input: {
         connectionName: "dab",
         connection,
         aiSettings: settings,
+        analysisContext: { runId: request.runId, question: request.prompt, semanticOptimization: options.semanticOptimization, automaticContracts: options.analysisContracts },
         connector: {
           listKinds: () => [{
             kind: "dab",
@@ -1131,6 +1136,8 @@ async function main(): Promise<void> {
     credentials.baseUrl,
     options.reasoningEffort,
   );
+  settings.semanticOptimizationEnabled = options.semanticOptimization;
+  settings.automaticAnalysisContractsEnabled = options.analysisContracts;
   const output = options.output ?? path.join(
     path.dirname(options.dabRoot),
     "dab-results",
@@ -1141,6 +1148,7 @@ async function main(): Promise<void> {
     sourceFingerprint: await sourceFingerprint(repoRoot),
     executionPolicy: "semantic-operation-v1-generation-lifecycle-v2-answer-contract-v1",
     runtimeConditions: {
+      semanticOptimization: options.semanticOptimization, analysisContracts: options.analysisContracts,
       model: credentials.model, endpointHash: endpointHash(credentials.baseUrl), reasoningEffort: options.reasoningEffort,
       concurrency: options.concurrency, mongoConcurrency: options.mongoConcurrency, mongoFixtureMode: options.mongoFixtureMode,
       pythonConcurrency: options.noPython ? 0 : options.pythonConcurrency, hints: options.hints, strategyReview: options.strategyReview,

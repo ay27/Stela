@@ -1,3 +1,4 @@
+import { analysisSnapshotSchema } from "./analysis-contract";
 /**
  * IPC payload 校验 schema。
  *
@@ -126,6 +127,8 @@ const partialSettingsSchema = z
         completionProfileId: z.string().min(1).max(128).nullable(),
         semanticProfileId: z.string().min(1).max(128).nullable(),
         semanticBudget: semanticBudgetSchema,
+        semanticOptimizationEnabled: z.boolean(),
+        automaticAnalysisContractsEnabled: z.boolean(),
       })
       .partial()
       .optional(),
@@ -336,6 +339,8 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
           agentWallClockMs: z.number().int().min(5_000).max(600_000).optional(),
           agentAllowMutations: z.boolean().optional(),
           agentAutoApplyEdits: z.boolean().optional(),
+          semanticOptimizationEnabled: z.boolean().optional(),
+          automaticAnalysisContractsEnabled: z.boolean().optional(),
           automaticSkillMaintenanceEnabled: z.boolean().optional(),
           inlineCompletionEnabled: z.boolean().optional(),
           completionProfileId: z.string().min(1).max(128).nullable().optional(),
@@ -617,6 +622,7 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
           elapsedMs: z.number().int().nonnegative(),
           error: z.string().max(16_000).optional(),
           stdoutTruncated: z.boolean().optional(),
+          analysis: analysisSnapshotSchema.optional(),
           workspace: z.object({
             generation: stringMin1.max(128),
             status: z.enum(["ready", "partial_mutation_possible", "lost"]),

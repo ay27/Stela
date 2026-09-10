@@ -148,6 +148,7 @@ export interface AgentPythonExecutorOps {
     vaultPath: string;
     sessionId: string;
     code: string;
+    analysisContext?: import("../../shared/types").IAnalysisExecutionContext;
     runSemantic?: import("../../shared/semantic").SemanticRunner;
     artifacts: Record<string, QueryArtifactDescriptor>;
     /**
@@ -316,6 +317,7 @@ export interface AgentAnalysisRunEvidence {
   columns: ColumnDef[];
   rowCount: number;
   truncated: boolean;
+  incomplete?: boolean;
   sourceRunIds: string[];
   /** Bounded same-run values supplied only to the tool-free result reviewer. */
   summary?: unknown;
@@ -370,6 +372,7 @@ export interface AgentToolContext {
   queryArtifacts?: AgentQueryArtifactOps;
   pythonExecutor?: AgentPythonExecutorOps;
   pythonStateful?: boolean;
+  analysisContext?: import("../../shared/types").IAnalysisExecutionContext;
   runSemantic?: import("../../shared/semantic").SemanticRunner;
   signal?: AbortSignal;
   sqlIndex: AgentSqlIndexOps;
@@ -409,6 +412,7 @@ export interface AgentToolContext {
     notePath: string | null;
     questionsAsked: number;
     toolFailureStreak: Map<string, number>;
+    analysis?: import("../../shared/analysis-contract").IAnalysisSnapshot;
   };
   plan?: ExecutionPlanStore;
   persistPlan?: (snapshot: AgentPlanSnapshot) => Promise<void>;
@@ -518,7 +522,9 @@ export function createAgentTools(options: {
           : "Python workspace: omitted sources reuse; redeclaring refreshes aliases, not DataFrames. Aliases are not variables: to_df('t') gives pandas, tables['t'] a DuckDB relation. result is cleared before EVERY cell; retain other variables, assign result for output. await query for dynamic reads; reset clears state.") +
         (ctx.runSemantic
           ? " Batch classification/extraction/entity matching: await semantic.classify/extract/resolve inside Python. First load_skill name=semantic-analysis. No database needed; host authorizes and budgets calls. Retain batches for resume."
-          : "") + " For material scope/grain/denominator risks, load_skill name=analysis-verification: analysis.contract retains sourced claims/checks. Skip trivial arithmetic.",
+          : "") + " For material scope/grain/denominator risks, load_skill name=analysis-verification: analysis.contract retains sourced claims/checks. Skip trivial arithmetic." +
+        (ctx.aiSettings.automaticAnalysisContractsEnabled ? " Automatic evidence is enabled: analysis.current exists without setup; use .claim(field, meaning, source='question' or existing alias/run ID, evidence=exact quote), .bind_population(df, id_column='id', source='alias'). Explicit analysis.contract(required=[...]) starts a revision; sources/checks do not certify business truth. Snapshots are automatic, no final gate." : "") +
+        (ctx.aiSettings.semanticOptimizationEnabled ? " Exact selected-content deduplication and all-input cost preflight are enabled for classify/extract. Prefer SQL/rules first; unmatched text is unresolved, not negative. One bounded pilot may consume existing budget. Inspect summary.preflight, pilot, forecastTokens and stopReason; partial work never permits extrapolation." : ""),
       parameters: Type.Object({
         reset: Type.Optional(Type.Boolean()),
         sources: Type.Optional(Type.Array(Type.Union([
@@ -1464,6 +1470,7 @@ async function runQuery(
     columns: result.columns,
     rowCount,
     truncated: previewTruncated,
+    incomplete: query.language === "mongodb" && query.limit !== null && rowCount === query.limit,
     sourceRunIds: [],
     summary: {
       columns: result.columns,
@@ -1683,6 +1690,9 @@ async function runExecutePython(
     sessionId: ctx.run.sessionId,
     code,
     runSemantic: ctx.runSemantic,
+    analysisContext: { runId: ctx.run.runId, question: ctx.analysisContext?.question ?? "",
+      semanticOptimization: ctx.aiSettings.semanticOptimizationEnabled === true,
+      automaticContracts: ctx.aiSettings.automaticAnalysisContractsEnabled === true },
     artifacts,
     runQuery: async ({ connectionName, request }) => {
       let parsed: unknown;
@@ -1725,6 +1735,7 @@ async function runExecutePython(
     },
     signal: ctx.signal,
   });
+  if (result.analysis && ctx.aiSettings.automaticAnalysisContractsEnabled) ctx.run.analysis = result.analysis;
   if (!result.ok) {
     const error = result.error ?? "Python execution failed.";
     const guidance = pythonFailureGuidance(error, result.workspace?.sources.map((source) => source.alias));
@@ -2668,17 +2679,41 @@ export async function dispatchTool(
   rawArguments: string,
   ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
-  if (UNBREAKABLE_TOOLS.has(name)) return await dispatchToolCall(name, rawArguments, ctx);
+  const exempt = UNBREAKABLE_TOOLS.has(name);
   const streak = ctx.run.toolFailureStreak;
-  if ((streak.get(name) ?? 0) >= MAX_CONSECUTIVE_TOOL_FAILURES) {
+  if (!exempt && (streak.get(name) ?? 0) >= MAX_CONSECUTIVE_TOOL_FAILURES) {
     return fail(
       `${name} has failed ${MAX_CONSECUTIVE_TOOL_FAILURES} times in a row in this run and is now blocked. ` +
         "Stop calling it: reach the goal another way, or answer the user with the evidence you already have and state what is missing.",
     );
   }
+  const dataTool = exempt;
+  if (dataTool && ctx.aiSettings.automaticAnalysisContractsEnabled && !ctx.run.analysis) {
+    ctx.run.analysis = { runId: ctx.run.runId, version: 0, generation: "host", status: "observed",
+      missingClaims: ["population", "metric", "granularity"], failedChecks: [], claims: [], checks: [], sources: [],
+      coverage: { state: "unknown", total: null, processed: 0, unresolved: 0, unprocessed: 0, source: null }, previousVersions: 0, truncated: false };
+  }
   const outcome = await dispatchToolCall(name, rawArguments, ctx);
-  if (outcome.ok) streak.delete(name);
-  else streak.set(name, (streak.get(name) ?? 0) + 1);
+  if (dataTool && ctx.aiSettings.automaticAnalysisContractsEnabled && ctx.run.analysis) {
+    const snapshot = ctx.run.analysis;
+    if (!outcome.ok && name === "execute_python") {
+      snapshot.status = /workspace_lost/i.test(outcome.text) ? "lost" : "partial_mutation_possible";
+      snapshot.coverage.state = "unknown";
+    }
+    const facts = [...(ctx.analysisRuns?.entries() ?? [])].filter(([, v]) => v.kind === "query")
+      .map(([ref, v]) => ({ ref, rowCount: v.rowCount, incomplete: v.incomplete === true, previewTruncated: v.truncated }));
+    const sources = new Map([...snapshot.sources, ...facts].map((s) => [s.ref, s]));
+    snapshot.sources = [...sources.values()].slice(-16);
+    snapshot.truncated ||= sources.size > 16;
+    let body: Record<string, unknown>;
+    try { const parsed: unknown = JSON.parse(outcome.text); body = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : { result: parsed }; }
+    catch { body = outcome.ok ? { resultPreview: outcome.text, truncated: true } : { error: outcome.text }; }
+    outcome.text = JSON.stringify({ ...body, analysis: snapshot });
+  }
+  if (!exempt) {
+    if (outcome.ok) streak.delete(name);
+    else streak.set(name, (streak.get(name) ?? 0) + 1);
+  }
   return outcome;
 }
 

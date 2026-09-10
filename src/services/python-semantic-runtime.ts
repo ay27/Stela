@@ -5,6 +5,31 @@ import asyncio as _stela_asyncio
 import hashlib as _stela_hashlib
 import copy as _stela_copy
 
+def _stela_exact_json_frame(frame):
+    # pandas.to_json defaults to 10 decimal places, which is unsafe for exact deduplication.
+    import math as _semantic_math
+    def json_value(value):
+        if value is None or value is pd.NA or value is pd.NaT:
+            return None
+        if isinstance(value, float):
+            if _semantic_math.isnan(value):
+                return None
+            if not _semantic_math.isfinite(value):
+                raise ValueError('Convert non-finite semantic input explicitly')
+            return value
+        if isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, datetime.date):
+            return value.isoformat()
+        if isinstance(value, dict):
+            if any(not isinstance(k, str) for k in value):
+                raise ValueError('Semantic JSON object keys must be strings')
+            return {k: json_value(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [json_value(v) for v in value]
+        raise ValueError('Convert unsupported semantic input type explicitly: ' + type(value).__name__)
+    return [json_value(row) for row in frame.to_dict('records')]
+
 class _StelaSemanticResult:
     def __init__(self, rows, summary, mapping=None, signature=None, identity=None):
         self.rows = pd.DataFrame(rows, columns=['id', 'status', 'value', 'evidence', 'error'])
@@ -24,6 +49,115 @@ class _StelaSemanticResult:
 
 class _StelaSemantic:
     async def _run(self, records, operation, instructions, *, resume=None, allow_partial=False, **options):
+        config = json.loads(globals().get('__stela_analysis_context', '{}'))
+        if not config.get('semanticOptimization') or operation == 'resolve':
+            return await self._run_legacy(records, operation, instructions, resume=resume, allow_partial=allow_partial, **options)
+        if not isinstance(instructions, str) or not instructions.strip():
+            raise ValueError('Explicit semantic instructions are required')
+        encode = lambda value: json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
+        signature = _stela_hashlib.sha256(encode([operation, instructions, options, records]).encode()).hexdigest()
+        if resume is not None and (type(resume).__name__ != '_StelaSemanticResult' or resume._signature != signature):
+            raise ValueError('Resume requires identical full input, row IDs and semantic definition')
+        unique, representative, content = [], {}, {}
+        for row in records:
+            key = encode(row['data'])
+            if key not in content:
+                content[key] = row['id']
+                unique.append(row)
+            representative[row['id']] = content[key]
+        definition = dict(operation=operation, instructions=instructions, **options)
+        bridge = globals().get('__stela_semantic')
+        if not callable(bridge):
+            raise RuntimeError('Semantic execution is unavailable or not authorized')
+        async def rpc(batch, phase):
+            return json.loads(await bridge(json.dumps(dict(**definition, records=batch, phase=phase,
+                totalRecords=len(batch), operationKey=signature), ensure_ascii=False)))
+        # Pack by the same 8-row / 24k-byte constraints as the host; include definition bytes.
+        batches, batch, by_id = [], [], {}
+        for row in unique:
+            if len(json.dumps(row, ensure_ascii=False)) > 10000:
+                by_id[row['id']] = dict(id=row['id'], status='failed', value=None, evidence=[], error='input_too_large: explicitly split the record')
+                continue
+            if batch and (len(batch) == 8 or len(json.dumps(dict(**definition, records=batch+[row]), ensure_ascii=False, separators=(',', ':')).encode()) > 24000):
+                batches.append(batch)
+                batch = []
+            batch.append(row)
+        if batch:
+            batches.append(batch)
+        control, usage, cached, reused = {}, {}, 0, 0
+        # Check identity before accepting resume output; enumerate every cache key without inference.
+        retained = {r['id']: r for r in (resume._resume_rows if resume is not None else []) if r['status'] in ('success', 'unresolved')}
+        pending_batches, reservations = [], []
+        for batch in batches or [[]]:
+            response = await rpc(batch, 'preflight')
+            control, usage = response.get('control', {}), response.get('usage', {})
+            if resume is not None and resume._identity != control.get('executionIdentity'):
+                raise ValueError('Resume model identity changed; do not mix model results')
+            for row in batch:
+                if row['id'] in retained:
+                    by_id[row['id']] = _stela_copy.deepcopy(retained[row['id']])
+                    reused += 1
+            for row in response['rows']:
+                if row['id'] not in by_id:
+                    by_id[row['id']] = row
+                    cached += 1
+            pending = [r for r in batch if r['id'] not in by_id]
+            if pending:
+                # Requote after removing resumed rows. Cache hits are already excluded by host quotes.
+                if any(r['id'] in retained for r in batch):
+                    response = await rpc(pending, 'preflight')
+                    control, usage = response.get('control', {}), response.get('usage', {})
+                pending_batches.append(pending)
+                reservations.append(response.get('control', {}).get('reservationTokens', 0))
+        capacity = control.get('remaining', {})
+        pending_count = sum(map(len, pending_batches))
+        preflight = dict(originalRows=len(records), uniqueRows=len(unique), deduplicatedRows=len(records)-len(unique),
+            reusedRows=cached+reused, pendingRows=pending_count,
+            inputBytes=sum(len(encode(r['data']).encode()) for r in unique),
+            plannedRequests=len(pending_batches), reservationTokens=sum(reservations), remaining=capacity)
+        stop_reason, forecast, pilot = None, None, None
+        if pending_count > capacity.get('records', 0) or len(pending_batches) > capacity.get('requests', 0):
+            stop_reason = 'full_operation_exceeds_remaining_budget'
+        elif by_id and any(r['status'] == 'failed' for r in by_id.values()) and not allow_partial:
+            stop_reason = 'input_requires_explicit_split'
+        elif pending_batches and sum(reservations) > capacity.get('tokens', 0):
+            # Pilot is real work, reused below. Host enforces one attempt and a 10% reservation cap.
+            response = await rpc(pending_batches[0], 'pilot')
+            usage = response['usage']
+            by_id.update({r['id']: r for r in response['rows']})
+            pilot = response.get('control', {}).get('pilot', {})
+            actual, reserved = pilot.get('actual'), pilot.get('reserved', 0)
+            if pilot.get('reason') or actual is None or not reserved:
+                stop_reason = pilot.get('reason', 'pilot_usage_unknown')
+            elif any(r['status'] in ('failed', 'unprocessed') for r in response['rows']):
+                stop_reason = 'pilot_incomplete'
+            else:
+                forecast = min(sum(reservations[1:]), int(sum(reservations[1:]) * actual / reserved * 1.5 + 0.999))
+                if forecast > response.get('control', {}).get('remaining', {}).get('tokens', 0):
+                    stop_reason = 'forecast_exceeds_remaining_budget'
+            pending_batches = pending_batches[1:]
+        # Bounded sequential scheduling prevents requests escaping after an observed stop.
+        for batch in pending_batches:
+            if stop_reason:
+                break
+            response = await rpc(batch, 'execute')
+            by_id.update({r['id']: r for r in response['rows']})
+            usage = response['usage']
+            cached += response['cached']
+            if response.get('control', {}).get('stopScheduling'):
+                stop_reason = response['control'].get('reason', 'semantic_budget_exhausted')
+        ordered = []
+        for row in records:
+            decision = _stela_copy.deepcopy(by_id.get(representative[row['id']], dict(status='unprocessed', value=None,
+                evidence=[], error=stop_reason or 'not_processed')))
+            decision['id'] = row['id']
+            ordered.append(decision)
+        counts = {s: sum(r['status'] == s for r in ordered) for s in ('success', 'unresolved', 'failed', 'unprocessed')}
+        return _StelaSemanticResult(ordered, dict(total=len(records), cached=cached, reused=reused, usage=usage,
+            complete=counts['success'] == len(records), preflight=preflight, pilot=pilot, forecastTokens=forecast,
+            stopReason=stop_reason, **counts), signature=signature, identity=control.get('executionIdentity'))
+
+    async def _run_legacy(self, records, operation, instructions, *, resume=None, allow_partial=False, **options):
         if not isinstance(instructions, str) or not instructions.strip():
             raise ValueError('Explicit semantic instructions are required')
         signature = _stela_hashlib.sha256(json.dumps([operation, instructions, options, records],
@@ -104,7 +238,7 @@ class _StelaSemantic:
             complete=counts['success'] == len(records), preflight=control, stopReason=stop_reason, **counts),
             signature=signature, identity=control.get('executionIdentity'))
 
-    def _records(self, df, columns, required_fields=None, id_column=None):
+    def _records(self, df, columns, required_fields=None, id_column=None, preserve_exact=False):
         if not isinstance(df, pd.DataFrame) or not columns or len(set(columns)) != len(columns):
             raise ValueError('Provide a DataFrame and unique selected columns')
         if len(df) > 100000:
@@ -115,7 +249,10 @@ class _StelaSemantic:
         selected = df.loc[:, columns]
         if not selected.columns.is_unique:
             raise ValueError('Duplicate DataFrame column names are unsupported')
-        data = json.loads(selected.to_json(orient='records', date_format='iso'))
+        if preserve_exact:
+            data = _stela_exact_json_frame(selected)
+        else:
+            data = json.loads(selected.to_json(orient='records', date_format='iso'))
         ids = [str(i) for i in range(len(data))]
         if id_column is not None:
             if df[id_column].isna().any():
@@ -126,12 +263,24 @@ class _StelaSemantic:
         return [{'id': ids[i], 'data': row} for i, row in enumerate(data)]
 
     async def classify(self, df, *, columns, labels, instructions, required_fields=None, id_column=None, resume=None, allow_partial=False):
-        return await self._run(self._records(df, columns, required_fields, id_column), 'classify', instructions,
+        output = await self._run(self._records(df, columns, required_fields, id_column, _stela_contract_context().get('semanticOptimization', False)), 'classify', instructions,
             labels=labels, requiredFields=required_fields or [], resume=resume, allow_partial=allow_partial)
+        try:
+            _stela_observe_semantic(df, id_column, output)
+        except Exception:
+            if _stela_contract_context().get('automaticContracts'):
+                _stela_current_contract()._coverage = dict(state='unknown', total=None, processed=0, unresolved=0, unprocessed=0, source=None)
+        return output
 
     async def extract(self, df, *, columns, schema, instructions, required_fields=None, id_column=None, resume=None, allow_partial=False):
-        return await self._run(self._records(df, columns, required_fields, id_column), 'extract', instructions,
+        output = await self._run(self._records(df, columns, required_fields, id_column, _stela_contract_context().get('semanticOptimization', False)), 'extract', instructions,
             schema=schema, requiredFields=required_fields or [], resume=resume, allow_partial=allow_partial)
+        try:
+            _stela_observe_semantic(df, id_column, output)
+        except Exception:
+            if _stela_contract_context().get('automaticContracts'):
+                _stela_current_contract()._coverage = dict(state='unknown', total=None, processed=0, unresolved=0, unprocessed=0, source=None)
+        return output
 
     async def resolve(self, left, right=None, *, columns, blocking=None, instructions, required_fields=None, resume=None, allow_partial=False):
         single = right is None

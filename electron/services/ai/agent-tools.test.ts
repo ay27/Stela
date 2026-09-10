@@ -576,6 +576,25 @@ try {
 
   // create_chart 只能引用本轮真实 run_query 结果，并校验字段。
   {
+    const ctx = { ...withConnection, aiSettings: { ...AI_SETTINGS, activeProfileId: "fixture", profiles: [], inlineCompletionEnabled: false,
+      completionProfileId: null, automaticSkillMaintenanceEnabled: false, automaticAnalysisContractsEnabled: true },
+      run: { ...baseCtx.run, toolFailureStreak: new Map<string, number>() }, analysisRuns: new Map(),
+      connector: { ...fakeConnector, execute: async () => ({ kind: "query" as const,
+        columns: [{ name: "count", typeName: "BIGINT" }], rows: [[42]], elapsedMs: 1 }) } };
+    const query = await dispatchTool("run_sql", JSON.stringify({ sql: "SELECT 42 AS count" }), ctx);
+    assert.equal(query.ok, true, query.text);
+    const observed = JSON.parse(query.text);
+    assert.equal(observed.analysis.generation, "host", "SQL-only evidence needs no Python worker");
+    assert.deepEqual(observed.analysis.missingClaims, ["population", "metric", "granularity"]);
+    assert.equal(observed.analysis.sources[0].ref, observed.runId);
+    assert.equal(observed.analysis.sources[0].rowCount, 1);
+    assert.equal(observed.analysis.coverage.state, "unknown", "a row count is not proof of task coverage");
+    const failed = await dispatchTool("run_sql", JSON.stringify({ sql: "DELETE FROM demo" }), { ...ctx, requestProposal: async () => false });
+    assert.equal(failed.ok, false);
+    assert.ok(JSON.parse(failed.text).analysis, "query failure retains observational state");
+  }
+
+  {
     const chartRuns = new Map();
     const ctx = {
       ...withConnection,

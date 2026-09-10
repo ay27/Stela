@@ -588,6 +588,14 @@ flowchart TB
    only invalid/missing rows retried. SDK retries are disabled on this budgeted path.
    Local `analysis.contract` objects retain sourced claims and deterministic checks
    for material scope/grain/denominator risks, without a reviewer model or final gate.
+   Independent default-off experiments extend this path: exact-content classify/extract
+   reduction plus all-key cost preflight and a host-bounded one-batch pilot (ADR-0097);
+   automatic observational contracts across SQL and Python (ADR-0098). Trusted job
+   context carries run/question/flags into both workers. Python reports bounded
+   snapshots through the existing result DTO; main attaches SQL facts and preserves
+   snapshots through timeline summaries for live/history/final evidence cards. There
+   is no new provider, persistence service or final-answer gate. See
+   [behavior and evaluation protocol](./testing/analysis-experiments.md).
    The semantic model defaults to the run's Agent profile but can be selected separately.
    The Python tool advertises classification/extraction/entity matching and points
    to the bundled `semantic-analysis` Skill for helper signatures. It also declares

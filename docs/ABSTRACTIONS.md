@@ -997,6 +997,28 @@ Supported fields: population/metric/granularity/denominator/business_rule/time_r
 gate. Model-authored claims and completeness of a filtered input are not certified.
 Recipes are in the bundled `analysis-verification` Skill; skip trivial tasks.
 
+Default-off `AiSettings.semanticOptimizationEnabled` and
+`automaticAnalysisContractsEnabled` select the experiments in ADR-0097/0098.
+`IAnalysisExecutionContext` carries trusted run ID, original question and flags on
+`PythonExecutionRequest`. The shared strict `analysisSnapshotSchema` bounds optional
+`PythonExecutionResult.analysis`: version/generation/status, model claims/checks and
+source-resolution flags, source row counts, full/subset/unknown coverage, previous
+version count and truncation. Source refresh, cell failure and unknown lineage
+cannot certify current coverage. `analysis.current` is lazy; explicit contracts are
+registered as revisions. `bind_population(df, id_column=..., source=...)` freezes
+source-verified row IDs/values; it cannot be silently rebound to a smaller cohort.
+Snapshots are automatically captured and preserved through existing tool history.
+Legacy explicit contract behavior remains when the experiment is off.
+
+Optimized classify/extract returns all original IDs after exact selected-content
+reuse. Preflight checks every unique cache key and exposes scale, packed request
+counts and conservative reservations. The `pilot` semantic phase requires host
+experiment enablement and an operation signature; one attempt and a 10% reservation
+cap share the existing run ledger. Model/definition/full-input identity constrain
+reuse, and forecasts never authorize sampling or guarantee completion. Resolve
+and the selected inference profile are unchanged. See
+[experiment protocol and API example](./testing/analysis-experiments.md).
+
 `AiSettings.semanticProfileId` defaults to the current run profile;
 `semanticBudget` supplies configurable limits. Grants are local under application
 userData, keyed by Vault and endpoint/vendor/model, never in Vault settings or Git.

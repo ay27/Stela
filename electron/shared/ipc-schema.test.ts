@@ -206,3 +206,9 @@ assert.throws(() => parseInput(IPC.AI_PYTHON_RUNTIME_READ_INPUT, {
 }));
 
 console.log("ipc-schema tests passed.");
+
+for (const [semanticOptimizationEnabled, automaticAnalysisContractsEnabled] of [[true, false], [false, true], [false, false]]) {
+  const patch = { ai: { semanticOptimizationEnabled, automaticAnalysisContractsEnabled } };
+  assert.deepEqual(parseInput(IPC.SETTINGS_PATCH, { patch }), { patch }, "experiment switches survive IPC parsing independently");
+}
+assert.throws(() => parseInput(IPC.SETTINGS_PATCH, { patch: { ai: { semanticOptimizationEnabled: "true" } } }));

@@ -279,6 +279,7 @@ def validate(query_dir, llm_answer, reason=None):
     bridgeTimeoutMs: number;
     strategyReview: boolean;
     salvageMs: number;
+    runtimeConditions: { semanticOptimization: boolean; analysisContracts: boolean };
   };
   assert.equal(manifest.concurrency, 2);
   assert.equal(manifest.mongoConcurrency, 2);
@@ -286,6 +287,13 @@ def validate(query_dir, llm_answer, reason=None):
   assert.equal(manifest.bridgeTimeoutMs, 10_000);
   assert.equal(manifest.strategyReview, true);
   assert.equal(manifest.salvageMs, 120_000);
+  assert.equal(manifest.runtimeConditions.semanticOptimization, false);
+  assert.equal(manifest.runtimeConditions.analysisContracts, false);
+  const experimentOutput = path.join(root, "experiments-output");
+  await runBenchmark(experimentOutput, ["--semantic-optimization", "--analysis-contracts"]);
+  const experimentManifest = JSON.parse(await fs.readFile(path.join(experimentOutput, "manifest.json"), "utf8"));
+  assert.equal(experimentManifest.runtimeConditions.semanticOptimization, true);
+  assert.equal(experimentManifest.runtimeConditions.analysisContracts, true);
 
   const failedFrom = path.join(root, "previous-results");
   const failedFinal = path.join(failedFrom, "query_demo", "query1", "run_0", "final_agent.json");

@@ -145,7 +145,9 @@ proposed → active → superseded
 | [0090](0090-bounded-semantic-execution.md) | Bounded host-mediated semantic execution | active |
 | [0091](0091-semantic-operation-completeness.md) | Preflight and resumable semantic operations | active |
 | [0092](0092-bounded-generation-recovery.md) | Bounded model generation recovery | superseded → [0095](0095-generation-lifecycle-and-safe-closeout.md) |
-| [0093](0093-evidence-backed-answer-contract.md) | Evidence-backed Python answer contracts | active |
+| [0093](0093-evidence-backed-answer-contract.md) | Evidence-backed Python answer contracts | superseded → [0098](0098-automatic-observational-analysis-contracts.md) |
 | [0094](0094-uncommitted-generation-previews.md) | Uncommitted generation previews | active |
 | [0095](0095-generation-lifecycle-and-safe-closeout.md) | Generation lifecycle and evidence-only closeout | active |
 | [0096](0096-explicit-knowledge-maintenance-outcomes.md) | Explicit knowledge-maintenance outcomes | active |
+| [0097](0097-semantic-input-reduction-and-cost-probe.md) | Semantic input reduction and bounded cost probing | active |
+| [0098](0098-automatic-observational-analysis-contracts.md) | Automatic observational analysis contracts | active |

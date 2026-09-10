@@ -236,6 +236,7 @@ async function executeActive(py: PyodideInterface): Promise<void> {
     py.globals.set("__stela_inputs_json", JSON.stringify(config));
     py.globals.set("__stela_query", requestQuery);
     py.globals.set("__stela_semantic", requestSemantic);
+    py.globals.set("__stela_analysis_context", JSON.stringify(job.request.analysisContext ?? {}));
     const raw = await py.runPythonAsync(PYTHON_EXECUTE_SCRIPT);
     const parsed = JSON.parse(String(raw)) as Omit<PythonExecutionResult, "elapsedMs">;
     post({
@@ -261,6 +262,7 @@ async function executeActive(py: PyodideInterface): Promise<void> {
     py.globals.delete("__stela_inputs_json");
     py.globals.delete("__stela_query");
     py.globals.delete("__stela_semantic");
+    py.globals.delete("__stela_analysis_context");
     for (const pending of semanticPending.values()) pending.reject(new Error("Python job finished"));
     semanticPending.clear();
     // Lazy relations retain their inputs until this workspace Worker is terminated.

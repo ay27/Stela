@@ -9,7 +9,8 @@ export type SemanticBudget = z.infer<typeof semanticBudgetSchema>;
 export const DEFAULT_SEMANTIC_BUDGET: SemanticBudget = { records: 1000, requests: 200, tokens: 200_000 };
 
 export const semanticRequestSchema = z.object({
-  phase: z.enum(["execute", "preflight"]).optional(),
+  phase: z.enum(["execute", "preflight", "pilot"]).optional(),
+  operationKey: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   totalRecords: z.number().int().min(0).max(100_000).optional(),
   requiredFields: z.array(z.string().min(1).max(128)).max(100).optional(),
   operation: z.enum(["classify", "extract", "resolve"]),
@@ -44,6 +45,8 @@ export interface ISemanticResponse {
     minimumRequests?: number;
     ledgerRevision?: number;
     executionIdentity?: string;
+    reservationTokens?: number;
+    pilot?: { reserved: number; actual?: number; reason?: string };
   };
 }
 export type SemanticRunner = (request: string, signal?: AbortSignal, onAuthorizationWait?: (waiting: boolean) => void) => Promise<ISemanticResponse>;

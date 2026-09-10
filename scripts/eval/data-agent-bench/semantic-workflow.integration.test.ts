@@ -48,7 +48,7 @@ setPythonRuntimeBroadcaster((channel, payload) => {
     const controller = new AbortController();
     jobs.set(request.jobId, controller);
     const carrier = workspace.execute({ vaultPath: root, sessionId, artifacts: {}, code: request.code,
-      signal: controller.signal,
+      signal: controller.signal, analysisContext: request.analysisContext,
       runSemantic: (raw) => semanticForPythonJob({ jobId: request.jobId, request: raw }),
     }).then((result) => { respondPythonRuntime({ jobId: request.jobId, result }); }, (error: unknown) => {
       respondPythonRuntime({ jobId: request.jobId, result: {
@@ -279,6 +279,19 @@ try {
   assert.equal(fallback.ok, true, fallback.text);
   assert.equal(requests.at(-1)!.model, profile.model, "unset semantic profile follows the main profile");
 
+  const experimental = startRun({ ...settings, semanticOptimizationEnabled: true, automaticAnalysisContractsEnabled: true });
+  const observed = await execute(experimental, `df = pd.DataFrame({'text':['football match']*20}); ${classify}`);
+  assert.equal(observed.ok, true, observed.text);
+  const evidence = JSON.parse(observed.text);
+  assert.equal(evidence.analysis.runId, experimental.run.runId);
+  assert.equal(evidence.analysis.generation === "host", false, "broker context reaches real Python runtime");
+  assert.equal(evidence.result.value.preflight.uniqueRows, 1);
+  assert.equal(evidence.result.value.total, 20);
+  const observedFailure = await execute(experimental, "raise ValueError('experimental cell failure')");
+  assert.equal(observedFailure.ok, false);
+  assert.equal(JSON.parse(observedFailure.text).analysis.status, "partial_mutation_possible");
+
+  clearSemanticWorkspace(root, sessionId);
   holdProvider = true;
   const stopProvider = new AbortController();
   const providerStarted = new Promise<void>((resolve) => { providerEntered = resolve; });

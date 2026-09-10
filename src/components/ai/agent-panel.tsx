@@ -1,3 +1,5 @@
+import { readAnalysisSnapshot } from "@shared/analysis-contract";
+import { AnalysisEvidence } from "./analysis-evidence";
 import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
 import type { EditorState } from "@milkdown/prose/state";
 import {
@@ -165,6 +167,15 @@ export function AgentPanel() {
   }, [activeWorkspaceTab, vaultPath]);
   // 执行中保持模型输出与 tool 的因果顺序；一轮结束后，仅在同一 run 内折叠过程气泡。
   // 连续 tool entries 就地合成 ToolActivity。pending question 从 timeline 摘出，固定到输入框上方。
+  const analysisByRun = useMemo(() => {
+    const snapshots = new Map<string, NonNullable<ReturnType<typeof readAnalysisSnapshot>>>();
+    for (const entry of timeline) {
+      if (entry.kind !== "tool") continue;
+      const snapshot = readAnalysisSnapshot(entry.result?.summary);
+      if (snapshot) snapshots.set(snapshot.runId, snapshot);
+    }
+    return snapshots;
+  }, [timeline]);
   const timelineItems = useMemo(() => groupAgentTimeline(timeline, !busy), [busy, timeline]);
   const pendingQuestion = timeline.find(
     (entry): entry is Extract<AgentTimelineEntry, { kind: "proposal" }> =>
@@ -547,7 +558,10 @@ export function AgentPanel() {
             ) : item.kind === "progress" ? (
               <ProcessNarrationGroup key={item.id} entries={item.entries} />
             ) : (
-              <TimelineItem key={item.entry.id} entry={item.entry} onRespond={respondProposal} />
+              <div key={item.entry.id} className="space-y-2">
+                <TimelineItem entry={item.entry} onRespond={respondProposal} />
+                {item.entry.kind === "final" && <AnalysisEvidence snapshot={analysisByRun.get(item.entry.runId) ?? null} />}
+              </div>
             ),
           )
         )}
@@ -1060,6 +1074,7 @@ function ToolActivity({ entries }: { entries: Array<Extract<AgentTimelineEntry, 
         <span>{t("agent.panel.activity", { count: entries.length })}</span>
         <ChevronDown className={cn("ml-auto h-3 w-3 transition-transform", expanded && "rotate-180")} />
       </button>
+      <AnalysisEvidence snapshot={[...entries].reverse().map((entry) => readAnalysisSnapshot(entry.result?.summary)).find(Boolean) ?? null} />
       {expanded ? <div className="space-y-1 border-t border-border/60 p-1.5">{entries.map((entry) => <ToolChip key={entry.id} entry={entry} />)}</div> : null}
     </div>
   );
@@ -1096,6 +1111,7 @@ function ToolChip({ entry }: { entry: Extract<AgentTimelineEntry, { kind: "tool"
           {entry.result ? (
             <div>
               <div className="mb-1 text-foreground/70">{t("agent.panel.result")}</div>
+              <AnalysisEvidence snapshot={readAnalysisSnapshot(entry.result.summary)} />
               <pre className="max-h-48 overflow-auto whitespace-pre-wrap">{entry.result.summary}</pre>
             </div>
           ) : null}

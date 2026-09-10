@@ -128,6 +128,7 @@ class PyodideSlot {
       timeoutMs: EXECUTION_TIMEOUT_MS,
       canQuery: Boolean(input.runQuery),
       canSemantic: Boolean(input.runSemantic),
+      analysisContext: input.analysisContext,
       inputs: Object.entries(input.artifacts).map(([alias, artifact]) => ({
         alias,
         runId: artifact.runId,

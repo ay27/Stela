@@ -1,3 +1,4 @@
+import { analysisToolSummary } from "../../shared/analysis-contract";
 /**
  * Harness agent via `@earendil-works/pi-agent-core` AgentHarness.
  *
@@ -313,13 +314,13 @@ function toolResultSummary(result: unknown): string {
   if (!result || typeof result !== "object") return String(result ?? "");
   const record = result as { details?: { summary?: unknown }; content?: Array<{ type?: string; text?: string }> };
   if (typeof record.details?.summary === "string") {
-    return record.details.summary.slice(0, TOOL_RESULT_SUMMARY_CHARS);
+    return analysisToolSummary(record.details.summary, TOOL_RESULT_SUMMARY_CHARS);
   }
   const text = (record.content ?? [])
     .filter((block) => block.type === "text" && typeof block.text === "string")
     .map((block) => block.text!)
     .join("");
-  return text.slice(0, TOOL_RESULT_SUMMARY_CHARS);
+  return analysisToolSummary(text, TOOL_RESULT_SUMMARY_CHARS);
 }
 
 function buildSkillMaintenanceInput(
@@ -945,6 +946,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
             await resetPythonWorkspace(vault, sessionId);
             clearSemanticWorkspace(vault, sessionId);
           } },
+          analysisContext: { runId, question: redactForPrompt(request.prompt), semanticOptimization: settings.ai.semanticOptimizationEnabled === true, automaticContracts: settings.ai.automaticAnalysisContractsEnabled === true },
           runSemantic: (raw, jobSignal, onAuthorizationWait) => semantic.execute(raw, jobSignal, onAuthorizationWait),
           signal,
           sqlIndex: { query: sqlIndex.query },

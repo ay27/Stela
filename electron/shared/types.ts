@@ -367,6 +367,8 @@ export interface AiVendorInfo {
 }
 
 export interface AiSettings {
+  semanticOptimizationEnabled?: boolean;
+  automaticAnalysisContractsEnabled?: boolean;
   semanticProfileId?: string | null;
   semanticBudget?: import("./semantic").SemanticBudget;
   providerMode: AiProviderMode;
@@ -863,6 +865,13 @@ export interface PythonExecutionInput {
   byteSize: number;
 }
 
+export interface IAnalysisExecutionContext {
+  runId: string;
+  question: string;
+  semanticOptimization: boolean;
+  automaticContracts: boolean;
+}
+
 export interface PythonExecutionRequest {
   jobId: string;
   workspaceId?: string;
@@ -872,6 +881,7 @@ export interface PythonExecutionRequest {
   /** When true the sandbox may call `await query(connection, sql)`. */
   canQuery?: boolean;
   canSemantic?: boolean;
+  analysisContext?: IAnalysisExecutionContext;
 }
 
 export interface IPythonWorkspaceSnapshot {
@@ -893,6 +903,7 @@ export interface PythonExecutionResult {
   value: PythonExecutionValue;
   elapsedMs: number;
   error?: string;
+  analysis?: import("./analysis-contract").IAnalysisSnapshot;
   workspace?: IPythonWorkspaceSnapshot;
   stdoutTruncated?: boolean;
 }

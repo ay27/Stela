@@ -56,6 +56,7 @@ async function executeActive() {
     pyodide.globals.set("__stela_inputs_json", JSON.stringify(config));
     pyodide.globals.set("__stela_query", requestQuery);
     pyodide.globals.set("__stela_semantic", requestSemantic);
+    pyodide.globals.set("__stela_analysis_context", JSON.stringify(job.request.analysisContext ?? {}));
     const raw = await pyodide.runPythonAsync(executeScript);
     const parsed = JSON.parse(String(raw));
     raw?.destroy?.();
@@ -78,7 +79,7 @@ async function executeActive() {
       },
     });
   } finally {
-    for (const key of ["__stela_code", "__stela_inputs_json", "__stela_query", "__stela_semantic"]) {
+    for (const key of ["__stela_code", "__stela_inputs_json", "__stela_query", "__stela_semantic", "__stela_analysis_context"]) {
       pyodide.globals.delete(key);
     }
     for (const pending of semanticPending.values()) pending.reject(new Error("Python job finished"));

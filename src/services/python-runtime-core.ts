@@ -237,6 +237,7 @@ async def _stela_main(_code, _staged_json, _query_bridge):
             'stdout': (schema + stdout.getvalue())[-8000:],
             'stdoutTruncated': len(schema + stdout.getvalue()) > 8000,
             'workspace': snapshot('ready'),
+            **({'analysis': _stela_safe_analysis_snapshot()} if _stela_contract_context().get('automaticContracts') else {}),
             'value': payload,
         }, default=str)
         if len(result_json) > 2_000_000:
@@ -244,6 +245,7 @@ async def _stela_main(_code, _staged_json, _query_bridge):
                 'ok': False,
                 'stdout': (schema + stdout.getvalue())[-8000:],
                 'workspace': snapshot('ready'),
+                **({'analysis': _stela_safe_analysis_snapshot()} if _stela_contract_context().get('automaticContracts') else {}),
                 'value': {'kind': 'none'},
                 'error': 'Python result exceeds the 2 MB response limit; aggregate or select fewer columns.',
             })
@@ -253,6 +255,7 @@ async def _stela_main(_code, _staged_json, _query_bridge):
             'ok': False,
             'stdout': (schema + stdout.getvalue())[-8000:],
             'workspace': snapshot('partial_mutation_possible'),
+            **({'analysis': _stela_safe_analysis_snapshot('partial_mutation_possible')} if _stela_contract_context().get('automaticContracts') else {}),
             'value': {'kind': 'none'},
             'error': ''.join(traceback.format_exception_only(type(error), error)).strip()[:16000],
         })
