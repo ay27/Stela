@@ -51,10 +51,10 @@
     "report:data-agent-bench": "tsx scripts/eval/build-data-agent-bench-report.ts",
     "compare:data-agent-bench": "tsx scripts/eval/compare-data-agent-bench.ts",
     "test:eval:data-agent-bench": "tsx electron/services/ai/analysis-efficiency.test.ts && tsx scripts/eval/data-agent-bench/runtime.test.ts && tsx scripts/eval/data-agent-bench/headless-python.test.ts && tsx scripts/eval/data-agent-bench/python-query-bridge.test.ts && tsx scripts/eval/data-agent-bench/paired-comparison.test.ts && python3 -m unittest scripts/eval/data-agent-bench/bridge_test.py && tsx scripts/eval/data-agent-bench/bridge.integration.test.ts && tsx scripts/eval/data-agent-bench/runner.integration.test.ts && tsx scripts/eval/data-agent-bench/report.test.ts && node scripts/eval/data-agent-bench/ssh-connector.test.mjs",
+    "test:canvas": "tsx electron/services/ai/agent-tools.test.ts && npm run test:charts && node scripts/run-canvas-renderer-tests.mjs",
     "test:conversation": "tsx electron/shared/conversation-routing.test.ts && tsx src/state/conversation.test.ts && tsx src/components/ai/conversation-timeline.test.ts && node scripts/run-conversation-tests.mjs"
   },
   "dependencies": {
-    "@lezer/highlight": "^1.2.3",
     "@codemirror/autocomplete": "^6.20.1",
     "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-sql": "^6.10.0",
@@ -67,6 +67,7 @@
     "@earendil-works/pi-ai": "0.80.6",
     "@fsegurai/codemirror-theme-vscode-dark": "^6.2.6",
     "@fsegurai/codemirror-theme-vscode-light": "^6.2.6",
+    "@lezer/highlight": "^1.2.3",
     "@milkdown/core": "^7.20.0",
     "@milkdown/crepe": "^7.20.0",
     "@milkdown/kit": "^7.20.0",
@@ -112,6 +113,7 @@
     "unified": "^11.0.5",
     "unist-util-visit": "^5.1.0",
     "zod": "^3.23.0",
+    "zod-to-json-schema": "^3.25.2",
     "zustand": "^5.0.12"
   },
   "devDependencies": {

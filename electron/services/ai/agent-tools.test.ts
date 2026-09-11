@@ -1,5 +1,6 @@
+import { mixedAuthoringFixture } from "@shared/canvas-authoring.fixture";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -111,12 +112,12 @@ try {
     }, requestProposal: async () => false });
     assert.match(semanticTools.find((tool) => tool.name === "execute_python")!.description,
       /semantic\.classify\/extract\/resolve.*load_skill name=semantic-analysis/);
-    // Semantic-capable runs include the helper discovery contract (~220 chars).
-    assert.ok(JSON.stringify(semanticTools).length <= 17_000, `semantic discovery stays within tool prompt budget: ${JSON.stringify(semanticTools).length}`);
+    // Structured Canvas schemas replace opaque JSON; bound the explicit schema cost (ADR-0104).
+    assert.ok(JSON.stringify(semanticTools).length <= 48_000, `semantic discovery stays within tool prompt budget: ${JSON.stringify(semanticTools).length}`);
     const serializedTools = JSON.stringify(tools);
     assert.ok(
-      serializedTools.length <= 17_000,
-      `provider-facing tools must stay <= 17000 chars, got ${serializedTools.length}`,
+      serializedTools.length <= 48_000,
+      `provider-facing tools must stay <= 48000 chars, got ${serializedTools.length}`,
     );
     assert.equal(tools.some((tool) => tool.name === "list_catalog"), true);
     assert.equal(tools.some((tool) => tool.name === "plan"), true);
@@ -1635,9 +1636,46 @@ Inspect the live schema first.`;
       } : null,
       onCanvasUpdated: (event: { action: "created" | "updated"; path: string }) => events.push(event),
     };
+    const beforeInvalid = await readdir(root);
+    const invalidCreate = await dispatchTool("create_analysis_canvas", JSON.stringify({
+      canvas: { title: "Invalid flow", sources: [], sections: [{ id: "s", title: "S", cards: [{
+        id: "f", type: "flow", nodes: [{ id: "a", kind: "source", label: "A" }],
+        edges: [{ id: "e", source: "a", target: "missing" }],
+      }] }] }, sourceRuns: [],
+    }), canvasCtx);
+    assert.equal(invalidCreate.ok, false);
+    assert.match(invalidCreate.text, /Unknown flow target/);
+    assert.deepEqual(await readdir(root), beforeInvalid, "Invalid creation must leave no file");
+    assert.equal(events.length, 0, "No created event for rejected content");
+    const invalidField = await dispatchTool("create_analysis_canvas", JSON.stringify({
+      canvas: { title: "Invalid field", sources: [{ id: "data", title: "Data" }], sections: [{ id: "s", title: "S", cards: [{
+        id: "t", type: "table", sourceId: "data", columns: [{ field: "missing" }],
+      }] }] }, sourceRuns: [{ sourceId: "data", runId: "canvas-run" }],
+    }), canvasCtx);
+    assert.equal(invalidField.ok, false);
+    assert.match(invalidField.text, /column missing/);
+    assert.deepEqual(await readdir(root), beforeInvalid);
+    const mixed = await dispatchTool("create_analysis_canvas", JSON.stringify({ canvas: mixedAuthoringFixture, sourceRuns: [{ sourceId: "data", runId: "canvas-run" }] }), canvasCtx);
+    assert.equal(mixed.ok, true, mixed.text);
+    const mixedFile = JSON.parse(mixed.text) as { path: string; content: string; etag: string };
+    assert.equal(await readFile(mixedFile.path, "utf8"), mixedFile.content);
+    const mixedCanvas = JSON.parse(mixedFile.content);
+    assert.equal(mixedCanvas.sections[0].cards.length, 5);
+    assert.equal(mixedCanvas.createdBySessionId, null);
+    const badUpdate = await dispatchTool("update_analysis_canvas", JSON.stringify({ path: mixedFile.path, etag: mixedFile.etag,
+      canvas: { ...mixedAuthoringFixture, sections: [{ id: "s", title: "S", cards: [{ id: "bad", type: "table", sourceId: "missing" }] }] }, sourceRuns: [],
+    }), canvasCtx);
+    assert.equal(badUpdate.ok, false);
+    assert.equal(await readFile(mixedFile.path, "utf8"), mixedFile.content, "Rejected updates preserve exact prior bytes");
+    const goodUpdate = await dispatchTool("update_analysis_canvas", JSON.stringify({ path: mixedFile.path, etag: mixedFile.etag,
+      canvas: { ...mixedAuthoringFixture, title: "Updated mixed" }, sourceRuns: [],
+    }), canvasCtx);
+    assert.equal(goodUpdate.ok, true, goodUpdate.text);
+    const changed = JSON.parse((JSON.parse(goodUpdate.text) as { content: string }).content);
+    for (const field of ["id", "createdAt", "createdBySessionId"]) assert.equal(changed[field], mixedCanvas[field]);
     const created = await dispatchTool(
       "create_analysis_canvas",
-      JSON.stringify({ title: "Agent Report" }),
+      JSON.stringify({ canvas: { title: "Agent Report", sources: [], sections: [{ id: "intro", title: "Intro", cards: [{ id: "intro", type: "markdown", markdown: "Report" }] }] }, sourceRuns: [] }),
       canvasCtx,
     );
     assert.equal(created.ok, true, created.text);
@@ -1646,6 +1684,24 @@ Inspect the live schema first.`;
       sources: unknown[];
       sections: unknown[];
     };
+    // Regression: repeated missing node kinds used to hide malformed edges
+    // behind the first 12 errors, consuming the three-retry budget.
+    const malformedFlow = {
+      ...content, createdAt: undefined, updatedAt: undefined,
+      sections: [{ id: "flow", title: "Flow", cards: [{ id: "flow", type: "flow",
+        nodes: Array.from({ length: 20 }, (_, i) => ({ id: `n${i}`, label: `Node ${i}` })),
+        edges: [{ from: "n0", to: "n1" }],
+      }] }],
+    };
+    const malformed = await dispatchTool("update_analysis_canvas", JSON.stringify({
+      path: createdPayload.path, etag: createdPayload.etag, content: JSON.stringify(malformedFlow), sourceRuns: [],
+    }), canvasCtx);
+    assert.equal(malformed.ok, false);
+    for (const field of ["createdAt", "updatedAt", "nodes.0.kind", "edges.0.id", "edges.0.source", "edges.0.target"]) {
+      assert.ok(malformed.text.includes(field), `Missing actionable error: ${field}`);
+    }
+    assert.match(malformed.text, /step\|decision\|source\|result\|note/);
+    assert.match(malformed.text, /createdBySessionId/);
     content.sources = [{
       id: "overview",
       title: "Overview",
@@ -1817,7 +1873,7 @@ Inspect the live schema first.`;
     assert.equal(secondAtomicUpdate.ok, false);
     assert.match(secondAtomicUpdate.text, /already committed/i);
     assert.equal(await readFile(createdPayload.path, "utf8"), afterAtomic, "second atomic update must not write");
-    assert.deepEqual(events.map((event) => event.action), ["created", "updated", "updated", "updated"]);
+    assert.deepEqual(events.map((event) => event.action), ["created", "updated", "created", "updated", "updated", "updated"]);
   }
 
   {

@@ -1,3 +1,4 @@
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Check, CheckCircle2, Clipboard, Database, Download, Loader2, RefreshCw } from "lucide-react";
 
@@ -90,17 +91,17 @@ export function AnalysisCanvasView({ tabId, path }: { tabId: string; path: strin
     }
   };
 
-  if (error && !canvas) return <div className="p-8 text-sm text-destructive">{error}</div>;
+  if (error && !canvas) return <div role="alert" className="p-8 text-sm text-destructive"><p>{error}</p><button className="mt-3 rounded border px-3 py-1" onClick={() => void load().catch(() => {})}>{t("common.retry")}</button></div>;
   if (!canvas) return <div className="flex h-full items-center justify-center"><Loader2 className="h-5 w-5 animate-spin" /></div>;
   return <div className="h-full overflow-auto bg-muted/20">
     <div className="mx-auto max-w-[1320px] px-5 py-4">
-      {error ? <div className="mb-4 flex items-center justify-between rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive"><span>{error}</span><button className="rounded border border-destructive/30 px-2 py-1" onClick={() => void load()}>{t("common.retry")}</button></div> : null}
+      {error ? <div className="mb-4 flex items-center justify-between rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive"><span>{error}</span><button className="rounded border border-destructive/30 px-2 py-1" onClick={() => void load().catch(() => {})}>{t("common.retry")}</button></div> : null}
       <header className="mb-5 flex items-start justify-between gap-4">
         <div><div className="text-[10px] uppercase tracking-wider text-muted-foreground">{t("analysisCanvas.label")} · {t(`analysisCanvas.status.${canvas.status}`)}</div><h1 className="mt-0.5 text-xl font-semibold">{canvas.title}</h1><div className="mt-0.5 text-[11px] text-muted-foreground">{t("analysisCanvas.updated", { time: new Date(canvas.updatedAt).toLocaleString() })}{canvas.sources.some((source) => source.lastError) ? ` · ${t("analysisCanvas.sourceErrors", { count: canvas.sources.filter((source) => source.lastError).length })}` : ""}</div></div>
         <div className="flex gap-2"><button className="rounded-md border px-3 py-1.5 text-xs" onClick={() => setSourcesOpen(!sourcesOpen)}><Database className="mr-1 inline h-3.5 w-3.5" />{t("analysisCanvas.sources")}</button><button className="rounded-md border px-3 py-1.5 text-xs" onClick={() => openCanvasRefreshTask({ canvasPath: path, canvasTitle: canvas.title })}><RefreshCw className="mr-1 inline h-3.5 w-3.5" />{t("analysisCanvas.refreshWithAgent")}</button><button className="rounded-md border px-3 py-1.5 text-xs" onClick={() => void exportHtml()}><Download className="mr-1 inline h-3.5 w-3.5" />{t("analysisCanvas.exportHtml")}</button></div>
       </header>
       {sourcesOpen ? <div className="mb-4 space-y-2 rounded-md border bg-background p-3"><h2 className="text-sm font-medium">{t("analysisCanvas.dataSources")}</h2>{canvas.sources.map((source) => <SourceRow key={source.id} source={source} onRefresh={() => openCanvasRefreshTask({ canvasPath: path, canvasTitle: canvas.title, source })} />)}</div> : null}
-      <div className="space-y-6">{canvas.sections.map((section) => <section key={section.id}><h2 className="mb-0.5 text-base font-semibold">{section.title}</h2>{section.description ? <p className="mb-2 text-xs text-muted-foreground">{section.description}</p> : null}<div className="grid grid-cols-6 gap-2.5">{section.cards.map((card) => <CanvasCard key={card.id} card={card} sources={canvas.sources} onSaveFlowLayout={(patch) => saveFlowLayout(card.id, patch)} />)}</div></section>)}</div>
+      <div className="space-y-6">{canvas.sections.map((section) => <section key={section.id}><h2 className="mb-0.5 text-base font-semibold">{section.title}</h2>{section.description ? <p className="mb-2 text-xs text-muted-foreground">{section.description}</p> : null}<div className="grid grid-cols-6 gap-2.5">{section.cards.map((card) => <div key={card.id} className={card.width === "third" ? "col-span-2 min-w-0" : card.width === "half" ? "col-span-3 min-w-0" : "col-span-6 min-w-0"}><ErrorBoundary compact resetKey={`${etag}:${card.id}`}><CanvasCard card={card} sources={canvas.sources} onSaveFlowLayout={(patch) => saveFlowLayout(card.id, patch)} /></ErrorBoundary></div>)}</div></section>)}</div>
     </div>
     {exportedFile ? (
       <div className="fixed bottom-5 right-5 z-[150] max-w-[min(40rem,calc(100vw-2.5rem))] rounded-lg border border-border bg-popover px-3 py-2 shadow-lg">

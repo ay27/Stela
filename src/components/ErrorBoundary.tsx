@@ -6,6 +6,7 @@ interface Props {
   children: ReactNode;
   /** 用于在切换 tab 时 reset 内部错误态 */
   resetKey?: string;
+  compact?: boolean;
 }
 
 interface State {
@@ -35,6 +36,13 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.error) {
+      if (this.props.compact) return (
+        <div role="alert" className="stela-card-error rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+          <p className="font-medium">{i18n.t("errorBoundary.title")}</p>
+          <p className="mt-1 whitespace-pre-wrap break-words">{this.state.error.message}</p>
+          <button type="button" className="mt-2 rounded border px-2 py-1" onClick={() => this.setState({ error: null })}>{i18n.t("common.retry")}</button>
+        </div>
+      );
       return (
         <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-sm">
           <div className="font-medium text-destructive">

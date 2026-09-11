@@ -156,3 +156,4 @@ proposed → active → superseded
 | [0101](0101-sql-first-conversation-execution.md) | sql first conversation execution | active |
 | [0102](0102-unified-codemirror-composer.md) | Unified CodeMirror conversation composer | active |
 | [0103](0103-conversation-structured-drafts.md) | Structured messages in durable conversations | active |
+| [0104](0104-validated-structured-canvas-authoring.md) | Validated structured Canvas authoring | active |

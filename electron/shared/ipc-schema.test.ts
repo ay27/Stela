@@ -216,3 +216,7 @@ assert.throws(() => parseInput(IPC.SETTINGS_PATCH, { patch: { ai: { semanticOpti
 const badReference = { version: 1, segments: [{ kind: "resource", resourceId: "absent" }], resources: [] };
 assert.throws(() => parseInput(IPC.CONVERSATION_DRAFT, { path: "/vault/chat.stela.chat", etag: "a".repeat(64), draft: "", draftMessage: badReference, connectionName: null }));
 assert.throws(() => parseInput(IPC.CONVERSATION_SUBMIT, { path: "/vault/chat.stela.chat", etag: "a".repeat(64), requestId: "00000000-0000-4000-8000-000000000000", input: "query", message: badReference, connectionName: null }));
+
+const localizedConversation = { path: "/vault/chat.stela.chat", etag: "a".repeat(64), requestId: "00000000-0000-4000-8000-000000000000", input: "分析链路", connectionName: null, locale: "zh" };
+assert.deepEqual(parseInput(IPC.CONVERSATION_SUBMIT, localizedConversation), localizedConversation);
+assert.throws(() => parseInput(IPC.CONVERSATION_SUBMIT, { ...localizedConversation, locale: "invalid" }));

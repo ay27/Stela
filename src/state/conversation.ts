@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n";
 import type { EditorState } from "@codemirror/state";
 import { agentMessagePlainText } from "@shared/agent-message";
 import { agentComposerStateToMessage, composerResources, createAgentComposerState, emptyAgentComposerState } from "@/lib/agent-composer";
@@ -99,7 +100,7 @@ export const useConversation = create<IConversationState>((set, get) => ({
       const message = state.editors[path] ? agentComposerStateToMessage(state.editors[path]) : undefined;
       const input = state.drafts[path]?.trim();
       if (!snapshot || !input || snapshot.document.turns.some(t => t.status === "running")) return;
-      const next = await window.stela.conversation.submit({ path, etag: snapshot.etag, requestId: crypto.randomUUID(), input, message, connectionName: state.connections[path] ?? null });
+      const next = await window.stela.conversation.submit({ locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en", path, etag: snapshot.etag, requestId: crypto.randomUUID(), input, message, connectionName: state.connections[path] ?? null });
       get().accept(next);
       set(s => {
         const unchanged = JSON.stringify(s.editors[path] ? agentComposerStateToMessage(s.editors[path]) : undefined) === JSON.stringify(message);

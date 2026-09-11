@@ -153,7 +153,7 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
   [IPC.CONVERSATION_READ]: z.object({ path: z.string().min(1).max(8192) }).strict(),
   [IPC.CONVERSATION_CANCEL]: z.object({ path: z.string().min(1).max(8192) }).strict(),
   [IPC.CONVERSATION_DRAFT]: z.object({ path: z.string().min(1).max(8192), etag: z.string().length(64), draft: z.string().max(20000), draftMessage: agentMessageSchema.optional(), connectionName: z.string().max(512).nullable() }).strict(),
-  [IPC.CONVERSATION_SUBMIT]: z.object({ path: z.string().min(1).max(8192), etag: z.string().length(64), requestId: z.string().uuid(), input: z.string().trim().min(1).max(20000), message: agentMessageSchema.optional(), connectionName: z.string().max(512).nullable() }).strict(),
+  [IPC.CONVERSATION_SUBMIT]: z.object({ locale: z.enum(["zh", "en"]).optional(), path: z.string().min(1).max(8192), etag: z.string().length(64), requestId: z.string().uuid(), input: z.string().trim().min(1).max(20000), message: agentMessageSchema.optional(), connectionName: z.string().max(512).nullable() }).strict(),
   [IPC.CONVERSATION_RESPOND]: z.object({ path: z.string().min(1).max(8192), response: z.object({ runId: z.string().uuid(), callId: z.string().min(1).max(512), approve: z.boolean(), answer: z.string().max(20000).optional() }).strict() }).strict(),
   [IPC.VAULT_LIST_DIR]: z.object({ path: stringPath }),
   [IPC.VAULT_READ_FILE]: z.object({ path: stringPath }),

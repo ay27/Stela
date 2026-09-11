@@ -126,6 +126,8 @@ New conversations use the local calendar date as their default title and filenam
 (`YYYY-MM-DD.stela.chat`), adding ` (1)`, ` (2)`, etc. on filename collisions.
 Optional `draftMessage` and turn `message` retain ordered structured references;
 legacy strings remain readable text projections (ADR-0103).
+Conversation submissions carry the resolved UI locale (`zh` or `en`) into the
+Agent request, matching the Agent Panel output-language contract.
 Each turn retains its request ID, original input, connection snapshot, start time,
 status, Agent events, proposal responses and `RunRecord` references. Rows are
 loaded by run ID through existing result storage, never embedded in this file.
@@ -1377,3 +1379,14 @@ only because the fallback scan still evaluates Git state.
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — system architecture and data flow
 - [adr/](./adr/) — decision records for each major choice above
+
+### Structured Agent Canvas authoring (ADR-0104)
+
+Agent create/update accept `canvas: {title, status, sources: [{id, title}], sections}`
+and `sourceRuns` bindings. The provider JSON Schema is generated from the existing
+Zod card/section schemas. File identity, timestamps, session attribution, SQL and
+saved-run metadata are host-owned. A complete nonempty artifact is checked for
+referential integrity and data-card compatibility before persistence. Manual
+empty creation and version-1 files remain supported; legacy update JSON uses the
+same final validation. Invalid creation leaves no file/event, and invalid updates
+preserve the previous bytes. Rendering failures are isolated per card.

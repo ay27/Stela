@@ -19,7 +19,7 @@ export const conversationSchema = z.object({
 export type ConversationDocument = z.infer<typeof conversationSchema>;
 export type ConversationTurn = z.infer<typeof conversationTurnSchema>;
 export interface IConversationSnapshot { path: string; etag: string; document: ConversationDocument; persistenceError?: string }
-export interface IConversationSubmit { path: string; etag: string; requestId: string; input: string; message?: AgentMessageContent; connectionName: string | null }
+export interface IConversationSubmit { locale?: "zh" | "en"; path: string; etag: string; requestId: string; input: string; message?: AgentMessageContent; connectionName: string | null }
 export interface IConversationBridge {
   create(directory: string, title: string): Promise<IConversationSnapshot>;
   read(path: string): Promise<IConversationSnapshot>;

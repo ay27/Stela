@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n";
 import assert from "node:assert/strict";
 import type { IConversationBridge, IConversationSnapshot } from "@shared/conversation";
 import { useConversation } from "./conversation";
@@ -11,12 +12,13 @@ let duringSubmit: (() => void) | undefined;
 const bridge: IConversationBridge = {
   create: async () => snapshot, read: async () => snapshot,
   draft: async (_path, etag, draft, connectionName, draftMessage) => { assert.equal(etag, snapshot.etag); snapshot = { ...snapshot, etag: "b".repeat(64), document: { ...snapshot.document, draft, connectionName, draftMessage } }; return snapshot; },
-  submit: async input => { sends++; snapshot = { ...snapshot, etag: "c".repeat(64), document: { ...snapshot.document, draft: "", draftMessage: { version: 1, segments: [], resources: [] }, turns: [{ id: input.requestId, input: input.input, message: input.message, connectionName: input.connectionName, status: "running", startedAt: 1, runs: [], events: [], responses: [] }] } }; listener?.(snapshot); duringSubmit?.(); return snapshot; },
+  submit: async input => { assert.equal(input.locale, "zh"); sends++; snapshot = { ...snapshot, etag: "c".repeat(64), document: { ...snapshot.document, draft: "", draftMessage: { version: 1, segments: [], resources: [] }, turns: [{ id: input.requestId, input: input.input, message: input.message, connectionName: input.connectionName, status: "running", startedAt: 1, runs: [], events: [], responses: [] }] } }; listener?.(snapshot); duringSubmit?.(); return snapshot; },
   cancel: async () => {}, respond: async () => {},
   onChanged: callback => { listener = callback; return () => {}; },
 };
 Object.assign(globalThis, { window: { stela: { conversation: bridge } } });
 useWorkspace.setState({ vaultPath: null, tabs: [{ id: "tab", kind: "conversation", path: visible, title: "Chat", ephemeral: true }] });
+await i18n.changeLanguage("zh");
 await useConversation.getState().open(visible);
 assert.equal(useConversation.getState().snapshots[visible]?.etag, snapshot.etag);
 assert.equal(useConversation.getState().drafts[visible], "SELECT 1");

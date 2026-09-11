@@ -14,6 +14,8 @@ import fs from "node:fs/promises";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { z } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
+import { canvasAuthoringSchema, createCanvasToolSchema, updateCanvasToolSchema } from "@shared/canvas-authoring";
 
 import { AppError } from "@shared/errors";
 import { parseAnalysisCanvas, type AnalysisCanvas } from "@shared/analysis-canvas";
@@ -237,7 +239,12 @@ function fail(message: string): ToolOutcome {
  */
 function describeZodError(error: unknown): string {
   if (!(error instanceof z.ZodError)) return error instanceof Error ? error.message : String(error);
-  return error.issues.slice(0, 12).map((issue) => {
+  const seen = new Set<string>();
+  return error.issues.filter(issue => {
+    const key = `${issue.path.map(part => typeof part === "number" ? "*" : part).join(".")}: ${issue.message}`;
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  }).slice(0, 12).map((issue) => {
     const location = issue.path.join(".") || "(root)";
     const allowed = issue.code === "invalid_union_discriminator"
       ? ` Allowed values: ${issue.options.map((option) => String(option)).join(" | ")}.`
@@ -349,9 +356,13 @@ const MAX_QUESTIONS_PER_RUN = 3;
  * 工具参数只能声明成一个 JSON 字符串，所以 card 判别联合必须在 description 里讲清楚。
  */
 const CANVAS_CARD_RULES =
-  "Every card needs id and type. type gates the rest: markdown needs markdown; kpi needs sourceId and value; " +
-  "chart needs sourceId and chart; table needs sourceId; flow needs nodes and edges. No other keys are accepted per type. " +
+  "Cards require id,type. By type: markdown needs markdown; kpi needs sourceId and value; " +
+  "chart needs sourceId and chart; table needs sourceId; flow needs nodes and edges. Other keys are rejected. " +
+  "Nodes: id,kind(step|decision|source|result|note),label. Edges: id,source,target. " +
   "A chart card's chart.fields is an object keyed by field id, not the array that create_chart takes.";
+const CANVAS_DOCUMENT_RULES = CANVAS_CARD_RULES +
+  " Submit canvas={title,status,sources:[{id,title}],sections} and sourceRuns. The host owns id, createdAt, updatedAt, createdBySessionId and source query metadata. " +
+  "Flow source/target reference node ids (not from/to); optional edge label is text. Flow/Markdown cards need no SQL source.";
 /**
  * 工具执行上下文，由 [agent.ts](./agent.ts) 每次 run 构造一次。
  * `requestProposal` 把「等用户确认」抽象成一个 Promise：agent 循环负责发
@@ -627,11 +638,8 @@ export function createAgentTools(options: {
       name: "create_analysis_canvas",
       label: "Create analysis Canvas",
       description:
-        "Create a structured .stela.canvas artifact for an explicitly requested Canvas/report/dashboard or a genuinely multi-view analysis. Simple answers stay in chat.",
-      parameters: Type.Object({
-        title: Type.String(),
-        directory: Type.Optional(Type.String({ description: "Vault-relative directory. Defaults to the current note directory or vault root." })),
-      }),
+        "Create a populated Canvas after validation. Supply canvas content and sourceRuns bindings for SQL sources; no file is created on failure. Simple answers stay in chat.",
+      parameters: Type.Unsafe(zodToJsonSchema(createCanvasToolSchema, { $refStrategy: "none" })),
       executionMode: "sequential",
       execute: (toolCallId, params) => runTool("create_analysis_canvas", toolCallId, params, ctx, requestProposal),
     },
@@ -643,14 +651,8 @@ export function createAgentTools(options: {
     },
     {
       name: "update_analysis_canvas", label: "Update analysis Canvas",
-      description: "Replace a Canvas with validated complete JSON. Keep existing semantic ids, bind each new or changed SQL source through sourceRuns, and omit Flow positions; Stela audits runs and preserves user-owned layout. Canvas refresh runs permit one final atomic update.",
-      parameters: Type.Object({
-        path: Type.String(), etag: Type.String(), content: Type.String({ description: `Complete version 1 .stela.canvas JSON. ${CANVAS_CARD_RULES}` }),
-        sourceRuns: Type.Array(Type.Object({
-          sourceId: Type.String({ description: "Canvas source id being created, changed, or refreshed." }),
-          runId: Type.String({ description: "Successful SQL run_query id from this Agent run." }),
-        })),
-      }), executionMode: "sequential",
+      description: "Update a Canvas read first, using its etag and structured canvas content. Keep semantic ids; bind new/refreshed sources through sourceRuns. Host preserves identity and Flow layout. Refresh permits one atomic update.",
+      parameters: Type.Unsafe(zodToJsonSchema(updateCanvasToolSchema, { $refStrategy: "none" })), executionMode: "sequential",
       execute: (toolCallId, params) => runTool("update_analysis_canvas", toolCallId, params, ctx, requestProposal),
     },
     {
@@ -1860,29 +1862,25 @@ function runCreateChart(args: Record<string, unknown>, ctx: AgentToolContext): T
 
 async function runCreateAnalysisCanvas(args: Record<string, unknown>, ctx: AgentToolContext): Promise<ToolOutcome> {
   if (ctx.canvasRefresh) return fail("A Canvas refresh run cannot create another Canvas.");
-  if (typeof args.title !== "string" || !args.title.trim()) return fail("title must be a non-empty string.");
-  const directory = typeof args.directory === "string" && args.directory.trim()
-    ? resolveVaultTarget(ctx.vaultPath, args.directory)
-    : ctx.run.notePath ? path.dirname(ctx.run.notePath) : ctx.vaultPath;
-  const file = await analysisCanvasService.createAnalysisCanvas(
-    ctx.vaultPath,
-    directory,
-    args.title.trim(),
-    ctx.run.sessionId ?? null,
-  );
-  const canvas = parseAnalysisCanvas(file.content);
-  ctx.onCanvasUpdated?.({ path: vaultRelativePath(ctx.vaultPath, file.path), title: canvas.title, action: "created" });
-  return ok({ path: file.path, etag: file.etag, content: file.content, instruction: "Populate this Canvas incrementally with update_analysis_canvas after verified SQL run_query results." });
+  return runWriteAnalysisCanvas(args, ctx, true);
 }
 
 async function runReadAnalysisCanvas(args: Record<string, unknown>, ctx: AgentToolContext): Promise<ToolOutcome> {
   if (typeof args.path !== "string" || !args.path.trim()) return fail("path must be a non-empty string.");
-  return ok(await analysisCanvasService.readAnalysisCanvas(ctx.vaultPath, resolveVaultTarget(ctx.vaultPath, args.path)));
+  return ok({ ...await analysisCanvasService.readAnalysisCanvas(ctx.vaultPath, resolveVaultTarget(ctx.vaultPath, args.path)), instruction: CANVAS_DOCUMENT_RULES });
 }
 
 async function runUpdateAnalysisCanvas(args: Record<string, unknown>, ctx: AgentToolContext): Promise<ToolOutcome> {
-  if (typeof args.path !== "string" || typeof args.etag !== "string" || typeof args.content !== "string") return fail("path, etag, and content are required.");
-  const target = resolveVaultTarget(ctx.vaultPath, args.path);
+  return runWriteAnalysisCanvas(args, ctx, false);
+}
+
+async function runWriteAnalysisCanvas(args: Record<string, unknown>, ctx: AgentToolContext, creating: boolean): Promise<ToolOutcome> {
+  if (!creating && (typeof args.path !== "string" || typeof args.etag !== "string")) return fail("path and etag are required.");
+  if (creating || args.canvas !== undefined) {
+    const checked = (creating ? createCanvasToolSchema : updateCanvasToolSchema).safeParse(args);
+    if (!checked.success) return fail(`Invalid Canvas content: ${describeZodError(checked.error)}`);
+  }
+  const target = creating ? "" : resolveVaultTarget(ctx.vaultPath, args.path as string);
   if (ctx.canvasRefresh) {
     const refreshTarget = resolveVaultTarget(ctx.vaultPath, ctx.canvasRefresh.path);
     if (path.resolve(target) !== path.resolve(refreshTarget)) {
@@ -1892,10 +1890,24 @@ async function runUpdateAnalysisCanvas(args: Record<string, unknown>, ctx: Agent
       return fail("This Canvas refresh has already committed its one atomic update.");
     }
   }
-  const currentFile = await analysisCanvasService.readAnalysisCanvas(ctx.vaultPath, target);
-  const current = parseAnalysisCanvas(currentFile.content);
+  const current = creating
+    ? analysisCanvasService.newAnalysisCanvas(canvasAuthoringSchema.parse(args.canvas).title, ctx.run.sessionId)
+    : parseAnalysisCanvas((await analysisCanvasService.readAnalysisCanvas(ctx.vaultPath, target)).content);
   let desired: AnalysisCanvas;
-  try { desired = parseAnalysisCanvas(args.content); } catch (error) { return fail(`Invalid Canvas JSON: ${describeZodError(error)}`); }
+  try {
+    if (args.canvas !== undefined) {
+      const authored = canvasAuthoringSchema.parse(args.canvas);
+      // New source placeholders exist only in memory until audited bindings below.
+      desired = { ...current, ...authored, sources: authored.sources.map(source => ({
+        connectionName: "", sql: "", lastRunId: null, lastRunAt: null, lastError: null,
+        ...current.sources.find(existing => existing.id === source.id), ...source,
+      })) };
+    } else {
+      if (typeof args.content !== "string") return fail("Structured canvas content is required.");
+      desired = parseAnalysisCanvas(args.content);
+      canvasAuthoringSchema.parse({ title: desired.title, status: desired.status === "error" ? "working" : desired.status, sources: desired.sources.map(({ id, title }) => ({ id, title })), sections: desired.sections });
+    }
+  } catch (error) { return fail(`Invalid Canvas JSON: ${describeZodError(error)}. ${CANVAS_DOCUMENT_RULES}`); }
   if (
     desired.id !== current.id ||
     desired.createdAt !== current.createdAt ||
@@ -1909,6 +1921,8 @@ async function runUpdateAnalysisCanvas(args: Record<string, unknown>, ctx: Agent
     if (!raw || typeof raw !== "object") return fail("sourceRuns entries must be objects.");
     const item = raw as Record<string, unknown>;
     if (typeof item.sourceId !== "string" || typeof item.runId !== "string") return fail("Each sourceRuns entry needs sourceId and runId.");
+    if (bindings.has(item.sourceId)) return fail(`Duplicate sourceRuns binding: ${item.sourceId}`);
+    if (!desired.sources.some(source => source.id === item.sourceId)) return fail(`Unknown sourceRuns source: ${item.sourceId}`);
     bindings.set(item.sourceId, item.runId);
   }
   if (ctx.canvasRefresh) {
@@ -1962,11 +1976,33 @@ async function runUpdateAnalysisCanvas(args: Record<string, unknown>, ctx: Agent
       };
     }),
   }));
-  const nextDesired = { ...desired, sources, sections };
-  const updated = await analysisCanvasService.updateAnalysisCanvas(ctx.vaultPath, target, args.etag, () => nextDesired);
+  let nextDesired: AnalysisCanvas;
+  try {
+    nextDesired = parseAnalysisCanvas(JSON.stringify({ ...desired, sources, sections }));
+    for (const section of nextDesired.sections) for (const card of section.cards) {
+      if (card.type === "flow" || card.type === "markdown") continue;
+      const source = sources.find(source => source.id === card.sourceId)!;
+      const data = ctx.chartRuns?.get(source.lastRunId!);
+      const oldCard = current.sections.flatMap(section => section.cards).find(old => old.id === card.id);
+      if (!data) {
+        if (JSON.stringify(oldCard) === JSON.stringify(card) && !bindings.has(source.id)) continue;
+        throw new Error(`Card ${card.id}: source ${source.id} must have saved rows available in this run or be rebound to an audited query before changing its data view.`);
+      }
+      const fields = new Set(data.columns.map(column => column.name));
+      if (card.type === "table" && card.columns?.some(column => !fields.has(column.field))) throw new Error(`Card ${card.id}: table column missing from source ${source.id}.`);
+      if (card.type === "kpi" && (!fields.has(card.value.field) || data.rows.length !== 1)) throw new Error(`Card ${card.id}: KPI needs its field and exactly one result row.`);
+      if (card.type === "chart") validateStelaChartData({ ...card.chart, version: 2, source: { kind: "run", runId: source.lastRunId! } }, data.columns, data.rows);
+    }
+  } catch (error) { return fail(`Invalid Canvas: ${describeZodError(error)}`); }
+  const directory = typeof args.directory === "string" && args.directory.trim()
+    ? resolveVaultTarget(ctx.vaultPath, args.directory)
+    : ctx.run.notePath ? path.dirname(ctx.run.notePath) : ctx.vaultPath;
+  const updated = creating
+    ? await analysisCanvasService.createAnalysisCanvas(ctx.vaultPath, directory, nextDesired.title, ctx.run.sessionId, nextDesired)
+    : await analysisCanvasService.updateAnalysisCanvas(ctx.vaultPath, target, args.etag as string, () => nextDesired);
   if (ctx.canvasRefresh) ctx.canvasRefresh.committed = true;
-  ctx.onCanvasUpdated?.({ path: vaultRelativePath(ctx.vaultPath, updated.path), title: desired.title, action: "updated" });
-  return ok({ path: updated.path, etag: updated.etag, status: desired.status, sections: desired.sections.length, cards: desired.sections.reduce((sum, section) => sum + section.cards.length, 0) });
+  ctx.onCanvasUpdated?.({ path: vaultRelativePath(ctx.vaultPath, updated.path), title: desired.title, action: creating ? "created" : "updated" });
+  return ok({ path: updated.path, etag: updated.etag, content: updated.content, status: desired.status, validation: "saved", sections: desired.sections.length, cards: desired.sections.reduce((sum, section) => sum + section.cards.length, 0) });
 }
 
 /** 记录失败不应影响 agent 继续工作——落盘异常只记日志。 */

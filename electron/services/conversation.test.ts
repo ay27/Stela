@@ -1,3 +1,4 @@
+import { pipelineAuthoringFixture } from "@shared/canvas-authoring.fixture";
 import { withAgentResourceId } from "@shared/agent-message";
 import assert from "node:assert/strict";
 import { app } from "electron";
@@ -27,6 +28,7 @@ async function main() {
     requests.push(JSON.parse(body)); modelCalls++;
     const tool = step++ === 0 ? phase === "repair" ? { name: "run_query", arguments: JSON.stringify({ language: "sql", query: "SELECT 42 AS answer", connectionName: "fixture" }) }
       : phase === "clarify" ? { name: "ask_user", arguments: JSON.stringify({ question: "Which period?", options: ["Last month", "This month"] }) }
+      : phase === "canvas" ? { name: "create_analysis_canvas", arguments: JSON.stringify({ canvas: pipelineAuthoringFixture, sourceRuns: [] }) }
       : phase === "existing" ? { name: "read_conversation_result", arguments: JSON.stringify({ runId: savedId, limit: 10 }) } : null : null;
     res.writeHead(200, { "Content-Type": "text/event-stream" });
     const send = (delta: unknown, finish: string | null) => res.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", created: 1, model: "fixture", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`);
@@ -48,7 +50,7 @@ async function main() {
     }
     throw new Error(`Timed out: ${JSON.stringify(received.get(file)?.document.turns.at(-1))}`);
   };
-  const send = async (s: IConversationSnapshot, input: string) => conversation.submitConversation(vault, { path: s.path, etag: s.etag, input, connectionName: "fixture", requestId: randomUUID() }, publish);
+  const send = async (s: IConversationSnapshot, input: string) => conversation.submitConversation(vault, { locale: "zh", path: s.path, etag: s.etag, input, connectionName: "fixture", requestId: randomUUID() }, publish);
   const done = (s: IConversationSnapshot) => s.document.turns.at(-1)?.status !== "running";
   try {
     const plugin = join(vault, ".stela/plugins/fixture"); await mkdir(plugin, { recursive: true });
@@ -90,6 +92,15 @@ async function main() {
     assert.equal(s.document.turns.at(-1)!.status, "completed", JSON.stringify(s.document.turns.at(-1)));
     assert.deepEqual(s.document.turns.at(-1)!.runs.map(r => r.status), ["err", "ok"]);
     assert.ok(s.document.sessionJsonl.includes("SELECT broken"));
+    assert.match(JSON.stringify(requests.at(-1)), /locale: zh/);
+    phase = "canvas"; step = 0;
+    await send(s, "请用流程图说明链路"); s = await waitFor(s.path, done);
+    const canvasEvent = s.document.turns.at(-1)!.events.find(event => event.type === "canvas_updated");
+    assert.ok(canvasEvent?.type === "canvas_updated", JSON.stringify(s.document.turns.at(-1)));
+    const createdCanvas = JSON.parse(await readFile(join(vault, canvasEvent.path), "utf8"));
+    assert.equal(createdCanvas.createdBySessionId, s.document.id);
+    assert.equal(createdCanvas.sections[0].cards[0].nodes.length, 20);
+    assert.equal(createdCanvas.sections[0].cards[0].edges.length, 20);
     phase = "existing"; step = 0;
     await send(s, "Continue analysing the previous result"); s = await waitFor(s.path, done);
     assert.equal(s.document.turns.at(-1)!.status, "completed"); assert.equal(s.document.turns.at(-1)!.runs.length, 0);

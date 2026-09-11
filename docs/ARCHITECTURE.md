@@ -967,3 +967,14 @@ Structured drafts/messages extend existing conversation draft/submit IPC using
 the same strict AgentMessageContent schema (ADR-0103). Main derives legacy text,
 persists references, and forwards them to AgentHarness. Only resource-free SQL
 qualifies for the direct execution path. Active runs do not own the next draft.
+
+### Validated Canvas authoring
+
+Per ADR-0104, both Agent Panel and Chat dispatch Canvas authoring through the same
+structured tools and validation path. The host assembles file metadata, audits
+query bindings and validates card fields against available result rows before an
+atomic write. Artifact events are emitted only after persistence. Renderer error
+boundaries isolate individual card failures; persistence success is not a claim
+of successful rendering or business correctness. `npm run test:canvas` covers
+schema/tool/service checks plus an isolated Electron renderer using actual Flow,
+chart, table, KPI and Markdown components and saved Canvas files.
