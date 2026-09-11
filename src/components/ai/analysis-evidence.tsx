@@ -7,7 +7,7 @@ export function AnalysisEvidence({ snapshot }: { snapshot: IAnalysisSnapshot | n
   const unresolved = [...snapshot.claims.filter((c) => !c.sourceResolved).map((c) => c.field),
     ...snapshot.checks.filter((c) => !c.sourceResolved).map((c) => c.name)];
   const coverage = snapshot.coverage;
-  return <div className="stela-analysis-evidence space-y-1 rounded border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+  return <div className="stela-analysis-evidence space-y-1 py-2 text-xs text-muted-foreground">
     <div className="font-medium text-foreground">{t("agent.analysis.title")} · v{snapshot.version}</div>
     <div>{t("agent.analysis.coverage")}: {t(`agent.analysis.${coverage.state}`)} · {coverage.processed} / {coverage.total ?? "?"}</div>
     {coverage.reason && <div>{t(`agent.analysis.reason.${coverage.reason}`)}</div>}

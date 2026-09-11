@@ -96,6 +96,54 @@ extensions and binary-like text are not editable. A source file is deliberately
 excluded from implicit `AgentWorkspaceContext`, whose public contract remains
 `note | canvas`.
 
+## SQL Conversation
+
+Both conversation surfaces render assistant prose and SQL results inline, without
+outer cards. Each user turn is followed by one muted divider before any SQL result, tool
+activity, process narration or final reply. The divider has no timing label.
+Shared assistant-output styles align tables and quiet result controls;
+user messages and actionable approval/question prompts retain their own treatment.
+
+The workspace conversation reuses the Agent panel's timeline renderer, tool and
+process grouping, proposal/question cards, model picker and send/stop controls.
+Pending questions stay above the composer. The SQL composer shares the Agent
+input shell and Mod-Enter submission contract, with completion dismissal taking
+precedence over submission; CodeMirror supplies SQL completion without gutters.
+Each reply has one collapsed execution disclosure containing tool calls, SQL,
+retries, process narration, and intermediate results. Pending decisions and terminal
+errors remain visible. Final prose and its tables form the main response; when
+there is no Markdown table, the latest successful recorded result is shown once
+below the answer. Direct SQL without an Agent reply shows its result immediately,
+with SQL folded behind a lightweight control.
+
+`ConversationDocument` (`electron/shared/conversation.ts`) is a version-1
+`stela-conversation` JSON document stored as `*.stela.chat`. It contains identity,
+title/timestamps, default connection, draft, turns and embedded `sessionJsonl`.
+Global creation actions default to `Chats/` under the current Vault, creating the
+folder when needed. File-tree folder actions retain their explicitly chosen location;
+existing conversation files are not automatically moved.
+New conversations use the local calendar date as their default title and filename
+(`YYYY-MM-DD.stela.chat`), adding ` (1)`, ` (2)`, etc. on filename collisions.
+Optional `draftMessage` and turn `message` retain ordered structured references;
+legacy strings remain readable text projections (ADR-0103).
+Each turn retains its request ID, original input, connection snapshot, start time,
+status, Agent events, proposal responses and `RunRecord` references. Rows are
+loaded by run ID through existing result storage, never embedded in this file.
+
+`IConversationSnapshot` carries the canonical path, etag and document, plus an
+optional persistence failure. `IConversationSubmit` carries path, expected etag,
+UUID request ID, input and connection. The typed `conversation` bridge exposes
+create/read/draft/submit/cancel/respond/onChanged. A completed request ID cannot
+execute twice. Stored terminal turns are append-only from the product UI; edit
+and resend creates a new turn. Reopened in-flight turns become `interrupted`.
+
+`TabKind` includes `conversation`; source-note buffer autosave does not own these
+files. Draft saves and all execution/session appends are main-owned. Model-only
+runtime caches, Python variables and full result rows are not conversation-file
+authorities. A cross-device reopening rebuilds the harness from stored messages;
+any missing runtime data requires explicit re-evaluation rather than silent SQL
+replay. File conflicts produce a separate recovery file when possible.
+
 ## DetailMeta
 
 The parsed form of a `<detail>` HTML block. **Single canonical implementation** in `electron/shared/detail-meta.ts`; renderer re-exports from `src/editor/runsql/detail-meta.ts`.
@@ -800,18 +848,19 @@ rewrite targets are keyed by the renderer-owned `rewriteTargetId` on the request
 message resources — never by `resource.id`, and never read off the deprecated
 `attachments` field, which no production renderer path sets.
 
-The Agent composer is a renderer-only ProseMirror document with one paragraph,
-plain text, hard breaks, and atomic resource nodes. Each Agent tab retains its
-own disposable EditorState so selection and undo history survive panel
-unmounting and tab switches. A resource-catalog plugin holds the full typed
-resource bodies; atom nodes contain only id, kind, and label. Sending or adding
-a timeline entry serializes that state back to AgentMessageContent, so no
-ProseMirror JSON or selection coordinate crosses IPC or enters Agent history.
+Agent Panel and workspace Chat share a CodeMirror 6 composer. Persisted in-memory editor states contain only model extensions (content, resource atoms, selection and undo history); view extensions are replaced on mount, never appended to a previously mounted state. SQL highlighting and completion share incremental parse states. Each conversation
+retains a disposable EditorState, including selection and undo. A transaction-
+mapped resource field backs atomic replacement widgets; only AgentMessageContent
+crosses IPC. External Add to Chat inserts at the saved selection head. Clipboard
+paste remains text-only: copied pills carry their visible label, not a live body
+([ADR-0102](./adr/0102-unified-codemirror-composer.md)).
 
-External Add to Chat inserts at the saved selection head without deleting a
-previous Composer range. Clipboard paste is intentionally plain text: copied
-pills paste as their visible `@Kind · Label`, never as SQL/path-bearing live
-resources ([ADR-0063](./adr/0063-prosemirror-agent-composer.md)).
+Enter inserts a newline; Mod-Enter submits, or closes an open completion menu
+first. Mod-Alt-L formats the selection or current unambiguous SQL region.
+Deterministic SQL completion reuses RunSQL schema caches, with no AI completion.
+References search the Vault; choosing a document's SQL entry loads complete
+RunSQL blocks from its current buffer or file. The composer remains editable
+while a run is active; new drafts are saved but never automatically submitted.
 
 Agent session files are native pi JSONL under
 `{vault}/.stela/agent-history/<deviceSlug>/<sessionId>.jsonl`. Besides pi

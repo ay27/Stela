@@ -1,3 +1,4 @@
+import { ConversationView } from "@/views/ConversationView";
 import { useWorkspace } from "@/state/workspace";
 import { WelcomeView } from "@/views/WelcomeView";
 import { EditorView } from "@/views/EditorView";
@@ -20,6 +21,7 @@ export function Workspace() {
   }
 
   const active = activeId ? tabs.find((t) => t.id === activeId) : undefined;
+  if (active?.kind === "conversation" && active.path) return <ErrorBoundary resetKey={active.id}><ConversationView key={active.id} tabId={active.id} path={active.path} /></ErrorBoundary>;
   if (active && active.kind === "file" && active.path) {
     return (
       <ErrorBoundary resetKey={active.id}>

@@ -1,0 +1,10 @@
+import assert from "node:assert/strict";
+import { directConversationSql } from "./conversation-routing";
+import { classifySql } from "../services/ai/sql-guard";
+for (const input of ["SELECT 1", "WITH q AS (SELECT 1) SELECT * FROM q", "SELECT ';' AS value", "SHOW TABLES", "SELECT * FROM t WHERE id = 1"]) assert.equal(directConversationSql(input), input);
+for (const input of ["比较一下上个月", "SELECT * FROM t\n然后画图", "SELECT * FROM t; compare the result", "SELECT 1; DELETE FROM t", "```sql\nSELECT 1\n```\n解释一下"]) assert.equal(directConversationSql(input), null, input);
+assert.equal(directConversationSql("```sql\nSELECT 1\n```"), "SELECT 1");
+for (const input of ["SELECT ';' AS value; -- trailing comment", "SELECT $$a;b$$", "SELECT 'delete' AS \"update\"", "WITH q AS (SELECT 1) SELECT * FROM q"]) assert.equal(classifySql(input, false).classification, "read-only", input);
+for (const input of ["WITH q AS (DELETE FROM t RETURNING *) SELECT * FROM q", "WITH q AS (SELECT 1) UPDATE t SET x=1", "SELECT * INTO copy FROM t", "SELECT 1 INTO OUTFILE '/tmp/out'", "EXPLAIN ANALYZE DELETE FROM t", "SELECT 'unterminated", "SELECT 1 /*!; DELETE FROM t */"]) assert.equal(classifySql(input, false).classification, "mutation", input);
+assert.equal(classifySql("SELECT ';'; DELETE FROM t", true).classification, "multi-statement");
+console.log("conversation routing and SQL authority tests passed");

@@ -1,3 +1,4 @@
+import { assertConversationsIdle, stopAllConversations } from "../services/conversation";
 /**
  * Vault context（main 进程级单例）。
  *
@@ -52,6 +53,7 @@ export async function setCurrentVault(
     from: currentVaultPath,
     to: vaultPath,
   });
+  assertConversationsIdle(currentVaultPath);
   if (currentVaultPath) cancelSkillMaintenance(currentVaultPath);
   beforeVaultChange();
   cancelAllPythonRuntimeJobs("Vault changed; workspace state was cleared");
@@ -135,6 +137,7 @@ export async function setCurrentVault(
 
 /** 主进程最终退出前调用。Connector 由 main 的独立 shutdown 步骤处理。 */
 export async function shutdownVaultContext(): Promise<void> {
+  await stopAllConversations();
   cancelAllPythonRuntimeJobs("Vault closed; workspace state was cleared");
   cancelSkillMaintenance();
   agentMetrics.close();

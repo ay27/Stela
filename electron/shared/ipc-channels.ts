@@ -10,6 +10,13 @@
  */
 
 export const IPC = {
+  CONVERSATION_CREATE: "conversation:create",
+  CONVERSATION_READ: "conversation:read",
+  CONVERSATION_DRAFT: "conversation:draft",
+  CONVERSATION_SUBMIT: "conversation:submit",
+  CONVERSATION_CANCEL: "conversation:cancel",
+  CONVERSATION_RESPOND: "conversation:respond",
+
   // Vault FS
   VAULT_LIST_DIR: "vault:list-dir",
   VAULT_READ_FILE: "vault:read-file",

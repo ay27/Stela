@@ -44,8 +44,8 @@ assert.match(prompt, /Mutating SQL and note or file edits must go through the to
 assert.match(prompt, /In chat and final answers, show SQL only in fenced ```sql``` blocks/);
 assert.match(prompt, /In Vault Markdown, use ```runsql``` only for intentionally executable SQL/);
 assert.match(prompt, /one compact data-basis line naming the table, fields, and calculation/);
-assert.match(prompt, /requested value alone on the last line/);
-assert.match(prompt, /or thousands separators/);
+assert.doesNotMatch(prompt, /requested value alone on the last line/);
+assert.match(prompt, /Do not repeat tables or append an unlabeled list of numbers/);
 assert.doesNotMatch(prompt, /material uncertainty|analysis stages|For physical data meaning|create_plan|update_plan|strategy-review checkpoint|Skill limits:/);
 
 const routineUser = buildUserContent(

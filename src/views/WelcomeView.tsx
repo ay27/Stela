@@ -1,6 +1,7 @@
+import { createSqlConversation } from "@/services/conversation-actions";
 import { useCallback, useMemo } from "react";
 import {
-  Database,
+  MessageSquarePlus,
   FileText,
   FolderOpen,
   KeyRound,
@@ -31,6 +32,7 @@ import { cn } from "@/lib/utils";
 import { TitlebarNavButtons } from "@/layout/TitlebarNavButtons";
 
 const NEW_NOTE_HINT = formatHotkey("Mod+N");
+const NEW_CONVERSATION_HINT = formatHotkey("Mod+Shift+N");
 const PALETTE_HINT = formatHotkey("Mod+K");
 const SETTINGS_HINT = formatHotkey("Mod+,");
 
@@ -79,7 +81,6 @@ export function WelcomeView() {
   const openVaultByPath = useWorkspace((s) => s.openVaultByPath);
   const openFile = useWorkspace((s) => s.openFile);
 
-  const setConnectionsOpen = useDialogs((s) => s.setConnections);
   const setSettingsOpen = useDialogs((s) => s.setSettings);
   const togglePalette = useDialogs((s) => s.togglePalette);
   const sidebarCollapsed = useLayout((s) => s.sidebarCollapsed);
@@ -177,7 +178,7 @@ export function WelcomeView() {
         <QuickActions
           vaultPath={vaultPath}
           onNewNote={() => void createNewStelaNote(vaultPath)}
-          onOpenConnections={() => setConnectionsOpen(true)}
+          onNewConversation={() => void createSqlConversation()}
           onOpenPalette={() => togglePalette()}
           onOpenSettings={() => setSettingsOpen(true)}
         />
@@ -292,13 +293,13 @@ function VaultCard({
 function QuickActions({
   vaultPath,
   onNewNote,
-  onOpenConnections,
+  onNewConversation,
   onOpenPalette,
   onOpenSettings,
 }: {
   vaultPath: string | null;
   onNewNote: () => void;
-  onOpenConnections: () => void;
+  onNewConversation: () => void;
   onOpenPalette: () => void;
   onOpenSettings: () => void;
 }) {
@@ -314,10 +315,11 @@ function QuickActions({
           disabled={!vaultPath}
         />
         <ActionTile
-          icon={<Database className="h-4 w-4" />}
-          label={t("welcome.connections")}
-          hint={t("welcome.connectionsHint")}
-          onClick={onOpenConnections}
+          icon={<MessageSquarePlus className="h-4 w-4" />}
+          label={t("conversation.new")}
+          hint={vaultPath ? NEW_CONVERSATION_HINT : t("welcome.needVault")}
+          onClick={onNewConversation}
+          disabled={!vaultPath}
         />
         <ActionTile
           icon={<Search className="h-4 w-4" />}

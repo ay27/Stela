@@ -247,8 +247,8 @@ function logColumnCompletionDebug(
   console.info("[stela] column completion", data);
 }
 
-export function sqlExtensions(options: SqlExtensionOptions = {}): Extension[] {
-  const { getSiblingSqls, getTableNames, ensureColumnsForTable, dialect } = options;
+export function createSqlCompletionSource(options: SqlExtensionOptions = {}) {
+  const { getSiblingSqls, getTableNames, ensureColumnsForTable } = options;
 
   const fetchTables = async (): Promise<string[]> => {
     if (!getTableNames) return [];
@@ -337,5 +337,9 @@ export function sqlExtensions(options: SqlExtensionOptions = {}): Extension[] {
   // 注意：保留 sql() 是为了语法高亮 + 提供 syntaxTree(state) 给 sql-scope.ts 使用。
   // autocompletion override 会屏蔽 lang-sql 自带的 keyword / schema source，
   // 全部由本文件的 `source` 一手包揽（避免双源出现"列 + 表"重复或交错）。
-  return [sql({ dialect }), autocompletion({ override: [source] })];
+  return source;
+}
+
+export function sqlExtensions(options: SqlExtensionOptions = {}): Extension[] {
+  return [sql({ dialect: options.dialect }), autocompletion({ override: [createSqlCompletionSource(options)] })];
 }

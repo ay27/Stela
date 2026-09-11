@@ -115,7 +115,7 @@ proposed → active → superseded
 | [0060](0060-cache-stable-agent-prompts.md) | Cache-stable Agent prompts and immutable plan snapshots | active |
 | [0061](0061-ordered-inline-agent-message-resources.md) | Ordered inline Agent message resources | superseded → [0062](0062-implicit-workspace-context-explicit-inline-resources.md) |
 | [0062](0062-implicit-workspace-context-explicit-inline-resources.md) | Implicit Workspace context and explicit inline resources | active |
-| [0063](0063-prosemirror-agent-composer.md) | ProseMirror-backed Agent composer | active |
+| [0063](0063-prosemirror-agent-composer.md) | ProseMirror-backed Agent composer | superseded → [0102](0102-unified-codemirror-composer.md) |
 | [0064](0064-session-query-artifacts-and-sandboxed-python.md) | Session query artifacts and sandboxed Python | superseded → [0079](0079-sandbox-query-rpc.md) |
 | [0065](0065-session-oriented-agent-observability.md) | Session-oriented Agent observability projection | active |
 | [0066](0066-structured-read-only-agent-queries.md) | Structured read-only Agent queries across connector languages | superseded → [0067](0067-safe-mongodb-aggregation-queries.md) |
@@ -152,3 +152,7 @@ proposed → active → superseded
 | [0097](0097-semantic-input-reduction-and-cost-probe.md) | Semantic input reduction and bounded cost probing | active |
 | [0098](0098-automatic-observational-analysis-contracts.md) | Automatic observational analysis contracts | active |
 | [0099](0099-reusable-analysis-operation-evidence.md) | Reusable analysis operation evidence | active |
+| [0100](0100-durable-conversation-files.md) | durable conversation files | active |
+| [0101](0101-sql-first-conversation-execution.md) | sql first conversation execution | active |
+| [0102](0102-unified-codemirror-composer.md) | Unified CodeMirror conversation composer | active |
+| [0103](0103-conversation-structured-drafts.md) | Structured messages in durable conversations | active |

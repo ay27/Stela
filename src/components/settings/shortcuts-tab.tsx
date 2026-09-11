@@ -31,6 +31,7 @@ const GROUPS: ShortcutGroup[] = [
     items: [
       { keys: "Mod+K", actionKey: "shortcuts.global.commandPalette" },
       { keys: "Mod+N", actionKey: "shortcuts.global.newNote" },
+      { keys: "Mod+Shift+N", actionKey: "conversation.new" },
       { keys: "Mod+W", actionKey: "shortcuts.global.closeTab" },
       { keys: "Mod+Shift+T", actionKey: "shortcuts.global.reopenTab" },
       { keys: "Ctrl+Tab / Ctrl+Shift+Tab", actionKey: "shortcuts.global.mruTabs" },

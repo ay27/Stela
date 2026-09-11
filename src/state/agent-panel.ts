@@ -6,7 +6,7 @@
  */
 
 import { create } from "zustand";
-import type { EditorState } from "@milkdown/prose/state";
+import type { EditorState } from "@codemirror/state";
 
 import type {
   AgentEntryPoint,
@@ -268,7 +268,7 @@ function toolCallEntry(call: AgentToolCallInfo): AgentTimelineEntry {
   return { kind: "tool", id: nextId(), callId: call.callId, name: call.name, args: call.arguments };
 }
 
-function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTimelineEntry[] {
+export function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTimelineEntry[] {
   switch (event.type) {
     case "started":
     case "context_usage":

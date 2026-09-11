@@ -1,3 +1,4 @@
+import { extractSqlSymbols } from "./sql-symbols";
 /**
  * Agent 工具集：JSON Schema 定义 + dispatch 到现有 service 函数。
  *
@@ -394,6 +395,7 @@ export interface AgentToolContext {
     category: string | null;
   }) => void;
   /** 本次 Agent 会话内 run_query 的真实结果，只供 create_chart 校验。 */
+  conversationRunIds?: string[];
   chartRuns?: Map<string, { sql: string; columns: ColumnDef[]; rows: unknown[][] }>;
   /** Successful query/Python outputs created in this Agent run and eligible for final evidence. */
   analysisRuns?: Map<string, AgentAnalysisRunEvidence>;
@@ -437,6 +439,24 @@ export function createAgentTools(options: {
 }): AgentTool[] {
   const { ctx, requestProposal } = options;
   const tools: AgentTool[] = [
+    ...(ctx.conversationRunIds ? [{
+      name: "read_conversation_result", label: "Read saved result",
+      description: "Read a saved SQL result from this conversation without executing SQL again. Saved rows may be capped; do not infer full-data totals from a preview.",
+      parameters: Type.Object({ runId: Type.String(), offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }),
+      executionMode: "parallel" as const,
+      execute: async (_id: string, raw: unknown) => {
+        const params = raw as { runId: string; offset?: number; limit?: number };
+        const { readConversationResult } = await import("../conversation");
+        const result = await readConversationResult(ctx.vaultPath, ctx.conversationRunIds ?? [], params.runId, params.offset ?? 0, Math.min(100, params.limit ?? 50));
+        if ((params.offset ?? 0) === 0) ctx.chartRuns?.set(params.runId, { sql: result.run.sql, columns: result.columns, rows: result.rows });
+        const preview = boundedPreview(result.rows, result.total, false, 100, MODEL_PREVIEW_MAX_BYTES);
+        ctx.analysisRuns?.set(params.runId, { kind: "query", connectionName: result.run.connectionName,
+          tables: extractSqlSymbols(result.run.sql).tables, columns: result.columns, rowCount: result.total,
+          truncated: true, incomplete: true, sourceRunIds: [],
+          summary: { columns: result.columns, rowCount: result.total, rows: preview.rows, previewTruncated: true, previewTruncatedBy: ["saved-rows"] } });
+        return { content: [{ type: "text" as const, text: JSON.stringify({ ...result, rows: preview.rows, pageTruncated: preview.truncated }) }], details: {} };
+      },
+    }] : []),
     {
       name: "list_catalog",
       label: "List catalog",

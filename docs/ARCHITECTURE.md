@@ -489,8 +489,8 @@ flowchart TB
    preview returns an instruction that it cannot support an exact result, every
    `query()` prints the fetched relation's row/column count and column types, and
    the system prompt fixes the answer shape (conclusion,
-   material caveats, one data-basis line, then the requested value alone on the
-   last line without Markdown emphasis or thousands separators). Successful
+   material caveats, and one data-basis line). Metrics retain their names and
+   units; the prompt does not append unlabeled numeric answer tails. Successful
    query/Python calls still register disposable same-run evidence metadata for
    chart and Canvas binding; there is no source pre-scan and no durable evidence
    database ([ADR-0084](./adr/0084-single-action-plan-tool.md)).
@@ -828,6 +828,41 @@ bounded cursor context
 | `electron/services/ai/sql-guard.ts` | read-only vs mutation classification |
 | `src/components/ai/` | Agent panel, unified inline resource composer, quick actions, Add to Chat |
 
+## SQL Conversation Workspace
+
+`*.stela.chat` files are authoritative, versioned Vault conversation documents.
+They store drafts, immutable submitted inputs, ordered Agent events, proposal
+responses, execution references and the embedded pi session JSONL. They are
+independent of the Agent Panel's newest-20 session retention policy. SQL result
+rows continue to live in the existing execution journal and disposable SQLite
+cache. A main-owned filesystem adapter persists pi session writes atomically
+inside the conversation document rather than creating a second session authority.
+
+The conversation preload capability validates inputs with Zod. Main serializes
+submissions per document, deduplicates request IDs, resolves the selected
+connection and routes clear single SQL statements directly to the connector.
+Natural language, mixed input and repair use the existing AgentHarness. Direct
+queries use the same execution recorder as Agent queries; successful direct SQL
+does not call the model. Shared SQL guards apply to both paths, including explicit
+approval for mutations when enabled. Prior successful result IDs are scoped to
+the conversation and available through `read_conversation_result`; saved rows
+are historical, potentially capped evidence, not instructions or implicit authority.
+
+Committed session entries, events and results use serial, etag-checked atomic
+writes. Failed writes abort further Agent actions and preserve an attempted
+snapshot in a separate recovery conversation when disk permits. External files
+are never overwritten on conflict. Restart marks unfinished turns interrupted
+and never replays SQL. Closing a tab keeps its execution alive; stopping aborts
+subsequent work but cannot necessarily interrupt an already dispatched connector
+query. Vault switching is blocked until an active conversation releases the
+shared connector/result-store context.
+
+The renderer shares RunSQL CodeMirror SQL/schema/inline-completion extensions,
+BlockResult tables and Agent timeline components. A dedicated Zustand store owns
+per-path drafts and incoming snapshots, without focusing the Agent sidebar.
+See ADR-0100 and ADR-0101. Run `npm run test:conversation` for the isolated Electron
+integration fixture (local connector and local streaming model server).
+
 ## IPC Contract
 
 ### Invoke channels (bidirectional, Zod-validated)
@@ -921,3 +956,14 @@ Forbidden-text scanning:
 - [../.cursor/skills/create-adr/SKILL.md](../.cursor/skills/create-adr/SKILL.md) — create/supersede ADR checklist
 - [../README.md](../README.md) — product overview (bilingual)
 - [../examples/demo-vault/README.md](../examples/demo-vault/README.md) — demo setup
+
+### Shared conversation composer
+
+Agent Panel and durable Chat use one CodeMirror composer (ADR-0102), with
+renderer-owned per-conversation selection/history and deterministic SQL tooling.
+Reference candidates use existing typed index/search/vault bridges; RunSQL bodies
+come from current note buffers or complete file parsing, never rendered DOM.
+Structured drafts/messages extend existing conversation draft/submit IPC using
+the same strict AgentMessageContent schema (ADR-0103). Main derives legacy text,
+persists references, and forwards them to AgentHarness. Only resource-free SQL
+qualifies for the direct execution path. Active runs do not own the next draft.

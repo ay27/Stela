@@ -29,7 +29,7 @@ import type { VaultFsEvent } from "@shared/ipc-events";
  * Markdown notes and Analysis Canvas artifacts share the same tab lifecycle;
  * `kind` selects the corresponding workspace renderer.
  */
-export type TabKind = "file" | "analysis";
+export type TabKind = "file" | "analysis" | "conversation";
 
 export interface Tab {
   id: string;
@@ -750,7 +750,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const id = `file:${path}`;
     const newTab: Tab = {
       id,
-      kind: path.endsWith(".stela.canvas") ? "analysis" : "file",
+      kind: path.endsWith(".stela.chat") ? "conversation" : path.endsWith(".stela.canvas") ? "analysis" : "file",
       title: opts.title ?? basename(path),
       path,
       ...(wantEphemeral ? { ephemeral: true } : {}),
@@ -1026,7 +1026,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       if (t.path === from || t.path.startsWith(`${from}/`)) {
         const remapped = t.path === from ? to : `${to}${t.path.slice(from.length)}`;
         const newId = `file:${remapped}`;
-        const kind: TabKind = remapped.endsWith(".stela.canvas") ? "analysis" : "file";
+        const kind: TabKind = remapped.endsWith(".stela.chat") ? "conversation" : remapped.endsWith(".stela.canvas") ? "analysis" : "file";
         idRemap.set(t.id, newId);
         if (activeTabId === t.id) nextActive = newId;
         mutated = true;

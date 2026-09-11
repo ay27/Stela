@@ -212,3 +212,7 @@ for (const [semanticOptimizationEnabled, automaticAnalysisContractsEnabled] of [
   assert.deepEqual(parseInput(IPC.SETTINGS_PATCH, { patch }), { patch }, "experiment switches survive IPC parsing independently");
 }
 assert.throws(() => parseInput(IPC.SETTINGS_PATCH, { patch: { ai: { semanticOptimizationEnabled: "true" } } }));
+
+const badReference = { version: 1, segments: [{ kind: "resource", resourceId: "absent" }], resources: [] };
+assert.throws(() => parseInput(IPC.CONVERSATION_DRAFT, { path: "/vault/chat.stela.chat", etag: "a".repeat(64), draft: "", draftMessage: badReference, connectionName: null }));
+assert.throws(() => parseInput(IPC.CONVERSATION_SUBMIT, { path: "/vault/chat.stela.chat", etag: "a".repeat(64), requestId: "00000000-0000-4000-8000-000000000000", input: "query", message: badReference, connectionName: null }));

@@ -1,3 +1,4 @@
+import type { IConversationBridge, IConversationSnapshot, IConversationSubmit } from "@shared/conversation";
 /**
  * Preload：唯一桥接 main / renderer 的脚本。
  *
@@ -253,6 +254,19 @@ const stela = {
       call<number>(IPC.STORAGE_CLEANUP, { keepDays }),
   },
 
+  conversation: {
+    create: (directory: string, title: string) => call<IConversationSnapshot>(IPC.CONVERSATION_CREATE, { directory, title }),
+    read: (path: string) => call<IConversationSnapshot>(IPC.CONVERSATION_READ, { path }),
+    draft: (path: string, etag: string, draft: string, connectionName: string | null, draftMessage?: import("@shared/types").AgentMessageContent) => call<IConversationSnapshot>(IPC.CONVERSATION_DRAFT, { path, etag, draft, connectionName, draftMessage }),
+    submit: (input: IConversationSubmit) => call<IConversationSnapshot>(IPC.CONVERSATION_SUBMIT, input),
+    cancel: (path: string) => call<void>(IPC.CONVERSATION_CANCEL, { path }),
+    respond: (path: string, response: AgentProposalResponse) => call<void>(IPC.CONVERSATION_RESPOND, { path, response }),
+    onChanged: (callback: (snapshot: IConversationSnapshot) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, snapshot: IConversationSnapshot) => callback(snapshot);
+      ipcRenderer.on(IPC_EVENTS.CONVERSATION_CHANGED, handler);
+      return () => { ipcRenderer.removeListener(IPC_EVENTS.CONVERSATION_CHANGED, handler); };
+    },
+  } satisfies IConversationBridge,
   canvas: {
     read: (path: string) => call<AnalysisCanvasFile>(IPC.CANVAS_READ, { path }),
     create: (directory: string, title: string) => call<AnalysisCanvasFile>(IPC.CANVAS_CREATE, { directory, title }),

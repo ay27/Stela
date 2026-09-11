@@ -10,6 +10,7 @@ CodeMirror navigation keys supplied by the platform.
 |----------|--------|
 | `Mod+K` | Open or close the command palette |
 | `Mod+N` | Create a Stela note |
+| `Mod+Shift+N` | Create a SQL conversation (requires an open Vault) |
 | `Mod+W` | Close the current tab |
 | `Mod+Shift+T` | Reopen the most recently closed tab |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Move forward/backward through tabs by recent use |

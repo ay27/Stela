@@ -255,7 +255,7 @@ async function loadAvailableConnections(
  * Agent 数据查询走与 RunSQL 相同的落盘路径：SQLite 缓存 + JSONL journal。
  * queryLanguage 区分 SQL 与结构化 MongoDB 查询。
  */
-function recordAgentRun(vaultPath: string): AgentRunRecorder {
+export function recordAgentRun(vaultPath: string): AgentRunRecorder {
   return async (run) => {
     resultStore.saveRun({
       runId: run.runId,
@@ -707,6 +707,11 @@ export function startSkillMaintenanceJob(vaultPath: string, job: SkillMaintenanc
 }
 
 export interface RunAgentOptions {
+  storage?: JsonlSessionStorage;
+  recordRun?: AgentRunRecorder;
+  conversationRunIds?: string[];
+  conversationContext?: string;
+  beforeTool?: () => Promise<void>;
   vaultPath: string;
   slug: string;
   request: AgentRunRequest;
@@ -775,7 +780,9 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
   signal.addEventListener("abort", onAbort);
 
   try {
-    const opened = await getOrCreateSession(vaultPath, slug, request.sessionId);
+    const opened = options.storage
+      ? { session: createSession(options.storage), storage: options.storage }
+      : await getOrCreateSession(vaultPath, slug, request.sessionId);
     session = opened.session;
     historyStorage = opened.storage;
     await appendAgentHistoryStarted(historyStorage, request);
@@ -989,6 +996,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           },
           run: { runId, sessionId: request.sessionId, notePath: request.notePath ?? null, questionsAsked: 0, toolFailureStreak: new Map() },
           chartRuns: new Map(),
+          conversationRunIds: options.conversationRunIds,
           analysisRuns,
           canvasRefresh: request.canvasRefresh ? {
             path: request.canvasRefresh.path,
@@ -1003,7 +1011,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           plan,
           persistPlan: planPersistence.enqueue,
           rewriteTargets: runsqlRewriteTargets(request),
-          recordRun: recordAgentRun(vaultPath),
+          recordRun: options.recordRun ?? recordAgentRun(vaultPath),
           onSkillMaintenance: (record) => normalSkillActions.push(record),
           onSkillUsage: (record) => {
             if (!agentMetrics.isOpen()) return;
@@ -1253,6 +1261,8 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         return;
       }
       if (event.type === "tool_execution_start") {
+        await options.beforeTool?.();
+        if (signal.aborted) throw new Error("Agent cancelled before tool execution.");
         const startedAt = Date.now();
         const toolMetricRunId = `tool:${runId}:${event.toolCallId}`;
         toolCalls.set(event.toolCallId, {
@@ -1283,6 +1293,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
             arguments: event.args ?? {},
           },
         });
+        await options.beforeTool?.();
         return;
       }
       if (event.type === "tool_execution_end") {
@@ -1382,6 +1393,9 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
             mongoOperations: available.mongoOperations[name] ?? ["find"],
           })),
       });
+      if (options.conversationContext) {
+        await session.appendMessage({ role: "user", content: [{ type: "text", text: options.conversationContext }], timestamp: Date.now() });
+      }
       let result = await harness.prompt(userContent);
       await emitUsage(false);
 

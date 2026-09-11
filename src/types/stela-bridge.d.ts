@@ -1,3 +1,4 @@
+import type { IConversationBridge } from "@shared/conversation";
 /**
  * Renderer 全局 window.stela 类型声明。
  *
@@ -84,6 +85,7 @@ import type { AnalysisCanvasFlowLayoutPatch } from "@shared/analysis-canvas";
 import type { VaultExternalChangePayload } from "@shared/ipc-events";
 
 interface StelaBridge {
+  conversation: IConversationBridge;
   vault: {
     listDir: (path: string) => Promise<FileNode[]>;
     readFile: (path: string) => Promise<string>;

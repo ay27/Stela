@@ -1,3 +1,5 @@
+import * as conversation from "../services/conversation";
+import type { IConversationSubmit } from "@shared/conversation";
 /**
  * IPC handler 注册：把 Phase 3-6 的 service 接到 channel。
  *
@@ -683,6 +685,15 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
     { jobId: string; result: PythonExecutionResult },
     { accepted: boolean }
   >(IPC.AI_PYTHON_RUNTIME_RESPOND, respondPythonRuntime);
+
+  registerHandler<{ directory: string; title: string }, unknown>(IPC.CONVERSATION_CREATE, ({ directory, title }) => conversation.createConversation(requireVault(), directory, title));
+  registerHandler<{ path: string }, unknown>(IPC.CONVERSATION_READ, ({ path }) => conversation.readConversation(requireVault(), path));
+  registerHandler<{ path: string; etag: string; draft: string; connectionName: string | null; draftMessage?: import("@shared/types").AgentMessageContent }, unknown>(IPC.CONVERSATION_DRAFT, ({ path, etag, draft, connectionName, draftMessage }) => conversation.saveConversationDraft(requireVault(), path, etag, draft, connectionName, draftMessage));
+  registerHandler<IConversationSubmit, unknown>(IPC.CONVERSATION_SUBMIT, (input, ctx) => conversation.submitConversation(requireVault(), input, snapshot => {
+    if (!ctx.event.sender.isDestroyed()) ctx.event.sender.send(IPC_EVENTS.CONVERSATION_CHANGED, snapshot);
+  }));
+  registerHandler<{ path: string }, void>(IPC.CONVERSATION_CANCEL, ({ path }) => conversation.cancelConversation(requireVault(), path));
+  registerHandler<{ path: string; response: AgentProposalResponse }, void>(IPC.CONVERSATION_RESPOND, ({ path, response }) => conversation.respondConversation(requireVault(), path, response));
 
   // ---------- Harness agent ----------
   registerHandler<{ request: AgentRunRequest }, AgentRunResponse>(

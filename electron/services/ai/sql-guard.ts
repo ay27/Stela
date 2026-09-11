@@ -1,3 +1,4 @@
+import { sqlStructuralText } from "@shared/sql-lexical";
 /**
  * Agent 侧 SQL 护栏：只读放行，改动类默认拦截，禁止多语句堆叠。
  *
@@ -34,12 +35,8 @@ const MUTATION_KEYWORDS = new Set([
   "REVOKE",
 ]);
 
-function stripComments(sql: string): string {
-  return sql.replace(/--.*$/gm, " ").replace(/\/\*[\s\S]*?\*\//g, " ");
-}
-
 function isMultiStatement(sql: string): boolean {
-  return /;\s*\S/.test(sql.trim());
+  return sql.split(";").filter(part => part.trim()).length > 1;
 }
 
 function firstKeyword(sql: string): string | null {
@@ -63,7 +60,8 @@ function classifyStatement(keyword: string | null): "read-only" | "mutation" | "
  *     proposal（v1 harness 循环里始终发 proposal 等用户 approve，而不是自动放行）。
  */
 export function classifySql(sql: string, allowMutations: boolean): SqlGuardResult {
-  const cleaned = stripComments(sql);
+  const cleaned = sqlStructuralText(sql);
+  if (cleaned === null) return { classification: "mutation", keyword: null, blockedReason: "Ambiguous SQL syntax requires review before execution." };
   if (isMultiStatement(cleaned)) {
     return {
       classification: "multi-statement",
@@ -72,7 +70,8 @@ export function classifySql(sql: string, allowMutations: boolean): SqlGuardResul
     };
   }
   const keyword = firstKeyword(cleaned);
-  const kind = classifyStatement(keyword);
+  const hasEmbeddedWrite = /\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|REPLACE|MERGE|GRANT|REVOKE|INTO|OUTFILE|DUMPFILE|CALL)\b/i.test(cleaned);
+  const kind = hasEmbeddedWrite ? "mutation" : classifyStatement(keyword);
   if (kind === "read-only") {
     return { classification: "read-only", keyword, blockedReason: null };
   }
