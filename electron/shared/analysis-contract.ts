@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 const count = z.number().int().nonnegative();
+export const analysisCoverageReasonSchema = z.enum([
+  "no_operation", "binding_failed", "population_unbound", "operation_unavailable", "verification_limit",
+  "identity_mismatch", "source_changed", "execution_failed", "workspace_lost",
+  "snapshot_unavailable", "partial_coverage", "verified",
+]);
 /** Bounded observations for tools/history/UI; never an answer-authority token. */
 export const analysisSnapshotSchema = z.object({
   runId: z.string().max(256),
@@ -14,7 +19,10 @@ export const analysisSnapshotSchema = z.object({
   checks: z.array(z.object({ name: z.string().max(128), passed: z.boolean(), sourceResolved: z.boolean() }).strict()).max(20),
   sources: z.array(z.object({ ref: z.string().max(256), rowCount: count, incomplete: z.boolean(), previewTruncated: z.boolean().optional() }).strict()).max(16),
   coverage: z.object({ state: z.enum(["full", "subset", "unknown"]), total: count.nullable(),
-    processed: count, unresolved: count, unprocessed: count, source: z.string().max(256).nullable() }).strict(),
+    processed: count, unresolved: count, unprocessed: count, source: z.string().max(256).nullable(),
+    reason: analysisCoverageReasonSchema.optional() }).strict(),
+  operationCoverage: z.object({ total: count, success: count, unresolved: count,
+    failed: count, unprocessed: count }).strict().optional(),
   previousVersions: count,
   truncated: z.boolean(),
 }).strict();

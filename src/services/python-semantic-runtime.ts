@@ -269,7 +269,7 @@ class _StelaSemantic:
             _stela_observe_semantic(df, id_column, output)
         except Exception:
             if _stela_contract_context().get('automaticContracts'):
-                _stela_current_contract()._coverage = dict(state='unknown', total=None, processed=0, unresolved=0, unprocessed=0, source=None)
+                _stela_current_contract()._coverage = _stela_unknown_coverage(_stela_current_contract(), 'snapshot_unavailable')
         return output
 
     async def extract(self, df, *, columns, schema, instructions, required_fields=None, id_column=None, resume=None, allow_partial=False):
@@ -279,7 +279,7 @@ class _StelaSemantic:
             _stela_observe_semantic(df, id_column, output)
         except Exception:
             if _stela_contract_context().get('automaticContracts'):
-                _stela_current_contract()._coverage = dict(state='unknown', total=None, processed=0, unresolved=0, unprocessed=0, source=None)
+                _stela_current_contract()._coverage = _stela_unknown_coverage(_stela_current_contract(), 'snapshot_unavailable')
         return output
 
     async def resolve(self, left, right=None, *, columns, blocking=None, instructions, required_fields=None, resume=None, allow_partial=False):

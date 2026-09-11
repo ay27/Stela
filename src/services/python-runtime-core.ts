@@ -207,6 +207,8 @@ async def _stela_main(_code, _staged_json, _query_bridge):
 
     try:
         existing_tasks = _stela_asyncio.all_tasks()
+        if _stela_contract_context().get('automaticContracts') and _stela_contract_context().get('invalidateEvidence'):
+            _stela_analysis_snapshot('partial_mutation_possible')
         try:
             with contextlib.redirect_stdout(stdout):
                 await eval_code_async(_code, globals=namespace)

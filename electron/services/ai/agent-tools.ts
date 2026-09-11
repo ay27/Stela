@@ -523,7 +523,7 @@ export function createAgentTools(options: {
         (ctx.runSemantic
           ? " Batch classification/extraction/entity matching: await semantic.classify/extract/resolve inside Python. First load_skill name=semantic-analysis. No database needed; host authorizes and budgets calls. Retain batches for resume."
           : "") + " For material scope/grain/denominator risks, load_skill name=analysis-verification: analysis.contract retains sourced claims/checks. Skip trivial arithmetic." +
-        (ctx.aiSettings.automaticAnalysisContractsEnabled ? " Automatic evidence is enabled: analysis.current exists without setup; use .claim(field, meaning, source='question' or existing alias/run ID, evidence=exact quote), .bind_population(df, id_column='id', source='alias'). Explicit analysis.contract(required=[...]) starts a revision; sources/checks do not certify business truth. Snapshots are automatic, no final gate." : "") +
+        (ctx.aiSettings.automaticAnalysisContractsEnabled ? " Automatic evidence is enabled: analysis.current exists without setup; use .claim(field, meaning, source='question' or existing alias/run ID, evidence=exact quote), .bind_population(df, id_column='id', source='alias', source_id_column='original_id'). Omit source_id_column when the ID column is unchanged. Bind source input columns, not derived result labels. After late binding use .observe(batch) to verify prior execution without new inference; inspect coverage.reason and operationCoverage. No implicit ID normalization or union of batches. Explicit analysis.contract(required=[...]) starts a revision; sources/checks do not certify business truth. Snapshots are automatic, no final gate." : "") +
         (ctx.aiSettings.semanticOptimizationEnabled ? " Exact selected-content deduplication and all-input cost preflight are enabled for classify/extract. Prefer SQL/rules first; unmatched text is unresolved, not negative. One bounded pilot may consume existing budget. Inspect summary.preflight, pilot, forecastTokens and stopReason; partial work never permits extrapolation." : ""),
       parameters: Type.Object({
         reset: Type.Optional(Type.Boolean()),
@@ -1692,6 +1692,7 @@ async function runExecutePython(
     runSemantic: ctx.runSemantic,
     analysisContext: { runId: ctx.run.runId, question: ctx.analysisContext?.question ?? "",
       semanticOptimization: ctx.aiSettings.semanticOptimizationEnabled === true,
+      invalidateEvidence: ctx.run.analysis !== undefined && ctx.run.analysis.status !== "observed",
       automaticContracts: ctx.aiSettings.automaticAnalysisContractsEnabled === true },
     artifacts,
     runQuery: async ({ connectionName, request }) => {
@@ -2691,7 +2692,7 @@ export async function dispatchTool(
   if (dataTool && ctx.aiSettings.automaticAnalysisContractsEnabled && !ctx.run.analysis) {
     ctx.run.analysis = { runId: ctx.run.runId, version: 0, generation: "host", status: "observed",
       missingClaims: ["population", "metric", "granularity"], failedChecks: [], claims: [], checks: [], sources: [],
-      coverage: { state: "unknown", total: null, processed: 0, unresolved: 0, unprocessed: 0, source: null }, previousVersions: 0, truncated: false };
+      coverage: { state: "unknown", total: null, processed: 0, unresolved: 0, unprocessed: 0, source: null, reason: "no_operation" }, previousVersions: 0, truncated: false };
   }
   const outcome = await dispatchToolCall(name, rawArguments, ctx);
   if (dataTool && ctx.aiSettings.automaticAnalysisContractsEnabled && ctx.run.analysis) {
@@ -2699,6 +2700,7 @@ export async function dispatchTool(
     if (!outcome.ok && name === "execute_python") {
       snapshot.status = /workspace_lost/i.test(outcome.text) ? "lost" : "partial_mutation_possible";
       snapshot.coverage.state = "unknown";
+      snapshot.coverage.reason = snapshot.status === "lost" ? "workspace_lost" : "execution_failed";
     }
     const facts = [...(ctx.analysisRuns?.entries() ?? [])].filter(([, v]) => v.kind === "query")
       .map(([ref, v]) => ({ ref, rowCount: v.rowCount, incomplete: v.incomplete === true, previewTruncated: v.truncated }));

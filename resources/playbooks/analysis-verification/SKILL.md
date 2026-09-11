@@ -31,6 +31,50 @@ Replace variables with actual observations/references, not invented definitions.
 Missing claims remain unresolved; conflicting claims cannot silently overwrite.
 Keep the contract variable for following cells; result is only the current cell output.
 
+# Automatic evidence (when enabled)
+
+`analysis.current` already exists. Define relevant meanings with `.claim(...)`;
+there is no `analysis.claim()` or `.summary()` API. Use `.report()` for local output.
+Source references are registered query aliases/run IDs, or `source='question'`
+with an exact excerpt. An arbitrary Python result run ID is not a query source.
+
+Bind the original input before deriving labels. When input ID names differ from
+source column names, state the mapping explicitly; ID values must still match:
+
+```python
+population = to_df('articles').rename(columns={'article_id': 'id'})
+contract = analysis.current
+contract.bind_population(population, id_column='id', source='articles',
+                         source_id_column='article_id')
+batch = await semantic.classify(population, columns=['text'], id_column='id',
+    labels={'sports': 'sports reporting', 'other': 'other reporting'},
+    instructions='Classify the subject; keep ambiguous items unresolved.')
+result = contract.report()
+```
+
+Omit `source_id_column` when unchanged. Binding checks the original input values;
+derived label/output columns are not source evidence. Errors identify unknown
+sources, missing columns, null/duplicate IDs or mismatched values. Fix these causes
+rather than suppressing errors or changing the declared population to a subset.
+
+If the operation was completed before binding, bind the original input and call
+`contract.observe(batch)`. This uses the saved execution record without inference;
+it does not trust edits to `batch.rows` or `batch.summary`. Source refresh or a failed
+cell invalidates old evidence. Rebuild/revise the binding after refresh, and perform
+new processing after a failed cell (existing semantic cache can still avoid calls).
+Do not combine arbitrary batches into a claimed full population; use the existing
+full-input resume contract instead.
+
+Automatic snapshots and `.report()` distinguish `operationCoverage` (last recorded
+operation counts) from `coverage` (verified processing of the bound population).
+Inspect `coverage.reason`: unbound, stale, unmatched and verification-limit cases
+remain unknown. No semantic operation is required for SQL-only work. A supplied
+`check_coverage()` is a model-authored check, not automatic execution coverage.
+At most 100,000 rows / 1,000,000 cells are fingerprinted per result; larger inputs
+cannot prove population coverage. Existing semantic input limits still apply.
+Keep missing claims, unresolved rows and failed checks visible in the final delivery;
+there is no additional model review or final-answer gate.
+
 # Checks
 
 check_equal(name, observed, expected, source=..., evidence=...) checks a supplied invariant.

@@ -87,8 +87,8 @@ excerpt of the original question. Resolution does not establish that a meaning o
 check is correct. Snapshots separate model-authored claims/checks from source facts
 and observed execution coverage; `structurallyReady` is never displayed as accuracy.
 
-Binding freezes IDs and row values against the referenced source, up to 100,000
-rows. A later subset cannot shrink that population. Binding an already filtered
+Binding freezes typed IDs and per-cell value fingerprints against the referenced
+source, up to 100,000 rows and 1,000,000 cells. A later subset cannot shrink that population. Binding an already filtered
 subset also cannot establish full coverage of its source. Arbitrary DataFrames have
 unknown lineage; there is no implicit business-scope inference. Source refresh,
 failed cells and workspace loss cannot certify current coverage. This records the
@@ -123,3 +123,36 @@ persistence, run a query/Python task, inspect collapsed and expanded tool cards,
 reopen history and inspect the final evidence card. A failing cell must retain its
 original error. Reset/refresh must not present old coverage as current. This UI
 interaction checklist is separate from the automated checks above.
+
+## Contract repair and late observation (ADR-0099)
+
+`bind_population(df, id_column=..., source=..., source_id_column=None)` explicitly
+maps a renamed identity column. Source ID values are not normalized. Unknown aliases,
+missing ID columns, null/duplicate IDs and differing values produce actionable errors.
+Bind source input columns; adding derived labels does not make them source evidence.
+
+`contract.observe(batch)` connects an existing classify/extract result to the binding.
+A weak registry holds independent execution counts, typed IDs, per-cell fingerprints,
+source versions and a failure epoch. Public rows/summary edits do not rewrite those
+observations. No inference is added. This is correctness bookkeeping within the
+sandbox, not a security boundary against malicious Python introspection.
+
+Late observation requires matching current run/workspace/source/failure epoch. Failed
+cells invalidate old operations persistently; a subsequent unrelated successful cell
+cannot restore full coverage. Failures before entering the worker propagate through
+trusted `invalidateEvidence` context on the next request. Source refresh requires a
+revised binding and a fresh operation. Separate operations are never automatically
+unioned. The normal semantic cache/resume behavior is unchanged.
+
+Snapshots add optional `operationCoverage` counts and a `coverage.reason` enum,
+retained in timeline summaries, final cards and history. Missing fields in legacy
+snapshots remain valid. Counts describe the last recorded operation even when its
+population coverage has since become invalid. SQL-only tasks can have `no_operation`;
+this is not an analytical failure. Verification-limited inputs retain counts only;
+the existing maximum semantic input size is unchanged. Do not use the number of
+`full` snapshots or API calls as an accuracy metric.
+
+The analysis-experiment regression test exercises renamed AGNews IDs, late binding,
+mutated previews, failed cells, host-side failure invalidation, cross-run attempts,
+source refresh, partial inputs and verification limits using real Pyodide and mocked
+inference. No evaluation answers are used as runtime inputs.

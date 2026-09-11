@@ -27,4 +27,11 @@ assert.doesNotMatch(subset, /已覆盖绑定范围/);
 const full = render({ ...snapshot, coverage: { ...snapshot.coverage, state: "full", processed: 14860, unprocessed: 0 } });
 assert.match(full, /已覆盖绑定范围/);
 assert.match(full, /不代表答案已验证/);
+const operation = render({ ...snapshot,
+  coverage: { ...snapshot.coverage, state: "unknown", reason: "population_unbound" },
+  operationCoverage: { total: 989, success: 980, unresolved: 5, failed: 2, unprocessed: 2 } });
+assert.match(operation, /尚未绑定任务总体/);
+assert.match(operation, /成功 980 \/ 989/);
+assert.match(operation, /未决 5.*失败 2.*未处理 2/);
+assert.doesNotMatch(operation, /已覆盖绑定范围/);
 console.log("analysis evidence rendering: hidden legacy, subset, unresolved references and non-certifying full coverage passed");

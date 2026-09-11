@@ -10,6 +10,8 @@ export function AnalysisEvidence({ snapshot }: { snapshot: IAnalysisSnapshot | n
   return <div className="stela-analysis-evidence space-y-1 rounded border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
     <div className="font-medium text-foreground">{t("agent.analysis.title")} · v{snapshot.version}</div>
     <div>{t("agent.analysis.coverage")}: {t(`agent.analysis.${coverage.state}`)} · {coverage.processed} / {coverage.total ?? "?"}</div>
+    {coverage.reason && <div>{t(`agent.analysis.reason.${coverage.reason}`)}</div>}
+    {snapshot.operationCoverage && <div>{t("agent.analysis.operation", snapshot.operationCoverage)}</div>}
     {snapshot.missingClaims.length > 0 && <div>{t("agent.analysis.missing")}: {snapshot.missingClaims.join(", ")}</div>}
     {snapshot.failedChecks.length > 0 && <div>{t("agent.analysis.failed")}: {snapshot.failedChecks.join(", ")}</div>}
     {unresolved.length > 0 && <div>{t("agent.analysis.unresolved")}: {unresolved.join(", ")}</div>}

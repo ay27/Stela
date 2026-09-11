@@ -1005,9 +1005,17 @@ Default-off `AiSettings.semanticOptimizationEnabled` and
 source-resolution flags, source row counts, full/subset/unknown coverage, previous
 version count and truncation. Source refresh, cell failure and unknown lineage
 cannot certify current coverage. `analysis.current` is lazy; explicit contracts are
-registered as revisions. `bind_population(df, id_column=..., source=...)` freezes
-source-verified row IDs/values; it cannot be silently rebound to a smaller cohort.
+registered as revisions. `bind_population(df, id_column=..., source=..., source_id_column=None)` freezes
+source-verified typed IDs and per-cell fingerprints; it cannot be silently rebound to a smaller cohort.
 Snapshots are automatically captured and preserved through existing tool history.
+`contract.observe(batch)` (ADR-0099) verifies an existing operation via a weak
+run-local registry, independent of mutable public result rows/summary. Records retain
+at most 100,000 rows / 1,000,000 cells of fingerprints, not text copies. Operation
+counts (`operationCoverage`) are separate from bound-population `coverage`; its
+optional `reason` explains unknown/partial status. Epoch invalidation survives later
+successful cells; host-side failures propagate using optional trusted
+`IAnalysisExecutionContext.invalidateEvidence`. Source versions must still match.
+No implicit ID normalization, batch union or business certification is added.
 Legacy explicit contract behavior remains when the experiment is off.
 
 Optimized classify/extract returns all original IDs after exact selected-content

@@ -870,6 +870,8 @@ export interface IAnalysisExecutionContext {
   question: string;
   semanticOptimization: boolean;
   automaticContracts: boolean;
+  /** A preceding tool failure may have occurred before the worker could invalidate evidence. */
+  invalidateEvidence?: boolean;
 }
 
 export interface PythonExecutionRequest {

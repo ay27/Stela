@@ -592,6 +592,23 @@ try {
     const failed = await dispatchTool("run_sql", JSON.stringify({ sql: "DELETE FROM demo" }), { ...ctx, requestProposal: async () => false });
     assert.equal(failed.ok, false);
     assert.ok(JSON.parse(failed.text).analysis, "query failure retains observational state");
+    assert.equal(observed.analysis.coverage.reason, "no_operation");
+    const invalidations: boolean[] = [];
+    const pythonCtx = { ...ctx, run: { ...ctx.run, sessionId: "contract-test" }, queryArtifacts: {} as never, pythonExecutor: {
+      execute: async (input: { analysisContext?: { invalidateEvidence?: boolean } }) => {
+        invalidations.push(input.analysisContext?.invalidateEvidence === true);
+        return { ok: true, stdout: "", value: { kind: "scalar" as const, value: 1 }, elapsedMs: 1,
+          analysis: { ...observed.analysis, status: "observed" as const,
+            coverage: { ...observed.analysis.coverage, reason: "execution_failed" as const } } };
+      },
+    } };
+    const beforeWorker = await dispatchTool("execute_python", JSON.stringify({ code: "" }), pythonCtx);
+    assert.equal(beforeWorker.ok, false);
+    assert.equal(invalidations.length, 0, "failure happens before entering the worker");
+    const afterFailure = await dispatchTool("execute_python", JSON.stringify({ code: "result=1" }), pythonCtx);
+    assert.equal(afterFailure.ok, true, afterFailure.text);
+    assert.equal((await dispatchTool("execute_python", JSON.stringify({ code: "result=2" }), pythonCtx)).ok, true);
+    assert.deepEqual(invalidations, [true, false], "worker consumes host failure invalidation once");
   }
 
   {

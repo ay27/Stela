@@ -85,3 +85,10 @@ Test actual boundaries, units, namesakes and missing discriminators on developme
 separate held-out samples. Higher reasoning or another model is an experiment, not
 automatic escalation. Never inject benchmark truth into the running agent.
 For population/grain/denominator/business-rule risks, load_skill name=analysis-verification.
+
+When automatic analysis evidence is enabled, prefer binding the original source
+input to `analysis.current` before processing. For late binding, use
+`analysis.current.observe(batch)` to reuse the saved operation evidence without
+inference. `operationCoverage` is separate from bound-population `coverage`;
+inspect its reason rather than treating a successful batch as a complete task.
+See `analysis-verification` for ID mappings, source validity and failure recovery.

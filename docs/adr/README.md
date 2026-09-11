@@ -151,3 +151,4 @@ proposed → active → superseded
 | [0096](0096-explicit-knowledge-maintenance-outcomes.md) | Explicit knowledge-maintenance outcomes | active |
 | [0097](0097-semantic-input-reduction-and-cost-probe.md) | Semantic input reduction and bounded cost probing | active |
 | [0098](0098-automatic-observational-analysis-contracts.md) | Automatic observational analysis contracts | active |
+| [0099](0099-reusable-analysis-operation-evidence.md) | Reusable analysis operation evidence | active |

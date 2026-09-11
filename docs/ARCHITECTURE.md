@@ -594,7 +594,13 @@ flowchart TB
    context carries run/question/flags into both workers. Python reports bounded
    snapshots through the existing result DTO; main attaches SQL facts and preserves
    snapshots through timeline summaries for live/history/final evidence cards. There
-   is no new provider, persistence service or final-answer gate. See
+   is no new provider, persistence service or final-answer gate. ADR-0099 adds a
+   weak run-local registry of operation counts and input fingerprints for late
+   `contract.observe(batch)` validation, independently of editable result previews.
+   Explicit source ID mapping preserves typed values. Failure epochs and source
+   versions prevent stale coverage revival; host-side failures invalidate evidence
+   on the next worker request. Optional operation counts and coverage reasons travel
+   through the same result/history DTO. See
    [behavior and evaluation protocol](./testing/analysis-experiments.md).
    The semantic model defaults to the run's Agent profile but can be selected separately.
    The Python tool advertises classification/extraction/entity matching and points

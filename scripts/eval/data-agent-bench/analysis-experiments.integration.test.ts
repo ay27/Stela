@@ -158,6 +158,83 @@ try {
   assert.notEqual(reset.analysis?.generation, revision.analysis?.generation);
   const off = await workspace.execute({ ...base, analysisContext: undefined, code: "result = 42" });
   assert.equal(off.analysis, undefined, "legacy outputs unchanged with experiment off");
+  // AGNews regressions: wrong source reference, renamed identity, late binding and mutable previews.
+  await workspace.reset!(base.vaultPath, base.sessionId);
+  const repairSource = await writeBufferedQueryArtifact({ vaultPath: root, sessionId: base.sessionId, runId: "amy-source",
+    columns: [{ name: "article_id", typeName: "INTEGER" }, { name: "text", typeName: "VARCHAR" }],
+    rows: [[1, "topic a"], [2, "topic b"], [3, "topic c"]] });
+  assert.ok(repairSource);
+  const repair = executor(200000, 20, "repair");
+  const execute = (code: string) => workspace.execute({ ...base, ...repair, code });
+  const prepared = await workspace.execute({ ...base, ...repair, artifacts: { amy_ids: repairSource },
+    code: `df = to_df('amy_ids').rename(columns={'article_id':'id'}); batch = ${classify}; result = batch.summary` });
+  assert.equal(prepared.analysis?.operationCoverage?.success, 3);
+  assert.equal(prepared.analysis?.coverage.reason, "population_unbound");
+  const badSource = await execute("analysis.current.bind_population(df, id_column='id', source='invented-python-run')");
+  assert.match(badSource.error ?? "", /population_source_unknown.*amy_ids/);
+  const badColumn = await execute("analysis.current.bind_population(df, id_column='id', source='amy_ids')");
+  assert.match(badColumn.error ?? "", /population_id_column_missing.*article_id/);
+  const mapped = await execute("analysis.current.bind_population(df, id_column='id', source='amy_ids', source_id_column='article_id'); analysis.current.observe(batch); result = 1");
+  assert.equal(mapped.ok, true, mapped.error);
+  assert.equal(mapped.analysis?.coverage.reason, "execution_failed", "binding repairs do not resurrect operations preceding failed cells");
+  await execute(`batch = ${classify}; result = batch.summary`);
+  const callsBeforeObserve = repair.sent.length;
+  const observed = await execute("batch.rows.loc[:, 'status'] = 'failed'; batch.summary['success'] = 0; analysis.current.observe(batch); result = 1");
+  assert.equal(observed.analysis?.coverage.state, "full");
+  assert.equal(observed.analysis?.operationCoverage?.success, 3);
+  assert.equal(repair.sent.length, callsBeforeObserve, "observe does not infer");
+  analysisSnapshotSchema.parse(observed.analysis);
+  assert.deepEqual(readAnalysisSnapshot(analysisToolSummary(JSON.stringify({ analysis: observed.analysis }), 10)), observed.analysis);
+  // Observe after creating a revised contract and binding in a later cell.
+  const late = await execute("c = analysis.contract(required=['population']); c.bind_population(df, id_column='id', source='amy_ids', source_id_column='article_id'); c.observe(batch); result = 1");
+  assert.equal(late.analysis?.coverage.state, "full");
+  const partial = await execute("part = await semantic.classify(df.head(1), columns=['text'], labels={'topic':'any topic'}, instructions='Classify text', id_column='id'); part.summary['success']=3; part.summary['complete']=True; c.observe(part); result = 1");
+  assert.equal(partial.analysis?.coverage.state, "subset");
+  assert.equal(partial.analysis?.coverage.processed, 1);
+  assert.equal(partial.analysis?.coverage.unprocessed, 2);
+  const fake = await execute("c.observe({'rows': [], 'summary': {'complete': True}})");
+  assert.match(fake.error ?? "", /operation_unavailable/);
+  const stale = await execute("c.observe(batch); result = 1");
+  assert.equal(stale.analysis?.coverage.reason, "execution_failed");
+  const unrelated = await execute("result = 42");
+  assert.equal(unrelated.analysis?.coverage.reason, "execution_failed");
+  const resumed = await execute(`batch = ${classify}; result = 1`);
+  assert.equal(resumed.analysis?.coverage.state, "full");
+  const upstreamFailure = await workspace.execute({ ...base, ...repair,
+    analysisContext: { ...base.analysisContext, invalidateEvidence: true }, code: "result = 1" });
+  assert.equal(upstreamFailure.analysis?.coverage.reason, "execution_failed");
+  assert.equal((await execute("c.observe(batch); result = 1")).analysis?.coverage.reason, "execution_failed");
+  await execute(`batch = ${classify}; result = 1`);
+  const changedInput = await execute("changed_df = df.copy(); changed_df.loc[0,'text']='changed'; changed_batch = await semantic.classify(changed_df, columns=['text'], labels={'topic':'any topic'}, instructions='Classify text', id_column='id'); result = 1");
+  assert.equal(changedInput.analysis?.coverage.reason, "identity_mismatch");
+  const otherRun = await workspace.execute({ ...base, ...repair,
+    analysisContext: { ...base.analysisContext, runId: "other-run" }, code: "analysis.current.observe(batch)" });
+  assert.match(otherRun.error ?? "", /operation_unavailable/);
+  // Establish a fresh binding for identity validation failures without changing fixtures.
+  for (const [frame, expected] of [
+    ["df.assign(id=[1,1,3])", "population_id_duplicate"],
+    ["df.assign(id=[1,None,3])", "population_id_null"],
+    ["df.assign(text='changed')", "population_values_mismatch"],
+    ["pd.DataFrame({'id': range(100001)})", "verification_limit"],
+  ]) {
+    const invalid = await execute(`analysis.contract(required=['population']).bind_population(${frame}, id_column='id', source='amy_ids', source_id_column='article_id')`);
+    assert.match(invalid.error ?? "", new RegExp(expected));
+  }
+  // Above the verification limit, inference can still deduplicate; only counts are certified.
+  const large = await execute("large_df = pd.DataFrame({'id':range(10001), 'text':['one topic']*10001, **{'extra'+str(i):'x' for i in range(100)}}); large_batch = await semantic.classify(large_df, columns=['text'], labels={'topic':'any topic'}, instructions='Classify text', id_column='id'); result=1");
+  assert.equal(large.ok, true, large.error);
+  assert.equal(large.analysis?.coverage.reason, "verification_limit");
+  assert.equal(large.analysis?.operationCoverage?.success, 10001);
+  const refreshedSource = await writeBufferedQueryArtifact({ vaultPath: root, sessionId: base.sessionId, runId: "amy-new",
+    columns: repairSource.columns, rows: [[1, "topic a"], [2, "topic b"], [3, "topic c"]] });
+  assert.ok(refreshedSource);
+  await execute(`c = analysis.contract(required=['population']); c.bind_population(df, id_column='id', source='amy_ids', source_id_column='article_id'); batch = ${classify}; result=1`);
+  const refresh = await workspace.execute({ ...base, ...repair, artifacts: { amy_ids: refreshedSource }, code: "result=c.report()" });
+  assert.equal((scalar(refresh).coverage as { reason: string }).reason, "source_changed");
+  assert.equal(refresh.analysis?.coverage.reason, "source_changed");
+  assert.equal((await execute("result=1")).analysis?.coverage.reason, "source_changed");
+  const newBindingOldOperation = await execute("c=analysis.contract(required=['population']); c.bind_population(df,id_column='id',source='amy_ids',source_id_column='article_id'); c.observe(batch); result=1");
+  assert.equal(newBindingOldOperation.analysis?.coverage.reason, "source_changed");
   console.log("analysis experiments: 10000→100→10000, cache, identity, cost pilot, rejection, frozen population, snapshots and IPC passed");
 } finally {
   await workspace.close();
