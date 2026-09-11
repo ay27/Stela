@@ -1,7 +1,0 @@
-{
-  "id": "connector-postgresql",
-  "kind": "postgresql",
-  "displayName": "PostgreSQL",
-  "apiVersion": 2,
-  "entry": "dist/index.cjs"
-}
