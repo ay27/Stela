@@ -432,9 +432,11 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
     })
     .strict(),
   [IPC.AI_METRICS_GET_TRACE]: z.object({ runId: z.string().min(1).max(256) }).strict(),
-  [IPC.AI_METRICS_GET_SESSION_TRACE]: z
-    .object({ sessionId: agentHistorySegment, deviceSlug: agentHistorySegment })
-    .strict(),
+  [IPC.AI_METRICS_LIST_SESSIONS]: z.object({}).strict(),
+  [IPC.AI_METRICS_GET_SESSION_TRACE]: z.union([
+    z.object({ sessionId: agentHistorySegment, deviceSlug: agentHistorySegment }).strict(),
+    z.object({ sessionId: z.string().min(1).max(256), conversationPath: stringPath }).strict(),
+  ]),
   [IPC.AI_METRICS_CLEAR]: z.object({}).strict(),
 
   [IPC.AI_AGENT_RUN]: z

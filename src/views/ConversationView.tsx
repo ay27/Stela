@@ -5,6 +5,7 @@ import { useConnections } from "@/state/connections";
 import { useWorkspace } from "@/state/workspace";
 import { AgentTimelineContent, AgentThinkingStatus, AgentComposerActions, AgentBlankIllustration, QuestionCard, TimelineItem, openAgentResource } from "@/components/ai/agent-panel";
 import { conversationTimeline, conversationResults } from "@/components/ai/conversation-timeline";
+import { ConversationNavigation } from "@/components/ai/conversation-navigation";
 import { AiPromptInput } from "@/components/ai/ai-prompt-input";
 import { agentComposerStateToMessage, emptyAgentComposerState } from "@/lib/agent-composer";
 import { agentMessagePlainText } from "@shared/agent-message";
@@ -54,7 +55,7 @@ const Turn = memo(function Turn({ turn, reuse, onRespond }: { turn: Conversation
   const detailsResult = (run: RunRecord) => run.runId === primary?.runId ? null : renderResult(run);
   const renderResult = (run: RunRecord) => <SqlResult key={run.runId} run={run} reuse={reuse} number={turn.runs.length > 1 ? turn.runs.findIndex(item => item.runId === run.runId) + 1 : undefined} />;
   return (
-    <article className="stela-conversation-turn">
+    <article data-conversation-turn={turn.id} tabIndex={-1} className="stela-conversation-turn outline-none">
       <TimelineItem entry={{ kind: "user", id: turn.id, message: turn.message ?? { version: 1, segments: [{ kind: "text", text: turn.input }], resources: [] } }} onRespond={onRespond} />
       {!timeline.length && results.before.map(renderResult)}
       <AgentTimelineContent timeline={timeline} busy={turn.status === "running"} onRespond={onRespond} executionContent={timeline.length && extraRuns.length ? extraRuns.map(renderResult) : undefined} afterEntry={entry => entry.id === final?.id && primary ? renderResult(primary) : results.byEntry.get(entry.id)?.map(detailsResult)} />
@@ -117,11 +118,14 @@ export function ConversationView({ path, tabId }: { path: string; tabId: string 
         {compacting && <span className="flex items-center gap-1 text-[11px] text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" />{t("agent.panel.compacting")}</span>}
         <ConnectionPicker value={connectionName} onChange={name => store.edit(path, draft, name)} />
       </header>
-      <div ref={scroll} onScroll={() => { const el = scroll.current!; following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }} className="min-h-0 flex-1 overflow-auto px-6">
+      <div className="relative flex min-h-0 flex-1">
+      <div ref={scroll} onScroll={() => { const el = scroll.current!; following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }} className="min-h-0 min-w-0 flex-1 overflow-auto pl-6 pr-12">
         <div className={`mx-auto w-full max-w-3xl space-y-12 pt-6 pb-2.5 ${!turns.length ? "flex h-full flex-col items-center justify-center" : ""}`}>
           {!turns.length && <div className="flex max-w-sm flex-col items-center gap-3 pb-10 text-center"><AgentBlankIllustration /><h1 className="text-sm font-medium">{t("conversation.title")}</h1><p className="text-xs leading-6 text-muted-foreground">{t("conversation.empty")}</p></div>}
           {turns.map(turn => <Turn key={turn.id} turn={turn} onRespond={respond} reuse={reuse} />)}
         </div>
+      </div>
+      <ConversationNavigation turns={turns} scrollRef={scroll} onNavigate={() => { following.current = false; }} />
       </div>
       <footer className="stela-composer-region bg-background px-6">
         <div className="mx-auto max-w-3xl space-y-2">

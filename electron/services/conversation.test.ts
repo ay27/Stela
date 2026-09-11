@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import * as conversation from "./conversation";
+import { listDashboardSessions, loadDashboardSession } from "./ai/agent-dashboard-sessions";
+import * as metrics from "./ai/agent-metrics";
 import * as store from "./result-store";
 import * as registry from "./connectors/registry";
 import { pruneLocalAgentHistory, openLocalAgentSessionStorage, appendAgentHistoryStarted, appendAgentHistoryFinished } from "./ai/agent-history";
@@ -53,6 +55,7 @@ async function main() {
   const send = async (s: IConversationSnapshot, input: string) => conversation.submitConversation(vault, { locale: "zh", path: s.path, etag: s.etag, input, connectionName: "fixture", requestId: randomUUID() }, publish);
   const done = (s: IConversationSnapshot) => s.document.turns.at(-1)?.status !== "running";
   try {
+    await metrics.open(vault);
     const plugin = join(vault, ".stela/plugins/fixture"); await mkdir(plugin, { recursive: true });
     await writeFile(join(plugin, "plugin.json"), JSON.stringify({ id: "fixture", kind: "fixture", displayName: "Fixture", apiVersion: 1, entry: "index.cjs" }));
     await writeFile(join(plugin, "index.cjs"), `module.exports = { apiVersion: 1, create() { return {
@@ -77,6 +80,7 @@ async function main() {
     await send(s, "UPDATE t SET x=1"); s = await waitFor(s.path, done); assert.equal(s.document.turns.at(-1)!.status, "error"); assert.equal(modelCalls, 0);
     await patchAppSettings(vault, { ai: { agentAllowMutations: true } });
     await send(s, "UPDATE t SET x=2"); s = await waitFor(s.path, s => s.document.turns.at(-1)!.events.some(e => e.type === "proposal"));
+    assert.equal((await loadDashboardSession(vault, "local", { conversationPath: s.path, sessionId: s.document.id })).runs.at(-1)!.conversation?.status, "running", "Live inspection must preserve an active turn");
     let turn = s.document.turns.at(-1)!; const proposal = turn.events.find(e => e.type === "proposal")!;
     assert.equal(proposal.type, "proposal"); if (proposal.type !== "proposal") throw new Error("missing proposal");
     assert.equal(turn.runs.length, 0);
@@ -125,6 +129,12 @@ async function main() {
     assert.deepEqual(s.document.turns.at(-1)!.message, structured);
     assert.ok(JSON.stringify(requests.at(-1)).includes("reference_payload"), "full referenced SQL reaches the model");
     const fresh = await conversation.readConversation(vault, s.path); assert.equal(fresh.document.sessionJsonl, s.document.sessionJsonl);
+    const dashboardSummary = (await listDashboardSessions(vault, profile.slug)).sessions.find(item => item.sessionId === fresh.document.id)!;
+    assert.ok(dashboardSummary, "Executed Chat must be discoverable in Dashboard");
+    const dashboard = metrics.getSessionTrace(await loadDashboardSession(vault, profile.slug, dashboardSummary.ref));
+    assert.equal(dashboard.turns.length, fresh.document.turns.length);
+    assert.equal(dashboard.turns[0]!.trace, null, "Direct SQL does not invent an Agent run");
+    assert.ok(dashboard.turns.some(turn => turn.trace?.root.run.operation === "chat"), "Actual Chat Agent calls join their recorded metrics");
     for (let i = 0; i < 22; i++) {
       const history = await openLocalAgentSessionStorage(vault, profile.slug, `retention_${i}`);
       await appendAgentHistoryStarted(history, { runId: `retention_${i}`, sessionId: `retention_${i}`, prompt: "history fixture" });
@@ -154,7 +164,7 @@ async function main() {
     await assert.rejects(() => conversation.readConversation(vault, linked));
     assert.ok(requests.length >= 6); console.log("Conversation integration: direct execution, deduplication, write gate, cancellation, automatic repair, saved-result follow-up, clarification, session persistence, conflict recovery, bounded-history independence and path confinement passed.");
   } finally {
-    await conversation.stopAllConversations(); await registry.setVault(null); store.close(); server.close();
+    await conversation.stopAllConversations(); await registry.setVault(null); metrics.__resetForTests(); store.close(); server.close();
     await rm(root, { recursive: true, force: true });
   }
 }

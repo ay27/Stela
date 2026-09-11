@@ -110,6 +110,7 @@ export const IPC = {
   AI_METRICS_LIST_RUNS: "ai-metrics:list-runs",
   AI_METRICS_GET_TRACE: "ai-metrics:get-trace",
   AI_METRICS_GET_SESSION_TRACE: "ai-metrics:get-session-trace",
+  AI_METRICS_LIST_SESSIONS: "ai-metrics:list-sessions",
   AI_METRICS_CLEAR: "ai-metrics:clear",
 
   // Harness agent（原生 function-calling 循环，见 electron/services/ai/agent.ts）

@@ -20,6 +20,8 @@ import type {
   AgentMetricRunFilter,
   AgentMetricRunPage,
   AgentMetricSessionTrace,
+  AgentMetricSessionRef,
+  IAgentMetricSessionList,
   AgentMetricTrace,
   AgentMetricsDashboard,
   AnalysisCanvasFile,
@@ -288,7 +290,8 @@ interface StelaBridge {
     getDashboard: (range: AgentMetricRange) => Promise<AgentMetricsDashboard>;
     listRuns: (filter: AgentMetricRunFilter) => Promise<AgentMetricRunPage>;
     getTrace: (runId: string) => Promise<AgentMetricTrace>;
-    getSessionTrace: (ref: AgentHistoryRef) => Promise<AgentMetricSessionTrace>;
+    listSessions: () => Promise<IAgentMetricSessionList>;
+    getSessionTrace: (ref: AgentMetricSessionRef) => Promise<AgentMetricSessionTrace>;
     clear: () => Promise<void>;
   };
   git: {

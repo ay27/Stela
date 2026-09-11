@@ -87,6 +87,17 @@ export async function readConversation(vault: string, file: string): Promise<ICo
     return snapshot;
   });
 }
+/** Dashboard inspection must not invoke the editor's interrupted-run recovery writes. */
+export async function inspectConversation(vault: string, file: string): Promise<IConversationSnapshot> {
+  const p = await target(vault, file);
+  const running = active.get(p);
+  if (running) return structuredClone(running.snapshot);
+  const snapshot = await disk(p);
+  for (const turn of snapshot.document.turns) {
+    if (turn.status === "running") turn.status = "interrupted";
+  }
+  return snapshot;
+}
 function mutate(state: IActiveConversation, change: (doc: ConversationDocument) => void): Promise<void> {
   const next = state.queue.then(async () => {
     if (state.snapshot.persistenceError) throw new Error(state.snapshot.persistenceError);

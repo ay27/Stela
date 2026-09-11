@@ -1209,8 +1209,8 @@ carry the redacted trace. Tool and maintenance runs use their Agent run as
 `parentRunId`.
 
 `AgentMetricSessionTrace` is a read-only projection, not a third storage
-authority. It contains the authoritative `AgentHistorySession`, one-based user
-Turns in history order, and an optional `AgentMetricRunTree` for every history
+authority. It contains an `IAgentMetricSessionHistory` projected from Agent History
+or a durable Chat document, one-based user Turns in source order, and an optional `AgentMetricRunTree` for every history
 run. A run tree contains the root Agent trace and every descendant tool or
 maintenance trace. The tree is `null` when local Metrics have expired or been
 cleared. Harness model context, provider requests, first-token arrival,
@@ -1246,9 +1246,13 @@ occupancy is `promptTokens / contextWindow`, not total tokens, so the current
 step's output and reasoning are not counted as input context.
 
 The renderer can only call `agentMetrics.getDashboard`, `listRuns`, `getTrace`,
-`getSessionTrace`, and `clear`. `getSessionTrace` accepts an `AgentHistoryRef`;
-the main process loads that history and joins it to the already-open local
-Metrics store by `agent:<runId>`. Date ranges are exactly `7d`, `30d`, or `90d`; trace queries are
+`listSessions`, `getSessionTrace`, and `clear`. `listSessions` returns typed
+source references plus warnings for unreadable sources. `getSessionTrace` accepts
+an `AgentMetricSessionRef`: a legacy `AgentHistoryRef` or a Chat path/session id.
+The main process loads that source and joins it to the already-open local Metrics
+store by `agent:<runId>`. Chat runs preserve structured messages, responses, SQL
+outcomes and lifecycle status; their missing completion timestamps remain null.
+Chat references do not assert which device originally executed their turns. Date ranges are exactly `7d`, `30d`, or `90d`; trace queries are
 cursor-paginated, bounded to 100 records by IPC, and displayed ten at a time.
 Inline completion does not enter this store; schema version 2 removes legacy
 inline runs and their events. Cancellations are reported separately from

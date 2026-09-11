@@ -714,8 +714,9 @@ or traces because its high-frequency requests obscure Agent diagnostics. The
 dashboard DTO also exposes the latest retained real knowledge-maintenance attempt
 for the Agent Panel empty-state hint; disabled and dropped jobs do not advance it.
 Dashboard keeps an aggregate Overview and a Session-oriented execution view.
-The Session view joins device-local Agent History with Metrics by Agent run id:
-History remains authoritative for Session and user-Turn order, while Metrics
+The Session view lists device-local Agent History and visible Vault `.stela.chat`
+files through `agentMetrics.listSessions`, then joins their turns to Metrics by
+Agent run id. Each source remains authoritative for Session and user-Turn order, while Metrics
 provides model steps, child tool/maintenance runs, timing, tokens, cache usage,
 and redacted payloads. It does not persist a second Session model in Metrics.
 Each user Turn can be inspected as a conversation or as an action-oriented
@@ -730,7 +731,11 @@ their tool action instead of being duplicated in model output. Context-window
 occupancy uses provider-reported prompt tokens and therefore excludes the current
 step's output. Post-answer Skill maintenance has a separate background section. Missing
 or expired Metrics leave the conversation readable and show an unavailable
-trace. Refresh is explicit rather than polled. See
+trace. Chat inspection is read-only, preserves SQL-only turns and lifecycle state,
+and checks both Vault containment and document identity; it never invokes editor
+recovery writes. Unreadable Chat sources are reported as listing warnings. See
+[ADR-0105](./adr/0105-dashboard-conversation-sources.md).
+Refresh is explicit rather than polled. See
 [ADR-0065](./adr/0065-session-oriented-agent-observability.md) and
 [ADR-0071](./adr/0071-action-oriented-agent-execution-traces.md).
 

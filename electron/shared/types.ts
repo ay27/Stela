@@ -562,16 +562,41 @@ export interface AgentMetricSessionTotals {
 export interface AgentMetricSessionTurn {
   /** One-based conversation turn index, ordered by Agent History. */
   index: number;
-  history: AgentHistoryRun;
+  history: IAgentMetricSessionRun;
   /** Null when local metrics were cleared or expired while conversation history still exists. */
   trace: AgentMetricRunTree | null;
 }
 
 /** Read-only projection joining Agent History with the local observability store by runId. */
 export interface AgentMetricSessionTrace {
-  history: AgentHistorySession;
+  history: IAgentMetricSessionHistory;
   totals: AgentMetricSessionTotals;
   turns: AgentMetricSessionTurn[];
+}
+
+/** Legacy history references remain valid; Chat references never imply a device of origin. */
+export type AgentMetricSessionRef = AgentHistoryRef | { conversationPath: string; sessionId: string };
+
+export interface IAgentMetricSessionSummary {
+  ref: AgentMetricSessionRef;
+  sessionId: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface IAgentMetricSessionList {
+  sessions: IAgentMetricSessionSummary[];
+  warnings: string[];
+}
+
+export interface IAgentMetricSessionRun extends AgentHistoryRun {
+  conversation?: Pick<import("./conversation").ConversationTurn, "status" | "error" | "runs">;
+}
+
+export interface IAgentMetricSessionHistory {
+  summary: AgentHistorySummary | IAgentMetricSessionSummary;
+  runs: IAgentMetricSessionRun[];
 }
 
 export interface AgentMetricRunFilter {

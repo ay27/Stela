@@ -9,8 +9,8 @@ import { useEffect, useMemo, useState } from "react";
 
 import { requestAgentMessage } from "@shared/agent-message";
 import type {
-  AgentHistoryRef,
-  AgentHistorySummary,
+  IAgentMetricSessionSummary,
+  IAgentMetricSessionRun,
   AgentMetricRange,
   AgentMetricSessionTrace,
   AgentMetricSessionTurn,
@@ -99,8 +99,8 @@ function DataDetails({ value }: { value: unknown }) {
   );
 }
 
-function sessionKey(ref: AgentHistoryRef): string {
-  return `${ref.deviceSlug}:${ref.sessionId}`;
+function sessionKey({ ref }: IAgentMetricSessionSummary): string {
+  return "conversationPath" in ref ? `chat:${ref.conversationPath}:${ref.sessionId}` : `history:${ref.deviceSlug}:${ref.sessionId}`;
 }
 
 function traceKindClass(kind: AgentTraceItemKind): string {
@@ -179,6 +179,21 @@ function SessionWaterfall({ session, onSelect }: { session: AgentMetricSessionTr
   );
 }
 
+function ConversationRunDetails({ run }: { run: IAgentMetricSessionRun }) {
+  const t = useT();
+  const detail = run.conversation;
+  if (!detail) return null;
+  return <div className="space-y-2 text-xs">
+    <div className="text-muted-foreground">{t(`agentDashboard.chatStatus.${detail.status}`)}</div>
+    {detail.error && <div className="text-destructive">{detail.error}</div>}
+    {detail.runs.map(sql => <details key={sql.runId} className="rounded-md border border-border p-2">
+      <summary className="cursor-pointer text-muted-foreground">{sql.connectionName} · {t(`agentDashboard.sqlStatus.${sql.status}`)} · {t("agentDashboard.savedRows", { count: sql.rowCount })} · {formatDuration(sql.elapsedMs)}</summary>
+      <pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-xs">{sql.sql}</pre>
+      {sql.message && <div className={cn("mt-2", sql.status === "err" && "text-destructive")}>{sql.message}</div>}
+    </details>)}
+  </div>;
+}
+
 function ConversationView({ session }: { session: AgentMetricSessionTrace }) {
   const t = useT();
   return <div className="space-y-5 p-5">{session.history.runs.map((run, index) => {
@@ -188,7 +203,8 @@ function ConversationView({ session }: { session: AgentMetricSessionTrace }) {
     return <section key={run.request.runId} className="space-y-2.5">
       <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{t("agentDashboard.turn", { count: index + 1 })}</div>
       <div className="flex justify-end"><div className="max-w-[82%] rounded-lg bg-muted px-3 py-2 text-sm text-foreground"><AgentUserMessage message={requestAgentMessage(run.request)} /></div></div>
-      {final?.type === "final" ? <div className="rounded-lg border border-border bg-card/40 p-3"><AssistantMessage content={final.content} /></div> : error?.type === "error" ? <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error.message}</div> : cancelled ? <div className="text-xs italic text-muted-foreground">{t("agentDashboard.cancelled")}</div> : <div className="flex items-center gap-2 text-xs text-muted-foreground"><RefreshCw className="h-3 w-3" />{run.finishedAt === null ? t("agentDashboard.running") : t("agentDashboard.traceUnavailable")}</div>}
+      {final?.type === "final" ? <div className="rounded-lg border border-border bg-card/40 p-3"><AssistantMessage content={final.content} /></div> : error?.type === "error" ? <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error.message}</div> : cancelled ? <div className="text-xs italic text-muted-foreground">{t("agentDashboard.cancelled")}</div> : run.conversation ? null : <div className="flex items-center gap-2 text-xs text-muted-foreground"><RefreshCw className="h-3 w-3" />{run.finishedAt === null ? t("agentDashboard.running") : t("agentDashboard.traceUnavailable")}</div>}
+      <ConversationRunDetails run={run} />
     </section>;
   })}</div>;
 }
@@ -234,7 +250,8 @@ function TraceView({ session, selectedId, onSelect }: { session: AgentMetricSess
         <span className="text-[10px] tabular-nums text-muted-foreground">{formatDuration(turn.trace?.root.run.durationMs ?? null)}</span>
       </div>
       <TurnInputDetails turn={turn} />
-      {!turn.trace ? <div className="flex items-center gap-2 px-4 py-4 text-xs text-muted-foreground"><AlertTriangle className="h-3.5 w-3.5" />{t("agentDashboard.traceUnavailable")}</div> : null}
+      {turn.history.conversation && <div className="px-4 py-3"><ConversationRunDetails run={turn.history} /></div>}
+      {!turn.trace ? <div className="flex items-center gap-2 px-4 py-4 text-xs text-muted-foreground"><AlertTriangle className="h-3.5 w-3.5" />{t(turn.history.conversation ? "agentDashboard.chatTraceUnavailable" : "agentDashboard.traceUnavailable")}</div> : null}
       {projection.errorMessage ? <div className="flex items-center gap-2 border-b border-destructive/20 bg-destructive/5 px-4 py-2 text-[10px] text-destructive"><AlertTriangle className="h-3.5 w-3.5" />{projection.errorMessage}</div> : null}
       <div>{projection.main.map((item) => <TraceItemButton key={item.id} item={item} selected={selectedId === item.id} onSelect={onSelect} />)}</div>
       {projection.maintenance.length > 0 ? <div className="border-t border-border bg-cyan-500/5"><div className="px-4 py-2 text-[9px] font-semibold uppercase tracking-wide text-cyan-700 dark:text-cyan-300">{t("agentDashboard.backgroundMaintenance")}</div>{projection.maintenance.map((item) => <TraceItemButton key={item.id} item={item} selected={selectedId === item.id} onSelect={onSelect} />)}</div> : null}
@@ -405,7 +422,7 @@ function TraceDetails({ item }: { item: AgentTraceItem }) {
 
 export function AgentDashboardSessions({ range, refreshToken }: AgentDashboardSessionsProps) {
   const t = useT();
-  const [sessions, setSessions] = useState<AgentHistorySummary[]>([]);
+  const [sessions, setSessions] = useState<IAgentMetricSessionSummary[]>([]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [session, setSession] = useState<AgentMetricSessionTrace | null>(null);
   const [view, setView] = useState<SessionView>("trace");
@@ -417,9 +434,10 @@ export function AgentDashboardSessions({ range, refreshToken }: AgentDashboardSe
     let active = true;
     setLoading(true);
     setError(null);
-    void window.stela.agent.listHistory().then((history) => {
+    void window.stela.agentMetrics.listSessions().then((page) => {
       if (!active) return;
-      const filtered = history.filter((item) => item.isLocal && item.updatedAt >= rangeStart(range));
+      const filtered = page.sessions.filter((item) => item.updatedAt >= rangeStart(range));
+      setError(page.warnings.length ? page.warnings.join("\n") : null);
       setSessions(filtered);
       setSelectedKey((current) => current && filtered.some((item) => sessionKey(item) === current) ? current : filtered[0] ? sessionKey(filtered[0]) : null);
     }).catch((err: unknown) => { if (active) setError(err instanceof Error ? err.message : String(err)); }).finally(() => { if (active) setLoading(false); });
@@ -436,7 +454,7 @@ export function AgentDashboardSessions({ range, refreshToken }: AgentDashboardSe
     setError(null);
     const loadSessionTrace = async () => {
       try {
-        const result = await window.stela.agentMetrics.getSessionTrace({ sessionId: selectedSummary.sessionId, deviceSlug: selectedSummary.deviceSlug });
+        const result = await window.stela.agentMetrics.getSessionTrace(selectedSummary.ref);
         if (!active) return;
         setSession(result);
         const latestTurn = result.turns.at(-1);
@@ -456,7 +474,7 @@ export function AgentDashboardSessions({ range, refreshToken }: AgentDashboardSe
   return (
     <div className="flex min-h-0 flex-1">
       <aside className="w-[220px] flex-none overflow-auto border-r border-border bg-muted/10 p-2">
-        <div className="px-2 pb-2 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{t("agentDashboard.localSessions")}</div>
+        <div className="px-2 pb-2 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{t("agentDashboard.sessions")}</div>
         {sessions.map((item) => <button key={sessionKey(item)} type="button" onClick={() => setSelectedKey(sessionKey(item))} className={cn("mb-1 w-full rounded-md px-2.5 py-2 text-left hover:bg-accent", selectedKey === sessionKey(item) && "bg-accent")}><span className="block truncate text-[11px] font-medium text-foreground">{item.title}</span><span className="mt-0.5 block truncate text-[9px] text-muted-foreground">{new Date(item.updatedAt).toLocaleString()}</span></button>)}
         {!loading && sessions.length === 0 ? <div className="px-2 py-6 text-center text-[11px] text-muted-foreground">{t("agentDashboard.noSessions")}</div> : null}
       </aside>

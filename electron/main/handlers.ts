@@ -1,3 +1,4 @@
+import { listDashboardSessions, loadDashboardSession } from "../services/ai/agent-dashboard-sessions";
 import * as conversation from "../services/conversation";
 import type { IConversationSubmit } from "@shared/conversation";
 /**
@@ -31,6 +32,8 @@ import type {
   AgentMetricRunFilter,
   AgentMetricRunPage,
   AgentMetricSessionTrace,
+  AgentMetricSessionRef,
+  IAgentMetricSessionList,
   AgentMetricTrace,
   AgentMetricsDashboard,
   AnalysisCanvasFile,
@@ -336,12 +339,16 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
     IPC.AI_METRICS_GET_TRACE,
     ({ runId }) => agentMetrics.getTrace(runId),
   );
-  registerHandler<AgentHistoryRef, AgentMetricSessionTrace>(
+  registerHandler<Record<string, never>, IAgentMetricSessionList>(
+    IPC.AI_METRICS_LIST_SESSIONS,
+    async () => listDashboardSessions(requireVault(), (await deviceProfile.loadDeviceProfile()).slug),
+  );
+  registerHandler<AgentMetricSessionRef, AgentMetricSessionTrace>(
     IPC.AI_METRICS_GET_SESSION_TRACE,
     async (ref) => {
       const vaultPath = requireVault();
       const slug = (await deviceProfile.loadDeviceProfile()).slug;
-      const history = await agentHistory.loadAgentHistory(vaultPath, ref, slug);
+      const history = await loadDashboardSession(vaultPath, slug, ref);
       return agentMetrics.getSessionTrace(history);
     },
   );
