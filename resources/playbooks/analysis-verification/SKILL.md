@@ -1,45 +1,48 @@
 ---
 name: analysis-verification
-description: Sourced answer contracts and targeted coverage, granularity, denominator and business-rule verification in Python.
+description: Targeted candidate, grain, identity and relationship-direction checks; sourced answer contracts and coverage verification in Python.
 ---
 
 # When to use
 
-Use when a material population, granularity, denominator, period or business-rule
-ambiguity can change the answer. Skip trivial arithmetic and routine bookkeeping.
-This is local Python in the existing workspace: no extra planner, reviewer or inference.
+For material scope, grain, denominator, time or business-rule risks, including SQL-only work. Reuse evidence; query unresolved distinctions. Skip trivial arithmetic. No extra reviewer or inference.
+
+# Conditional decision checks
+
+Apply only relevant checks that can change the answer.
+
+- Candidate exclusion: when a name/keyword filter rejects an item with supporting attribute/text evidence, compare the exclusion with the requested business definition. Apply one supported rule across candidates; uncertain membership stays unresolved, not negative.
+- Grouping grain: when code/name choices change groups, inspect their mapping against the requested level. Many-to-one names can merge groups. A qualifier removing no rows warrants investigation, not an automatic column change. Aggregate at the supported level, not always the finest code.
+- Identity conflict: preserve raw IDs and inspect collisions when normalization/fuzzy matches compete with exact IDs. Prefixes may carry identity. Prefer exact matches within the same namespace unless source evidence supports another mapping; similarity alone cannot override them.
+- Relationship direction: label both endpoints and bind the requested attribute to the appropriate endpoint. Trace an available joined row from source ID to target ID to attribute; the opposite endpoint answers a different question.
+- Coverage: check the requested population before heuristic filtering. A regex for one spelling cannot prove coverage of all mentions. Inspect unmatched variants when they can affect the answer.
+- Ratios need the requested denominator, including unresolved labels when applicable. Hierarchy changes may require aggregation/deduplication and the corresponding title.
+- Policies need applicable terms and effective conditions; correlations cannot prove eligibility. Resolve conflicting sources with a discriminating fact or clarification.
+
+Recompute after changing decisions; explain unresolved impacts. Successful queries/checks cannot prove meaning. Test semantic boundaries against held-out labels outside runtime context.
 
 # Sourced contract
 
-analysis.contract(required=[...]) supports population, metric, granularity,
-denominator, business_rule, time_range. Only require relevant fields.
+`analysis.contract(required=[...])` supports population, metric, granularity, denominator, business_rule, time_range. Require only relevant fields. With automatic evidence enabled, `analysis.current` already exists. There is no `analysis.claim()` or `.summary()` API.
 
 ```python
-contract = analysis.contract(required=['population','denominator'])
+contract = analysis.current
 contract.claim('population', population_definition,
-    source=actual_source_reference, evidence=actual_scope_quote)
+    source='question', evidence=exact_question_excerpt)
 contract.claim('denominator', denominator_definition,
-    source=actual_source_reference, evidence=actual_ratio_quote)
+    source=query_alias, evidence=observed_scope)
 contract.check_coverage('classification', total=len(full_input),
     covered=batch.summary['success'], unresolved=batch.summary['unresolved'],
     unprocessed=batch.summary['unprocessed'],
-    source=source_query_reference, evidence=source_scope_description)
+    source=query_alias, evidence=observed_scope)
 result = contract.report()
 ```
 
-Replace variables with actual observations/references, not invented definitions.
-Missing claims remain unresolved; conflicting claims cannot silently overwrite.
-Keep the contract variable for following cells; result is only the current cell output.
+Without automatic evidence, create `analysis.contract(required=['population','denominator'])`. Use actual observations. Sources: query aliases/run IDs or `source='question'` with exact excerpts, not arbitrary Python result IDs. Missing claims stay unresolved; conflicts cannot silently overwrite. Retain the contract across cells; `result` is current output only.
 
-# Automatic evidence (when enabled)
+# Binding execution evidence
 
-`analysis.current` already exists. Define relevant meanings with `.claim(...)`;
-there is no `analysis.claim()` or `.summary()` API. Use `.report()` for local output.
-Source references are registered query aliases/run IDs, or `source='question'`
-with an exact excerpt. An arbitrary Python result run ID is not a query source.
-
-Bind the original input before deriving labels. When input ID names differ from
-source column names, state the mapping explicitly; ID values must still match:
+Bind source input before deriving labels. Renamed ID columns need an explicit mapping; values must still match:
 
 ```python
 population = to_df('articles').rename(columns={'article_id': 'id'})
@@ -48,59 +51,21 @@ contract.bind_population(population, id_column='id', source='articles',
                          source_id_column='article_id')
 batch = await semantic.classify(population, columns=['text'], id_column='id',
     labels={'sports': 'sports reporting', 'other': 'other reporting'},
-    instructions='Classify the subject; keep ambiguous items unresolved.')
+    instructions='Classify subject; keep ambiguous items unresolved.')
 result = contract.report()
 ```
 
-Omit `source_id_column` when unchanged. Binding checks the original input values;
-derived label/output columns are not source evidence. Errors identify unknown
-sources, missing columns, null/duplicate IDs or mismatched values. Fix these causes
-rather than suppressing errors or changing the declared population to a subset.
+Omit `source_id_column` when unchanged. Derived outputs are not source evidence. Fix unknown sources, missing columns, null/duplicate IDs and value mismatches; do not suppress errors or redefine the population as a subset.
 
-If the operation was completed before binding, bind the original input and call
-`contract.observe(batch)`. This uses the saved execution record without inference;
-it does not trust edits to `batch.rows` or `batch.summary`. Source refresh or a failed
-cell invalidates old evidence. Rebuild/revise the binding after refresh, and perform
-new processing after a failed cell (existing semantic cache can still avoid calls).
-Do not combine arbitrary batches into a claimed full population; use the existing
-full-input resume contract instead.
+For an operation completed before binding, bind its original input then call `contract.observe(batch)`. This uses saved execution evidence without inference, not mutable `batch.rows`/`.summary`. Source refresh or failed cells invalidate evidence: rebuild binding after refresh and process again after failure (semantic cache can avoid new calls). Use full-input resume; arbitrary batch unions cannot prove full coverage.
 
-Automatic snapshots and `.report()` distinguish `operationCoverage` (last recorded
-operation counts) from `coverage` (verified processing of the bound population).
-Inspect `coverage.reason`: unbound, stale, unmatched and verification-limit cases
-remain unknown. No semantic operation is required for SQL-only work. A supplied
-`check_coverage()` is a model-authored check, not automatic execution coverage.
-At most 100,000 rows / 1,000,000 cells are fingerprinted per result; larger inputs
-cannot prove population coverage. Existing semantic input limits still apply.
-Keep missing claims, unresolved rows and failed checks visible in the final delivery;
-there is no additional model review or final-answer gate.
+Snapshots/`.report()`: `operationCoverage` records last operation counts; `coverage` verifies bound-population processing. Inspect `coverage.reason`: unbound, stale, unmatched or over-limit evidence stays unknown. Fingerprinting supports 100,000 rows / 1,000,000 cells per result. Larger inputs cannot prove coverage; semantic limits also apply. SQL-only work needs no semantic operation. `check_coverage()` is model-authored, not automatic evidence.
 
-# Checks
+# Check helpers
 
-check_equal(name, observed, expected, source=..., evidence=...) checks a supplied invariant.
-check_granularity(name, values, pattern=..., source=..., evidence=...) full-matches
-identifier shape against the requested level, not the most detailed available level.
-check_coverage(name, total=..., covered=..., unresolved=0, unprocessed=0,
-source=..., evidence=...) requires consistent nonnegative integer counts.
-require_ready() rejects missing claims, failed checks or no checks. structurallyReady
-does NOT certify business truth. Checks validate supplied observations, not the
-truth of model-authored assertions. It is not a final-answer gate: explain unsupported
-parts instead of repeatedly querying merely to make the flag true.
+- `check_equal(name, observed, expected, source=..., evidence=...)`: supplied invariant.
+- `check_granularity(name, values, pattern=..., source=..., evidence=...)`: full-match identifier shape at the requested level.
+- `check_coverage(name, total=..., covered=..., unresolved=0, unprocessed=0, source=..., evidence=...)`: consistent nonnegative counts.
+- `require_ready()` rejects missing claims, failed checks or no checks. `structurallyReady` validates supplied assertions, not business truth.
 
-# Select the relevant risk
-
-- Coverage must address the requested population BEFORE heuristic filtering. A city
-  regex matching one spelling does not establish coverage of all location mentions.
-  Inspect plausible unmatched variants only when they can change the answer.
-- A ratio needs the requested denominator, including unresolved labels when applicable;
-  incomplete classifications cannot silently become negatives.
-- A hierarchy task needs the requested level; projecting to a subclass may require
-  aggregation/deduplication and the corresponding title, not a subgroup title.
-- Business policy selection needs applicable terms and their effective conditions;
-  installation volume or timing correlations do not establish policy eligibility.
-- Conflicting sources need explicit clarification or a discriminating fact. A query
-  showing data distribution cannot decide what the user means by revenue.
-- A successful parser, query, schema check or quotation cannot prove semantic correctness.
-
-Do not add a second model review to every task. Test uncertain semantic boundaries
-against held-out labeled samples separately from the agent's runtime context.
+Keep missing claims, unresolved rows and failed checks visible in the final answer. No final-answer gate: explain unsupported parts instead of repeatedly querying to turn a flag green.

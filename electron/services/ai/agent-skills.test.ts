@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   archiveAgentSkill,
@@ -24,6 +25,16 @@ async function writeSkill(name: string, content: string): Promise<void> {
 }
 
 try {
+  // Load the actual shipped files through the production loader, not only fixtures.
+  // Oversized bundled guidance used to disappear while all fixture tests passed.
+  const shippedDir = fileURLToPath(new URL("../../../resources/playbooks/", import.meta.url));
+  const shipped = await loadAgentSkills(root, { systemSkillDir: shippedDir });
+  assert.deepEqual(shipped.rejected, [], JSON.stringify(shipped.rejected));
+  const bundledNames = (await readdir(shippedDir, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+  assert.deepEqual(shipped.system.map((item) => item.metadata.name).sort(), bundledNames);
+  assert.ok(shipped.loaded.some((item) => item.metadata.name === "analysis-verification"));
+
   await writeSkill(
     "valid-schema-gotcha",
     `---

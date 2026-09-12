@@ -184,6 +184,7 @@ def validate(query_dir, llm_answer, reason=None):
       [
         path.join(repoRoot, "scripts", "eval", "run-data-agent-bench.ts"),
         "--dab-root", dabRoot,
+        "--suite", "all",
         ...selectionArgs,
         "--runs", String(runs),
         "--output", outputDir,

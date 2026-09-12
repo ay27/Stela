@@ -753,7 +753,7 @@ export function createAgentTools(options: {
     {
       name: "load_skill",
       label: "Load Skill",
-      description: "Load one exact Skill. System Skills are read-only Stela guidance; Vault Skills include freshness and verification status.",
+      description: "Load one exact Skill. System Skills are read-only Stela guidance; Vault Skills include freshness and verification status. When candidate exclusions conflict with observed evidence, code/name grouping may merge entities, exact and fuzzy identity matches disagree, or relationship direction is ambiguous, load analysis-verification before relying on that decision. Skip these checks when no such risk is present.",
       parameters: Type.Object({ name: Type.String({ description: "Exact Skill name from search_skills or the available Skills list." }) }),
       executionMode: "parallel",
       execute: (toolCallId, params) => runTool("load_skill", toolCallId, params, ctx, requestProposal),
