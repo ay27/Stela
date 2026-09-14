@@ -22,7 +22,7 @@
     "prepare:pyodide": "node scripts/prepare-pyodide-assets.mjs",
     "check:main-symbols": "node scripts/check-main-symbols.mjs",
     "check:main-types": "tsc --noEmit -p tsconfig.node.json",
-    "test:skill-maintenance": "node scripts/check-main-symbols.test.mjs && node scripts/run-skill-maintenance-tests.mjs",
+    "test:skill-maintenance": "node --import tsx electron/services/ai/maintenance-policy.test.ts && node scripts/check-main-symbols.test.mjs && node scripts/run-skill-maintenance-tests.mjs",
     "check:release": "node scripts/check-public-release.mjs",
     "preview": "electron-vite preview",
     "start": "electron-vite preview",

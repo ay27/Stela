@@ -718,7 +718,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
     // 推 recent files：fire-and-forget，仅在真有 vault 时记录。
     // 失败会在 settings store 内部 console.error，不影响 openFile 主流程。
-    if (vaultPath) {
+    if (vaultPath && !path.includes("/.stela/chat-sessions.local/")) {
       void useSettings.getState().pushRecentFile(path, vaultPath);
     }
 

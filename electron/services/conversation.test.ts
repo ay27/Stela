@@ -142,6 +142,59 @@ async function main() {
     }
     assert.equal((await pruneLocalAgentHistory(vault, profile.slug)).length, 2);
     assert.equal((await conversation.readConversation(vault, s.path)).document.sessionJsonl, fresh.document.sessionJsonl);
+
+    // Temporary lifecycle: no empty file, recoverable drafts, explicit promotion and stable identity.
+    let temporary = await conversation.createTemporaryConversation(vault, "Exploration");
+    const temporaryPath = temporary.path;
+    await assert.rejects(() => readFile(temporaryPath), /ENOENT/);
+    temporary = await conversation.saveConversationDraft(vault, temporary.path, temporary.etag, "SELECT 42 AS answer", "fixture");
+    assert.equal(JSON.parse(await readFile(temporary.path, "utf8")).draft, "SELECT 42 AS answer");
+    await send(temporary, "SELECT slow");
+    await assert.rejects(() => conversation.promoteConversation(vault, temporary.path, temporary.etag, "Chats", "Exploration"), /Finish/);
+    temporary = await waitFor(temporary.path, done);
+    const identity = temporary.document.id;
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const promoted = await conversation.promoteConversation(vault, temporary.path, temporary.etag, "Chats", "Exploration");
+    assert.equal(promoted.document.id, identity);
+    assert.equal(promoted.temporary, false);
+    assert.equal(promoted.previousPath, temporaryPath);
+    await assert.rejects(() => readFile(temporaryPath), /ENOENT/);
+    assert.equal((await conversation.readConversation(vault, temporaryPath)).path, promoted.path, "old live reference follows promotion");
+    await send(promoted, "SELECT 42 AS answer");
+    const continued = await waitFor(promoted.path, done);
+    assert.equal(JSON.parse(await readFile(promoted.path, "utf8")).turns.length, 2);
+    assert.equal(continued.document.id, identity);
+    assert.equal((await listDashboardSessions(vault, profile.slug)).sessions.filter(item => item.sessionId === identity).length, 1);
+    await assert.rejects(() => conversation.discardConversation(vault, promoted.path), /file tree/);
+    const duplicate = await conversation.createTemporaryConversation(vault, "Duplicate");
+    await assert.rejects(() => conversation.promoteConversation(vault, duplicate.path, duplicate.etag, "Chats", "Exploration"), /EEXIST/);
+    assert.equal((await conversation.readConversation(vault, duplicate.path)).temporary, true);
+    await conversation.discardConversation(vault, duplicate.path);
+    await assert.rejects(() => conversation.readConversation(vault, duplicate.path), /ENOENT/);
+    const imported = await conversation.importConversationHistory(vault, { deviceSlug: profile.slug, sessionId: "retention_21" });
+    assert.equal(imported.document.turns[0]?.input, "history fixture");
+    assert.ok(imported.document.sessionJsonl.length > 0);
+    assert.equal((await conversation.importConversationHistory(vault, { deviceSlug: profile.slug, sessionId: "retention_21" })).path, imported.path);
+    const protectedSession = await conversation.createTemporaryConversation(vault, "Protected");
+    await conversation.saveConversationDraft(vault, protectedSession.path, protectedSession.etag, "draft", null);
+    for (let i = 0; i < 22; i++) {
+      const item = await conversation.createTemporaryConversation(vault, `Temporary ${i}`);
+      await conversation.saveConversationDraft(vault, item.path, item.etag, "draft", null);
+    }
+    await conversation.protectConversations(vault, [protectedSession.path]);
+    assert.ok((await conversation.listConversations(vault)).some(item => item.path === protectedSession.path));
+    await conversation.protectConversations(vault, []);
+    assert.equal((await conversation.listConversations(vault)).filter(item => item.temporary).length, 20);
+
+    // Chat must dispatch the returned background job, and maintenance must remain on its own turn.
+    await patchAppSettings(vault, { ai: { automaticSkillMaintenanceEnabled: true } });
+    phase = "repair"; step = 0;
+    let background = await conversation.createTemporaryConversation(vault, "Background");
+    await send(background, "Inspect a value using tools");
+    background = await waitFor(background.path, value => done(value) && value.document.turns[0].events.some(event => event.type === "skill_maintenance"));
+    assert.ok(background.document.turns[0].events.some(event => event.type === "skill_maintenance" && event.outcome === "no_source"));
+    for (const turn of background.document.turns) for (const event of turn.events) assert.equal(event.runId, turn.id);
+    await patchAppSettings(vault, { ai: { automaticSkillMaintenanceEnabled: false } });
     // A conflict arriving while SQL is in flight preserves its received outcome
     // in a recovery document and does not overwrite the external edit.
     const conflict = await conversation.createConversation(vault, vault, "Conflict");

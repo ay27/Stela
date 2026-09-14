@@ -3,6 +3,7 @@ import path from "node:path";
 
 import type { SqlIndexFilter, SqlIndexHit } from "@shared/types";
 
+import { ensureWithinVault } from "../vault-fs";
 import { redactForPrompt } from "./redaction";
 import { skillSourceSha256, type LoadedAgentSkill } from "./agent-skills";
 
@@ -35,6 +36,7 @@ export async function collectSkillSourceNotes(
   tables: string[],
   query: SkillSourceQuery,
   maxNotes = 3,
+  preferredPaths: string[] = [],
 ): Promise<SkillSourceNote[]> {
   const hits = (await Promise.all(
     Array.from(new Set(tables)).slice(0, 8).flatMap((table) => [
@@ -42,25 +44,27 @@ export async function collectSkillSourceNotes(
       query({ writeTable: table, maxHits: 60 }),
     ]),
   )).flat();
-  const paths = Array.from(new Set(hits.map((hit) => hit.relPath)));
+  const preferred = new Set(preferredPaths.filter(p => p.endsWith(".md")).map(p => path.isAbsolute(p) ? path.relative(vaultPath, p).split(path.sep).join("/") : p));
+  const paths = Array.from(new Set([...preferred, ...hits.map((hit) => hit.relPath)])).slice(0, 120);
   const candidates = await Promise.all(paths.map(async (relativePath) => {
-    const absolutePath = path.join(vaultPath, relativePath);
     try {
-      const [stat, raw] = await Promise.all([fs.stat(absolutePath), fs.readFile(absolutePath, "utf-8")]);
-      return {
-        path: relativePath.split(path.sep).join("/"),
-        updatedAt: stat.mtime.toISOString(),
-        sha256: skillSourceSha256(raw),
-        content: sanitizeDocument(raw),
-      };
-    } catch {
-      return null;
-    }
+      const absolutePath = await ensureWithinVault(vaultPath, relativePath);
+      const stat = await fs.stat(absolutePath);
+      if (!stat.isFile()) return null;
+      return { path: relativePath.split(path.sep).join("/"), updatedAt: stat.mtime.toISOString() };
+    } catch { return null; }
   }));
-  return candidates
-    .filter((item): item is SkillSourceNote => item !== null)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.path.localeCompare(b.path))
+  const selected = candidates.filter((item): item is NonNullable<typeof item> => item !== null)
+    .sort((a, b) => Number(preferred.has(b.path)) - Number(preferred.has(a.path)) || b.updatedAt.localeCompare(a.updatedAt) || a.path.localeCompare(b.path))
     .slice(0, maxNotes);
+  const notes = await Promise.all(selected.map(async note => {
+    try {
+      const raw = await fs.readFile(await ensureWithinVault(vaultPath, note.path), "utf-8");
+      return { ...note, sha256: skillSourceSha256(raw), content: sanitizeDocument(raw) };
+    } catch { return null; }
+  }));
+  return notes.filter((note): note is SkillSourceNote => note !== null);
+
 }
 
 export async function getSkillFreshness(
@@ -80,7 +84,7 @@ export async function getSkillFreshness(
   }
   const tables = tablesFromSkill(skill);
   if (tables.length === 0) return "fresh";
-  const current = await collectSkillSourceNotes(vaultPath, tables, query);
+  const current = await collectSkillSourceNotes(vaultPath, tables, query, 3, skill.metadata.sources.map(source => source.path));
   const recorded = new Set(skill.metadata.sources.map((source) => source.path));
   const currentPaths = new Set(current.map((source) => source.path));
   const sourceSetChanged = currentPaths.size !== recorded.size

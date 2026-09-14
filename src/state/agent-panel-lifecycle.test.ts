@@ -21,7 +21,7 @@ const diagnostic = { stage: "initialization", message: "missing function", metri
 const outcomes = [
   ["error", "error"], ["timeout", "timeout"], ["turn_limit", "timeout"],
   ["cancelled", "cancelled"], ["no_source", "skipped"], ["input_too_large", "skipped"],
-  ["dropped", "skipped"], ["no_change", "none"], [undefined, "unknown"],
+  ["unchanged", "skipped"], ["cooldown", "skipped"], ["dropped", "skipped"], ["no_change", "none"], [undefined, "unknown"],
 ] as const;
 for (const [outcome, expected] of outcomes) {
   history.runs[0].events = [

@@ -220,3 +220,14 @@ assert.throws(() => parseInput(IPC.CONVERSATION_SUBMIT, { path: "/vault/chat.ste
 const localizedConversation = { path: "/vault/chat.stela.chat", etag: "a".repeat(64), requestId: "00000000-0000-4000-8000-000000000000", input: "分析链路", connectionName: null, locale: "zh" };
 assert.deepEqual(parseInput(IPC.CONVERSATION_SUBMIT, localizedConversation), localizedConversation);
 assert.throws(() => parseInput(IPC.CONVERSATION_SUBMIT, { ...localizedConversation, locale: "invalid" }));
+
+// Unified Chat lifecycle and explicit quick-action scope stay typed at IPC.
+assert.deepEqual(parseInput(IPC.CONVERSATION_TEMPORARY, {}), {});
+assert.throws(() => parseInput(IPC.CONVERSATION_TEMPORARY, { path: "/tmp/chat" }));
+assert.throws(() => parseInput(IPC.CONVERSATION_IMPORT_HISTORY, { deviceSlug: "../other", sessionId: "session" }));
+assert.throws(() => parseInput(IPC.CONVERSATION_PROTECT, { paths: Array(257).fill("chat.stela.chat") }));
+const chatDraft = { path: "chat.stela.chat", etag: "a".repeat(64), draft: "refresh", connectionName: null };
+assert.doesNotThrow(() => parseInput(IPC.CONVERSATION_DRAFT, { ...chatDraft, task: { entryPoint: "canvas-refresh", canvasRefresh: { path: "chart.stela.canvas", sourceId: "source-1" } } }));
+assert.throws(() => parseInput(IPC.CONVERSATION_DRAFT, { ...chatDraft, task: { entryPoint: "canvas-refresh" } }));
+assert.throws(() => parseInput(IPC.CONVERSATION_DRAFT, { ...chatDraft, task: { entryPoint: "chat", canvasRefresh: { path: "chart.stela.canvas" } } }));
+console.log("Unified Chat IPC: strict lifecycle inputs and Canvas task scope passed.");

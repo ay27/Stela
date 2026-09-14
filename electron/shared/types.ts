@@ -1174,7 +1174,7 @@ export type AgentEvent =
       type: "skill_maintenance";
       runId: string;
       /** Absent on legacy history: an empty action list does not prove success. */
-      outcome?: "saved" | "no_change" | "no_source" | "input_too_large" | "cancelled" | "timeout" | "turn_limit" | "dropped" | "error";
+      outcome?: "unchanged" | "cooldown" | "saved" | "no_change" | "no_source" | "input_too_large" | "cancelled" | "timeout" | "turn_limit" | "dropped" | "error";
       diagnostic?: { stage: string; message: string; metricRunId: string };
       actions: Array<{
         action: "saved" | "archived";

@@ -32,6 +32,8 @@ export const DEFAULT_GITIGNORE = `# Stela machine-local cache (never commit)
 .stela.sqlite-shm
 .stela-knowledge.sqlite
 .stela/recent-files.local.json
+.stela/skill-maintenance.local.json
+.stela/chat-sessions.local/
 .stela/agent-metrics.local.sqlite*
 
 # NOTE: .stela/connections.json (non-secret config) and
@@ -55,6 +57,8 @@ export const DEFAULT_GITIGNORE = `# Stela machine-local cache (never commit)
 /** 老 vault 的 .gitignore 可能缺这些行；打开 vault 时按需追加。 */
 const MACHINE_LOCAL_GITIGNORE_LINES = [
   ".stela/recent-files.local.json",
+  ".stela/skill-maintenance.local.json",
+  ".stela/chat-sessions.local/",
   ".stela/agent-metrics.local.sqlite*",
 ];
 

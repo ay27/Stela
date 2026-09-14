@@ -3,11 +3,9 @@ import "./assistant-output.css";
 import { AssistantReplyDivider } from "./assistant-reply-divider";
 import { readAnalysisSnapshot } from "@shared/analysis-contract";
 import { AnalysisEvidence } from "./analysis-evidence";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type WheelEvent } from "react";
-import type { EditorState } from "@codemirror/state";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   BarChart3,
-  Bot,
   Brain,
   CheckCircle2,
   ChevronRight,
@@ -19,13 +17,11 @@ import {
   History,
   Loader2,
   MinusCircle,
-  Plus,
   RefreshCw,
   Send,
   Sparkles,
   ShieldAlert,
   StopCircle,
-  X,
   XCircle,
 } from "lucide-react";
 import type {
@@ -36,444 +32,27 @@ import type {
 } from "@shared/types";
 
 import { ProposalLineDiff } from "./proposal-diff";
-import { PythonWorkspaceStatus } from "./python-workspace-status";
-import { ContextUsageIndicator } from "./context-usage-indicator";
-import { i18n } from "@/i18n";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
-import { getRunContext } from "@/editor/runsql/run-context";
 
 import {
   resolveCanvasArtifactPath,
-  useAgentPanel,
   type AgentTimelineEntry,
 } from "@/state/agent-panel";
 import { useLayout } from "@/state/layout";
-import { useConnections } from "@/state/connections";
 import { useWorkspace } from "@/state/workspace";
 import { useSettings } from "@/state/settings";
-import { firstConnectionName } from "@/services/connections";
-import { ConnectionPicker } from "@/components/connection-picker";
-import { isStelaFilePath } from "@/core/stela-file";
 
-import {
-  AiPromptInput,
-  type AiPromptInputHandle,
-  type AiPromptSubmitPayload,
-} from "./ai-prompt-input";
 import { renderMarkdown } from "./markdown-renderer";
-import { isAgentMessageEmpty } from "@/lib/agent-message";
-import { agentComposerStateToMessage, agentResourceDisplay } from "@/lib/agent-composer";
+import { agentResourceDisplay } from "@/lib/agent-composer";
 import {
-  buildAgentEmptyActions,
-  formatMaintenanceRecency,
   type AgentEmptyAction,
   type AgentEmptyActionId,
-  type AgentEmptyWorkspace,
 } from "./agent-empty-state";
 import {
   type AgentProgressTimelineEntry,
 } from "./agent-timeline";
 
-function relativeToVault(path: string | null | undefined, vaultPath: string | null): string | null {
-  if (!path) return null;
-  if (!vaultPath) return path;
-  const normalizedVault = vaultPath.replace(/\\/g, "/").replace(/\/+$/, "");
-  const normalizedPath = path.replace(/\\/g, "/");
-  if (normalizedPath.startsWith(`${normalizedVault}/`)) {
-    return normalizedPath.slice(normalizedVault.length + 1);
-  }
-  return normalizedPath;
-}
-
-/**
- * 应用级全局 Agent 面板主体，嵌在 [AgentSidebar](../../layout/AgentSidebar.tsx)
- * 里——一条独立于左侧文件树 / 文档目录的常驻右侧栏，视觉上用边框跟文档区分开，
- * 强调它是"全局"而非"当前文档"范畴的工具。
- */
-export function AgentPanel() {
-  const t = useT();
-  const tabs = useAgentPanel((s) => s.tabs);
-  const activeTabId = useAgentPanel((s) => s.activeTabId);
-  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
-  const status = activeTab.status;
-  const timeline = activeTab.timeline;
-  const draft = activeTab.draft;
-  const connectionName = activeTab.connectionName;
-  const contextUsage = activeTab.contextUsage;
-  const compacting = activeTab.compacting;
-  const history = useAgentPanel((s) => s.history);
-  const historyLoaded = useAgentPanel((s) => s.historyLoaded);
-  const vaultPath = useWorkspace((s) => s.vaultPath);
-  const workspaceTabs = useWorkspace((s) => s.tabs);
-  const workspaceActiveTabId = useWorkspace((s) => s.activeTabId);
-  const focusToken = useLayout((s) => s.agentFocusToken);
-  const [emptyStateMaintenance, setEmptyStateMaintenance] = useState<{
-    latestMaintenanceAt: number | null;
-    loading: boolean;
-    metricsFailed: boolean;
-  }>({
-    latestMaintenanceAt: null,
-    loading: false,
-    metricsFailed: false,
-  });
-  const switchTab = useAgentPanel((s) => s.switchTab);
-  const start = useAgentPanel((s) => s.start);
-  const cancel = useAgentPanel((s) => s.cancel);
-  const respondProposal = useAgentPanel((s) => s.respondProposal);
-  const newConversation = useAgentPanel((s) => s.newConversation);
-  const bindVault = useAgentPanel((s) => s.bindVault);
-  const refreshHistory = useAgentPanel((s) => s.refreshHistory);
-  const openHistory = useAgentPanel((s) => s.openHistory);
-  const closeTab = useAgentPanel((s) => s.closeTab);
-  const setConnectionName = useAgentPanel((s) => s.setConnectionName);
-  const updateDraft = useAgentPanel((s) => s.updateDraft);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const historyMenuRef = useRef<HTMLDetailsElement>(null);
-  const promptInputRef = useRef<AiPromptInputHandle>(null);
-  const busy = status === "running";
-  const empty = timeline.length === 0;
-  const activeWorkspaceTab = workspaceTabs.find((tab) => tab.id === workspaceActiveTabId) ?? null;
-  const emptyWorkspace = useMemo<AgentEmptyWorkspace | null>(() => {
-    if (!activeWorkspaceTab?.path) return null;
-    if (
-      activeWorkspaceTab.kind !== "analysis" &&
-      !isStelaFilePath(activeWorkspaceTab.path)
-    ) {
-      return null;
-    }
-    const relativePath = relativeToVault(activeWorkspaceTab.path, vaultPath);
-    if (!relativePath) return null;
-    return {
-      kind: activeWorkspaceTab.kind === "analysis" ? "canvas" : "note",
-      path: relativePath,
-      title: activeWorkspaceTab.title || relativePath.split("/").pop() || relativePath,
-    };
-  }, [activeWorkspaceTab, vaultPath]);
-  // 执行中保持模型输出与 tool 的因果顺序；一轮结束后，仅在同一 run 内折叠过程气泡。
-  // Pending questions stay beside the composer; the shared reply renderer groups execution details.
-  const pendingQuestion = timeline.find(
-    (entry): entry is Extract<AgentTimelineEntry, { kind: "proposal" }> =>
-      entry.kind === "proposal" && entry.proposalKind === "question" && entry.resolution === "pending",
-  );
-
-  const connectionEntries = useConnections((s) => s.entries);
-  const connectionsLoaded = useConnections((s) => s.loaded);
-  const reloadConnections = useConnections((s) => s.reload);
-
-  useEffect(() => {
-    if (!connectionsLoaded) void reloadConnections();
-  }, [connectionsLoaded, reloadConnections]);
-
-
-  useEffect(() => {
-    void bindVault(vaultPath);
-  }, [vaultPath, bindVault]);
-
-  useEffect(() => {
-    if (!empty || !vaultPath) return;
-    let active = true;
-    setEmptyStateMaintenance((current) => ({ ...current, loading: true }));
-    void window.stela.agentMetrics.getDashboard("90d").then((dashboard) => {
-      if (!active) return;
-      setEmptyStateMaintenance({
-        latestMaintenanceAt: dashboard.latestKnowledgeMaintenanceAt,
-        loading: false,
-        metricsFailed: false,
-      });
-    }).catch(() => {
-      if (!active) return;
-      setEmptyStateMaintenance({ latestMaintenanceAt: null, loading: false, metricsFailed: true });
-    });
-    return () => { active = false; };
-  }, [empty, vaultPath]);
-
-  // 当前文档的连接 > 默认连接（isDefault 标记 / 名称首个）> 空。与
-  // EditorView 的 frontmatter 兜底规则保持一致，避免多连接时每次都要手选。
-  useEffect(() => {
-    if (connectionName !== null) return;
-    const ctx = getRunContext();
-    if (ctx?.connectionName) {
-      setConnectionName(ctx.connectionName);
-      return;
-    }
-    if (!connectionsLoaded) return;
-    const fallback = firstConnectionName(connectionEntries);
-    if (fallback) setConnectionName(fallback);
-  }, [activeTabId, connectionName, connectionsLoaded, connectionEntries, setConnectionName]);
-
-  useEffect(() => {
-    if (focusToken > 0) promptInputRef.current?.focus();
-  }, [focusToken]);
-
-  useEffect(() => {
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!historyMenuRef.current?.contains(event.target as Node)) historyMenuRef.current?.removeAttribute("open");
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") historyMenuRef.current?.removeAttribute("open");
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePointer);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, []);
-
-  const onWheelScroll = useCallback((ev: WheelEvent<HTMLDivElement>) => {
-    if (ev.deltaX === 0 && ev.deltaY !== 0) {
-      ev.currentTarget.scrollLeft += ev.deltaY;
-    }
-  }, []);
-
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [activeTabId, timeline]);
-
-  const send = ({ message }: AiPromptSubmitPayload) => {
-    if (isAgentMessageEmpty(message) || busy) return;
-    const ctx = getRunContext();
-    void start({
-      message,
-      connectionName,
-      notePath: ctx?.path ?? null,
-      locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
-    });
-  };
-
-  const emptyActions = useMemo(
-    () => buildAgentEmptyActions({
-      workspace: emptyWorkspace,
-      copy: {
-        canvasCreatePrompt: t("agent.panel.emptyActions.canvasCreate.prompt"),
-        canvasRefreshPrompt: t("ai.quick.canvasRefreshAllPrompt"),
-        documentSummaryPrompt: t("agent.panel.emptyActions.documentSummary.prompt"),
-        canvasSummaryPrompt: t("agent.panel.emptyActions.canvasSummary.prompt"),
-        dataAuditPrompt: t("agent.panel.emptyActions.dataAudit.prompt"),
-        canvasAuditPrompt: t("agent.panel.emptyActions.canvasAudit.prompt"),
-        knowledgeMaintenancePrompt: t("agent.panel.emptyActions.knowledgeMaintenance.prompt"),
-      },
-    }),
-    [emptyWorkspace, t],
-  );
-
-  const knowledgeMeta = useMemo(() => {
-    if (emptyStateMaintenance.loading) return t("agent.panel.emptyActions.knowledgeMaintenance.loading");
-    return emptyStateMaintenance.metricsFailed
-      ? t("agent.panel.emptyActions.knowledgeMaintenance.timeUnavailable")
-      : emptyStateMaintenance.latestMaintenanceAt === null
-        ? t("agent.panel.emptyActions.knowledgeMaintenance.noRecentRun")
-        : t("agent.panel.emptyActions.knowledgeMaintenance.lastRun", {
-            time: formatMaintenanceRecency(
-              emptyStateMaintenance.latestMaintenanceAt,
-              Date.now(),
-              i18n.resolvedLanguage ?? "en",
-            ),
-          });
-  }, [emptyStateMaintenance, t]);
-
-  const runEmptyAction = useCallback((action: AgentEmptyAction) => {
-    if (busy) return;
-    void start({
-      message: action.message,
-      connectionName,
-      notePath: emptyWorkspace?.kind === "note" ? activeWorkspaceTab?.path ?? null : null,
-      locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
-      entryPoint: action.entryPoint,
-      canvasRefresh: action.canvasRefresh,
-    });
-  }, [activeWorkspaceTab?.path, busy, connectionName, emptyWorkspace?.kind, start]);
-
-  const updatePromptDraft = useCallback(
-    (editorState: EditorState, isEmpty: boolean) => {
-      updateDraft({
-        editorState,
-        isEmpty,
-      });
-    },
-    [updateDraft],
-  );
-
-  return (
-    <div className="flex h-full flex-col bg-background text-foreground">
-      <div className="flex h-9 flex-none items-stretch border-b border-border bg-muted/60">
-        <div className="stela-tabbar-scroll flex min-w-0 flex-1 items-stretch overflow-x-auto" onWheel={onWheelScroll}>
-          {tabs.map((tab, idx) => {
-            const active = tab.id === activeTabId;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => switchTab(tab.id)}
-                className={cn(
-                  "group relative flex min-w-[104px] max-w-[180px] shrink-0 cursor-pointer select-none items-center gap-2 px-3 text-[12px] transition-colors",
-                  active
-                    ? "bg-background text-foreground"
-                    : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
-                  idx > 0 && !active && "border-l border-border",
-                )}
-                title={tab.title}
-              >
-                <span
-                  className={cn(
-                    "pointer-events-none absolute inset-x-0 bottom-0 h-[2px]",
-                    active ? "bg-primary" : "bg-transparent",
-                  )}
-                />
-                {tab.status === "running" ? (
-                  <Loader2 className="h-3 w-3 flex-none animate-spin text-primary" />
-                ) : (
-                  <Bot className="h-3.5 w-3.5 flex-none text-muted-foreground" />
-                )}
-                <span className="flex-1 truncate">{tab.title}</span>
-                {tabs.length > 1 ? (
-                  <span
-                    role="button"
-                    tabIndex={-1}
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      closeTab(tab.id);
-                    }}
-                    className={cn(
-                      "flex h-4 w-4 flex-none items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground",
-                      active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
-                    )}
-                    title={t("agent.panel.closeTab")}
-                  >
-                    <X className="h-3 w-3" />
-                  </span>
-                ) : null}
-              </button>
-            );
-          })}
-          <div className="flex-1 border-b border-border/0" />
-        </div>
-        <details
-          ref={historyMenuRef}
-          className="group relative border-l border-border"
-          onBlur={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget)) {
-              historyMenuRef.current?.removeAttribute("open");
-            }
-          }}
-          onToggle={(event) => {
-            if (event.currentTarget.open) void refreshHistory();
-          }}
-        >
-          <summary
-            className="flex h-full cursor-pointer list-none items-center gap-1 px-2 text-[11px] text-muted-foreground hover:bg-background/50 hover:text-foreground [&::-webkit-details-marker]:hidden"
-            title={t("agent.panel.history")}
-          >
-            <History className="h-3.5 w-3.5" />
-            {t("agent.panel.history")}
-          </summary>
-          <div className="absolute right-0 top-9 z-20 max-h-64 w-64 overflow-auto rounded-md border border-border bg-popover p-1 shadow-md">
-            {!historyLoaded ? (
-              <div className="px-2 py-1.5 text-[11px] text-muted-foreground">{t("agent.panel.historyLoading")}</div>
-            ) : history.length === 0 ? (
-              <div className="px-2 py-1.5 text-[11px] text-muted-foreground">{t("agent.panel.historyEmpty")}</div>
-            ) : (
-              history.map((item) => (
-                <button
-                  key={`${item.deviceSlug}:${item.sessionId}`}
-                  type="button"
-                  onClick={() => {
-                    historyMenuRef.current?.removeAttribute("open");
-                    void openHistory(item);
-                  }}
-                  className="flex w-full flex-col rounded px-2 py-1.5 text-left text-[11px] hover:bg-accent"
-                >
-                  <span className="truncate text-foreground">{item.title}</span>
-                  <span className="text-muted-foreground">{item.deviceSlug}</span>
-                </button>
-              ))
-            )}
-          </div>
-        </details>
-        <button
-          type="button"
-          onClick={newConversation}
-          className="flex w-8 flex-none items-center justify-center border-l border-border text-muted-foreground hover:bg-background/50 hover:text-foreground"
-          title={t("agent.panel.newConversation")}
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-      </div>
-
-      <div className="flex h-8 flex-none items-center gap-2 border-b border-border bg-muted/20 px-3.5">
-        <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-[12px] font-medium text-muted-foreground">
-          <Bot className="h-3.5 w-3.5 flex-none text-primary" />
-          {t("agent.panel.title")}
-        </span>
-        <PythonWorkspaceStatus key={`python:${activeTab.sessionId}`} sessionId={activeTab.sessionId} busy={busy} />
-        {contextUsage && contextUsage.contextWindow > 0 ? (
-          <ContextUsageIndicator
-            key={`context:${activeTab.sessionId}`}
-            runId={activeTab.runId}
-            busy={busy}
-            usedTokens={contextUsage.usedTokens}
-            contextWindow={contextUsage.contextWindow}
-            estimated={contextUsage.estimated}
-          />
-        ) : null}
-        {compacting ? (
-          <span className="flex flex-none items-center gap-1 text-[11px] text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            {t("agent.panel.compacting")}
-          </span>
-        ) : null}
-        <ConnectionPicker value={connectionName} onChange={setConnectionName} />
-      </div>
-
-      <div
-        ref={scrollRef}
-        className={cn(
-          "stela-agent-timeline min-h-0 flex-1 overflow-auto px-3.5 py-2.5",
-          timeline.length === 0 && vaultPath && "flex items-center justify-center",
-        )}
-      >
-        {timeline.length === 0 ? (
-          vaultPath ? (
-            <AgentPanelEmptyState
-              actions={emptyActions}
-              knowledgeMeta={knowledgeMeta}
-              onRun={runEmptyAction}
-            />
-          ) : (
-            <div className="text-[12px] text-muted-foreground">{t("agent.panel.empty")}</div>
-          )
-        ) : (
-          <AgentTimelineContent timeline={timeline} busy={busy} onRespond={respondProposal} />
-        )}
-      </div>
-
-      {pendingQuestion ? (
-        <div className="bg-background px-2.5 pt-2">
-          <QuestionCard entry={pendingQuestion} onRespond={respondProposal} />
-        </div>
-      ) : null}
-
-      <div className="stela-composer-region bg-background px-2.5">
-        <AiPromptInput
-          key={activeTabId}
-          ref={promptInputRef}
-          state={draft.editorState}
-          placeholder={t("agent.panel.placeholder")}
-          disabled={false}
-          submitEnabled={!busy && !draft.isEmpty}
-          connectionName={connectionName}
-          onChange={updatePromptDraft}
-          onSubmit={send}
-          onOpenResource={openAgentResource}
-          renderActions={tools => <AgentComposerActions leading={tools} busy={busy} canSend={!draft.isEmpty}
-            onSend={() => send({ message: agentComposerStateToMessage(draft.editorState) })} onCancel={cancel} />}
-        />
-
-      </div>
-    </div>
-  );
-}
 
 function EmptyActionIcon({ id }: { id: AgentEmptyActionId }) {
   switch (id) {
@@ -509,7 +88,7 @@ export function AgentBlankIllustration() {
   );
 }
 
-function AgentPanelEmptyState({
+export function AgentPanelEmptyState({
   actions,
   knowledgeMeta,
   onRun,
@@ -737,8 +316,9 @@ function SkillMaintenanceIndicator({
   const names = maintenance.actions.map((action) => action.name).join("、");
   const detail = working
     ? t("agent.panel.skillWorking")
+    : (failed || timedOut) && maintenance.actions.length > 0 ? t("agent.panel.skillPartiallySaved")
     : failed ? t("agent.panel.skillFailed")
-    : timedOut ? t("agent.panel.skillTimedOut")
+    : timedOut ? t(maintenance.actions.length > 0 ? "agent.panel.skillPartiallySaved" : maintenance.outcome === "turn_limit" ? "agent.panel.skillTurnLimit" : "agent.panel.skillTimedOut")
     : maintenance.status === "cancelled" ? t("agent.panel.skillCancelled")
     : maintenance.status === "skipped" ? t("agent.panel.skillSkipped")
     : maintenance.status === "unknown" ? t("agent.panel.skillUnknown")

@@ -158,3 +158,6 @@ proposed → active → superseded
 | [0103](0103-conversation-structured-drafts.md) | Structured messages in durable conversations | active |
 | [0104](0104-validated-structured-canvas-authoring.md) | Validated structured Canvas authoring | active |
 | [0105](0105-dashboard-conversation-sources.md) | Dashboard conversation sources | active |
+| [0106](0106-bounded-incremental-knowledge-maintenance.md) | Bounded incremental knowledge maintenance | active |
+| [0107](0107-dialect-aware-sql-review-classification.md) | Dialect-aware SQL review classification | active |
+| [0108](0108-unified-chat-lifecycle.md) | Unified temporary and saved Chat lifecycle | active |

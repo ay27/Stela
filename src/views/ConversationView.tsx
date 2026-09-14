@@ -1,9 +1,13 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { buildAgentEmptyActions, type AgentEmptyWorkspace } from "@/components/ai/agent-empty-state";
+import { ChatControls } from "@/components/ai/chat-controls";
+import { useChatWorkspace } from "@/state/chat-workspace";
+import { useLayout } from "@/state/layout";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Bot, Loader2, RotateCcw, Copy, Pencil, ChevronRight } from "lucide-react";
 import { useConversation } from "@/state/conversation";
 import { useConnections } from "@/state/connections";
 import { useWorkspace } from "@/state/workspace";
-import { AgentTimelineContent, AgentThinkingStatus, AgentComposerActions, AgentBlankIllustration, QuestionCard, TimelineItem, openAgentResource } from "@/components/ai/agent-panel";
+import { AgentTimelineContent, AgentThinkingStatus, AgentComposerActions, AgentPanelEmptyState, QuestionCard, TimelineItem, openAgentResource } from "@/components/ai/agent-panel";
 import { conversationTimeline, conversationResults } from "@/components/ai/conversation-timeline";
 import { ConversationNavigation } from "@/components/ai/conversation-navigation";
 import { AiPromptInput } from "@/components/ai/ai-prompt-input";
@@ -68,10 +72,15 @@ const Turn = memo(function Turn({ turn, reuse, onRespond }: { turn: Conversation
   );
 });
 
-export function ConversationView({ path, tabId }: { path: string; tabId: string }) {
+export function ConversationView({ path, tabId, side = false }: { path: string; tabId?: string; side?: boolean }) {
   const t = useT();
   const store = useConversation();
   const snapshot = store.snapshots[path];
+  const vault = useWorkspace(s => s.vaultPath);
+  const focusToken = useLayout(s => s.agentFocusToken);
+  const inputRef = useRef<import("@/components/ai/ai-prompt-input").AiPromptInputHandle>(null);
+  useEffect(() => { useChatWorkspace.getState().bind(); }, [vault]);
+  useEffect(() => { inputRef.current?.focus(); }, [path, side, focusToken]);
   const entries = useConnections(s => s.entries);
   const connectionsLoaded = useConnections(s => s.loaded);
   const emptyEditor = useMemo(() => emptyAgentComposerState(), [path]);
@@ -84,17 +93,34 @@ export function ConversationView({ path, tabId }: { path: string; tabId: string 
   const following = useRef(true);
   useEffect(() => { void useConnections.getState().reload().catch(e => setError(String(e))); }, [path]);
   useEffect(() => {
-    setError(""); following.current = true;
+    setError(""); following.current = useChatWorkspace.getState().scroll[path]?.following ?? true;
     void store.open(path).catch(e => setError(String(e)));
     return () => { void useConversation.getState().flush(path).catch(() => {}); };
   }, [path, reloadToken]);
   useEffect(() => {
-    if (snapshot && !connectionName && connectionsLoaded) {
+    if (snapshot && !snapshot.document.turns.length && !connectionName && connectionsLoaded) {
       const first = firstConnectionName(entries);
       if (first) store.edit(path, draft, first);
     }
   }, [snapshot, connectionName, connectionsLoaded, entries, path]);
   useEffect(() => { if (following.current && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight; }, [snapshot]);
+  useLayoutEffect(() => {
+    const element = scroll.current;
+    if (element) element.scrollTop = useChatWorkspace.getState().scroll[path]?.top ?? 0;
+    return () => { if (element) useChatWorkspace.setState(s => ({ scroll: { ...s.scroll, [path]: { top: element.scrollTop, following: following.current } } })); };
+  }, [path]);
+  const workspaceTabs = useWorkspace(state => state.tabs);
+  const workspaceActive = useWorkspace(state => state.activeTabId);
+  const sourceTab = workspaceTabs.find(tab => tab.id === workspaceActive && tab.kind !== "conversation")
+    ?? workspaceTabs.find(tab => tab.id === useChatWorkspace.getState().returnTabId && tab.kind !== "conversation");
+  const workspace: AgentEmptyWorkspace | null = sourceTab?.path && vault
+    ? { kind: sourceTab.kind === "analysis" ? "canvas" : "note", path: sourceTab.path.startsWith(vault + "/") ? sourceTab.path.slice(vault.length + 1) : sourceTab.path, title: sourceTab.title } : null;
+  const emptyActions = buildAgentEmptyActions({ workspace, copy: {
+    canvasCreatePrompt: t("agent.panel.emptyActions.canvasCreate.prompt"), canvasRefreshPrompt: t("agent.panel.emptyActions.canvasRefresh.prompt"),
+    documentSummaryPrompt: t("agent.panel.emptyActions.documentSummary.prompt"), canvasSummaryPrompt: t("agent.panel.emptyActions.canvasSummary.prompt"),
+    dataAuditPrompt: t("agent.panel.emptyActions.dataAudit.prompt"), canvasAuditPrompt: t("agent.panel.emptyActions.canvasAudit.prompt"),
+    knowledgeMaintenancePrompt: t("agent.panel.emptyActions.knowledgeMaintenance.prompt"),
+  } });
   const turns = useMemo(() => snapshot?.document.turns ?? [], [snapshot?.document.turns]);
   const siblingSqls = useMemo(() => turns.flatMap(turn => turn.runs.map(run => run.sql)), [turns]);
   const activeTurn = turns.find(turn => turn.status === "running");
@@ -110,8 +136,9 @@ export function ConversationView({ path, tabId }: { path: string; tabId: string 
   const reuse = useCallback((text: string) => useConversation.getState().edit(path, text, useConversation.getState().connections[path] ?? null), [path]);
   const issue = error || store.errors[path] || snapshot?.persistenceError;
   return (
-    <section className="stela-conversation flex h-full min-h-0 flex-col bg-background">
-      <header className="flex h-8 flex-none items-center gap-2 border-b border-border bg-muted/20 px-3.5">
+    <section className="stela-conversation flex h-full min-h-0 min-w-0 flex-col bg-background">
+      <ChatControls path={path} side={side} />
+      <header className="flex min-h-8 flex-none flex-wrap items-center gap-2 border-b border-border bg-muted/20 px-3.5">
         <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-[12px] font-medium text-muted-foreground"><Bot className="h-3.5 w-3.5 text-primary" />{t("conversation.title")}</span>
         {snapshot && <PythonWorkspaceStatus sessionId={snapshot.document.id} busy={busy} />}
         {contextUsage && contextUsage.contextWindow > 0 && <ContextUsageIndicator {...contextUsage} busy={busy} />}
@@ -119,19 +146,19 @@ export function ConversationView({ path, tabId }: { path: string; tabId: string 
         <ConnectionPicker value={connectionName} onChange={name => store.edit(path, draft, name)} />
       </header>
       <div className="relative flex min-h-0 flex-1">
-      <div ref={scroll} onScroll={() => { const el = scroll.current!; following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }} className="min-h-0 min-w-0 flex-1 overflow-auto pl-6 pr-12">
+      <div ref={scroll} onScroll={() => { const el = scroll.current!; following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }} className={`min-h-0 min-w-0 flex-1 overflow-auto ${side ? "pl-3 pr-6" : "pl-6 pr-12"}`}>
         <div className={`mx-auto w-full max-w-3xl space-y-12 pt-6 pb-2.5 ${!turns.length ? "flex h-full flex-col items-center justify-center" : ""}`}>
-          {!turns.length && <div className="flex max-w-sm flex-col items-center gap-3 pb-10 text-center"><AgentBlankIllustration /><h1 className="text-sm font-medium">{t("conversation.title")}</h1><p className="text-xs leading-6 text-muted-foreground">{t("conversation.empty")}</p></div>}
+          {!turns.length && <div className="flex max-w-sm flex-col items-center gap-3 pb-10 text-center"><AgentPanelEmptyState actions={emptyActions} knowledgeMeta="" onRun={action => { void useChatWorkspace.getState().quick({ ...action, title: "Chat", connectionName, autoSend: true }).catch(e => setError(String(e))); }} /></div>}
           {turns.map(turn => <Turn key={turn.id} turn={turn} onRespond={respond} reuse={reuse} />)}
         </div>
       </div>
       <ConversationNavigation turns={turns} scrollRef={scroll} onNavigate={() => { following.current = false; }} />
       </div>
-      <footer className="stela-composer-region bg-background px-6">
+      <footer className={`stela-composer-region bg-background ${side ? "px-2" : "px-6"}`}>
         <div className="mx-auto max-w-3xl space-y-2">
           {issue && <div role="alert" className="flex items-center gap-2 text-xs text-destructive"><span className="flex-1">{issue}</span><button title={t("conversation.reload")} onClick={() => { setError(""); void store.open(path).catch(e => setError(String(e))); }}><RotateCcw className="h-3 w-3" /></button></div>}
           {pendingQuestion?.kind === "proposal" && <QuestionCard key={pendingQuestion.id} entry={pendingQuestion} onRespond={respond} />}
-          <AiPromptInput state={editorState} connectionName={connectionName} siblingSqls={siblingSqls}
+          <AiPromptInput ref={inputRef} state={editorState} connectionName={connectionName} siblingSqls={siblingSqls}
             placeholder={t("conversation.placeholder")} submitEnabled={!busy && !!snapshot && !snapshot.persistenceError}
             onChange={state => store.edit(path, agentMessagePlainText(agentComposerStateToMessage(state)), connectionName, state)}
             onSubmit={send} onOpenResource={openAgentResource}

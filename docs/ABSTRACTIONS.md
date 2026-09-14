@@ -119,11 +119,12 @@ with SQL folded behind a lightweight control.
 `ConversationDocument` (`electron/shared/conversation.ts`) is a version-1
 `stela-conversation` JSON document stored as `*.stela.chat`. It contains identity,
 title/timestamps, default connection, draft, turns and embedded `sessionJsonl`.
-Global creation actions default to `Chats/` under the current Vault, creating the
-folder when needed. File-tree folder actions retain their explicitly chosen location;
-existing conversation files are not automatically moved.
-New conversations use the local calendar date as their default title and filename
-(`YYYY-MM-DD.stela.chat`), adding ` (1)`, ` (2)`, etc. on filename collisions.
+New Chat actions create temporary sessions. Blank sessions remain in memory; drafts
+and turns persist locally under `.stela/chat-sessions.local/`. Retention keeps the
+latest 20, protecting open, running and background-maintained sessions. Explicit
+Save chooses a visible Vault directory (default `Chats/`) and title, preserves
+session identity and rejects filename collisions. Subsequent changes autosave.
+Saved conversations are outside temporary retention (ADR-0108).
 Optional `draftMessage` and turn `message` retain ordered structured references;
 legacy strings remain readable text projections (ADR-0103).
 Conversation submissions carry the resolved UI locale (`zh` or `en`) into the
@@ -133,9 +134,11 @@ status, Agent events, proposal responses and `RunRecord` references. Rows are
 loaded by run ID through existing result storage, never embedded in this file.
 
 `IConversationSnapshot` carries the canonical path, etag and document, plus an
-optional persistence failure. `IConversationSubmit` carries path, expected etag,
+optional persistence failure, temporary flag and previous-path alias after Save. `IConversationSubmit` carries path, expected etag,
 UUID request ID, input and connection. The typed `conversation` bridge exposes
-create/read/draft/submit/cancel/respond/onChanged. A completed request ID cannot
+temporary/recent/saveAs/discard/protect/importHistory, plus
+create/read/draft/submit/cancel/respond/onChanged. Optional task metadata preserves
+quick-action entry points, Canvas refresh targets and explicit workspace context. A completed request ID cannot
 execute twice. Stored terminal turns are append-only from the product UI; edit
 and resend creates a new turn. Reopened in-flight turns become `interrupted`.
 
@@ -1162,8 +1165,9 @@ may read stale or untracked bodies only as untrusted drafts and must verify thei
 rules before saving.
 
 After a normal completion with successful tool evidence, an independent bounded
-maintenance job receives the complete current-task conversation, structured
-evidence, at most three ordered source documents, and related Skill metadata. All
+maintenance job receives a bounded conversation excerpt, structured evidence,
+complete relevant source blocks with sanitized-document line ranges and SHA-256 hashes from at most
+three notes, and related Skill metadata, within 12,000 characters. All
 retrieval is deterministic; the maintenance harness exposes only `save_skill` and
 may create one templated Skill or no-op. It cannot overwrite or archive existing
 Skills, call SQL, search the Vault broadly, or edit notes. Automatic creation
@@ -1394,3 +1398,19 @@ referential integrity and data-card compatibility before persistence. Manual
 empty creation and version-1 files remain supported; legacy update JSON uses the
 same final validation. Invalid creation leaves no file/event, and invalid updates
 preserve the previous bytes. Rendering failures are isolated per card.
+
+
+Automatic maintenance outcomes additionally include `unchanged` (a previously
+reviewed candidate with unchanged source/Skill content) and `cooldown` (an
+incomplete candidate suppressed for one hour). Both render as neutral skips;
+individual attempts remain in Metrics. Time and turn limits have distinct labels,
+and saved actions remain visible when the job did not fully complete.
+`.stela/skill-maintenance.local.json` stores version 1, at most 256 hash-keyed
+receipts with Skill-set hash, timestamp and outcome; it contains no source text.
+Manual knowledge maintenance bypasses receipts (ADR-0106).
+
+`SqlGuardClassification` includes `unknown` separately from `mutation`.
+Ambiguous syntax and unrecognized statements require review, with an explicit
+uncertainty explanation; callers must never treat unknown as read-only. The
+optional dialect argument enables only dialect-specific lexical exceptions
+(ADR-0107).

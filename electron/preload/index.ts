@@ -1,4 +1,4 @@
-import type { IConversationBridge, IConversationSnapshot, IConversationSubmit } from "@shared/conversation";
+import type { IConversationBridge, IConversationSnapshot, IConversationSubmit, IConversationSummary, IConversationTask } from "@shared/conversation";
 /**
  * Preload：唯一桥接 main / renderer 的脚本。
  *
@@ -257,9 +257,15 @@ const stela = {
   },
 
   conversation: {
+    temporary: (title?: string) => call<IConversationSnapshot>(IPC.CONVERSATION_TEMPORARY, { title }),
+    recent: () => call<IConversationSummary[]>(IPC.CONVERSATION_RECENT, {}),
+    saveAs: (path: string, etag: string, directory: string, title: string) => call<IConversationSnapshot>(IPC.CONVERSATION_SAVE_AS, { path, etag, directory, title }),
+    discard: (path: string) => call<void>(IPC.CONVERSATION_DISCARD, { path }),
+    protect: (paths: string[]) => call<void>(IPC.CONVERSATION_PROTECT, { paths }),
+    importHistory: (ref: { deviceSlug: string; sessionId: string }) => call<IConversationSnapshot>(IPC.CONVERSATION_IMPORT_HISTORY, ref),
     create: (directory: string, title: string) => call<IConversationSnapshot>(IPC.CONVERSATION_CREATE, { directory, title }),
     read: (path: string) => call<IConversationSnapshot>(IPC.CONVERSATION_READ, { path }),
-    draft: (path: string, etag: string, draft: string, connectionName: string | null, draftMessage?: import("@shared/types").AgentMessageContent) => call<IConversationSnapshot>(IPC.CONVERSATION_DRAFT, { path, etag, draft, connectionName, draftMessage }),
+    draft: (path: string, etag: string, draft: string, connectionName: string | null, draftMessage?: import("@shared/types").AgentMessageContent, task?: IConversationTask) => call<IConversationSnapshot>(IPC.CONVERSATION_DRAFT, { path, etag, draft, connectionName, draftMessage, task }),
     submit: (input: IConversationSubmit) => call<IConversationSnapshot>(IPC.CONVERSATION_SUBMIT, input),
     cancel: (path: string) => call<void>(IPC.CONVERSATION_CANCEL, { path }),
     respond: (path: string, response: AgentProposalResponse) => call<void>(IPC.CONVERSATION_RESPOND, { path, response }),

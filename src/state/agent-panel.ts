@@ -327,7 +327,7 @@ export function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): A
                 status: event.outcome === "error" ? "error"
                   : event.outcome === "timeout" || event.outcome === "turn_limit" ? "timeout"
                   : event.outcome === "cancelled" ? "cancelled"
-                  : event.outcome === "no_source" || event.outcome === "input_too_large" || event.outcome === "dropped" ? "skipped"
+                  : event.outcome === "unchanged" || event.outcome === "cooldown" || event.outcome === "no_source" || event.outcome === "input_too_large" || event.outcome === "dropped" ? "skipped"
                   : event.outcome === "no_change" ? "none"
                   : event.actions.length > 0 ? "updated" : "unknown",
                 outcome: event.outcome,

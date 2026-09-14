@@ -1305,12 +1305,12 @@ async function executeDataQuery(
     }
   }
   const classified = query.language === "sql"
-    ? classifySql(query.query, input.allowMutations)
+    ? classifySql(query.query, input.allowMutations, ctx.connectionDialects?.[connectionName] ?? connectorMeta?.dialect)
     : null;
   if (classified?.classification === "multi-statement") {
     return { failure: classified.blockedReason ?? "Multiple statements are not allowed." };
   }
-  if (classified?.classification === "mutation") {
+  if (classified?.classification === "mutation" || classified?.classification === "unknown") {
     if (!input.allowMutations) {
       return { failure: classified.blockedReason ?? "Mutating statements are blocked by default." };
     }
@@ -1318,7 +1318,9 @@ async function executeDataQuery(
       kind: "mutation_sql",
       payload: {
         sql: query.query,
-        description: `Run ${classified.keyword ?? "mutation"} statement on connection '${connectionName}'`,
+        description: classified.classification === "unknown"
+          ? `Cannot confirm SQL is read-only on connection '${connectionName}': ${classified.blockedReason}`
+          : `Run ${classified.keyword ?? "mutation"} statement on connection '${connectionName}'`,
       },
     });
     if (!approved) return { failure: "The user rejected this SQL statement. Do not retry it as-is." };
@@ -1333,7 +1335,7 @@ async function executeDataQuery(
   let connectorPreviewTruncatedBy: Array<"rows" | "bytes"> = [];
   try {
     if (
-      classified?.classification !== "mutation" &&
+      classified?.classification === "read-only" &&
       ctx.queryArtifacts &&
       (ctx.connector.materializeDataQuery || (query.language === "sql" && ctx.connector.materializeQuery)) &&
       ctx.run.sessionId

@@ -1,3 +1,4 @@
+import { conversationTaskSchema } from "./conversation";
 import { agentMessageSchema } from "./agent-message-schema";
 import { analysisSnapshotSchema } from "./analysis-contract";
 /**
@@ -149,11 +150,17 @@ const connectionEntrySchema = z.object({
  * 直接校验单个对象，避免拆位置参数。
  */
 export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
+  [IPC.CONVERSATION_TEMPORARY]: z.object({ title: z.string().max(120).optional() }).strict(),
+  [IPC.CONVERSATION_RECENT]: z.object({}).strict(),
+  [IPC.CONVERSATION_SAVE_AS]: z.object({ path: z.string().min(1).max(8192), etag: z.string().length(64), directory: z.string().min(1).max(8192), title: z.string().min(1).max(120) }).strict(),
+  [IPC.CONVERSATION_DISCARD]: z.object({ path: z.string().min(1).max(8192) }).strict(),
+  [IPC.CONVERSATION_PROTECT]: z.object({ paths: z.array(z.string().min(1).max(8192)).max(256) }).strict(),
+  [IPC.CONVERSATION_IMPORT_HISTORY]: z.object({ deviceSlug: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/), sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/) }).strict(),
   [IPC.CONVERSATION_CREATE]: z.object({ directory: z.string().min(1).max(8192), title: z.string().min(1).max(120) }).strict(),
   [IPC.CONVERSATION_READ]: z.object({ path: z.string().min(1).max(8192) }).strict(),
   [IPC.CONVERSATION_CANCEL]: z.object({ path: z.string().min(1).max(8192) }).strict(),
-  [IPC.CONVERSATION_DRAFT]: z.object({ path: z.string().min(1).max(8192), etag: z.string().length(64), draft: z.string().max(20000), draftMessage: agentMessageSchema.optional(), connectionName: z.string().max(512).nullable() }).strict(),
-  [IPC.CONVERSATION_SUBMIT]: z.object({ locale: z.enum(["zh", "en"]).optional(), path: z.string().min(1).max(8192), etag: z.string().length(64), requestId: z.string().uuid(), input: z.string().trim().min(1).max(20000), message: agentMessageSchema.optional(), connectionName: z.string().max(512).nullable() }).strict(),
+  [IPC.CONVERSATION_DRAFT]: z.object({ task: conversationTaskSchema.optional(), path: z.string().min(1).max(8192), etag: z.string().length(64), draft: z.string().max(20000), draftMessage: agentMessageSchema.optional(), connectionName: z.string().max(512).nullable() }).strict(),
+  [IPC.CONVERSATION_SUBMIT]: z.object({ task: conversationTaskSchema.optional(), locale: z.enum(["zh", "en"]).optional(), path: z.string().min(1).max(8192), etag: z.string().length(64), requestId: z.string().uuid(), input: z.string().trim().min(1).max(20000), message: agentMessageSchema.optional(), connectionName: z.string().max(512).nullable() }).strict(),
   [IPC.CONVERSATION_RESPOND]: z.object({ path: z.string().min(1).max(8192), response: z.object({ runId: z.string().uuid(), callId: z.string().min(1).max(512), approve: z.boolean(), answer: z.string().max(20000).optional() }).strict() }).strict(),
   [IPC.VAULT_LIST_DIR]: z.object({ path: stringPath }),
   [IPC.VAULT_READ_FILE]: z.object({ path: stringPath }),

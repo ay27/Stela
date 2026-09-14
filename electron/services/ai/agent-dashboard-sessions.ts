@@ -4,7 +4,7 @@ import { CONVERSATION_EXTENSION, type IConversationSnapshot } from "@shared/conv
 import type { AgentMetricSessionRef, IAgentMetricSessionHistory, IAgentMetricSessionList, IAgentMetricSessionSummary } from "@shared/types";
 import { AppError } from "@shared/errors";
 import { ensureWithinVault, listDir } from "../vault-fs";
-import { inspectConversation } from "../conversation";
+import { inspectConversation, listConversations } from "../conversation";
 import { listAgentHistory, loadAgentHistory } from "./agent-history";
 
 function summary(snapshot: IConversationSnapshot): IAgentMetricSessionSummary {
@@ -43,6 +43,16 @@ export async function listDashboardSessions(vault: string, deviceSlug: string): 
     }
   };
   await visit(vault);
+  for (const item of await listConversations(vault)) {
+    if (!item.temporary) continue;
+    try { const snapshot = await inspectConversation(vault, item.path); if (snapshot.document.turns.length) result.sessions.push(summary(snapshot)); }
+    catch (error) { warn("Temporary Chat", error); }
+  }
+  const unique = new Map<string, IAgentMetricSessionSummary>();
+  for (const item of result.sessions) {
+    if (!unique.has(item.sessionId) || "conversationPath" in item.ref) unique.set(item.sessionId, item);
+  }
+  result.sessions = [...unique.values()];
   result.sessions.sort((a, b) => b.updatedAt - a.updatedAt || a.title.localeCompare(b.title));
   return result;
 }
@@ -56,7 +66,7 @@ export async function loadDashboardSession(vault: string, deviceSlug: string, re
   return {
     summary: summary(snapshot),
     runs: snapshot.document.turns.map(turn => ({
-      request: { runId: turn.id, sessionId: snapshot.document.id, entryPoint: "chat", prompt: turn.input,
+      request: { runId: turn.id, sessionId: snapshot.document.id, ...turn.task, entryPoint: turn.task?.entryPoint ?? "chat", prompt: turn.input,
         message: turn.message, connectionName: turn.connectionName },
       startedAt: turn.startedAt,
       // Chat v1 has no turn completion timestamp. Lifecycle comes from status.

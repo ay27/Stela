@@ -65,7 +65,7 @@ try {
   const skills = await loadAgentSkills(root);
   const events: AgentEvent[] = [];
   const base = {
-    vaultPath: root, request: { runId: "offline-parent", prompt: "Explain orders revenue" },
+    forceMaintenance: true, vaultPath: root, request: { runId: "offline-parent", prompt: "Explain orders revenue" },
     conversation: "Revenue sums paid orders only, as verified in orders.md.",
     evidence: [{ tool: "run_query", kind: "success" as const, source: ["demo.orders"], tables: ["demo.orders"] }],
     model, models, skills, connection: null, dialect: null, aiSettings,
@@ -97,6 +97,7 @@ try {
   const saved = await run("saved");
   assert.equal(saved.saved, true);
   assert.equal(saved.trace.run.outcome, "saved");
+  assert.equal(calls, 1, "save must end maintenance without another generation");
   assert.ok(saved.trace.events.some(e => e.type === "provider_prompt"));
   const file = await readFile(join(root, ".stela/skills/orders-paid-revenue/SKILL.md"), "utf8");
   assert.match(file, /Revenue is SUM/);
@@ -178,6 +179,18 @@ try {
   models.streamSimple = streamSimple;
   replies = [reply([{ type: "text", text: "No new durable knowledge." }])];
   assert.equal((await run("after-failure")).trace.run.outcome, "no_change");
+  const beforeSkip = calls;
+  assert.equal((await run("unchanged-candidate", { forceMaintenance: false, historyStorage: storage })).trace.run.outcome, "unchanged");
+  assert.equal(calls, beforeSkip, "unchanged candidate must not invoke a model");
+  const skippedHistory = await loadAgentHistory(root, { deviceSlug: "offline", sessionId: "maintenance-history" });
+  assert.ok(skippedHistory.runs[0].events.some(event => event.type === "skill_maintenance" && event.outcome === "unchanged"), "new skip outcome survives disk history validation");
+  replies = [reply([{ type: "thinking", thinking: "Still reasoning" }], "length")];
+  assert.equal((await run("thinking-only")).trace.run.outcome, "error");
+  assert.equal((await run("cooldown-candidate", { forceMaintenance: false })).trace.run.outcome, "cooldown");
+  replies = Array.from({ length: 5 }, (_, index) => reply([{ type: "toolCall", id: `bad-save-${index}`, name: "save_skill", arguments: { name: "invalid", content: "Missing required metadata" } }], "toolUse"));
+  const limited = await run("turn-limited");
+  assert.equal(limited.trace.run.outcome, "turn_limit");
+  assert.equal(limited.saved, false);
   console.log("skill-maintenance integration: saved/readback, no source, init/provider failures, cancellation, timeout, queue continuation passed");
 } finally {
   await sqlIndex.stop();

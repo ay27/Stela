@@ -1,6 +1,6 @@
 import { getRunContext } from "@/editor/runsql/run-context";
 import type { AgentMessageResourceInput } from "@shared/types";
-import { useAgentPanel } from "@/state/agent-panel";
+import { useChatWorkspace } from "@/state/chat-workspace";
 import { useLayout } from "@/state/layout";
 import { useWorkspace } from "@/state/workspace";
 
@@ -31,7 +31,7 @@ function openAgentChat(): void {
 }
 
 export function addAttachmentToChat(attachment: AgentMessageResourceInput): void {
-  useAgentPanel.getState().addToChat(attachment);
+  void useChatWorkspace.getState().attach(attachment).catch(error => useChatWorkspace.setState({ error: String(error) }));
 }
 
 export function addSelectionToChat(

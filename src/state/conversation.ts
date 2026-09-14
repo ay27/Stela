@@ -3,11 +3,14 @@ import type { EditorState } from "@codemirror/state";
 import { agentMessagePlainText } from "@shared/agent-message";
 import { agentComposerStateToMessage, composerResources, createAgentComposerState, emptyAgentComposerState } from "@/lib/agent-composer";
 import { create } from "zustand";
-import type { IConversationSnapshot } from "@shared/conversation";
+import type { IConversationSnapshot, IConversationTask } from "@shared/conversation";
 import { scheduleAutoGit } from "@/services/auto-git";
 import { useWorkspace } from "./workspace";
 
 interface IConversationState {
+  tasks: Record<string, IConversationTask | undefined>;
+  reset: () => void;
+  setTask: (path: string, task?: IConversationTask) => void;
   snapshots: Record<string, IConversationSnapshot>;
   drafts: Record<string, string>;
   editors: Record<string, EditorState>;
@@ -25,8 +28,14 @@ const sending = new Set<string>();
 let subscribed = false;
 const aliases = new Map<string, Set<string>>();
 export const useConversation = create<IConversationState>((set, get) => ({
+  tasks: {},
+  reset() { for (const timer of timers.values()) clearTimeout(timer); timers.clear(); aliases.clear(); set({ snapshots: {}, drafts: {}, editors: {}, connections: {}, errors: {}, tasks: {} }); },
+  setTask(path, task) { set(s => ({ tasks: { ...s.tasks, [path]: task } })); },
   snapshots: {}, drafts: {}, editors: {}, connections: {}, errors: {},
   accept(snapshot) {
+    if (snapshot.previousPath) {
+      const known = aliases.get(snapshot.path) ?? new Set<string>(); known.add(snapshot.previousPath); aliases.set(snapshot.path, known);
+    }
     const paths = [snapshot.path, ...(aliases.get(snapshot.path) ?? [])];
     set(s => ({ snapshots: { ...s.snapshots, ...Object.fromEntries(paths.map(path => [path, { ...snapshot, path }])) } }));
     for (const visiblePath of paths) {
@@ -47,7 +56,7 @@ export const useConversation = create<IConversationState>((set, get) => ({
     const knownAliases = aliases.get(snapshot.path) ?? new Set<string>();
     knownAliases.add(path); aliases.set(snapshot.path, knownAliases);
     get().accept(snapshot);
-    set(s => ({ editors: { ...s.editors, [path]: s.editors[path] ?? createAgentComposerState(snapshot.document.draftMessage ?? { version: 1, segments: [{ kind: "text", text: snapshot.document.draft }], resources: [] }) }, drafts: { ...s.drafts, [path]: s.drafts[path] ?? snapshot.document.draft }, connections: { ...s.connections, [path]: path in s.connections ? s.connections[path]! : snapshot.document.connectionName } }));
+    set(s => ({ tasks: { ...s.tasks, [path]: s.tasks[path] ?? snapshot.document.draftTask }, editors: { ...s.editors, [path]: s.editors[path] ?? createAgentComposerState(snapshot.document.draftMessage ?? { version: 1, segments: [{ kind: "text", text: snapshot.document.draft }], resources: [] }) }, drafts: { ...s.drafts, [path]: s.drafts[path] ?? snapshot.document.draft }, connections: { ...s.connections, [path]: path in s.connections ? s.connections[path]! : snapshot.document.connectionName } }));
   },
   edit(path, draft, connectionName, editor) {
     const current = get().editors[path];
@@ -75,17 +84,17 @@ export const useConversation = create<IConversationState>((set, get) => ({
       const draft = state.drafts[path] ?? snap.document.draft;
       const connection = state.connections[path] ?? null;
       const draftMessage = state.editors[path] ? agentComposerStateToMessage(state.editors[path]) : undefined;
-      if (draft === snap.document.draft && connection === snap.document.connectionName && JSON.stringify(draftMessage) === JSON.stringify(snap.document.draftMessage)) return;
+      if (draft === snap.document.draft && connection === snap.document.connectionName && JSON.stringify(draftMessage) === JSON.stringify(snap.document.draftMessage) && JSON.stringify(state.tasks[path]) === JSON.stringify(snap.document.draftTask)) return;
       // Active events can advance revisions; retry only when an event already
       // delivered a newer revision, never silently adopt an external disk edit.
       let snapshot: IConversationSnapshot;
-      try { snapshot = await window.stela.conversation.draft(path, snap.etag, draft, connection, draftMessage); }
+      try { snapshot = await window.stela.conversation.draft(path, snap.etag, draft, connection, draftMessage, state.tasks[path]); }
       catch (e) {
         const latest = get().snapshots[path];
         if (!latest || latest.etag === snap.etag) throw e;
-        snapshot = await window.stela.conversation.draft(path, latest.etag, draft, connection, draftMessage);
+        snapshot = await window.stela.conversation.draft(path, latest.etag, draft, connection, draftMessage, state.tasks[path]);
       }
-      get().accept(snapshot); scheduleAutoGit("conversation-save");
+      get().accept(snapshot); if (!snapshot.temporary) scheduleAutoGit("conversation-save");
       set(s => ({ errors: { ...s.errors, [path]: "" } }));
     });
     saving.set(path, task);
@@ -100,15 +109,15 @@ export const useConversation = create<IConversationState>((set, get) => ({
       const message = state.editors[path] ? agentComposerStateToMessage(state.editors[path]) : undefined;
       const input = state.drafts[path]?.trim();
       if (!snapshot || !input || snapshot.document.turns.some(t => t.status === "running")) return;
-      const next = await window.stela.conversation.submit({ locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en", path, etag: snapshot.etag, requestId: crypto.randomUUID(), input, message, connectionName: state.connections[path] ?? null });
+      const next = await window.stela.conversation.submit({ task: state.tasks[path], locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en", path, etag: snapshot.etag, requestId: crypto.randomUUID(), input, message, connectionName: state.connections[path] ?? null });
       get().accept(next);
       set(s => {
         const unchanged = JSON.stringify(s.editors[path] ? agentComposerStateToMessage(s.editors[path]) : undefined) === JSON.stringify(message);
-        return { editors: { ...s.editors, [path]: unchanged ? emptyAgentComposerState() : s.editors[path] },
+        return { tasks: { ...s.tasks, [path]: unchanged ? undefined : s.tasks[path] }, editors: { ...s.editors, [path]: unchanged ? emptyAgentComposerState() : s.editors[path] },
           drafts: { ...s.drafts, [path]: unchanged ? "" : s.drafts[path] }, errors: { ...s.errors, [path]: "" } };
       });
       get().accept(next);
-      scheduleAutoGit("conversation-send");
+      if (!next.temporary) scheduleAutoGit("conversation-send");
     } catch (e) { set(s => ({ errors: { ...s.errors, [path]: String(e) } })); }
     finally { sending.delete(path); }
   },

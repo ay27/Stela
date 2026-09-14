@@ -31,6 +31,9 @@ try {
     filters.push(filter);
     return filter.readTable ? latest : [];
   };
+  const preferred = await collectSkillSourceNotes(root, [], async () => [], 3, [join(root, "notes", "new.md")]);
+  assert.equal(preferred[0]?.path, "notes/new.md");
+  assert.equal((await collectSkillSourceNotes(root, [], async () => [], 3, ["../outside.md"])).length, 0);
   const notes = await collectSkillSourceNotes(root, ["demo.orders"], query);
   assert.deepEqual(notes.map((note) => note.path), ["notes/old.md"]);
   assert.deepEqual(filters, [
@@ -77,9 +80,10 @@ Compare grouped totals.`,
   });
   skill = (await loadAgentSkills(root)).loaded[0]!;
   latest = [hit("notes/new.md")];
+  // Additional retrieved sources may trigger refresh, but recorded sources stay preferred.
   assert.equal(await isSkillStale(root, skill, query), true);
   latest = [];
-  assert.equal(await isSkillStale(root, skill, query), true);
+  assert.equal(await isSkillStale(root, skill, query), false);
 
   await saveAgentSkill(
     root,

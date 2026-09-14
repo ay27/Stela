@@ -288,6 +288,23 @@ try {
     },
   };
 
+  // Connection dialect reaches the execution authority guard without rewriting SQL.
+  {
+    const query = "SELECT /*+ SET_VAR(query_mem_limit=214748364800) */ task_name FROM demo.orders";
+    let executed = "";
+    const ctx = { ...withConnection, connectionDialects: { demo: "StarRocks" },
+      connector: { ...fakeConnector, execute: async (_kind: string, _config: unknown, sql: string) => {
+        executed = sql;
+        return { kind: "query" as const, columns: ["task_name"], rows: [["test"]], elapsedMs: 1 };
+      } } };
+    const accepted = await dispatchTool("run_query", JSON.stringify({ query }), ctx);
+    assert.equal(accepted.ok, true, accepted.text);
+    assert.equal(executed, query);
+    const uncertain = await dispatchTool("run_query", JSON.stringify({ query }), { ...ctx, connectionDialects: {} });
+    assert.equal(uncertain.ok, false);
+    assert.match(uncertain.text, /Ambiguous SQL/);
+  }
+
   // list_catalog auto-selects a sole database and returns an actionable domain rejection for ambiguity.
   {
     const selected: Array<string | null | undefined> = [];

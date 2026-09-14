@@ -239,7 +239,7 @@ function asAgentEvent(value: unknown): AgentEvent | null {
     case "skill_maintenance":
       return Array.isArray(event.actions) &&
         event.actions.every(isSkillMaintenanceAction) &&
-        (event.outcome === undefined || (typeof event.outcome === "string" && ["saved", "no_change", "no_source", "input_too_large", "cancelled", "timeout", "turn_limit", "dropped", "error"].includes(event.outcome))) &&
+        (event.outcome === undefined || (typeof event.outcome === "string" && ["unchanged", "cooldown", "saved", "no_change", "no_source", "input_too_large", "cancelled", "timeout", "turn_limit", "dropped", "error"].includes(event.outcome))) &&
         (event.diagnostic === undefined || (
           typeof asRecord(event.diagnostic)?.stage === "string" &&
           typeof asRecord(event.diagnostic)?.message === "string" &&

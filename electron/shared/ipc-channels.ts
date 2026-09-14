@@ -10,6 +10,12 @@
  */
 
 export const IPC = {
+  CONVERSATION_TEMPORARY: "conversation:temporary",
+  CONVERSATION_RECENT: "conversation:recent",
+  CONVERSATION_SAVE_AS: "conversation:save-as",
+  CONVERSATION_DISCARD: "conversation:discard",
+  CONVERSATION_PROTECT: "conversation:protect",
+  CONVERSATION_IMPORT_HISTORY: "conversation:import-history",
   CONVERSATION_CREATE: "conversation:create",
   CONVERSATION_READ: "conversation:read",
   CONVERSATION_DRAFT: "conversation:draft",

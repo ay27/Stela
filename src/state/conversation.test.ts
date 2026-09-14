@@ -10,6 +10,8 @@ let listener: ((s: IConversationSnapshot) => void) | undefined;
 let sends = 0;
 let duringSubmit: (() => void) | undefined;
 const bridge: IConversationBridge = {
+  temporary: async () => snapshot, recent: async () => [], saveAs: async () => snapshot,
+  discard: async () => {}, protect: async () => {}, importHistory: async () => snapshot,
   create: async () => snapshot, read: async () => snapshot,
   draft: async (_path, etag, draft, connectionName, draftMessage) => { assert.equal(etag, snapshot.etag); snapshot = { ...snapshot, etag: "b".repeat(64), document: { ...snapshot.document, draft, connectionName, draftMessage } }; return snapshot; },
   submit: async input => { assert.equal(input.locale, "zh"); sends++; snapshot = { ...snapshot, etag: "c".repeat(64), document: { ...snapshot.document, draft: "", draftMessage: { version: 1, segments: [], resources: [] }, turns: [{ id: input.requestId, input: input.input, message: input.message, connectionName: input.connectionName, status: "running", startedAt: 1, runs: [], events: [], responses: [] }] } }; listener?.(snapshot); duringSubmit?.(); return snapshot; },
@@ -53,3 +55,31 @@ await useConversation.getState().flush(visible);
 assert.equal(snapshot.document.draft, "next question");
 assert.equal(agentMessagePlainText(agentComposerStateToMessage(useConversation.getState().editors[visible])), "next question");
 console.log("Conversation structured drafts: references persist and a new draft survives in-flight submission.");
+
+// Placement changes must not fork execution or replace a structured draft.
+const { useChatWorkspace } = await import("./chat-workspace");
+useWorkspace.setState({ vaultPath: "/real-vault", tabs: [{ id: "note", kind: "file", path: "/real-vault/note.md", title: "Note" }], activeTabId: "note" });
+useChatWorkspace.getState().bind();
+await useConversation.getState().open(canonical);
+useConversation.getState().edit(canonical, "kept draft", "demo");
+await useConversation.getState().flush(canonical);
+const retainedEditor = useConversation.getState().editors[canonical];
+const priorSends = sends;
+Object.assign(window.stela, { settings: { patch: async () => ({}) } });
+useChatWorkspace.getState().move(canonical, "side");
+useChatWorkspace.getState().move(canonical, "main");
+assert.equal(useChatWorkspace.getState().sidePath, null);
+assert.equal(useWorkspace.getState().tabs.filter(t => t.path === canonical).length, 1);
+useChatWorkspace.getState().move(canonical, "side");
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.equal(useWorkspace.getState().activeTabId, "note");
+assert.equal(useWorkspace.getState().tabs.filter(t => t.path === canonical).length, 0);
+assert.equal(useConversation.getState().editors[canonical], retainedEditor);
+assert.equal(useConversation.getState().connections[canonical], "demo");
+assert.equal(sends, priorSends);
+let cancellations = 0;
+bridge.cancel = async () => { cancellations++; };
+useChatWorkspace.getState().close(canonical);
+assert.equal(cancellations, 0);
+assert.equal(useConversation.getState().drafts[canonical], "kept draft");
+console.log("Unified Chat placement preserves one session, draft/editor, connection, prior tab and execution; close does not cancel.");

@@ -50,6 +50,8 @@ function runCacheHitRate(run: AgentMetricRunSummary): number | null {
 
 function knowledgeOutcomeLabel(key: string, t: ReturnType<typeof useT>): string {
   const labels: Record<string, string> = {
+    unchanged: t("agentDashboard.outcome.unchanged"),
+    cooldown: t("agentDashboard.outcome.cooldown"),
     saved: t("agentDashboard.outcome.saved"),
     no_change: t("agentDashboard.outcome.noChange"),
     no_source: t("agentDashboard.outcome.noSource"),

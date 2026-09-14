@@ -693,9 +693,15 @@ export function registerAllHandlers(ctx: HandlerCtx): void {
     { accepted: boolean }
   >(IPC.AI_PYTHON_RUNTIME_RESPOND, respondPythonRuntime);
 
+  registerHandler<{ title?: string }, unknown>(IPC.CONVERSATION_TEMPORARY, ({ title }) => conversation.createTemporaryConversation(requireVault(), title));
+  registerHandler<Record<string, never>, unknown>(IPC.CONVERSATION_RECENT, () => conversation.listConversations(requireVault()));
+  registerHandler<{ path: string; etag: string; directory: string; title: string }, unknown>(IPC.CONVERSATION_SAVE_AS, ({ path, etag, directory, title }) => conversation.promoteConversation(requireVault(), path, etag, directory, title));
+  registerHandler<{ path: string }, void>(IPC.CONVERSATION_DISCARD, ({ path }) => conversation.discardConversation(requireVault(), path));
+  registerHandler<{ paths: string[] }, void>(IPC.CONVERSATION_PROTECT, ({ paths }) => conversation.protectConversations(requireVault(), paths));
+  registerHandler<{ deviceSlug: string; sessionId: string }, unknown>(IPC.CONVERSATION_IMPORT_HISTORY, ref => conversation.importConversationHistory(requireVault(), ref));
   registerHandler<{ directory: string; title: string }, unknown>(IPC.CONVERSATION_CREATE, ({ directory, title }) => conversation.createConversation(requireVault(), directory, title));
   registerHandler<{ path: string }, unknown>(IPC.CONVERSATION_READ, ({ path }) => conversation.readConversation(requireVault(), path));
-  registerHandler<{ path: string; etag: string; draft: string; connectionName: string | null; draftMessage?: import("@shared/types").AgentMessageContent }, unknown>(IPC.CONVERSATION_DRAFT, ({ path, etag, draft, connectionName, draftMessage }) => conversation.saveConversationDraft(requireVault(), path, etag, draft, connectionName, draftMessage));
+  registerHandler<{ path: string; etag: string; draft: string; connectionName: string | null; draftMessage?: import("@shared/types").AgentMessageContent; task?: import("@shared/conversation").IConversationTask }, unknown>(IPC.CONVERSATION_DRAFT, ({ path, etag, draft, connectionName, draftMessage, task }) => conversation.saveConversationDraft(requireVault(), path, etag, draft, connectionName, draftMessage, task));
   registerHandler<IConversationSubmit, unknown>(IPC.CONVERSATION_SUBMIT, (input, ctx) => conversation.submitConversation(requireVault(), input, snapshot => {
     if (!ctx.event.sender.isDestroyed()) ctx.event.sender.send(IPC_EVENTS.CONVERSATION_CHANGED, snapshot);
   }));

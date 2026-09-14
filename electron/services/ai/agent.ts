@@ -1,3 +1,4 @@
+import { buildSkillMaintenanceInput, MAINTENANCE_INPUT_CHARS, maintenanceModel, maintenanceHash, maintenanceNotes, maintenanceSkip, recordMaintenance } from "./maintenance-policy";
 import { analysisToolSummary } from "../../shared/analysis-contract";
 /**
  * Harness agent via `@earendil-works/pi-agent-core` AgentHarness.
@@ -87,7 +88,6 @@ import { redactForPrompt } from "./redaction";
 import * as agentMetrics from "./agent-metrics";
 import {
   buildSkillMaintenanceEvidence,
-  formatSkillMaintenanceEvidence,
   hasSkillMaintenanceEvidence,
   type SkillMaintenanceEvidence,
 } from "./skill-maintenance";
@@ -121,7 +121,7 @@ const OVERFLOW_CONTINUE_PROMPT =
   "The previous request exceeded the model context window. Continue from the compacted history and finish the user's last request.";
 const SKILL_PROMPT_LIMIT = 8;
 const SKILL_MAINTENANCE_PROMPT = `You are Stela's internal experience-maintenance agent.
-The application already retrieved, ordered, and validated the material below. You have one decision: call save_skill exactly once for one durable rule, or make no tool call and give a one-sentence reason. Conversation explains intent; only verified evidence and source documents prove facts. Never copy result rows, absolute counts, snapshots, private data, narration, or one-off SQL. Automatic creation supports only sql-dialect, metric-definition, business-glossary, and data-lineage; never create analysis-runbook.
+The application already retrieved, ordered, and validated the material below. You have one decision: call save_skill exactly once for one durable rule, or make no tool call and give a one-sentence reason. Conversation explains intent; only verified evidence and source documents prove facts. Source documents may be excerpts: never infer absence or universal rules from omitted material. A query snapshot does not prove a permanent business rule. If evidence is insufficient, do not save. Never copy result rows, absolute counts, snapshots, private data, narration, or one-off SQL. Automatic creation supports only sql-dialect, metric-definition, business-glossary, and data-lineage; never create analysis-runbook.
 
 Use this frontmatter:
 ---
@@ -323,26 +323,6 @@ function toolResultSummary(result: unknown): string {
   return analysisToolSummary(text, TOOL_RESULT_SUMMARY_CHARS);
 }
 
-function buildSkillMaintenanceInput(
-  conversation: string,
-  evidence: SkillMaintenanceEvidence[],
-  notes: SkillSourceNote[],
-  skills: LoadedAgentSkill[],
-  refreshSkill?: LoadedAgentSkill,
-): string {
-  return [
-    refreshSkill ? `Refresh only this Skill:\n${refreshSkill.content}` : "Create at most one new Skill.",
-    `Current-task conversation (context, not proof):\n${conversation}`,
-    "Verified tool evidence:",
-    formatSkillMaintenanceEvidence(evidence) || "No tool evidence was available.",
-    `Source documents, newest first:\n${notes.map((note) =>
-      `--- SOURCE ${note.path} · ${note.updatedAt} ---\n${note.content}`
-    ).join("\n\n")}`,
-    `Existing related Skill metadata:\n${skills.map((skill) =>
-      `${skill.metadata.name} · ${skill.metadata.category} · ${skill.metadata.description}`
-    ).join("\n") || "none"}`,
-  ].join("\n\n");
-}
 
 function conversationForMaintenance(messages: unknown[]): string {
   return messages.flatMap((message) => {
@@ -433,6 +413,8 @@ export async function runSkillMaintenance(options: {
   refreshSkill?: LoadedAgentSkill;
   emitStatus?: boolean;
   metricRunId?: string;
+  /** Explicit retry and isolated replay bypass automatic candidate receipts. */
+  forceMaintenance?: boolean;
   historyStorage?: JsonlSessionStorage | null;
 }): Promise<boolean> {
   const { vaultPath, request, conversation, evidence, models, model, skills, connection, dialect, aiSettings, onEvent, signal, refreshSkill } = options;
@@ -480,6 +462,10 @@ export async function runSkillMaintenance(options: {
   let unsubscribe: (() => void) | undefined;
   let onAbort: (() => void) | undefined;
   let stage = "initialization";
+  let candidateKey: string | null = null;
+  let candidateOutcome: string | null = null;
+  let stoppedAfterSave = false;
+  const phaseStarted = Date.now();
   try {
     const profile = getActiveProfile(aiSettings, request.profileId);
     if (agentMetrics.isOpen() && !options.metricRunId) {
@@ -511,7 +497,8 @@ export async function runSkillMaintenance(options: {
       );
     }
     stage = "source_collection";
-    const sourceNotes = await collectSkillSourceNotes(vaultPath, maintenanceTables, sqlIndex.query);
+    const sourceNotes = await collectSkillSourceNotes(vaultPath, maintenanceTables, sqlIndex.query, 3,
+      refreshSkill?.metadata.sources.map(source => source.path) ?? evidence.filter(item => item.kind === "success").flatMap(item => item.source).filter(source => source.endsWith(".md")));
     signal.throwIfAborted();
     if (sourceNotes.length === 0) {
       return finishWithoutSource(
@@ -524,36 +511,47 @@ export async function runSkillMaintenance(options: {
         },
       );
     }
-    const maxInputChars = Math.max(16_000, Math.floor(model.contextWindow * 2.5));
-    if (conversation.length > maxInputChars - 8_000) {
-      finishMetric("completed", "input_too_large");
-      if (options.emitStatus !== false) notify({
-        type: "skill_maintenance", runId: request.runId, outcome: "input_too_large", actions: [],
-        summary: "Knowledge maintenance input exceeds the context budget.",
-      });
+    const currentSkills = (await loadAgentSkills(vaultPath)).vault;
+    const skillsHash = (items: typeof currentSkills) => maintenanceHash(items.map(skill => [skill.metadata.name, skill.content]).sort());
+    candidateKey = maintenanceHash({ version: 1, operation: refreshSkill?.metadata.name ?? "create",
+      intent: request.prompt, connection: request.connectionName, dialect,
+      sources: sourceNotes.map(note => [note.path, note.sha256]).sort(),
+      evidence: [...new Set(evidence.map(item => JSON.stringify([item.kind, item.tool, [...item.source].sort()])))].sort() });
+    const skip = options.forceMaintenance ? null : await maintenanceSkip(vaultPath, candidateKey, skillsHash(currentSkills));
+    if (skip) {
+      finishMetric("completed", skip);
+      if (options.emitStatus !== false) notify({ type: "skill_maintenance", runId: request.runId,
+        outcome: skip, actions: [], summary: skip === "unchanged"
+          ? "The same evidence and source versions have already been reviewed."
+          : "This candidate is cooling down after an incomplete attempt; previous details remain in Metrics." });
       return false;
     }
-    let remaining = Math.max(4_000, maxInputChars - conversation.length - 8_000);
-    const boundedNotes = sourceNotes.map((note) => {
-      const content = note.content.slice(0, remaining);
-      remaining = Math.max(0, remaining - content.length);
-      return { ...note, content };
-    }).filter((note) => note.content.length > 0);
-    if (boundedNotes.length === 0) {
+    // Context is explicitly not proof. Bound it separately from source blocks.
+    const boundedConversation = `User intent:\n${request.prompt.slice(0, 900)}\nFinal answer context (not proof):\n${conversation.slice(-1500)}`;
+    const boundedEvidence = evidence.slice(-12);
+    const boundedSkills = promptSkills.slice(0, 4);
+    const envelope = buildSkillMaintenanceInput(boundedConversation, boundedEvidence, [], boundedSkills, refreshSkill);
+    const boundedNotes = maintenanceNotes(sourceNotes, maintenanceTables, MAINTENANCE_INPUT_CHARS - envelope.length);
+    const maintenanceInput = buildSkillMaintenanceInput(boundedConversation, boundedEvidence, boundedNotes, boundedSkills, refreshSkill);
+    if (boundedNotes.length === 0 || maintenanceInput.length > MAINTENANCE_INPUT_CHARS) {
       finishMetric("completed", "input_too_large");
-      if (options.emitStatus !== false) notify({
-        type: "skill_maintenance", runId: request.runId, outcome: "input_too_large", actions: [],
-        summary: "No source content fits within the maintenance context budget.",
-      });
+      if (options.emitStatus !== false) notify({ type: "skill_maintenance", runId: request.runId,
+        outcome: "input_too_large", actions: [], summary: "No complete source block fits within the maintenance evidence budget." });
       return false;
     }
+    candidateOutcome = "error";
+    if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "evidence_packet", payload: {
+      inputChars: maintenanceInput.length, sourceChars: boundedNotes.reduce((sum, note) => sum + note.content.length, 0),
+      sourceCollectionMs: Date.now() - phaseStarted, sources: boundedNotes.map(note => ({ path: note.path, sha256: note.sha256 })),
+      thinkingRequested: "off", maxOutputTokens: maintenanceModel(model).maxTokens,
+    } });
     stage = "harness_initialization";
     if (options.emitStatus !== false) notify({ type: "skill_maintenance_started", runId: request.runId });
     const maintenanceHarness = new AgentHarness({
       env: new NodeExecutionEnv({ cwd: vaultPath }),
       session: createSession(),
       models,
-      model,
+      model: maintenanceModel(model),
       thinkingLevel: "off",
       streamOptions: { cacheRetention: "short" },
       systemPrompt: refreshSkill
@@ -589,9 +587,19 @@ export async function runSkillMaintenance(options: {
       }),
     });
     let turns = 0;
+    let thinkingChars = 0;
+    let saveStartedAt = 0;
     unsubscribe = maintenanceHarness.subscribe((event) => {
-      if (event.type === "turn_end" && ++turns >= SKILL_MAINTENANCE_MAX_TURNS) {
+      if (event.type === "tool_execution_start") saveStartedAt = Date.now();
+      if (event.type === "tool_execution_end" && !event.isError && actions.length > 0) {
+        stoppedAfterSave = true;
+        if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "save_completed", payload: { elapsedMs: Date.now() - phaseStarted, saveMs: Date.now() - saveStartedAt, actions: actions.length } });
+      }
+      if (event.type === "turn_end" && ++turns >= SKILL_MAINTENANCE_MAX_TURNS && event.message.stopReason === "toolUse" && !stoppedAfterSave) {
         void maintenanceHarness.abort();
+      }
+      if (event.type === "message_end" && event.message.role === "assistant") {
+        thinkingChars += event.message.content.reduce((sum, block) => sum + (block.type === "thinking" ? block.thinking.length : 0), 0);
       }
       if (event.type === "message_end" && event.message.role === "assistant" && agentMetrics.isOpen()) {
         agentMetrics.addUsage(metricRunId, event.message.usage);
@@ -601,22 +609,27 @@ export async function runSkillMaintenance(options: {
     onAbort = () => void maintenanceHarness.abort();
     signal.addEventListener("abort", onAbort, { once: true });
     signal.throwIfAborted();
-    const maintenanceInput = buildSkillMaintenanceInput(
-      conversation,
-      evidence,
-      boundedNotes,
-      promptSkills,
-      refreshSkill,
-    );
     if (agentMetrics.isOpen()) {
       agentMetrics.addEvent(metricRunId, { type: "provider_prompt", payload: maintenanceInput });
     }
     stage = "model_execution";
+    const modelStartedAt = Date.now();
     const result = await maintenanceHarness.prompt(maintenanceInput);
+    if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "generation_finished", payload: { modelMs: Date.now() - modelStartedAt, thinkingChars, stopReason: result.stopReason, turns } });
     if (result.stopReason === "error") {
       throw new Error(result.errorMessage || "Knowledge maintenance model failed.");
     }
-    const completed = !signal.aborted && result.stopReason !== "aborted";
+    const completed = !signal.aborted && (stoppedAfterSave || result.stopReason !== "aborted");
+    if (completed && actions.length === 0 && (result.stopReason === "length" || !assistantText(result).trim())) {
+      throw new Error("Maintenance produced no decision before its output limit; thinking-only output is not a no-change decision.");
+    }
+    candidateOutcome = completed ? (actions.length ? "saved" : "no_change")
+      : signal.reason === "timeout" ? "timeout" : signal.aborted ? "cancelled" : "turn_limit";
+    if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "decision", payload: {
+      turns, saved: actions.length, stoppedAfterSave, stopReason: result.stopReason,
+      thinkingChars,
+      elapsedMs: Date.now() - phaseStarted,
+    } });
     if (options.emitStatus !== false) {
       notify({
         type: "skill_maintenance",
@@ -649,6 +662,7 @@ export async function runSkillMaintenance(options: {
   } catch (err) {
     const cancelled = signal.aborted;
     const timeout = cancelled && signal.reason === "timeout";
+    if (candidateOutcome) candidateOutcome = timeout ? "timeout" : cancelled ? "cancelled" : "error";
     finishMetric(
       timeout ? "timeout" : cancelled ? "cancelled" : "error",
       timeout ? "timeout" : cancelled ? "cancelled" : "error",
@@ -679,6 +693,14 @@ export async function runSkillMaintenance(options: {
     }
     return false;
   } finally {
+    if (candidateKey && candidateOutcome) {
+      try {
+        const latestSkills = (await loadAgentSkills(vaultPath)).vault;
+        await recordMaintenance(vaultPath, { key: candidateKey,
+          skills: maintenanceHash(latestSkills.map(skill => [skill.metadata.name, skill.content]).sort()),
+          at: Date.now(), outcome: candidateOutcome });
+      } catch (error) { log.error("maintenance receipt write failed", { error: redactForPrompt(String(error)) }); }
+    }
     unsubscribe?.();
     if (onAbort) signal.removeEventListener("abort", onAbort);
     if (options.historyStorage && maintenanceEvents.length > 0) {

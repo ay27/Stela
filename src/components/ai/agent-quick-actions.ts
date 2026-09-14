@@ -7,7 +7,7 @@ import type {
 
 import { getRunContext } from "@/editor/runsql/run-context";
 import { i18n } from "@/i18n";
-import { useAgentPanel } from "@/state/agent-panel";
+import { useChatWorkspace } from "@/state/chat-workspace";
 import { useWorkspace } from "@/state/workspace";
 import { composeAgentMessage } from "@/lib/agent-message";
 
@@ -20,9 +20,6 @@ function relativeToVault(path: string | null | undefined): string | undefined {
   return normalized.startsWith(`${root}/`) ? normalized.slice(root.length + 1) : normalized;
 }
 
-function locale(): "zh" | "en" {
-  return i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en";
-}
 
 function open(input: {
   entryPoint: AgentEntryPoint;
@@ -32,7 +29,7 @@ function open(input: {
   connectionName?: string | null;
   autoSend: boolean;
 }): void {
-  useAgentPanel.getState().openQuickTask({ ...input, locale: locale() });
+  void useChatWorkspace.getState().quick(input).catch(error => useChatWorkspace.setState({ error: String(error) }));
 }
 
 export function openRunsqlFixTask(input: {

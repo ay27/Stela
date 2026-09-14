@@ -20,7 +20,7 @@ import type {
   GitVaultStatus,
 } from "@shared/types";
 
-import { useAgentPanel } from "@/state/agent-panel";
+import { useChatWorkspace } from "@/state/chat-workspace";
 import { useWorkspace } from "@/state/workspace";
 
 const EMPTY_STATUS: GitVaultStatus = {
@@ -63,7 +63,7 @@ async function refreshChangedDomains(result: GitSyncResult): Promise<void> {
     useWorkspace.getState().reloadCleanFileTabsAfterSync();
   }
   if (domains.has("agent-history")) {
-    await useAgentPanel.getState().refreshHistory();
+    await useChatWorkspace.getState().refresh();
   }
   if (domains.has("settings")) {
     const { useSettings } = await import("@/state/settings");
@@ -153,7 +153,7 @@ export const useGitStore = create<GitState>((set, get) => ({
       // 比纯等 vault-watcher 事件更跟手、抖动更少；watcher 仍会兜底刷新文件树等。
       if (r.updated && !r.conflicted) {
         useWorkspace.getState().reloadCleanFileTabsAfterSync();
-        void useAgentPanel.getState().refreshHistory();
+        void useChatWorkspace.getState().refresh();
       }
       await get().refresh();
       return r;

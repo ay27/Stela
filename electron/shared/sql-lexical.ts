@@ -1,7 +1,7 @@
 /** Replace quoted text and comments with whitespace, preserving statement delimiters.
  * Unclosed lexical constructs are ambiguous and must never receive read authority.
  */
-export function sqlStructuralText(sql: string): string | null {
+export function sqlStructuralText(sql: string, options: { optimizerHints?: boolean } = {}): string | null {
   let out = "";
   for (let i = 0; i < sql.length;) {
     if (sql.startsWith("--", i) || sql[i] === "#") {
@@ -9,10 +9,14 @@ export function sqlStructuralText(sql: string): string | null {
     }
     if (sql.startsWith("/*", i)) {
       // MySQL executable comments are code, not ordinary comments.
-      if (/^\/\*[!+]/.test(sql.slice(i))) return null;
+      if (sql.startsWith("/*!", i) || (sql.startsWith("/*+", i) && !options.optimizerHints)) return null;
       let depth = 1; i += 2;
       while (i < sql.length && depth) {
-        if (sql.startsWith("/*", i)) { depth++; i += 2; }
+        if (sql.startsWith("/*", i)) {
+          // StarRocks/MySQL-style comments do not nest; do not hide executable suffixes.
+          if (options.optimizerHints) return null;
+          depth++; i += 2;
+        }
         else if (sql.startsWith("*/", i)) { depth--; i += 2; }
         else i++;
       }

@@ -667,9 +667,10 @@ interactive run has finished. Failures appear as inline warnings in Agent Panel;
 safe skips/cancellation stay neutral, and legacy empty-action records are unknown,
 not evidence of successful maintenance ([ADR-0096](./adr/0096-explicit-knowledge-maintenance-outcomes.md)).
 Deterministic code extracts evidence tables, retrieves SQL usage,
-orders notes by document update time, reads at most three source notes, and finds
-related Skill metadata. The maintenance model receives that material plus the
-complete current-task conversation and can only call `save_skill` once or do
+prioritizes source notes read in the current run, and extracts complete relevant
+blocks with sanitized-document line ranges and source hashes from at most three notes. A 12,000-character
+packet includes bounded conversation context, evidence and related Skill metadata.
+The maintenance model receives the packet and can only call `save_skill` once or do
 nothing. It cannot run SQL, search the Vault, overwrite, or archive an existing
 Skill. A normal Agent turn may also use `save_skill` when
 the user explicitly asks it to retain verified reusable data knowledge. Neither path
@@ -837,8 +838,8 @@ bounded cursor context
 
 `*.stela.chat` files are authoritative, versioned Vault conversation documents.
 They store drafts, immutable submitted inputs, ordered Agent events, proposal
-responses, execution references and the embedded pi session JSONL. They are
-independent of the Agent Panel's newest-20 session retention policy. SQL result
+responses, execution references and the embedded pi session JSONL. Saved documents are
+independent of temporary Chat retention. SQL result
 rows continue to live in the existing execution journal and disposable SQLite
 cache. A main-owned filesystem adapter persists pi session writes atomically
 inside the conversation document rather than creating a second session authority.
@@ -864,8 +865,21 @@ shared connector/result-store context.
 
 The renderer shares RunSQL CodeMirror SQL/schema/inline-completion extensions,
 BlockResult tables and Agent timeline components. A dedicated Zustand store owns
-per-path drafts and incoming snapshots, without focusing the Agent sidebar.
-See ADR-0100 and ADR-0101. Run `npm run test:conversation` for the isolated Electron
+per-path drafts and incoming snapshots. `chat-workspace` owns placement and moves
+one `ConversationView` between workspace and sidebar, preserving draft, selection,
+connection and scroll without restarting execution. Note switches do not inject
+context; references and quick actions do so explicitly.
+
+New Chat sessions are temporary: blank ones stay in memory; non-empty ones use
+`.stela/chat-sessions.local/` (ignored by Git). The newest 20 remain recoverable,
+with open/running/background sessions protected. Explicit Save promotes the same
+session into a visible Vault file and subsequent changes autosave. Promotion and
+maintenance writes share the document queue; callbacks address their original turn.
+Closing a view neither cancels execution nor discards history. Legacy Panel history
+is readable and imported on continuation; Dashboard deduplicates by session ID.
+Maintenance jobs returned by Agent execution are scheduled through the existing
+maintenance queue, including after foreground completion.
+See ADR-0100, ADR-0101 and ADR-0108. Run `npm run test:conversation` for the isolated Electron
 integration fixture (local connector and local streaming model server).
 
 ## IPC Contract
@@ -983,3 +997,17 @@ boundaries isolate individual card failures; persistence success is not a claim
 of successful rendering or business correctness. `npm run test:canvas` covers
 schema/tool/service checks plus an isolated Electron renderer using actual Flow,
 chart, table, KPI and Markdown components and saved Canvas files.
+
+
+Automatic maintenance uses explicit GLM-compatible thinking disablement and a
+2,048-token output cap without changing the foreground model. Local bounded
+candidate receipts at `.stela/skill-maintenance.local.json` reuse completed
+source versions and cool down incomplete attempts for one hour; explicit
+maintenance bypasses this optimization. Receipts are not knowledge authority.
+Metrics retain source preparation, decision and save timing, input size and
+observed thinking output (ADR-0106).
+
+The SQL authority guard receives the selected connection dialect. Closed
+StarRocks optimizer hints are allowed in structural inspection; executable
+comments remain uncertain. `unknown` SQL requires review under the existing
+policy and remains blocked in read-only Python queries (ADR-0107).
