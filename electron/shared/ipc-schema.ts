@@ -65,6 +65,7 @@ const aiProviderProfileSchema = z
     baseUrl: z.string().max(2048),
     contextWindow: aiContextWindowSchema,
     reasoningEffort: aiReasoningEffortSchema,
+    customApi: z.enum(["chat-completions", "responses"]).optional(),
     hasApiKey: z.boolean(),
   })
   .strict();

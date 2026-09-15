@@ -277,11 +277,11 @@ try {
   );
   assert.deepEqual(
     await pruneLocalAgentHistory(vaultPath, "retention"),
-    [{ deviceSlug: "retention", sessionId: "limit_00" }],
+    [],
   );
   assert.equal(
     (await listAgentHistory(vaultPath, "retention")).filter((summary) => summary.deviceSlug === "retention").length,
-    20,
+    21,
   );
   const closeoutStorage = await openLocalAgentSessionStorage(vaultPath, "closeout", "partial");
   await appendAgentHistoryStarted(closeoutStorage, { runId: "partial", sessionId: "partial", prompt: "Calculate a value" });

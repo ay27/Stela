@@ -12,6 +12,7 @@ type Placement = "main" | "side";
 interface IChatWorkspace {
   error: string;
   vault: string | null;
+  sidePaths: string[];
   sidePath: string | null;
   lastPath: string | null;
   returnTabId: string | null;
@@ -30,13 +31,13 @@ interface IChatWorkspace {
   importLegacy: (ref: AgentHistoryRef, placement?: Placement) => Promise<void>;
 }
 export const useChatWorkspace = create<IChatWorkspace>((set, get) => ({
-  error: "", vault: null, sidePath: null, lastPath: null, returnTabId: null, recent: [], scroll: {},
+  error: "", vault: null, sidePaths: [], sidePath: null, lastPath: null, returnTabId: null, recent: [], scroll: {},
   bind() {
     installChatSubscriptions();
     const vault = useWorkspace.getState().vaultPath;
     if (get().vault === vault) return;
     useConversation.getState().reset();
-    set({ error: "", vault, sidePath: null, lastPath: null, returnTabId: null, recent: [], scroll: {} });
+    set({ error: "", vault, sidePaths: [], sidePath: null, lastPath: null, returnTabId: null, recent: [], scroll: {} });
   },
   async refresh() { get().bind(); if (get().vault) set({ recent: await window.stela.conversation.recent() }); },
   async create(placement = "side", title = "Chat") {
@@ -52,7 +53,8 @@ export const useChatWorkspace = create<IChatWorkspace>((set, get) => ({
     const workspace = useWorkspace.getState();
     if (placement === "main") {
       const previous = workspace.tabs.find(tab => tab.id === workspace.activeTabId);
-      set({ sidePath: get().sidePath === path ? null : get().sidePath, lastPath: path,
+      const remaining = get().sidePaths.filter(item => item !== path);
+      set({ sidePaths: remaining, sidePath: get().sidePath === path ? remaining.at(-1) ?? null : get().sidePath, lastPath: path,
         returnTabId: previous?.kind !== "conversation" ? workspace.activeTabId : get().returnTabId });
       workspace.openFile(path, useConversation.getState().snapshots[path]?.document.title ?? "Chat");
       if (!useLayout.getState().agentPanelCollapsed) useLayout.getState().toggleAgentPanel();
@@ -60,11 +62,14 @@ export const useChatWorkspace = create<IChatWorkspace>((set, get) => ({
       workspace.closeTab(workspace.getTabIdByPath(path));
       const previous = get().returnTabId;
       if (previous && useWorkspace.getState().tabs.some(tab => tab.id === previous)) workspace.setActive(previous);
-      set({ sidePath: path, lastPath: path }); useLayout.getState().focusAgentPanel();
+      set({ sidePaths: get().sidePaths.includes(path) ? get().sidePaths : [...get().sidePaths, path], sidePath: path, lastPath: path }); useLayout.getState().focusAgentPanel();
     }
   },
   close(path) {
-    if (get().sidePath === path) set({ sidePath: null });
+    const index = get().sidePaths.indexOf(path);
+    const remaining = get().sidePaths.filter(item => item !== path);
+    set({ sidePaths: remaining, sidePath: get().sidePath === path ? remaining[index] ?? remaining[index - 1] ?? null : get().sidePath });
+    void useConversation.getState().flush(path).catch(error => set({ error: String(error) }));
     useWorkspace.getState().closeTab(useWorkspace.getState().getTabIdByPath(path));
     if (get().lastPath === path) set({ lastPath: null });
     void get().refresh();
@@ -78,7 +83,7 @@ export const useChatWorkspace = create<IChatWorkspace>((set, get) => ({
       drafts: { ...s.drafts, [saved.path]: s.drafts[path] }, connections: { ...s.connections, [saved.path]: s.connections[path] },
       tasks: { ...s.tasks, [saved.path]: s.tasks[path] } }));
     useWorkspace.getState().renameTabsForPath(path, saved.path);
-    set(s => ({ sidePath: s.sidePath === path ? saved.path : s.sidePath, lastPath: saved.path,
+    set(s => ({ sidePaths: s.sidePaths.map(item => item === path ? saved.path : item), sidePath: s.sidePath === path ? saved.path : s.sidePath, lastPath: saved.path,
       scroll: { ...s.scroll, [saved.path]: s.scroll[path] } }));
     scheduleAutoGit("conversation-save"); await get().refresh();
   },
@@ -102,15 +107,14 @@ export const useChatWorkspace = create<IChatWorkspace>((set, get) => ({
     store.edit(path, agentMessagePlainText(input.message), input.connectionName ?? null, createAgentComposerState(input.message));
     if (input.autoSend) await store.send(path);
   },
-  async importLegacy(ref, placement = "side") { get().bind(); const snapshot = await window.stela.conversation.importHistory(ref); await get().show(snapshot.path, placement); },
+  async importLegacy(ref, placement = "side") { get().bind(); const snapshot = await window.stela.conversation.importHistory({ deviceSlug: ref.deviceSlug, sessionId: ref.sessionId }); await get().show(snapshot.path, placement); },
 }));
 
 let protectedSignature = "";
 function protectOpenChats() {
   if (!useWorkspace.getState().vaultPath || typeof window === "undefined" || !window.stela?.conversation?.protect) return;
   const paths = useWorkspace.getState().tabs.filter(tab => tab.kind === "conversation").flatMap(tab => tab.path ? [tab.path] : []);
-  const side = useChatWorkspace.getState().sidePath;
-  if (side) paths.push(side);
+  paths.push(...useChatWorkspace.getState().sidePaths);
   const signature = JSON.stringify([useWorkspace.getState().vaultPath, [...paths].sort()]);
   if (signature === protectedSignature) return;
   protectedSignature = signature;
@@ -120,6 +124,32 @@ let installed = false;
 function installChatSubscriptions() {
   if (installed) return;
   installed = true;
-  useWorkspace.subscribe(protectOpenChats);
+  useWorkspace.subscribe((state, previous) => {
+    const added = new Set(state.tabs.filter(tab => tab.kind === "conversation" && !previous.tabs.some(old => old.path === tab.path)).map(tab => tab.path));
+    const chat = useChatWorkspace.getState();
+    if (chat.sidePaths.some(path => added.has(path))) {
+      const remaining = chat.sidePaths.filter(path => !added.has(path));
+      useChatWorkspace.setState({ sidePaths: remaining, sidePath: chat.sidePath && added.has(chat.sidePath) ? remaining.at(-1) ?? null : chat.sidePath });
+    }
+    protectOpenChats();
+  });
   useChatWorkspace.subscribe(protectOpenChats);
+}
+
+// Share startup across StrictMode/remounts; never replace a tab opened while IPC is pending.
+const preparingSidebar = new Map<string, Promise<void>>();
+export function ensureSidebarChat(): Promise<void> {
+  useChatWorkspace.getState().bind();
+  const { vault, sidePaths } = useChatWorkspace.getState();
+  if (!vault || sidePaths.length) return Promise.resolve();
+  const pending = preparingSidebar.get(vault);
+  if (pending) return pending;
+  const task = window.stela.conversation.temporary("Chat").then(snapshot => {
+    const current = useChatWorkspace.getState();
+    if (current.vault !== vault || useWorkspace.getState().vaultPath !== vault || current.sidePaths.length) return;
+    useConversation.getState().accept(snapshot);
+    useChatWorkspace.setState({ sidePaths: [snapshot.path], sidePath: snapshot.path, lastPath: snapshot.path });
+  }).finally(() => { preparingSidebar.delete(vault); });
+  preparingSidebar.set(vault, task);
+  return task;
 }

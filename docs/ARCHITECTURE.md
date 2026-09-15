@@ -18,7 +18,7 @@ SQL result sets, Agent sessions, and local Agent traces are too large to live in
 | Execution history | `{vault}/.stela/history/history_{deviceSlug}.jsonl` | **Authoritative** | Append-only run packages; Git-synced, per-device write isolation |
 | Result cache | `{vault}/.stela.sqlite` | Disposable | Query cache (`runs` / `result_schemas` / `result_rows`); rebuildable from JSONL |
 | Vault config | `{vault}/.stela/*.json` | Authoritative | Settings, connections, plugin manifests |
-| Agent session history | `{vault}/.stela/agent-history/<deviceSlug>/*.jsonl` | **Authoritative** | pi AgentHarness context and Agent Panel timeline; newest 20 per device |
+| Agent session history | `{vault}/.stela/agent-history/<deviceSlug>/*.jsonl` | **Authoritative** | pi AgentHarness context and legacy timeline; retained locally without count-based cleanup |
 | Local Agent observability | `{vault}/.stela/agent-metrics.local.sqlite` | **Authoritative (local, 90 days)** | AI/Agent runs, tool events, Skill usage, maintenance outcomes, redacted traces |
 | Agent query artifacts | `{userData}/query-artifacts/` | Disposable | Session-scoped Parquet/JSONL transport for sandbox `query()`; never synced, never named to the model, never exposed by path |
 | Session state | Zustand + localStorage + `{userData}/` | Disposable | Panel widths, open tabs, recent vaults |
@@ -871,15 +871,14 @@ connection and scroll without restarting execution. Note switches do not inject
 context; references and quick actions do so explicitly.
 
 New Chat sessions are temporary: blank ones stay in memory; non-empty ones use
-`.stela/chat-sessions.local/` (ignored by Git). The newest 20 remain recoverable,
-with open/running/background sessions protected. Explicit Save promotes the same
+`.stela/chat-sessions.local/` (ignored by Git). Non-empty sessions remain recoverable without count-based cleanup. Explicit Save promotes the same
 session into a visible Vault file and subsequent changes autosave. Promotion and
 maintenance writes share the document queue; callbacks address their original turn.
 Closing a view neither cancels execution nor discards history. Legacy Panel history
 is readable and imported on continuation; Dashboard deduplicates by session ID.
 Maintenance jobs returned by Agent execution are scheduled through the existing
 maintenance queue, including after foreground completion.
-See ADR-0100, ADR-0101 and ADR-0108. Run `npm run test:conversation` for the isolated Electron
+See ADR-0100, ADR-0101 and ADR-0110. Run `npm run test:conversation` for the isolated Electron
 integration fixture (local connector and local streaming model server).
 
 ## IPC Contract
@@ -1011,3 +1010,21 @@ The SQL authority guard receives the selected connection dialect. Closed
 StarRocks optimizer hints are allowed in structural inspection; executable
 comments remain uncertain. `unknown` SQL requires review under the existing
 policy and remains blocked in read-only Python queries (ADR-0107).
+
+## Custom OpenAI protocol
+
+Per ADR-0109, `AiProviderProfile.customApi` selects `chat-completions` (legacy default) or `responses`. The existing pi-ai adapter owns the selected wire format, streamed events and tool-result replay. Custom `off` explicitly maps to `none`; other requested efforts use the selected protocol. Base URLs identify the API root, usually ending in `/v1`. Built-in providers retain their catalog protocol and reasoning capabilities.
+
+## Chat tabs and local history
+
+ADR-0110 supersedes ADR-0108. Sidebar tabs share the existing conversation store and
+execution service; main-area Chat uses workspace tabs. Open-tab order is in-memory
+and is reset across Vault changes/restarts. Closing only removes a view; drafts and
+turns remain in local history without newest-20 pruning, including legacy history.
+Blank sessions remain memory-only. Tabs preserve identity when moved or promoted
+to a file. The More menu exposes promotion as “Store as local file”; subsequent
+writes autosave. History merges sources by session identity, prefers file-backed
+entries, searches titles/paths and reveals 50 more rows at a time. File entries
+display the actual filename and Vault-relative directory; storage/version labels
+are not product UI. Protection/discard IPC remains compatible, with no count-based
+deletion and no discard control in Chat. Result-cache lifetimes are unchanged.

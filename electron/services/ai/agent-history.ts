@@ -33,8 +33,6 @@ const STELA_RUN_EVENT = "stela_agent_run_event";
 const STELA_PROPOSAL_RESPONSE = "stela_agent_proposal_response";
 const STELA_RUN_FINISHED = "stela_agent_run_finished";
 const SAFE_SEGMENT = /^[A-Za-z0-9_-]{1,128}$/;
-export const MAX_AGENT_HISTORY_SESSIONS = 20;
-const pruneQueues = new Map<string, Promise<AgentHistoryRef[]>>();
 
 function assertSafeSegment(value: string, label: string): void {
   if (!SAFE_SEGMENT.test(value)) {
@@ -579,40 +577,12 @@ export async function prepareLocalAgentHistorySession(
     : localRef;
 }
 
-async function pruneLocalAgentHistoryOnce(
-  vaultPath: string,
+/** Compatibility hook: history is retained until explicitly removed (ADR-0110). */
+export async function pruneLocalAgentHistory(
+  _vaultPath: string,
   deviceSlug: string,
-  getProtectedSessionIds: () => ReadonlySet<string>,
-): Promise<AgentHistoryRef[]> {
-  const candidates = (await listAgentHistory(vaultPath, deviceSlug))
-    .filter((summary) => summary.deviceSlug === deviceSlug)
-    .slice(MAX_AGENT_HISTORY_SESSIONS)
-    .map(({ sessionId }) => ({ sessionId, deviceSlug }));
-  const resolvedCandidates = await Promise.all(
-    candidates.map(async (ref) => ({ ref, filePath: await sessionPath(vaultPath, ref) })),
-  );
-  const stale: AgentHistoryRef[] = [];
-  for (const { ref, filePath } of resolvedCandidates) {
-    if (getProtectedSessionIds().has(ref.sessionId)) continue;
-    await fs.rm(filePath, { force: true });
-    stale.push(ref);
-  }
-  return stale;
-}
-
-export function pruneLocalAgentHistory(
-  vaultPath: string,
-  deviceSlug: string,
-  getProtectedSessionIds: () => ReadonlySet<string> = () => new Set(),
+  _getProtectedSessionIds: () => ReadonlySet<string> = () => new Set(),
 ): Promise<AgentHistoryRef[]> {
   assertSafeSegment(deviceSlug, "device");
-  const key = `${vaultPath}\0${deviceSlug}`;
-  const previous = pruneQueues.get(key) ?? Promise.resolve([]);
-  const next = previous
-    .catch(() => [])
-    .then(() => pruneLocalAgentHistoryOnce(vaultPath, deviceSlug, getProtectedSessionIds));
-  pruneQueues.set(key, next);
-  return next.finally(() => {
-    if (pruneQueues.get(key) === next) pruneQueues.delete(key);
-  });
+  return [];
 }

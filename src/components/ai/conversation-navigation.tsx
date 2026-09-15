@@ -13,6 +13,8 @@ interface IConversationNavigationProps {
 export function ConversationNavigation({ turns, scrollRef, onNavigate }: IConversationNavigationProps) {
   const t = useT();
   const [activeId, setActiveId] = useState<string>();
+  const [hoveredId, setHoveredId] = useState<string>();
+  const [focusedId, setFocusedId] = useState<string>();
   const navRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -70,19 +72,27 @@ export function ConversationNavigation({ turns, scrollRef, onNavigate }: IConver
     setActiveId(id);
   };
 
+  const waveIndex = turns.findIndex(turn => turn.id === (hoveredId ?? focusedId));
+
   return (
     <Tooltip.Provider delayDuration={150}>
-      <nav ref={navRef} aria-label={t("conversation.navigation")} className="stela-conversation-navigation absolute right-1 top-1/2 max-h-[80%] w-8 -translate-y-1/2 overflow-y-auto overscroll-contain py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <nav ref={navRef} onPointerLeave={() => setHoveredId(undefined)} aria-label={t("conversation.navigation")} className="stela-conversation-navigation absolute right-1 top-1/2 max-h-[80%] w-7 -translate-y-1/2 overflow-y-auto overscroll-contain py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {turns.map((turn, index) => {
           const summary = turn.input.replace(/\s+/g, " ").trim() || t("conversation.turn", { number: index + 1 });
           const label = `${index + 1}. ${summary}`;
           const active = turn.id === activeId;
+          const distance = waveIndex < 0 ? Infinity : Math.abs(index - waveIndex);
+          const influence = Math.max(0, 1 - distance / 4);
+          const width = Math.max(active ? 8 : 5, 5 + influence * 19);
           return (
             <Tooltip.Root key={turn.id}>
               <Tooltip.Trigger asChild>
                 <button type="button" aria-label={label} aria-current={active ? "location" : undefined} onClick={() => jump(turn.id)}
-                  className="group flex h-6 w-full items-center justify-end rounded px-1.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary">
-                  <span className={`h-0.5 rounded-full transition-all ${active ? "w-5 bg-primary" : "w-3 bg-muted-foreground/30 group-hover:w-5 group-hover:bg-muted-foreground"}`} />
+                  onPointerEnter={event => { if (event.pointerType !== "touch") setHoveredId(turn.id); }}
+                  onFocus={() => setFocusedId(turn.id)} onBlur={() => setFocusedId(undefined)}
+                  className="flex h-3.5 w-full items-center justify-end rounded px-0.5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary">
+                  <span style={{ width, opacity: active ? 1 : 0.3 + influence * 0.5 }}
+                    className={`h-0.5 shrink-0 rounded-full transition-[width,opacity] duration-150 ease-out motion-reduce:transition-none ${active ? "bg-primary" : "bg-muted-foreground"}`} />
                 </button>
               </Tooltip.Trigger>
               <Tooltip.Portal>

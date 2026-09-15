@@ -120,11 +120,10 @@ with SQL folded behind a lightweight control.
 `stela-conversation` JSON document stored as `*.stela.chat`. It contains identity,
 title/timestamps, default connection, draft, turns and embedded `sessionJsonl`.
 New Chat actions create temporary sessions. Blank sessions remain in memory; drafts
-and turns persist locally under `.stela/chat-sessions.local/`. Retention keeps the
-latest 20, protecting open, running and background-maintained sessions. Explicit
+and turns persist locally under `.stela/chat-sessions.local/`. Non-empty sessions remain in local history without count-based cleanup. Explicit
 Save chooses a visible Vault directory (default `Chats/`) and title, preserves
 session identity and rejects filename collisions. Subsequent changes autosave.
-Saved conversations are outside temporary retention (ADR-0108).
+Saved conversations appear as files in the Vault (ADR-0110).
 Optional `draftMessage` and turn `message` retain ordered structured references;
 legacy strings remain readable text projections (ADR-0103).
 Conversation submissions carry the resolved UI locale (`zh` or `en`) into the
@@ -884,8 +883,7 @@ While a run is active, process entries stay in causal order around tool groups.
 After settlement, prior process entries collect into one closed disclosure, and
 strategy-review entries are also closed by default
 ([ADR-0074](./adr/0074-streamed-agent-process-narration.md)).
-Each device retains only its 20 most recently updated session files; cleanup
-never deletes another device's directory ([ADR-0047](./adr/0047-bounded-device-agent-history-retention.md)).
+Device session files remain locally retained without count-based cleanup (ADR-0110); other devices' histories are read without mutation.
 
 Agent `run_query` accepts an optional Vault `connectionName`; omission selects
 the current note connection. The connector's `queryLanguages` and
@@ -1414,3 +1412,26 @@ Ambiguous syntax and unrecognized statements require review, with an explicit
 uncertainty explanation; callers must never treat unknown as read-only. The
 optional dialect argument enables only dialect-specific lexical exceptions
 (ADR-0107).
+
+## Custom OpenAI protocol
+
+Per ADR-0109, `AiProviderProfile.customApi` selects `chat-completions` (legacy default) or `responses`. The existing pi-ai adapter owns the selected wire format, streamed events and tool-result replay. Custom `off` explicitly maps to `none`; other requested efforts use the selected protocol. Base URLs identify the API root, usually ending in `/v1`. Built-in providers retain their catalog protocol and reasoning capabilities.
+
+## Chat tabs and local history
+
+ADR-0110 supersedes ADR-0108. Sidebar tabs share the existing conversation store and
+execution service; main-area Chat uses workspace tabs. Open-tab order is in-memory
+and is reset across Vault changes/restarts. Closing only removes a view; drafts and
+turns remain in local history without newest-20 pruning, including legacy history.
+Blank sessions remain memory-only. Tabs preserve identity when moved or promoted
+to a file. The More menu exposes promotion as “Store as local file”; subsequent
+writes autosave. History merges sources by session identity, prefers file-backed
+entries, searches titles/paths and reveals 50 more rows at a time. File entries
+display the actual filename and Vault-relative directory; storage/version labels
+are not product UI. Protection/discard IPC remains compatible, with no count-based
+deletion and no discard control in Chat. Result-cache lifetimes are unchanged.
+
+Opening the Chat sidebar with no open tabs creates one blank in-memory conversation.
+Closing its last tab while the sidebar remains open also creates a blank composer.
+Concurrent initialization is deduplicated and must not replace tabs opened while
+creation is pending; empty conversations do not enter persistent history.

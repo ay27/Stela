@@ -146,7 +146,7 @@ export function ConversationView({ path, tabId, side = false }: { path: string; 
         <ConnectionPicker value={connectionName} onChange={name => store.edit(path, draft, name)} />
       </header>
       <div className="relative flex min-h-0 flex-1">
-      <div ref={scroll} onScroll={() => { const el = scroll.current!; following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }} className={`min-h-0 min-w-0 flex-1 overflow-auto ${side ? "pl-3 pr-6" : "pl-6 pr-12"}`}>
+      <div ref={scroll} onScroll={() => { const el = scroll.current!; following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }} className={`min-h-0 min-w-0 flex-1 overflow-auto ${turns.length ? "mx-8" : ""} ${side ? "px-2" : "px-6"}`}>
         <div className={`mx-auto w-full max-w-3xl space-y-12 pt-6 pb-2.5 ${!turns.length ? "flex h-full flex-col items-center justify-center" : ""}`}>
           {!turns.length && <div className="flex max-w-sm flex-col items-center gap-3 pb-10 text-center"><AgentPanelEmptyState actions={emptyActions} knowledgeMeta="" onRun={action => { void useChatWorkspace.getState().quick({ ...action, title: "Chat", connectionName, autoSend: true }).catch(e => setError(String(e))); }} /></div>}
           {turns.map(turn => <Turn key={turn.id} turn={turn} onRespond={respond} reuse={reuse} />)}

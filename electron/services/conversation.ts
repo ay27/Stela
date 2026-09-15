@@ -205,6 +205,7 @@ export async function submitConversation(vault: string, input: IConversationSubm
     try {
       await mutate(state, d => {
         d.draft = ""; d.draftTask = undefined; d.draftMessage = { version: 1, segments: [], resources: [] }; d.connectionName = input.connectionName;
+        if (state.snapshot.temporary && !d.turns.length && d.title === "Chat") d.title = input.input.replace(/\s+/g, " ").trim().slice(0, 60) || "Chat";
         d.turns.push({ id: input.requestId, input: input.input, message: input.message, task: input.task, connectionName: input.connectionName, startedAt: Date.now(), status: "running", events: [], responses: [], runs: [] });
       });
     } catch (e) { active.delete(p); throw e; }
@@ -380,7 +381,7 @@ export async function listConversations(vault: string): Promise<IConversationSum
         try {
           const snapshot = await inspectConversation(vault, file);
           const d = snapshot.document;
-          const summary = { path: file, sessionId: d.id, title: d.title, updatedAt: d.updatedAt, temporary: local };
+          const summary = { path: file, sessionId: d.id, title: d.title === "Chat" ? (d.turns[0]?.input || d.draft).replace(/\s+/g, " ").trim().slice(0, 60) || d.title : d.title, updatedAt: d.updatedAt, temporary: local };
           if (!found.has(d.id) || !local) found.set(d.id, summary);
         } catch { /* One unreadable file must not hide other sessions. */ }
       }
@@ -393,13 +394,7 @@ export async function listConversations(vault: string): Promise<IConversationSum
 export async function protectConversations(vault: string, paths: string[]) {
   const opened = new Set(await Promise.all(paths.map(file => target(vault, file))));
   for (const [file, state] of resident) if (state.vault === vault) state.opened = opened.has(file);
-  const recent = (await listConversations(vault)).filter(item => item.temporary);
-  for (const item of recent.slice(20)) {
-    const state = resident.get(item.path);
-    if (state?.opened || active.has(item.path) || state?.background) continue;
-    await fs.rm(await target(vault, item.path), { force: true });
-    resident.delete(item.path); unwritten.delete(item.path);
-  }
+
 }
 
 export async function discardConversation(vault: string, file: string) {

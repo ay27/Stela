@@ -348,6 +348,8 @@ export interface AiProviderProfile {
   /** Used when vendorId is custom; ignored for builtins. */
   baseUrl: string;
   contextWindow: AiContextWindow;
+  /** Custom wire protocol; absent legacy values mean chat-completions. */
+  customApi?: "chat-completions" | "responses";
   /** Requested Agent reasoning effort. Runtime may clamp this to model support. */
   reasoningEffort: AiReasoningEffort;
   hasApiKey: boolean;

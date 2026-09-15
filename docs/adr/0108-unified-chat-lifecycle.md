@@ -2,7 +2,8 @@
 type: ADR
 id: "0108"
 title: "Unified temporary and saved Chat lifecycle"
-status: active
+status: superseded
+superseded_by: "0110"
 date: 2026-09-14
 ---
 

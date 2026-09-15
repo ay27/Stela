@@ -52,7 +52,8 @@
     "compare:data-agent-bench": "tsx scripts/eval/compare-data-agent-bench.ts",
     "test:eval:data-agent-bench": "tsx scripts/eval/data-agent-bench/leaderboard.test.ts && tsx electron/services/ai/analysis-efficiency.test.ts && tsx scripts/eval/data-agent-bench/runtime.test.ts && tsx scripts/eval/data-agent-bench/headless-python.test.ts && tsx scripts/eval/data-agent-bench/python-query-bridge.test.ts && tsx scripts/eval/data-agent-bench/paired-comparison.test.ts && python3 -m unittest scripts/eval/data-agent-bench/bridge_test.py && tsx scripts/eval/data-agent-bench/bridge.integration.test.ts && tsx scripts/eval/data-agent-bench/runner.integration.test.ts && tsx scripts/eval/data-agent-bench/report.test.ts && node scripts/eval/data-agent-bench/ssh-connector.test.mjs",
     "test:canvas": "tsx electron/services/ai/agent-tools.test.ts && npm run test:charts && node scripts/run-canvas-renderer-tests.mjs",
-    "test:conversation": "tsx electron/shared/conversation-routing.test.ts && tsx src/state/conversation.test.ts && tsx src/components/ai/conversation-timeline.test.ts && node scripts/run-conversation-tests.mjs"
+    "test:chat-controls": "node scripts/run-chat-controls-tests.mjs",
+    "test:conversation": "tsx electron/shared/conversation-routing.test.ts && tsx src/state/conversation.test.ts && tsx src/components/ai/conversation-timeline.test.ts && tsx src/components/ai/chat-history.test.ts && node scripts/run-conversation-tests.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",

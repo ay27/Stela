@@ -83,3 +83,40 @@ useChatWorkspace.getState().close(canonical);
 assert.equal(cancellations, 0);
 assert.equal(useConversation.getState().drafts[canonical], "kept draft");
 console.log("Unified Chat placement preserves one session, draft/editor, connection, prior tab and execution; close does not cancel.");
+
+// History menus supply a summary; only its identity may cross strict IPC.
+const historySummary = { deviceSlug: "device-test", sessionId: "session-test", title: "Old Chat", createdAt: 1, updatedAt: 2, isLocal: true };
+let imported = false;
+bridge.importHistory = async ref => {
+  assert.deepEqual(ref, { deviceSlug: "device-test", sessionId: "session-test" });
+  imported = true;
+  return snapshot;
+};
+await useChatWorkspace.getState().importLegacy(historySummary, "side");
+assert.equal(imported, true);
+console.log("Legacy Chat import projects summary metadata to the strict IPC identity.");
+
+const secondPath = "/real-vault/second.stela.chat";
+useChatWorkspace.getState().move(secondPath, "side");
+useChatWorkspace.getState().move(canonical, "side");
+assert.deepEqual(useChatWorkspace.getState().sidePaths, [canonical, secondPath]);
+useChatWorkspace.getState().close(canonical);
+assert.equal(useChatWorkspace.getState().sidePath, secondPath);
+useChatWorkspace.getState().close(secondPath);
+assert.deepEqual(useChatWorkspace.getState().sidePaths, []);
+assert.equal(useChatWorkspace.getState().sidePath, null);
+assert.equal(cancellations, 0);
+console.log("Chat tabs deduplicate and close to the adjacent tab, then an empty state.");
+
+const { ensureSidebarChat } = await import("./chat-workspace");
+let blankCreations = 0;
+bridge.temporary = async () => { blankCreations++; return snapshot; };
+await Promise.all([ensureSidebarChat(), ensureSidebarChat()]);
+assert.equal(blankCreations, 1);
+assert.deepEqual(useChatWorkspace.getState().sidePaths, [snapshot.path]);
+await ensureSidebarChat();
+assert.equal(blankCreations, 1, "existing tabs must not be replaced");
+useChatWorkspace.getState().close(snapshot.path);
+await ensureSidebarChat();
+assert.equal(blankCreations, 2, "closing the last tab allows a fresh blank composer");
+console.log("Empty sidebar initializes one Chat and deduplicates concurrent initialization.");

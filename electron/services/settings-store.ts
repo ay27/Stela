@@ -102,6 +102,7 @@ function sanitizeProfile(input: unknown, fallbackHasKey: boolean): AiProviderPro
     baseUrl: baseUrl || (vendorId === "custom" ? "https://api.openai.com/v1" : ""),
     contextWindow: snapContextWindow(r.contextWindow, 128_000),
     reasoningEffort: sanitizeReasoningEffort(r.reasoningEffort),
+    customApi: r.customApi === "responses" ? "responses" : "chat-completions",
     hasApiKey: r.hasApiKey === true || fallbackHasKey,
   };
 }

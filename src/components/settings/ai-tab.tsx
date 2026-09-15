@@ -595,6 +595,13 @@ export function AiTab() {
                   )}
                 </Field>
 
+                {isCustom && <Field label={t("ai.customApi.label")} hint={t("ai.customApi.description")}>
+                  <select className={fieldClass} value={draft.customApi ?? "chat-completions"}
+                    onChange={e => updateDraft({ customApi: e.target.value as "chat-completions" | "responses" })}>
+                    <option value="chat-completions">Chat Completions</option>
+                    <option value="responses">Responses</option>
+                  </select>
+                </Field>}
                 <Field
                   label={t("ai.reasoningEffort.label")}
                   hint={
