@@ -55,7 +55,7 @@ export function createSemanticAgent(input: {
       if (Buffer.byteLength(system + user, "utf8") + maxTokens > transport.model.contextWindow) throw new Error("Semantic batch exceeds model context; split the input");
       const answer = await transport.models.completeSimple(transport.model, {
         systemPrompt: system, messages: [{ role: "user", content: user, timestamp: Date.now() }],
-      }, { signal, maxTokens, maxRetries: 0, reasoning: transport.reasoning.effective });
+      }, { signal, maxTokens, maxRetries: 0, reasoning: transport.reasoning.effective === "off" ? undefined : transport.reasoning.effective });
       input.onUsage(answer.usage);
       if (answer.stopReason === "error" || answer.stopReason === "aborted") throw new Error(answer.errorMessage ?? "Semantic model failed");
       return { text: assistantText(answer), tokens: answer.usage.totalTokens };

@@ -188,6 +188,27 @@ async function main() {
     assert.ok(retainedCount > 20);
     assert.equal((await conversation.listConversations(vault)).filter(item => item.temporary).length, retainedCount);
 
+    // A real legacy Chat remains byte-identical on read, then migrates atomically on send.
+    const legacyPath = join(vault, "Legacy.stela.chat");
+    const legacyId = randomUUID();
+    const legacyDocument = { ...structuredClone(s.document), id: legacyId, version: 1, turns: [],
+      sessionJsonl: JSON.stringify({ type: "session", version: 3, id: legacyId, cwd: vault, timestamp: new Date().toISOString() }) + "\n" +
+        JSON.stringify({ type: "message", id: "historical-user", parentId: null, timestamp: new Date().toISOString(),
+          message: { role: "user", content: "Legacy business context", timestamp: Date.now() } }) + "\n" };
+    const legacyRaw = JSON.stringify(legacyDocument);
+    await writeFile(legacyPath, legacyRaw);
+    const legacySnapshot = await conversation.readConversation(vault, legacyPath);
+    assert.equal(await readFile(legacyPath, "utf8"), legacyRaw);
+    phase = "final"; step = 0;
+    await send(legacySnapshot, "Continue the previous analysis");
+    const migrated = await waitFor(legacyPath, done);
+    assert.equal(migrated.document.version, 2);
+    assert.equal(JSON.parse(migrated.document.sessionJsonl.split("\n")[0]).v, 4);
+    const legacyBackup = JSON.parse(await readFile(`${legacyPath}.pre-pi087.bak`, "utf8"));
+    assert.equal(legacyBackup.sessionJsonl, legacyDocument.sessionJsonl);
+    assert.equal(legacyBackup.version, 1);
+    assert.ok(JSON.stringify(requests.at(-1)).includes("Legacy business context"));
+
     // Chat must dispatch the returned background job, and maintenance must remain on its own turn.
     await patchAppSettings(vault, { ai: { automaticSkillMaintenanceEnabled: true } });
     phase = "repair"; step = 0;

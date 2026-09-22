@@ -401,7 +401,7 @@ export function parseStrategyReview(text: string): StrategyReviewAdvice {
 
 export async function runStrategyReview(input: {
   models: Models;
-  model: Model;
+  model: Model<import("@earendil-works/pi-ai").Api>;
   reasoningEffort: AiReasoningEffort;
   signal: AbortSignal;
   sessionId: string;
@@ -417,7 +417,7 @@ export async function runStrategyReview(input: {
       signal: input.signal,
       temperature: 0.1,
       maxTokens: 500,
-      reasoning: input.reasoningEffort,
+      reasoning: input.reasoningEffort === "off" ? undefined : input.reasoningEffort,
       cacheRetention: "short",
       sessionId: input.sessionId,
     },

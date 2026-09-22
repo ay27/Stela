@@ -357,6 +357,7 @@ export function createStelaCredentialStore(apiKey: string): CredentialStore {
     ? { type: "api_key", key: apiKey }
     : undefined;
   return {
+    async list() { return []; },
     async read() {
       return credential;
     },
@@ -424,7 +425,7 @@ export interface ReasoningEffortResolution {
 }
 
 export function resolveReasoningEffort(
-  model: Model,
+  model: Model<import("@earendil-works/pi-ai").Api>,
   requested: AiReasoningEffort,
 ): ReasoningEffortResolution {
   const supported = getSupportedThinkingLevels(model) as AiReasoningEffort[];
@@ -442,7 +443,7 @@ export function createTransportForProfile(
   profileId?: string | null,
 ): {
   models: Models;
-  model: Model;
+  model: Model<import("@earendil-works/pi-ai").Api>;
   profile: AiProviderProfile;
   reasoning: ReasoningEffortResolution;
 } {
@@ -490,7 +491,7 @@ export function createTransportForProfile(
 /** @deprecated use createTransportForProfile */
 export function createStelaTransport(settings: AiSettings, apiKey: string): {
   models: Models;
-  model: Model;
+  model: Model<import("@earendil-works/pi-ai").Api>;
 } {
   const { models, model } = createTransportForProfile(settings, apiKey);
   return { models, model };
@@ -533,7 +534,7 @@ export async function callChatCompletions({
         },
       ],
     },
-    { reasoning: "off", cacheRetention: "short", ...(sessionId ? { sessionId } : {}) },
+    { reasoning: undefined, cacheRetention: "short", ...(sessionId ? { sessionId } : {}) },
   );
   onMessage?.(message);
 
@@ -591,7 +592,7 @@ export async function streamChatCompletions({
         signal,
         temperature: 0.2,
         maxTokens: maxTokens ?? 48,
-        reasoning: "off",
+        reasoning: undefined,
         cacheRetention: "short",
         ...(sessionId ? { sessionId } : {}),
       },

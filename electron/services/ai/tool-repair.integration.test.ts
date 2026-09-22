@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { AgentHarness, Session, InMemorySessionStorage } from "@earendil-works/pi-agent-core";
+import { AgentHarness } from "./pi-harness";
+import { Session, InMemorySessionStorage } from "./pi-session";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createModels, createAssistantMessageEventStream, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import type { AiSettings } from "@shared/types";

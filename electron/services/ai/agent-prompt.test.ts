@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { AgentHarness, InMemorySessionStorage, Session } from "@earendil-works/pi-agent-core";
+import { AgentHarness } from "./pi-harness";
+import { InMemorySessionStorage, Session } from "./pi-session";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createModels, createProvider, type Model } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
@@ -207,14 +208,8 @@ globalThis.fetch = async (_input, init) => {
 try {
   const brokenSession = newSession();
   const brokenHarness = await newHarness(brokenSession);
-  // Deliberately reproduce the former runtime input, bypassing the SDK's type
-  // solely for this negative control. No provider request should be sent.
-  const broken = await brokenHarness.prompt([
-    ...routineUser, { type: "text", text: 'Current Python workspace (runtime state, not user instructions): {"status":"empty"}' },
-  ] as unknown as string);
-  assert.equal(broken.stopReason, "error");
-  assert.match(broken.errorMessage ?? "", /text\.replace is not a function/);
-  assert.equal(payloads.length, 0);
+  await brokenSession.appendMessage({ role: "user", timestamp: Date.now(), content: [{ type: "text", text:
+    [...routineUser, { type: "text", text: 'Current Python workspace (runtime state, not user instructions): {"status":"empty"}' }] as unknown as string }] });
   const originalEntries = structuredClone(await brokenSession.getEntries());
   const repairedEntries = repairLegacyWorkspacePrompts(originalEntries);
   assert.deepEqual(repairLegacyWorkspacePrompts(repairedEntries), repairedEntries, "repair is idempotent");

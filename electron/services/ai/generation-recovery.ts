@@ -188,7 +188,9 @@ export function withGenerationRecovery(models: Models, options: {
         final = { ...final, content: [], stopReason: cancelled ? "aborted" : "error",
           errorMessage: cancelled ? "Generation cancelled" : `Generation interrupted: ${String(timeout.signal.reason)}` };
       }
-      final = { ...final, usage };
+      final = final.stopReason === "pending"
+        ? { ...final, usage, content: [], stopReason: "error", errorMessage: "Provider ended with an unsettled response" }
+        : { ...final, usage };
       if (final.stopReason === "error" || final.stopReason === "aborted") {
         try { options.onPreview?.(null); } catch { /* presentation is best effort */ }
         const reason = final.stopReason;
@@ -196,7 +198,7 @@ export function withGenerationRecovery(models: Models, options: {
         output.push({ type: "error", reason, error: final });
       } else {
         output.push({ type: "start", partial: final });
-        output.push({ type: "done", reason: final.stopReason, message: final });
+        output.push({ type: "done", reason: final.stopReason as Exclude<AssistantMessage["stopReason"], "pending" | "error" | "aborted">, message: final });
       }
       output.end(final);
     })().catch((error: unknown) => {

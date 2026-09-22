@@ -21,7 +21,7 @@ export const conversationTurnSchema = z.object({
   runs: z.array(z.object({ runId: z.string(), blockId: z.string(), sql: z.string(), queryLanguage: z.enum(["sql", "mongodb"]).optional(), status: z.enum(["ok", "err", "running"]), message: z.string().nullable(), startedAt: z.number(), elapsedMs: z.number(), rowCount: z.number(), connectionName: z.string(), notePath: z.string().nullable() })),
 });
 export const conversationSchema = z.object({
-  kind: z.literal("stela-conversation"), version: z.literal(1), id: z.string(), title: z.string(),
+  kind: z.literal("stela-conversation"), version: z.union([z.literal(1), z.literal(2)]), id: z.string(), title: z.string(),
   createdAt: z.number(), updatedAt: z.number(), connectionName: z.string().nullable(), draft: z.string(), draftMessage: agentMessageSchema.optional(),
   draftTask: conversationTaskSchema.optional(),
   turns: z.array(conversationTurnSchema), sessionJsonl: z.string(),

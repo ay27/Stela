@@ -4,7 +4,8 @@ import type { AgentMessageContent } from "../shared/types";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { JsonlSessionStorage, ok } from "@earendil-works/pi-agent-core";
+import { ok } from "@earendil-works/pi-agent-core";
+import { JsonlSessionStorage } from "./ai/pi-session";
 import { conversationSchema, CONVERSATION_EXTENSION, type ConversationDocument, type IConversationSnapshot, type IConversationSubmit, type IConversationSummary, type IConversationTask } from "@shared/conversation";
 import type { AgentEvent, AgentProposalResponse } from "@shared/types";
 import { directConversationSql } from "@shared/conversation-routing";
@@ -175,7 +176,17 @@ async function sessionStorage(state: IActiveConversation, vault: string) {
   const io: Parameters<typeof JsonlSessionStorage.open>[0] = {
     readTextFile: async () => ok(state.snapshot.document.sessionJsonl),
     readTextLines: async (_p, options) => ok(state.snapshot.document.sessionJsonl.split("\n").slice(0, options?.maxLines)),
-    writeFile: async (_p, value) => { await mutate(state, d => { d.sessionJsonl = typeof value === "string" ? value : new TextDecoder().decode(value); }); return ok(undefined); },
+    writeFile: async (_p, value) => {
+      const journal = typeof value === "string" ? value : new TextDecoder().decode(value);
+      const upgraded = JSON.parse(journal.split("\n")[0]).v === 4;
+      if (upgraded && state.snapshot.document.version === 1 && state.snapshot.document.sessionJsonl) {
+        const backup = await ensureWithinVault(vault, `${state.snapshot.path}.pre-pi087.bak`);
+        try { await fs.writeFile(backup, JSON.stringify(state.snapshot.document), { flag: "wx", mode: 0o600 }); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+      }
+      await mutate(state, d => { d.sessionJsonl = journal; if (upgraded) d.version = 2; });
+      return ok(undefined);
+    },
     appendFile: async (_p, value) => { await mutate(state, d => { d.sessionJsonl += typeof value === "string" ? value : new TextDecoder().decode(value); }); return ok(undefined); },
   };
   return state.snapshot.document.sessionJsonl
@@ -419,6 +430,7 @@ export async function importConversationHistory(vault: string, ref: { deviceSlug
   const jsonl = await fs.readFile(await ensureWithinVault(vault, path.join(vault, ".stela/agent-history", ref.deviceSlug, `${ref.sessionId}.jsonl`)), "utf8");
   await mutate(state, d => {
     d.id = ref.sessionId; d.sessionJsonl = jsonl;
+    if (jsonl && JSON.parse(jsonl.split("\n")[0]).v === 4) d.version = 2;
     d.createdAt = history.summary.createdAt;
     d.turns = history.runs.map(run => ({ id: run.request.runId, input: run.request.prompt,
       message: run.request.message, task: { entryPoint: run.request.entryPoint, canvasRefresh: run.request.canvasRefresh, workspaceContext: run.request.workspaceContext },

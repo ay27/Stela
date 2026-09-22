@@ -30,7 +30,7 @@ models.streamSimple = () => {
   stream.push({ type: "start", partial: reply });
   if (reply.stopReason === "error" || reply.stopReason === "aborted") {
     stream.push({ type: "error", reason: reply.stopReason, error: reply });
-  } else stream.push({ type: "done", reason: reply.stopReason, message: reply });
+  } else stream.push({ type: "done", reason: reply.stopReason as "stop" | "toolUse", message: reply });
   stream.end(reply);
   return stream;
 };

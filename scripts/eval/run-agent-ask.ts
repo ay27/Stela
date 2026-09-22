@@ -22,11 +22,8 @@
  *   sqlIndex.query      由语料的 runsql 事实回答，让 search_sql_usage 真的可用
  */
 
-import {
-  AgentHarness,
-  InMemorySessionStorage,
-  Session,
-} from "@earendil-works/pi-agent-core";
+import { AgentHarness } from "../../electron/services/ai/pi-harness";
+import { InMemorySessionStorage, Session } from "../../electron/services/ai/pi-session";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { promises as fs } from "node:fs";
 import path from "node:path";

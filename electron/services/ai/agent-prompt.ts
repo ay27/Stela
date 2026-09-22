@@ -1,3 +1,4 @@
+import type { SessionTreeEntry } from "./pi-session";
 /**
  * Agent 的 system / user 消息构造。
  *
@@ -6,7 +7,7 @@
  * 把提示词摘出来，评测脚本就能复用**产品同一份提示**而不是抄一份副本。
  */
 
-import type { AgentMessage, SessionTreeEntry } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 import type { AgentRunRequest, ConnectionEntry } from "@shared/types";

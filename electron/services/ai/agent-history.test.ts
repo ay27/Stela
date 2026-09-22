@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -100,10 +100,7 @@ try {
   });
   await appendAgentHistoryEvent(storage, { type: "final", runId: "run_1", content: "Revenue is 42.", stepIndex: 2 });
   await appendAgentHistoryFinished(storage, "run_1");
-  const lastEntry = (await storage.getEntries()).at(-1);
-  await appendFile(
-    path.join(vaultPath, ".stela", "agent-history", "laptop", "session_1.jsonl"),
-    [
+  for (const event of [
       { type: "plan_updated", runId: "run_1" },
       {
         type: "plan_updated",
@@ -123,19 +120,9 @@ try {
         content: "bad",
         phase: "completed",
       },
-    ]
-      .map((event, index) =>
-        JSON.stringify({
-          type: "custom",
-          id: `invalid_event_${index}`,
-          parentId: lastEntry?.id ?? null,
-          timestamp: new Date().toISOString(),
-          customType: "stela_agent_run_event",
-          data: { runId: "run_1", event },
-        }),
-      )
-      .join("\n") + "\n",
-  );
+    ]) {
+    await storage.appendCustomEntry("stela_agent_run_event", { runId: "run_1", event });
+  }
 
   const history = await loadAgentHistory(vaultPath, { sessionId: "session_1", deviceSlug: "laptop" });
   assert.equal(history.summary.title, "Show daily revenue");

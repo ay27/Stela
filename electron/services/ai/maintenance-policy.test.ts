@@ -1,3 +1,4 @@
+import { normalizeContext } from "@earendil-works/pi-ai";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -39,7 +40,7 @@ console.log('maintenance policy tests passed');
 const { streamSimple } = await import('@earendil-works/pi-ai/api/openai-completions');
 let payload: Record<string, unknown> | undefined;
 const response = await streamSimple(selected as Model<'openai-completions'>,
-  { messages: [{ role: 'user', content: 'No new knowledge.', timestamp: 0 }] },
+  normalizeContext({ messages: [{ role: 'user', content: 'No new knowledge.', timestamp: 0 }] }),
   { apiKey: 'offline-test-key', onPayload: value => {
     payload = value as Record<string, unknown>;
     throw new Error('offline: stop before HTTP');

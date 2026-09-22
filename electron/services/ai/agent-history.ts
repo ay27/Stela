@@ -6,7 +6,7 @@ import {
   JsonlSessionStorage,
   loadJsonlSessionMetadata,
   type SessionTreeEntry,
-} from "@earendil-works/pi-agent-core";
+} from "./pi-session";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
 import { AppError } from "@shared/errors";
@@ -54,8 +54,8 @@ function envFor(vaultPath: string): NodeExecutionEnv {
   return new NodeExecutionEnv({ cwd: vaultPath });
 }
 
-function toMillis(value: string): number {
-  const millis = Date.parse(value);
+function toMillis(value: string | number): number {
+  const millis = typeof value === "number" ? value : Date.parse(value);
   return Number.isFinite(millis) ? millis : 0;
 }
 
@@ -68,15 +68,7 @@ async function appendCustom(
   customType: string,
   data: unknown,
 ): Promise<void> {
-  const entry: Extract<SessionTreeEntry, { type: "custom" }> = {
-    type: "custom",
-    id: await storage.createEntryId(),
-    parentId: await storage.getLeafId(),
-    timestamp: new Date().toISOString(),
-    customType,
-    data,
-  };
-  await storage.appendEntry(entry);
+  await storage.appendCustomEntry(customType, data);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -549,13 +541,15 @@ export async function forkAgentHistorySession(
   source: AgentHistoryRef,
 ): Promise<AgentHistoryRef> {
   const sourcePath = await sessionPath(vaultPath, source);
-  const env = envFor(vaultPath);
-  const sourceStorage = await JsonlSessionStorage.open(env, sourcePath);
   const sessionId = `sess_${randomUUID()}`;
-  const target = await openLocalAgentSessionStorage(vaultPath, localDeviceSlug, sessionId);
-  for (const entry of await sourceStorage.getEntries()) {
-    await target.appendEntry(entry);
-  }
+  const destination = await sessionPath(vaultPath, { deviceSlug: localDeviceSlug, sessionId });
+  const raw = await fs.readFile(sourcePath, 'utf8');
+  const lines = raw.split('\n');
+  const header = JSON.parse(lines[0]);
+  header.id = sessionId;
+  lines[0] = JSON.stringify(header);
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await fs.writeFile(destination, lines.join('\n'), { flag: 'wx', mode: 0o600 });
   return { sessionId, deviceSlug: localDeviceSlug };
 }
 

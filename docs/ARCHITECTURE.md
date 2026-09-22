@@ -382,7 +382,7 @@ Stela AI is **search-first and provider-backed**, not on-device RAG. Retrieval u
 |---------|----------------|
 | Chat / agent transport | `@earendil-works/pi-ai` — built-in provider factories by `vendorId`, or `createProvider` + `openAICompletionsApi` for `custom` ([ADR-0022](./adr/0022-ai-multi-provider-profiles.md)) |
 | SQL inline transport | Every completion profile → bounded, reasoning-off, streamed pi-ai Chat ([ADR-0087](./adr/0087-chat-only-sql-inline-completion.md)) |
-| Agent loop | `@earendil-works/pi-agent-core` `AgentHarness` + in-memory `Session` |
+| Agent loop | `@earendil-works/pi-agent-core` native main lane via `pi-harness.ts` / `pi-session.ts` |
 | API key | `{vault}/.stela/secrets/ai_{deviceSlug}_{profileId}.json` via `safeStorage` (injected into pi `CredentialStore`; not pi `auth.json`) |
 | Settings | vault `.stela/settings.json` → shared `ai.profiles` (including requested reasoning effort), chat/agent `activeProfileId`, independent inline `completionProfileId` (+ policy flags); keys never in settings |
 
@@ -814,7 +814,7 @@ bounded cursor context
 - `ask_user` reuses the same blocking proposal handshake with kind `question`, resolving to the answer string; at most 3 questions per run, and skipping never counts as approval ([ADR-0027](./adr/0027-agent-ask-user-clarification.md))
 - Same-turn tool batches may run in parallel; stateful plan, Canvas, chart, note-edit, and RunSQL-rewrite tools are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0088](./adr/0088-configurable-automatic-agent-edits.md))
 - Agent runs are stopped by model completion, errors, or explicit user cancellation; legacy iteration/time settings are ignored
-- Sessions use native pi `JsonlSessionStorage` by `sessionId` at `.stela/agent-history/<deviceSlug>/`. Main caches open local sessions; other-device sessions are read-only and fork to a new local session before a new prompt.
+- Sessions use the Stela `pi-session.ts` adapter over native Pi `JsonlSessionRepo` by `sessionId` at `.stela/agent-history/<deviceSlug>/`. Main caches open local sessions; other-device sessions are read-only and fork to a new local session before a new prompt.
 - Compaction: proactive `shouldCompact` against `ai.contextWindow`, plus one overflow recovery compact + continue; the current plan is re-injected from the Session custom-entry projector, and `plan_updated` joins `context_usage` / `compaction` on `ai:agent-event`
 - Agent chat references are structured: note paths are listed for tool-driven `read_note`, while selected prose and RunSQL snippets are added to the current user turn with a bounded character budget
 
@@ -1058,3 +1058,24 @@ automatic excerpt refresh. Qualified physical-table candidates are retained;
 unqualified/ambiguous names are not asserted as physical tables. Existing maintenance
 input/output budgets are unchanged. These checks establish provenance and bounded
 observations, not general semantic truth.
+
+### Pi 0.87 runtime and session compatibility
+
+Per [ADR-0113](adr/0113-pi-durable-session-upgrade.md), `pi-harness.ts` adapts
+Pi's native `main` lane to Stela's existing event lifecycle. Both foreground
+analysis and knowledge maintenance use this adapter. Stela retains generation-only
+recovery; nested Harness retries and automatic compaction are disabled. Supplied
+model overrides (including maintenance output limits) remain authoritative.
+Events are queued outside Pi's lane command barrier and drained before subsequent
+model requests, tool effects, and returning the final result. This prevents history
+writes from deadlocking native event delivery. Interrupted operations are aborted,
+never automatically resumed or replayed when opening a conversation.
+
+`pi-session.ts` opens Pi format-4 journals at Stela-owned paths and reuses Pi's
+native v3 import. Read-only legacy inspection leaves the source unchanged. The
+first migration publishes atomically and retains a `.pre-pi087.bak` copy. Embedded
+Chat journals publish through the conversation service, which backs up the complete
+legacy Chat document and upgrades its outer version to 2. New journals use format 4
+directly. Backups contain private conversation data and stay beside their source;
+they are not release assets. To downgrade an old conversation, restore its backup
+with Stela closed. A new version-2 Chat has no old-client equivalent.

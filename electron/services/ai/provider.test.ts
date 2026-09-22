@@ -1,3 +1,4 @@
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { Type } from "@earendil-works/pi-ai";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
@@ -41,7 +42,7 @@ function customSettings(reasoningEffort: AiReasoningEffort): AiSettings {
 {
   const transport = createTransportForProfile(customSettings("medium"), "test-key");
   assert.equal(transport.model.reasoning, true);
-  assert.equal(transport.model.compat?.supportsReasoningEffort, true);
+  assert.equal((transport.model as import("@earendil-works/pi-ai").Model<"openai-completions">).compat?.supportsReasoningEffort, true);
   assert.equal(transport.reasoning.requested, "medium");
   assert.equal(transport.reasoning.effective, "medium");
   assert.deepEqual(transport.reasoning.supported, [
@@ -95,12 +96,12 @@ for (const customApi of ['chat-completions', 'responses'] as const) {
     const { model } = createTransportForProfile(settings, 'offline-key');
     assert.equal(model.api, customApi === 'responses' ? 'openai-responses' : 'openai-completions');
     let payload: Record<string, unknown> = {};
-    const options = { apiKey: 'offline-key', reasoning: effort, onPayload: (value: unknown) => {
+    const options = { apiKey: 'offline-key', reasoning: effort === "off" ? undefined : effort, onPayload: (value: unknown) => {
       payload = value as Record<string, unknown>; throw new Error('offline: before HTTP');
     } };
     const context = { messages: [{ role: 'user' as const, content: 'hello', timestamp: 0 }] };
-    if (model.api === 'openai-responses') await responses.streamSimple(model as import('@earendil-works/pi-ai').Model<'openai-responses'>, context, options).result();
-    else await completions.streamSimple(model as import('@earendil-works/pi-ai').Model<'openai-completions'>, context, options).result();
+    if (model.api === 'openai-responses') await responses.streamSimple(model as import('@earendil-works/pi-ai').Model<'openai-responses'>, normalizeContext(context), options).result();
+    else await completions.streamSimple(model as import('@earendil-works/pi-ai').Model<'openai-completions'>, normalizeContext(context), options).result();
     assert.equal(customApi === 'responses' ? (payload.reasoning as { effort: string }).effort : payload.reasoning_effort, effort === 'off' ? 'none' : effort);
   }
 }
@@ -130,12 +131,12 @@ try {
     ];
     return new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } });
   };
-  const first = await responses.streamSimple(model, { tools: testTools, messages: [{ role: 'user', content: 'lookup', timestamp: 0 }] }, { apiKey: 'offline-key', reasoning: 'off' }).result();
+  const first = await responses.streamSimple(model, normalizeContext({ tools: testTools, messages: [{ role: 'user', content: 'lookup', timestamp: 0 }] }), { apiKey: 'offline-key', reasoning: undefined }).result();
   assert.equal(first.stopReason, 'toolUse', first.errorMessage);
   const call = first.content.find(item => item.type === 'toolCall');
   assert.ok(call && call.type === 'toolCall');
   assert.deepEqual(call.arguments, { id: 1 });
-  const second = await responses.streamSimple(model, { tools: testTools, messages: [first, { role: 'toolResult', toolCallId: call.id, toolName: 'lookup', content: [{ type: 'text', text: '42' }], isError: false, timestamp: 1 }] }, { apiKey: 'offline-key', reasoning: 'off' }).result();
+  const second = await responses.streamSimple(model, normalizeContext({ tools: testTools, messages: [first, { role: 'toolResult', toolCallId: call.id, toolName: 'lookup', content: [{ type: 'text', text: '42' }], isError: false, timestamp: 1 }] }), { apiKey: 'offline-key', reasoning: undefined }).result();
   assert.equal(second.stopReason, 'stop', second.errorMessage);
   assert.deepEqual(second.content.map(item => item.type === 'text' ? item.text : ''), ['42']);
   assert.equal(round, 2);

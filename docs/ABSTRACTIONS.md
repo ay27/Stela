@@ -1482,3 +1482,13 @@ Maintenance retains `no_source` as its terminal outcome and records a more speci
 reason in the trace: `only_self_authored_sources`, `source_documents_unreadable`,
 or `no_matching_source_documents`. Diagnostics include candidate, excluded, and
 unreadable paths; user-facing summaries follow the request language.
+
+### Pi journal compatibility (ADR-0113)
+
+`ConversationDocument.version` accepts 1 (legacy journal) and 2 (Pi format-4
+journal). Ordered user-authored `AgentMessageContent.version` remains 1; it is a
+separate contract. Native Pi entries use numeric timestamps and JSON-compatible
+custom payloads. Stela's `Session` adapter projects legacy workspace-prompt repairs,
+plan entries, and compaction summaries without rewriting source entries. Historical
+custom UI events and runtime writes share the same lane once execution is attached.
+Credential storage remains Stela-owned; Pi's metadata listing never exposes secrets.

@@ -1,3 +1,5 @@
+import { AgentHarness } from "./pi-harness";
+import { Session, JsonlSessionStorage, InMemorySessionStorage } from "./pi-session";
 import { ToolRepairBudget } from "./tool-repair";
 import { buildSkillMaintenanceInput, MAINTENANCE_INPUT_CHARS, maintenanceModel, maintenanceHash, maintenanceNotes, maintenanceSkip, recordMaintenance } from "./maintenance-policy";
 import { analysisToolSummary, readAnalysisSnapshot } from "../../shared/analysis-contract";
@@ -9,11 +11,7 @@ import { analysisToolSummary, readAnalysisSnapshot } from "../../shared/analysis
  */
 
 import {
-  AgentHarness,
   DEFAULT_COMPACTION_SETTINGS,
-  InMemorySessionStorage,
-  JsonlSessionStorage,
-  Session,
   estimateContextTokens,
   shouldCompact,
   formatSkillsForSystemPrompt,

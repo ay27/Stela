@@ -165,3 +165,4 @@ proposed → active → superseded
 | [0110](0110-chat-tabs-and-retained-history.md) | Chat tabs and retained local history | active |
 | [0111](0111-evidence-aware-agent-recovery.md) | Evidence-aware Agent recovery and delivery | active |
 | [0112](0112-maintenance-evidence-publication.md) | Independent evidence for automatic knowledge publication | active |
+| [0113](0113-pi-durable-session-upgrade.md) | Pi 0.87 durable sessions behind Stela conversation adapters | active |

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { AgentHarness, InMemorySessionStorage, Session } from "@earendil-works/pi-agent-core";
+import { AgentHarness } from "./pi-harness";
+import { InMemorySessionStorage, Session } from "./pi-session";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createModels, createProvider, createAssistantMessageEventStream, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
@@ -20,7 +21,7 @@ const stream = (reply: AssistantMessage) => {
   const textIndex = reply.content.findIndex((c) => c.type === "text");
   if (textIndex >= 0) value.push({ type: "text_delta", contentIndex: textIndex, delta: "preview", partial: reply });
   if (reply.stopReason === "error" || reply.stopReason === "aborted") value.push({ type: "error", reason: reply.stopReason, error: reply });
-  else value.push({ type: "done", reason: reply.stopReason, message: reply });
+  else value.push({ type: "done", reason: reply.stopReason as "stop" | "toolUse", message: reply });
   value.end(reply); return value;
 };
 

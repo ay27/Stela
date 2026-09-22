@@ -6,11 +6,8 @@
  * behavior run against a DAB-backed virtual connector over JSONL stdio.
  */
 
-import {
-  AgentHarness,
-  InMemorySessionStorage,
-  Session,
-} from "@earendil-works/pi-agent-core";
+import { AgentHarness } from "../../electron/services/ai/pi-harness";
+import { InMemorySessionStorage, Session } from "../../electron/services/ai/pi-session";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";

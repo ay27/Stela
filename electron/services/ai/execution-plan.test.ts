@@ -1,4 +1,4 @@
-import { Session, JsonlSessionStorage } from "@earendil-works/pi-agent-core";
+import { Session, JsonlSessionStorage } from "./pi-session";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

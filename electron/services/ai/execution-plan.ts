@@ -1,4 +1,4 @@
-import type { Session } from "@earendil-works/pi-agent-core";
+import type { Session } from "./pi-session";
 import { z } from "zod";
 import type {
   AgentPlanSnapshot,

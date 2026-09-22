@@ -1,3 +1,4 @@
+import { BACKGROUND_CONTEXT } from "@earendil-works/pi-agent-core";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -96,12 +97,12 @@ function normalizeFileInfo<T extends { name: string; path: string }>(entry: T): 
 
 class SkillExecutionEnv extends NodeExecutionEnv {
   override async fileInfo(filePath: string) {
-    const result = await super.fileInfo(filePath);
+    const result = await super.fileInfo(filePath, BACKGROUND_CONTEXT);
     return result.ok ? { ...result, value: normalizeFileInfo(result.value) } : result;
   }
 
   override async listDir(dirPath: string) {
-    const result = await super.listDir(dirPath);
+    const result = await super.listDir(dirPath, BACKGROUND_CONTEXT);
     return result.ok
       ? {
           ...result,
@@ -111,7 +112,7 @@ class SkillExecutionEnv extends NodeExecutionEnv {
   }
 
   override async canonicalPath(filePath: string) {
-    const result = await super.canonicalPath(filePath);
+    const result = await super.canonicalPath(filePath, BACKGROUND_CONTEXT);
     return result.ok ? { ...result, value: toPosixPath(result.value) } : result;
   }
 }
@@ -422,7 +423,7 @@ export async function loadAgentSkills(
     ...(options.systemSkillDir ? [{ path: options.systemSkillDir, source: "system" as const }] : []),
     { path: skillDir(vaultPath), source: "vault" },
   ];
-  const result = await loadSourcedSkills(skillEnv(vaultPath), inputs);
+  const result = await loadSourcedSkills(skillEnv(vaultPath), inputs, undefined, BACKGROUND_CONTEXT);
   const systemNames = new Set(
     result.skills.filter((item) => item.source === "system").map((item) => item.skill.name),
   );
@@ -469,8 +470,8 @@ export async function loadAgentSkills(
 export async function listAgentSkills(vaultPath: string): Promise<AgentSkillListItem[]> {
   const env = skillEnv(vaultPath);
   const [active, archived] = await Promise.all([
-    loadSkills(env, skillDir(vaultPath)),
-    loadSkills(env, path.join(skillDir(vaultPath), ".archive")),
+    loadSkills(env, skillDir(vaultPath), BACKGROUND_CONTEXT),
+    loadSkills(env, path.join(skillDir(vaultPath), ".archive"), BACKGROUND_CONTEXT),
   ]);
   const toListItems = async (skills: Skill[], status: AgentSkillListItem["status"]) =>
     (await Promise.all(

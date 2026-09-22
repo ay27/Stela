@@ -13,10 +13,10 @@ export const MAINTENANCE_OUTPUT_TOKENS = 2_048;
 export const MAINTENANCE_COOLDOWN_MS = 60 * 60 * 1000;
 
 /** Custom GLM gateways need an explicit disabled thinking payload, not omission. */
-export function maintenanceModel(model: Model): Model {
+export function maintenanceModel<TApi extends import("@earendil-works/pi-ai").Api>(model: Model<TApi>): Model<TApi> {
   model = { ...model, maxTokens: Math.min(model.maxTokens, MAINTENANCE_OUTPUT_TOKENS) };
   return model.api === "openai-completions" && /^glm[-_]/i.test(model.id)
-    ? { ...model, reasoning: true, compat: { ...model.compat, thinkingFormat: "zai" } }
+    ? { ...model, reasoning: true, compat: { ...model.compat, thinkingFormat: "zai" } } as Model<TApi>
     : model;
 }
 
