@@ -10,6 +10,19 @@
  */
 
 export const IPC = {
+  CONVERSATION_TEMPORARY: "conversation:temporary",
+  CONVERSATION_RECENT: "conversation:recent",
+  CONVERSATION_SAVE_AS: "conversation:save-as",
+  CONVERSATION_DISCARD: "conversation:discard",
+  CONVERSATION_PROTECT: "conversation:protect",
+  CONVERSATION_IMPORT_HISTORY: "conversation:import-history",
+  CONVERSATION_CREATE: "conversation:create",
+  CONVERSATION_READ: "conversation:read",
+  CONVERSATION_DRAFT: "conversation:draft",
+  CONVERSATION_SUBMIT: "conversation:submit",
+  CONVERSATION_CANCEL: "conversation:cancel",
+  CONVERSATION_RESPOND: "conversation:respond",
+
   // Vault FS
   VAULT_LIST_DIR: "vault:list-dir",
   VAULT_READ_FILE: "vault:read-file",
@@ -103,6 +116,7 @@ export const IPC = {
   AI_METRICS_LIST_RUNS: "ai-metrics:list-runs",
   AI_METRICS_GET_TRACE: "ai-metrics:get-trace",
   AI_METRICS_GET_SESSION_TRACE: "ai-metrics:get-session-trace",
+  AI_METRICS_LIST_SESSIONS: "ai-metrics:list-sessions",
   AI_METRICS_CLEAR: "ai-metrics:clear",
 
   // Harness agent（原生 function-calling 循环，见 electron/services/ai/agent.ts）

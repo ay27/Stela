@@ -348,6 +348,8 @@ export interface AiProviderProfile {
   /** Used when vendorId is custom; ignored for builtins. */
   baseUrl: string;
   contextWindow: AiContextWindow;
+  /** Custom wire protocol; absent legacy values mean chat-completions. */
+  customApi?: "chat-completions" | "responses";
   /** Requested Agent reasoning effort. Runtime may clamp this to model support. */
   reasoningEffort: AiReasoningEffort;
   hasApiKey: boolean;
@@ -367,6 +369,8 @@ export interface AiVendorInfo {
 }
 
 export interface AiSettings {
+  semanticOptimizationEnabled?: boolean;
+  automaticAnalysisContractsEnabled?: boolean;
   semanticProfileId?: string | null;
   semanticBudget?: import("./semantic").SemanticBudget;
   providerMode: AiProviderMode;
@@ -560,16 +564,41 @@ export interface AgentMetricSessionTotals {
 export interface AgentMetricSessionTurn {
   /** One-based conversation turn index, ordered by Agent History. */
   index: number;
-  history: AgentHistoryRun;
+  history: IAgentMetricSessionRun;
   /** Null when local metrics were cleared or expired while conversation history still exists. */
   trace: AgentMetricRunTree | null;
 }
 
 /** Read-only projection joining Agent History with the local observability store by runId. */
 export interface AgentMetricSessionTrace {
-  history: AgentHistorySession;
+  history: IAgentMetricSessionHistory;
   totals: AgentMetricSessionTotals;
   turns: AgentMetricSessionTurn[];
+}
+
+/** Legacy history references remain valid; Chat references never imply a device of origin. */
+export type AgentMetricSessionRef = AgentHistoryRef | { conversationPath: string; sessionId: string };
+
+export interface IAgentMetricSessionSummary {
+  ref: AgentMetricSessionRef;
+  sessionId: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface IAgentMetricSessionList {
+  sessions: IAgentMetricSessionSummary[];
+  warnings: string[];
+}
+
+export interface IAgentMetricSessionRun extends AgentHistoryRun {
+  conversation?: Pick<import("./conversation").ConversationTurn, "status" | "error" | "runs">;
+}
+
+export interface IAgentMetricSessionHistory {
+  summary: AgentHistorySummary | IAgentMetricSessionSummary;
+  runs: IAgentMetricSessionRun[];
 }
 
 export interface AgentMetricRunFilter {
@@ -787,6 +816,8 @@ export interface AgentPlanStep {
 export interface AgentPlanSnapshot {
   runId: string;
   version: number;
+  originRunId?: string;
+  deliveries?: Array<{ kind: "note" | "canvas"; path?: string; receipt?: { path: string; runId: string } }>;
   steps: AgentPlanStep[];
 }
 
@@ -863,6 +894,15 @@ export interface PythonExecutionInput {
   byteSize: number;
 }
 
+export interface IAnalysisExecutionContext {
+  runId: string;
+  question: string;
+  semanticOptimization: boolean;
+  automaticContracts: boolean;
+  /** A preceding tool failure may have occurred before the worker could invalidate evidence. */
+  invalidateEvidence?: boolean;
+}
+
 export interface PythonExecutionRequest {
   jobId: string;
   workspaceId?: string;
@@ -872,6 +912,7 @@ export interface PythonExecutionRequest {
   /** When true the sandbox may call `await query(connection, sql)`. */
   canQuery?: boolean;
   canSemantic?: boolean;
+  analysisContext?: IAnalysisExecutionContext;
 }
 
 export interface IPythonWorkspaceSnapshot {
@@ -893,6 +934,7 @@ export interface PythonExecutionResult {
   value: PythonExecutionValue;
   elapsedMs: number;
   error?: string;
+  analysis?: import("./analysis-contract").IAnalysisSnapshot;
   workspace?: IPythonWorkspaceSnapshot;
   stdoutTruncated?: boolean;
 }
@@ -903,6 +945,7 @@ export interface PythonRuntimeInputChunk {
 }
 
 export interface AgentSkillListItem {
+  sources?: Array<{ path: string; sha256: string }>;
   name: string;
   description: string;
   category: string | null;
@@ -1136,7 +1179,7 @@ export type AgentEvent =
       type: "skill_maintenance";
       runId: string;
       /** Absent on legacy history: an empty action list does not prove success. */
-      outcome?: "saved" | "no_change" | "no_source" | "input_too_large" | "cancelled" | "timeout" | "turn_limit" | "dropped" | "error";
+      outcome?: "unchanged" | "cooldown" | "saved" | "candidate_not_published" | "no_change" | "no_source" | "input_too_large" | "cancelled" | "timeout" | "turn_limit" | "dropped" | "error";
       diagnostic?: { stage: string; message: string; metricRunId: string };
       actions: Array<{
         action: "saved" | "archived";

@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
-import type { EditorState } from "@milkdown/prose/state";
+import { replyExecutionEntries, splitAgentReplies } from "./reply-layout";
+import "./assistant-output.css";
+import { AssistantReplyDivider } from "./assistant-reply-divider";
+import { readAnalysisSnapshot } from "@shared/analysis-contract";
+import { AnalysisEvidence } from "./analysis-evidence";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   BarChart3,
-  Bot,
   Brain,
   CheckCircle2,
   ChevronRight,
@@ -14,13 +17,11 @@ import {
   History,
   Loader2,
   MinusCircle,
-  Plus,
   RefreshCw,
   Send,
   Sparkles,
   ShieldAlert,
   StopCircle,
-  X,
   XCircle,
 } from "lucide-react";
 import type {
@@ -29,612 +30,29 @@ import type {
   AgentPlanSnapshot,
   AiProviderStatus,
 } from "@shared/types";
-import { withAgentResourceId } from "@shared/agent-message";
 
 import { ProposalLineDiff } from "./proposal-diff";
-import { PythonWorkspaceStatus } from "./python-workspace-status";
-import { ContextUsageIndicator } from "./context-usage-indicator";
-import { i18n } from "@/i18n";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
-import { fuzzyFilter } from "@/lib/fuzzy";
-import { getRunContext } from "@/editor/runsql/run-context";
-import {
-  ensureAutocompleteFor,
-  peekAutocompleteFor,
-} from "@/editor/runsql/fetch-schema";
+
 import {
   resolveCanvasArtifactPath,
-  useAgentPanel,
   type AgentTimelineEntry,
 } from "@/state/agent-panel";
 import { useLayout } from "@/state/layout";
-import { useConnections } from "@/state/connections";
 import { useWorkspace } from "@/state/workspace";
 import { useSettings } from "@/state/settings";
-import { firstConnectionName } from "@/services/connections";
-import { ConnectionPicker } from "@/components/connection-picker";
-import { isStelaFilePath } from "@/core/stela-file";
 
-import {
-  AiPromptInput,
-  type AiPromptInputHandle,
-  type AiPromptSubmitPayload,
-} from "./ai-prompt-input";
 import { renderMarkdown } from "./markdown-renderer";
-import { isAgentMessageEmpty } from "@/lib/agent-message";
-import { agentComposerStateToMessage, agentResourceDisplay } from "@/lib/agent-composer";
+import { agentResourceDisplay } from "@/lib/agent-composer";
 import {
-  buildAgentEmptyActions,
-  formatMaintenanceRecency,
   type AgentEmptyAction,
   type AgentEmptyActionId,
-  type AgentEmptyWorkspace,
 } from "./agent-empty-state";
 import {
-  groupAgentTimeline,
   type AgentProgressTimelineEntry,
 } from "./agent-timeline";
 
-function uniqueStrings(values: string[]): string[] {
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
-}
-
-function isCanvasPath(path: string): boolean {
-  return path.toLowerCase().endsWith(".stela.canvas");
-}
-
-function relativeToVault(path: string | null | undefined, vaultPath: string | null): string | null {
-  if (!path) return null;
-  if (!vaultPath) return path;
-  const normalizedVault = vaultPath.replace(/\\/g, "/").replace(/\/+$/, "");
-  const normalizedPath = path.replace(/\\/g, "/");
-  if (normalizedPath.startsWith(`${normalizedVault}/`)) {
-    return normalizedPath.slice(normalizedVault.length + 1);
-  }
-  return normalizedPath;
-}
-
-/**
- * 应用级全局 Agent 面板主体，嵌在 [AgentSidebar](../../layout/AgentSidebar.tsx)
- * 里——一条独立于左侧文件树 / 文档目录的常驻右侧栏，视觉上用边框跟文档区分开，
- * 强调它是"全局"而非"当前文档"范畴的工具。
- */
-export function AgentPanel() {
-  const t = useT();
-  const tabs = useAgentPanel((s) => s.tabs);
-  const activeTabId = useAgentPanel((s) => s.activeTabId);
-  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
-  const status = activeTab.status;
-  const timeline = activeTab.timeline;
-  const draft = activeTab.draft;
-  const connectionName = activeTab.connectionName;
-  const contextUsage = activeTab.contextUsage;
-  const compacting = activeTab.compacting;
-  const history = useAgentPanel((s) => s.history);
-  const historyLoaded = useAgentPanel((s) => s.historyLoaded);
-  const vaultPath = useWorkspace((s) => s.vaultPath);
-  const workspaceTabs = useWorkspace((s) => s.tabs);
-  const workspaceActiveTabId = useWorkspace((s) => s.activeTabId);
-  const focusToken = useLayout((s) => s.agentFocusToken);
-  const aiSettings = useSettings((s) => s.settings.ai);
-  const patchSettings = useSettings((s) => s.patch);
-  const [providerStatus, setProviderStatus] = useState<AiProviderStatus | null>(null);
-  const [emptyStateMaintenance, setEmptyStateMaintenance] = useState<{
-    latestMaintenanceAt: number | null;
-    loading: boolean;
-    metricsFailed: boolean;
-  }>({
-    latestMaintenanceAt: null,
-    loading: false,
-    metricsFailed: false,
-  });
-  const switchTab = useAgentPanel((s) => s.switchTab);
-  const start = useAgentPanel((s) => s.start);
-  const cancel = useAgentPanel((s) => s.cancel);
-  const respondProposal = useAgentPanel((s) => s.respondProposal);
-  const newConversation = useAgentPanel((s) => s.newConversation);
-  const bindVault = useAgentPanel((s) => s.bindVault);
-  const refreshHistory = useAgentPanel((s) => s.refreshHistory);
-  const openHistory = useAgentPanel((s) => s.openHistory);
-  const closeTab = useAgentPanel((s) => s.closeTab);
-  const setConnectionName = useAgentPanel((s) => s.setConnectionName);
-  const updateDraft = useAgentPanel((s) => s.updateDraft);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const historyMenuRef = useRef<HTMLDetailsElement>(null);
-  const promptInputRef = useRef<AiPromptInputHandle>(null);
-  const canvasMentionPathsRef = useRef<string[]>([]);
-  const busy = status === "running";
-  const empty = timeline.length === 0;
-  const activeWorkspaceTab = workspaceTabs.find((tab) => tab.id === workspaceActiveTabId) ?? null;
-  const emptyWorkspace = useMemo<AgentEmptyWorkspace | null>(() => {
-    if (!activeWorkspaceTab?.path) return null;
-    if (
-      activeWorkspaceTab.kind !== "analysis" &&
-      !isStelaFilePath(activeWorkspaceTab.path)
-    ) {
-      return null;
-    }
-    const relativePath = relativeToVault(activeWorkspaceTab.path, vaultPath);
-    if (!relativePath) return null;
-    return {
-      kind: activeWorkspaceTab.kind === "analysis" ? "canvas" : "note",
-      path: relativePath,
-      title: activeWorkspaceTab.title || relativePath.split("/").pop() || relativePath,
-    };
-  }, [activeWorkspaceTab, vaultPath]);
-  // 执行中保持模型输出与 tool 的因果顺序；一轮结束后，仅在同一 run 内折叠过程气泡。
-  // 连续 tool entries 就地合成 ToolActivity。pending question 从 timeline 摘出，固定到输入框上方。
-  const timelineItems = useMemo(() => groupAgentTimeline(timeline, !busy), [busy, timeline]);
-  const pendingQuestion = timeline.find(
-    (entry): entry is Extract<AgentTimelineEntry, { kind: "proposal" }> =>
-      entry.kind === "proposal" && entry.proposalKind === "question" && entry.resolution === "pending",
-  );
-
-  const connectionEntries = useConnections((s) => s.entries);
-  const connectionsLoaded = useConnections((s) => s.loaded);
-  const reloadConnections = useConnections((s) => s.reload);
-
-  useEffect(() => {
-    if (!connectionsLoaded) void reloadConnections();
-  }, [connectionsLoaded, reloadConnections]);
-
-  useEffect(() => {
-    void window.stela.ai.getStatus().then(setProviderStatus).catch(() => {
-      setProviderStatus(null);
-    });
-  }, [aiSettings.activeProfileId, aiSettings.profiles]);
-
-  useEffect(() => {
-    void bindVault(vaultPath);
-  }, [vaultPath, bindVault]);
-
-  useEffect(() => {
-    if (!empty || !vaultPath) return;
-    let active = true;
-    setEmptyStateMaintenance((current) => ({ ...current, loading: true }));
-    void window.stela.agentMetrics.getDashboard("90d").then((dashboard) => {
-      if (!active) return;
-      setEmptyStateMaintenance({
-        latestMaintenanceAt: dashboard.latestKnowledgeMaintenanceAt,
-        loading: false,
-        metricsFailed: false,
-      });
-    }).catch(() => {
-      if (!active) return;
-      setEmptyStateMaintenance({ latestMaintenanceAt: null, loading: false, metricsFailed: true });
-    });
-    return () => { active = false; };
-  }, [empty, vaultPath]);
-
-  // 当前文档的连接 > 默认连接（isDefault 标记 / 名称首个）> 空。与
-  // EditorView 的 frontmatter 兜底规则保持一致，避免多连接时每次都要手选。
-  useEffect(() => {
-    if (connectionName !== null) return;
-    const ctx = getRunContext();
-    if (ctx?.connectionName) {
-      setConnectionName(ctx.connectionName);
-      return;
-    }
-    if (!connectionsLoaded) return;
-    const fallback = firstConnectionName(connectionEntries);
-    if (fallback) setConnectionName(fallback);
-  }, [activeTabId, connectionName, connectionsLoaded, connectionEntries, setConnectionName]);
-
-  useEffect(() => {
-    if (focusToken > 0) promptInputRef.current?.focus();
-  }, [focusToken]);
-
-  useEffect(() => {
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!historyMenuRef.current?.contains(event.target as Node)) historyMenuRef.current?.removeAttribute("open");
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") historyMenuRef.current?.removeAttribute("open");
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePointer);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    canvasMentionPathsRef.current = [];
-    const unsubscribe = window.stela.vault.onExternalChange((payload) => {
-      if (!active || payload.vaultPath !== vaultPath) return;
-      for (const event of payload.events) {
-        if (event.isDir || !isCanvasPath(event.path)) continue;
-        const relative = relativeToVault(event.path, vaultPath);
-        if (!relative) continue;
-        canvasMentionPathsRef.current = event.type === "removed"
-          ? canvasMentionPathsRef.current.filter((path) => path !== relative)
-          : uniqueStrings([...canvasMentionPathsRef.current, relative]);
-      }
-    });
-    if (vaultPath) {
-      void window.stela.search.listFiles(vaultPath, [".stela.canvas"])
-        .then((files) => {
-          if (!active) return;
-          canvasMentionPathsRef.current = files.flatMap((file) => {
-            const relative = relativeToVault(file, vaultPath);
-            return relative ? [relative] : [];
-          });
-        })
-        .catch(() => {});
-    }
-    return () => { active = false; unsubscribe(); };
-  }, [vaultPath]);
-
-  useEffect(() => {
-    const createdOrUpdated = timeline.flatMap((entry) => entry.kind === "canvas" ? [entry.path] : []);
-    if (createdOrUpdated.length > 0) {
-      canvasMentionPathsRef.current = uniqueStrings([...canvasMentionPathsRef.current, ...createdOrUpdated]);
-    }
-  }, [timeline]);
-
-  const getResourceCandidates = useCallback(async (query: string): Promise<AgentMessageResource[]> => {
-    const tableNames = connectionName ? peekAutocompleteFor(connectionName) : [];
-    if (connectionName && tableNames.length === 0) {
-      void ensureAutocompleteFor(connectionName).catch(() => []);
-    }
-    const indexCandidates = await window.stela.index.listCandidates(query, 24).catch(() => []);
-    const notes = indexCandidates
-      .filter((candidate) => candidate.kind === "file" && candidate.detail && !isCanvasPath(candidate.detail))
-      .map((candidate) => withAgentResourceId({
-        kind: "note" as const,
-        path: candidate.detail!,
-        label: candidate.detail!.split("/").pop() || candidate.detail!,
-      }));
-    const canvases = canvasMentionPathsRef.current.map((path) => withAgentResourceId({
-      kind: "canvas" as const,
-      path,
-      label: path.split("/").pop() || path,
-    }));
-    const tables = tableNames.map((table) => withAgentResourceId({
-      kind: "table" as const,
-      table,
-      label: table,
-      connectionName,
-    }));
-    const sourcePath = relativeToVault(getRunContext()?.path, vaultPath);
-    const runsql = Array.from(document.querySelectorAll<HTMLElement>(".stela-cb--runsql"))
-      .flatMap((block, blockIndex) => {
-        const sql = block.querySelector<HTMLElement>(".cm-content")?.textContent?.trim();
-        if (!sql) return [];
-        return [withAgentResourceId({
-          kind: "runsql" as const,
-          label: sql.split(/\r?\n/, 1)[0]?.slice(0, 48) || `RunSQL ${blockIndex + 1}`,
-          sql,
-          sourcePath: sourcePath ?? undefined,
-          locator: { blockIndex, keyword: sql, nthInFile: 0 },
-        })];
-      });
-    const combined = [...tables, ...notes, ...canvases, ...runsql];
-    const needle = query.trim();
-    return needle
-      ? fuzzyFilter(needle, combined, (resource) => `${resource.kind} ${resource.label}`, 24)
-      : combined.slice(0, 24);
-  }, [connectionName, vaultPath]);
-  const onWheelScroll = useCallback((ev: WheelEvent<HTMLDivElement>) => {
-    if (ev.deltaX === 0 && ev.deltaY !== 0) {
-      ev.currentTarget.scrollLeft += ev.deltaY;
-    }
-  }, []);
-
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [activeTabId, timeline]);
-
-  const send = ({ message }: AiPromptSubmitPayload) => {
-    if (isAgentMessageEmpty(message) || busy) return;
-    const ctx = getRunContext();
-    void start({
-      message,
-      connectionName,
-      notePath: ctx?.path ?? null,
-      locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
-    });
-  };
-
-  const emptyActions = useMemo(
-    () => buildAgentEmptyActions({
-      workspace: emptyWorkspace,
-      copy: {
-        canvasCreatePrompt: t("agent.panel.emptyActions.canvasCreate.prompt"),
-        canvasRefreshPrompt: t("ai.quick.canvasRefreshAllPrompt"),
-        documentSummaryPrompt: t("agent.panel.emptyActions.documentSummary.prompt"),
-        canvasSummaryPrompt: t("agent.panel.emptyActions.canvasSummary.prompt"),
-        dataAuditPrompt: t("agent.panel.emptyActions.dataAudit.prompt"),
-        canvasAuditPrompt: t("agent.panel.emptyActions.canvasAudit.prompt"),
-        knowledgeMaintenancePrompt: t("agent.panel.emptyActions.knowledgeMaintenance.prompt"),
-      },
-    }),
-    [emptyWorkspace, t],
-  );
-
-  const knowledgeMeta = useMemo(() => {
-    if (emptyStateMaintenance.loading) return t("agent.panel.emptyActions.knowledgeMaintenance.loading");
-    return emptyStateMaintenance.metricsFailed
-      ? t("agent.panel.emptyActions.knowledgeMaintenance.timeUnavailable")
-      : emptyStateMaintenance.latestMaintenanceAt === null
-        ? t("agent.panel.emptyActions.knowledgeMaintenance.noRecentRun")
-        : t("agent.panel.emptyActions.knowledgeMaintenance.lastRun", {
-            time: formatMaintenanceRecency(
-              emptyStateMaintenance.latestMaintenanceAt,
-              Date.now(),
-              i18n.resolvedLanguage ?? "en",
-            ),
-          });
-  }, [emptyStateMaintenance, t]);
-
-  const runEmptyAction = useCallback((action: AgentEmptyAction) => {
-    if (busy) return;
-    void start({
-      message: action.message,
-      connectionName,
-      notePath: emptyWorkspace?.kind === "note" ? activeWorkspaceTab?.path ?? null : null,
-      locale: i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en",
-      entryPoint: action.entryPoint,
-      canvasRefresh: action.canvasRefresh,
-    });
-  }, [activeWorkspaceTab?.path, busy, connectionName, emptyWorkspace?.kind, start]);
-
-  const updatePromptDraft = useCallback(
-    (editorState: EditorState, isEmpty: boolean) => {
-      updateDraft({
-        editorState,
-        isEmpty,
-      });
-    },
-    [updateDraft],
-  );
-
-  return (
-    <div className="flex h-full flex-col bg-background text-foreground">
-      <div className="flex h-9 flex-none items-stretch border-b border-border bg-muted/60">
-        <div className="stela-tabbar-scroll flex min-w-0 flex-1 items-stretch overflow-x-auto" onWheel={onWheelScroll}>
-          {tabs.map((tab, idx) => {
-            const active = tab.id === activeTabId;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => switchTab(tab.id)}
-                className={cn(
-                  "group relative flex min-w-[104px] max-w-[180px] shrink-0 cursor-pointer select-none items-center gap-2 px-3 text-[12px] transition-colors",
-                  active
-                    ? "bg-background text-foreground"
-                    : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
-                  idx > 0 && !active && "border-l border-border",
-                )}
-                title={tab.title}
-              >
-                <span
-                  className={cn(
-                    "pointer-events-none absolute inset-x-0 bottom-0 h-[2px]",
-                    active ? "bg-primary" : "bg-transparent",
-                  )}
-                />
-                {tab.status === "running" ? (
-                  <Loader2 className="h-3 w-3 flex-none animate-spin text-primary" />
-                ) : (
-                  <Bot className="h-3.5 w-3.5 flex-none text-muted-foreground" />
-                )}
-                <span className="flex-1 truncate">{tab.title}</span>
-                {tabs.length > 1 ? (
-                  <span
-                    role="button"
-                    tabIndex={-1}
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      closeTab(tab.id);
-                    }}
-                    className={cn(
-                      "flex h-4 w-4 flex-none items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground",
-                      active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
-                    )}
-                    title={t("agent.panel.closeTab")}
-                  >
-                    <X className="h-3 w-3" />
-                  </span>
-                ) : null}
-              </button>
-            );
-          })}
-          <div className="flex-1 border-b border-border/0" />
-        </div>
-        <details
-          ref={historyMenuRef}
-          className="group relative border-l border-border"
-          onBlur={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget)) {
-              historyMenuRef.current?.removeAttribute("open");
-            }
-          }}
-          onToggle={(event) => {
-            if (event.currentTarget.open) void refreshHistory();
-          }}
-        >
-          <summary
-            className="flex h-full cursor-pointer list-none items-center gap-1 px-2 text-[11px] text-muted-foreground hover:bg-background/50 hover:text-foreground [&::-webkit-details-marker]:hidden"
-            title={t("agent.panel.history")}
-          >
-            <History className="h-3.5 w-3.5" />
-            {t("agent.panel.history")}
-          </summary>
-          <div className="absolute right-0 top-9 z-20 max-h-64 w-64 overflow-auto rounded-md border border-border bg-popover p-1 shadow-md">
-            {!historyLoaded ? (
-              <div className="px-2 py-1.5 text-[11px] text-muted-foreground">{t("agent.panel.historyLoading")}</div>
-            ) : history.length === 0 ? (
-              <div className="px-2 py-1.5 text-[11px] text-muted-foreground">{t("agent.panel.historyEmpty")}</div>
-            ) : (
-              history.map((item) => (
-                <button
-                  key={`${item.deviceSlug}:${item.sessionId}`}
-                  type="button"
-                  onClick={() => {
-                    historyMenuRef.current?.removeAttribute("open");
-                    void openHistory(item);
-                  }}
-                  className="flex w-full flex-col rounded px-2 py-1.5 text-left text-[11px] hover:bg-accent"
-                >
-                  <span className="truncate text-foreground">{item.title}</span>
-                  <span className="text-muted-foreground">{item.deviceSlug}</span>
-                </button>
-              ))
-            )}
-          </div>
-        </details>
-        <button
-          type="button"
-          onClick={newConversation}
-          className="flex w-8 flex-none items-center justify-center border-l border-border text-muted-foreground hover:bg-background/50 hover:text-foreground"
-          title={t("agent.panel.newConversation")}
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-      </div>
-
-      <div className="flex h-8 flex-none items-center gap-2 border-b border-border bg-muted/20 px-3.5">
-        <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-[12px] font-medium text-muted-foreground">
-          <Bot className="h-3.5 w-3.5 flex-none text-primary" />
-          {t("agent.panel.title")}
-        </span>
-        <PythonWorkspaceStatus key={`python:${activeTab.sessionId}`} sessionId={activeTab.sessionId} busy={busy} />
-        {contextUsage && contextUsage.contextWindow > 0 ? (
-          <ContextUsageIndicator
-            key={`context:${activeTab.sessionId}`}
-            runId={activeTab.runId}
-            busy={busy}
-            usedTokens={contextUsage.usedTokens}
-            contextWindow={contextUsage.contextWindow}
-            estimated={contextUsage.estimated}
-          />
-        ) : null}
-        {compacting ? (
-          <span className="flex flex-none items-center gap-1 text-[11px] text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            {t("agent.panel.compacting")}
-          </span>
-        ) : null}
-        <ConnectionPicker value={connectionName} onChange={setConnectionName} />
-      </div>
-
-      <div
-        ref={scrollRef}
-        className={cn(
-          "min-h-0 flex-1 space-y-2.5 overflow-auto px-3.5 py-2.5",
-          timeline.length === 0 && vaultPath && "flex items-center justify-center",
-        )}
-      >
-        {timeline.length === 0 ? (
-          vaultPath ? (
-            <AgentPanelEmptyState
-              actions={emptyActions}
-              knowledgeMeta={knowledgeMeta}
-              onRun={runEmptyAction}
-            />
-          ) : (
-            <div className="text-[12px] text-muted-foreground">{t("agent.panel.empty")}</div>
-          )
-        ) : (
-          timelineItems.map((item) =>
-            item.kind === "tools" ? (
-              <ToolActivity key={item.id} entries={item.entries} />
-            ) : item.kind === "progress" ? (
-              <ProcessNarrationGroup key={item.id} entries={item.entries} />
-            ) : (
-              <TimelineItem key={item.entry.id} entry={item.entry} onRespond={respondProposal} />
-            ),
-          )
-        )}
-        {busy ? (
-          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            {t("agent.panel.thinking")}
-          </div>
-        ) : null}
-      </div>
-
-      {pendingQuestion ? (
-        <div className="border-t border-border bg-muted/20 px-2.5 pt-2">
-          <QuestionCard entry={pendingQuestion} onRespond={respondProposal} />
-        </div>
-      ) : null}
-
-      <div className="border-t border-border bg-muted/20 px-2.5 py-2">
-        <AiPromptInput
-          key={activeTabId}
-          ref={promptInputRef}
-          state={draft.editorState}
-          placeholder={t("agent.panel.placeholder")}
-          disabled={busy}
-          submitEnabled={!draft.isEmpty}
-          minHeightPx={132}
-          getResourceCandidates={getResourceCandidates}
-          onChange={updatePromptDraft}
-          onSubmit={send}
-          onOpenResource={openAgentResource}
-        />
-        {/* 独立一行放操作按钮——左侧切 AI 配置档，Send/Stop 占最右。 */}
-        <div className="mt-1.5 flex items-center justify-between gap-1.5">
-          <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            {aiSettings.profiles.length > 0 ? (
-              <select
-                value={aiSettings.activeProfileId}
-                disabled={busy}
-                title={t("agent.panel.provider")}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  void patchSettings({ ai: { activeProfileId: id } });
-                }}
-                className="w-full max-w-[240px] truncate rounded-md border border-border bg-background px-1.5 py-1.5 text-[11px] text-foreground disabled:opacity-40"
-              >
-                {aiSettings.profiles.map((profile) => (
-                  <option key={profile.id} value={profile.id}>
-                    {profile.name}
-                    {profile.model ? ` · ${profile.model}` : ""}
-                    {` · ${
-                      profile.id === providerStatus?.activeProfileId
-                        ? (providerStatus.requestedReasoningEffort ?? "medium") ===
-                            (providerStatus.effectiveReasoningEffort ?? "medium")
-                          ? providerStatus.effectiveReasoningEffort ?? "medium"
-                          : `${providerStatus.requestedReasoningEffort ?? "medium"}→${providerStatus.effectiveReasoningEffort ?? "medium"}`
-                        : profile.reasoningEffort ?? "medium"
-                    }`}
-                  </option>
-                ))}
-              </select>
-            ) : null}
-          </div>
-          {busy ? (
-            <button
-              type="button"
-              onClick={() => void cancel()}
-              title={t("agent.panel.cancel")}
-              className="inline-flex items-center gap-1 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-[11px] font-medium text-destructive hover:bg-destructive/20"
-            >
-              <StopCircle className="h-3.5 w-3.5" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => send({ message: agentComposerStateToMessage(draft.editorState) })}
-              disabled={draft.isEmpty}
-              title={t("agent.panel.send")}
-              className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1.5 text-[11px] font-medium text-primary-foreground disabled:opacity-40"
-            >
-              <Send className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function EmptyActionIcon({ id }: { id: AgentEmptyActionId }) {
   switch (id) {
@@ -653,7 +71,7 @@ function EmptyActionIcon({ id }: { id: AgentEmptyActionId }) {
   }
 }
 
-function AgentBlankIllustration() {
+export function AgentBlankIllustration() {
   return (
     <svg
       viewBox="0 0 64 48"
@@ -670,7 +88,7 @@ function AgentBlankIllustration() {
   );
 }
 
-function AgentPanelEmptyState({
+export function AgentPanelEmptyState({
   actions,
   knowledgeMeta,
   onRun,
@@ -720,7 +138,7 @@ function AgentPanelEmptyState({
   );
 }
 
-function TimelineItem({
+export function TimelineItem({
   entry,
   onRespond,
 }: {
@@ -731,15 +149,18 @@ function TimelineItem({
   switch (entry.kind) {
     case "user":
       return (
+        <div className="stela-reply-boundary">
         <div className="flex justify-end">
-          <div className="max-w-[80%] rounded-lg bg-muted px-3 py-2 text-sm text-foreground">
+          <div className="stela-user-message-bubble max-w-[80%] rounded-lg px-3 py-2 text-sm text-foreground">
             <AgentUserMessage message={entry.message} />
           </div>
+        </div>
+        <AssistantReplyDivider />
         </div>
       );
     case "final":
       return (
-        <div className="relative rounded-lg border border-border bg-card/40 p-3 pb-6">
+        <div className="stela-assistant-output relative">
           <AssistantMessage content={entry.content} />
           {entry.maintenance ? <SkillMaintenanceIndicator maintenance={entry.maintenance} /> : null}
         </div>
@@ -817,7 +238,7 @@ function StrategyReviewCard({
 function ProcessNarrationBubble({ entry }: { entry: AgentProgressTimelineEntry }) {
   const t = useT();
   return (
-    <div className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2.5 text-sm">
+    <div className="stela-assistant-output py-2 text-sm">
       <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
         {entry.phase === "streaming"
           ? <Loader2 className="h-3 w-3 animate-spin text-primary" />
@@ -829,28 +250,7 @@ function ProcessNarrationBubble({ entry }: { entry: AgentProgressTimelineEntry }
   );
 }
 
-function ProcessNarrationGroup({ entries }: { entries: AgentProgressTimelineEntry[] }) {
-  const t = useT();
-  if (entries.length === 0) return null;
-  return (
-    <details className="group rounded-lg border border-border/60 bg-muted/10 text-xs">
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-muted-foreground [&::-webkit-details-marker]:hidden">
-        <Sparkles className="h-3.5 w-3.5 text-primary/70" />
-        <span className="flex-1">{t("agent.panel.processNarrationCount", { count: entries.length })}</span>
-        <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" />
-      </summary>
-      <div className="space-y-3 border-t border-border/50 px-3 py-2.5">
-        {entries.map((entry) => (
-          <div key={entry.id} className="border-l-2 border-primary/20 pl-2.5 text-sm">
-            <AssistantMessage content={entry.content} />
-          </div>
-        ))}
-      </div>
-    </details>
-  );
-}
-
-function openAgentResource(resource: AgentMessageResource): void {
+export function openAgentResource(resource: AgentMessageResource): void {
   if (resource.kind === "table") {
     useLayout.getState().revealSchemaTable(resource.connectionName ?? null, resource.table);
     return;
@@ -916,11 +316,13 @@ function SkillMaintenanceIndicator({
   const names = maintenance.actions.map((action) => action.name).join("、");
   const detail = working
     ? t("agent.panel.skillWorking")
+    : (failed || timedOut) && maintenance.actions.length > 0 ? t("agent.panel.skillPartiallySaved")
     : failed ? t("agent.panel.skillFailed")
-    : timedOut ? t("agent.panel.skillTimedOut")
+    : timedOut ? t(maintenance.actions.length > 0 ? "agent.panel.skillPartiallySaved" : maintenance.outcome === "turn_limit" ? "agent.panel.skillTurnLimit" : "agent.panel.skillTimedOut")
     : maintenance.status === "cancelled" ? t("agent.panel.skillCancelled")
     : maintenance.status === "skipped" ? t("agent.panel.skillSkipped")
     : maintenance.status === "unknown" ? t("agent.panel.skillUnknown")
+    : maintenance.outcome === "candidate_not_published" ? t("agent.panel.skillCandidate")
     : updated
       ? t("agent.panel.skillUpdated", { names })
       : t("agent.panel.skillAllMaintained");
@@ -1023,6 +425,9 @@ function ExecutionPlanCard({ plan }: { plan: AgentPlanSnapshot }) {
       </button>
       {expanded ? (
         <ol className="space-y-1.5 border-t border-primary/10 px-2.5 py-2">
+          {plan.deliveries?.map((item, index) => <li key={`delivery-${index}`} className="stela-plan-delivery text-muted-foreground">
+            {t(item.receipt ? "agent.panel.deliverySaved" : "agent.panel.deliveryMissing", { kind: item.kind, path: item.receipt?.path ?? item.path ?? "" })}
+          </li>)}
           {plan.steps.map((step) => (
             <li key={step.id} className="flex items-start gap-2">
               <span className="mt-px"><PlanStepIcon status={step.status} /></span>
@@ -1047,35 +452,17 @@ function ExecutionPlanCard({ plan }: { plan: AgentPlanSnapshot }) {
   );
 }
 
-function ToolActivity({ entries }: { entries: Array<Extract<AgentTimelineEntry, { kind: "tool" }>> }) {
-  const t = useT();
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <div className="rounded-md border border-border/60 bg-muted/20 text-xs">
-      <button
-        type="button"
-        onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-muted-foreground"
-      >
-        <span>{t("agent.panel.activity", { count: entries.length })}</span>
-        <ChevronDown className={cn("ml-auto h-3 w-3 transition-transform", expanded && "rotate-180")} />
-      </button>
-      {expanded ? <div className="space-y-1 border-t border-border/60 p-1.5">{entries.map((entry) => <ToolChip key={entry.id} entry={entry} />)}</div> : null}
-    </div>
-  );
-}
-
 function ToolChip({ entry }: { entry: Extract<AgentTimelineEntry, { kind: "tool" }> }) {
   const t = useT();
   const [expanded, setExpanded] = useState(false);
   const pending = !entry.result;
   const failed = entry.result && !entry.result.ok;
   return (
-    <div className="rounded-md border border-border/60 bg-muted/20 text-xs">
+    <div className="py-1 text-xs">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
+        className="flex w-full items-center gap-2 py-1.5 text-left"
       >
         {pending ? (
           <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
@@ -1088,7 +475,7 @@ function ToolChip({ entry }: { entry: Extract<AgentTimelineEntry, { kind: "tool"
         <ChevronDown className={cn("ml-auto h-3 w-3 transition-transform", expanded && "rotate-180")} />
       </button>
       {expanded ? (
-        <div className="space-y-2 border-t border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+        <div className="space-y-2 py-2 font-mono text-[11px] text-muted-foreground">
           <div>
             <div className="mb-1 text-foreground/70">{t("agent.panel.arguments")}</div>
             <pre className="overflow-auto whitespace-pre-wrap">{JSON.stringify(entry.args, null, 2)}</pre>
@@ -1096,6 +483,7 @@ function ToolChip({ entry }: { entry: Extract<AgentTimelineEntry, { kind: "tool"
           {entry.result ? (
             <div>
               <div className="mb-1 text-foreground/70">{t("agent.panel.result")}</div>
+              <AnalysisEvidence snapshot={readAnalysisSnapshot(entry.result.summary)} />
               <pre className="max-h-48 overflow-auto whitespace-pre-wrap">{entry.result.summary}</pre>
             </div>
           ) : null}
@@ -1109,7 +497,7 @@ function ToolChip({ entry }: { entry: Extract<AgentTimelineEntry, { kind: "tool"
  * `question` kind：agent 停下来问一句，用户点候选或自由输入。
  * 复用 proposal 的阻塞通道（见 ADR-0027），所以这里只换外观与提交语义。
  */
-function QuestionCard({
+export function QuestionCard({
   entry,
   onRespond,
 }: {
@@ -1278,5 +666,131 @@ function ProposalCard({
         </div>
       )}
     </div>
+  );
+}
+
+/** One disclosure per reply, independent of the number of tool/narration events. */
+export const AgentTimelineContent = memo(function AgentTimelineContent({ timeline, busy, onRespond, afterEntry, executionContent }: {
+  timeline: AgentTimelineEntry[];
+  busy: boolean;
+  onRespond: (runId: string, callId: string, approve: boolean, answer?: string) => Promise<void>;
+  afterEntry?: (entry: AgentTimelineEntry) => ReactNode;
+  executionContent?: ReactNode;
+}) {
+  const replies = useMemo(() => splitAgentReplies(timeline), [timeline]);
+  return <>{replies.map((entries, index) => <ReplyContent key={entries[0]?.id ?? index}
+    entries={entries} busy={busy && index === replies.length - 1} onRespond={onRespond}
+    afterEntry={afterEntry} executionContent={index === 0 ? executionContent : undefined} />)}
+    {!replies.length && executionContent}
+  </>;
+});
+
+export function AgentThinkingStatus() {
+  const t = useT();
+  return <div role="status" className="stela-agent-thinking flex items-center gap-2 py-1 text-[11px] leading-4 text-muted-foreground">
+    <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+    {t("agent.panel.thinking")}
+  </div>;
+}
+
+function ReplyContent({ entries, busy, onRespond, afterEntry, executionContent }: {
+  entries: AgentTimelineEntry[]; busy: boolean;
+  onRespond: (runId: string, callId: string, approve: boolean, answer?: string) => Promise<void>;
+  afterEntry?: (entry: AgentTimelineEntry) => ReactNode; executionContent?: ReactNode;
+}) {
+  const t = useT();
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => { if (!busy) setExpanded(false); }, [busy]);
+  const process = replyExecutionEntries(entries);
+  const visible = entries.filter(entry => entry.kind !== "user" && !process.includes(entry));
+  const tools = process.filter(entry => entry.kind === "tool");
+  const queries = tools.filter(entry => entry.kind === "tool" && ["run_query", "execute_sql", "run_sql"].includes(entry.name)).length;
+  const latest = [...process].reverse().find(entry => entry.kind === "progress" || (entry.kind === "tool" && !entry.result));
+  const current = latest?.kind === "progress" ? latest.content : latest?.kind === "tool" ? latest.name : t("agent.panel.thinking");
+  return <section className="stela-agent-reply">
+    {entries.filter(entry => entry.kind === "user").map(entry => <TimelineItem key={entry.id} entry={entry} onRespond={onRespond} />)}
+    <div className="stela-reply-body">
+    {(process.length > 0 || executionContent) && <div className="stela-reply-execution text-xs text-muted-foreground">
+      <button type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)} className="flex w-full min-w-0 items-center gap-2 py-1 text-left hover:text-foreground">
+        {busy ? <Loader2 className="h-3 w-3 shrink-0 animate-spin" /> : <ChevronRight className={cn("h-3 w-3 shrink-0 transition-transform", expanded && "rotate-90")} />}
+        <span className="truncate">{busy ? current : queries ? t("agent.reply.queries", { count: queries }) : t("agent.reply.execution")}</span>
+      </button>
+      {expanded && <div className="space-y-2 border-l border-border pl-3">
+        {executionContent}
+        {process.map(entry => <div key={entry.id}><TimelineItem entry={entry} onRespond={onRespond} />{afterEntry?.(entry)}</div>)}
+      </div>}
+    </div>}
+    {visible.map(entry => <div key={entry.id}><TimelineItem entry={entry} onRespond={onRespond} />{afterEntry?.(entry)}</div>)}
+    {busy && !process.length && !executionContent && !visible.some(entry => entry.kind === "proposal" && entry.resolution === "pending") && <AgentThinkingStatus />}
+    </div>
+  </section>;
+}
+
+export function AgentComposerActions({ busy, canSend, onSend, onCancel, leading }: {
+  leading?: ReactNode;
+  busy: boolean; canSend: boolean; onSend: () => void; onCancel: () => void | Promise<void>;
+}) {
+  const t = useT();
+  const aiSettings = useSettings((s) => s.settings.ai);
+  const patchSettings = useSettings((s) => s.patch);
+  const [providerStatus, setProviderStatus] = useState<AiProviderStatus | null>(null);
+  useEffect(() => {
+    void window.stela.ai.getStatus().then(setProviderStatus).catch(() => {
+      setProviderStatus(null);
+    });
+  }, [aiSettings.activeProfileId, aiSettings.profiles]);
+  return (
+        <div className="flex w-full items-center justify-between gap-1.5">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            {leading}
+            {aiSettings.profiles.length > 0 ? (
+              <select
+                value={aiSettings.activeProfileId}
+                disabled={false}
+                title={t("agent.panel.provider")}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  void patchSettings({ ai: { activeProfileId: id } });
+                }}
+                className="w-full max-w-[240px] truncate rounded-md border-0 bg-transparent px-1.5 py-1.5 text-[11px] text-foreground disabled:opacity-40"
+              >
+                {aiSettings.profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}
+                    {profile.model ? ` · ${profile.model}` : ""}
+                    {` · ${
+                      profile.id === providerStatus?.activeProfileId
+                        ? (providerStatus.requestedReasoningEffort ?? "medium") ===
+                            (providerStatus.effectiveReasoningEffort ?? "medium")
+                          ? providerStatus.effectiveReasoningEffort ?? "medium"
+                          : `${providerStatus.requestedReasoningEffort ?? "medium"}→${providerStatus.effectiveReasoningEffort ?? "medium"}`
+                        : profile.reasoningEffort ?? "medium"
+                    }`}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+          </div>
+          {busy ? (
+            <button
+              type="button"
+              onClick={() => void onCancel()}
+              title={t("agent.panel.cancel")}
+              className="inline-flex items-center gap-1 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-[11px] font-medium text-destructive hover:bg-destructive/20"
+            >
+              <StopCircle className="h-3.5 w-3.5" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onSend}
+              disabled={!canSend}
+              title={`${t("agent.panel.send")} (⌘/Ctrl+Enter)`}
+              className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1.5 text-[11px] font-medium text-primary-foreground disabled:opacity-40"
+            >
+              <Send className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
   );
 }

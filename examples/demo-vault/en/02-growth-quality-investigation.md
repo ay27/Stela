@@ -3,7 +3,6 @@ type: stela-data-note
 connection_name: local-mysql
 created_at: "2026-07-08T02:00:00.000Z"
 ---
-
 # 2. Growth quality investigation
 
 The saved results below make this review readable without Docker. With `local-mysql` running, execute each block again to produce your own audited run.
@@ -56,11 +55,11 @@ ORDER BY contribution_margin ASC;
 
 <detail>
    <block-id>blk_demo_ecommerce_channel_en</block-id>
-   <run-date>2026-07-08 10:00:00</run-date>
-   <elapsed>18ms</elapsed>
+   <run-date>2026-09-22 18:12:39</run-date>
+   <elapsed>17ms</elapsed>
    <row-count>5</row-count>
-   <first-row>{"channel":"paid_social","orders":152,"net_revenue":20685.8,"marketing_spend":12800,"contribution_profit":-4972.75,"contribution_margin":-0.2404}</first-row>
-   <result-ref-id>run_demo_ecommerce_channel_en</result-ref-id>
+   <first-row>{"channel":"paid_social","orders":"152","net_revenue":"20685.80","marketing_spend":"12800.00","contribution_profit":"-4972.75","contribution_margin":"-0.2404"}</first-row>
+   <result-ref-id>9de5e8cc-bc42-4e60-bd28-93740b1f0ee3</result-ref-id>
 </detail>
 
 Paid social supplied 152 orders and $20,685.80 of net revenue, but lost $4,972.75 after marketing. Every other channel remained contribution-positive.
@@ -123,4 +122,4 @@ LIMIT 8;
 
 TrailFlex Runner was heavily promoted and returned at 19.8%, creating $2,941.60 in refunds and processing loss. The campaign combined the most expensive channel, the deepest discount, and the riskiest SKU.
 
-Open [[en/business-review.stela.canvas|Business Review Canvas →]] to turn these audited results into a decision view, then continue to [[en/03-management-action-plan|3. Management action plan]].
+Open \[\[en/business-review\.stela.canvas|Business Review Canvas →]] to turn these audited results into a decision view, then continue to \[\[en/03-management-action-plan|3. Management action plan]].

@@ -18,7 +18,7 @@ SQL result sets, Agent sessions, and local Agent traces are too large to live in
 | Execution history | `{vault}/.stela/history/history_{deviceSlug}.jsonl` | **Authoritative** | Append-only run packages; Git-synced, per-device write isolation |
 | Result cache | `{vault}/.stela.sqlite` | Disposable | Query cache (`runs` / `result_schemas` / `result_rows`); rebuildable from JSONL |
 | Vault config | `{vault}/.stela/*.json` | Authoritative | Settings, connections, plugin manifests |
-| Agent session history | `{vault}/.stela/agent-history/<deviceSlug>/*.jsonl` | **Authoritative** | pi AgentHarness context and Agent Panel timeline; newest 20 per device |
+| Agent session history | `{vault}/.stela/agent-history/<deviceSlug>/*.jsonl` | **Authoritative** | pi AgentHarness context and legacy timeline; retained locally without count-based cleanup |
 | Local Agent observability | `{vault}/.stela/agent-metrics.local.sqlite` | **Authoritative (local, 90 days)** | AI/Agent runs, tool events, Skill usage, maintenance outcomes, redacted traces |
 | Agent query artifacts | `{userData}/query-artifacts/` | Disposable | Session-scoped Parquet/JSONL transport for sandbox `query()`; never synced, never named to the model, never exposed by path |
 | Session state | Zustand + localStorage + `{userData}/` | Disposable | Panel widths, open tabs, recent vaults |
@@ -489,8 +489,8 @@ flowchart TB
    preview returns an instruction that it cannot support an exact result, every
    `query()` prints the fetched relation's row/column count and column types, and
    the system prompt fixes the answer shape (conclusion,
-   material caveats, one data-basis line, then the requested value alone on the
-   last line without Markdown emphasis or thousands separators). Successful
+   material caveats, and one data-basis line). Metrics retain their names and
+   units; the prompt does not append unlabeled numeric answer tails. Successful
    query/Python calls still register disposable same-run evidence metadata for
    chart and Canvas binding; there is no source pre-scan and no durable evidence
    database ([ADR-0084](./adr/0084-single-action-plan-tool.md)).
@@ -588,6 +588,20 @@ flowchart TB
    only invalid/missing rows retried. SDK retries are disabled on this budgeted path.
    Local `analysis.contract` objects retain sourced claims and deterministic checks
    for material scope/grain/denominator risks, without a reviewer model or final gate.
+   Independent default-off experiments extend this path: exact-content classify/extract
+   reduction plus all-key cost preflight and a host-bounded one-batch pilot (ADR-0097);
+   automatic observational contracts across SQL and Python (ADR-0098). Trusted job
+   context carries run/question/flags into both workers. Python reports bounded
+   snapshots through the existing result DTO; main attaches SQL facts and preserves
+   snapshots through timeline summaries for live/history/final evidence cards. There
+   is no new provider, persistence service or final-answer gate. ADR-0099 adds a
+   weak run-local registry of operation counts and input fingerprints for late
+   `contract.observe(batch)` validation, independently of editable result previews.
+   Explicit source ID mapping preserves typed values. Failure epochs and source
+   versions prevent stale coverage revival; host-side failures invalidate evidence
+   on the next worker request. Optional operation counts and coverage reasons travel
+   through the same result/history DTO. See
+   [behavior and evaluation protocol](./testing/analysis-experiments.md).
    The semantic model defaults to the run's Agent profile but can be selected separately.
    The Python tool advertises classification/extraction/entity matching and points
    to the bundled `semantic-analysis` Skill for helper signatures. It also declares
@@ -653,9 +667,10 @@ interactive run has finished. Failures appear as inline warnings in Agent Panel;
 safe skips/cancellation stay neutral, and legacy empty-action records are unknown,
 not evidence of successful maintenance ([ADR-0096](./adr/0096-explicit-knowledge-maintenance-outcomes.md)).
 Deterministic code extracts evidence tables, retrieves SQL usage,
-orders notes by document update time, reads at most three source notes, and finds
-related Skill metadata. The maintenance model receives that material plus the
-complete current-task conversation and can only call `save_skill` once or do
+prioritizes source notes read in the current run, and extracts complete relevant
+blocks with sanitized-document line ranges and source hashes from at most three notes. A 12,000-character
+packet includes bounded conversation context, evidence and related Skill metadata.
+The maintenance model receives the packet and can only call `save_skill` once or do
 nothing. It cannot run SQL, search the Vault, overwrite, or archive an existing
 Skill. A normal Agent turn may also use `save_skill` when
 the user explicitly asks it to retain verified reusable data knowledge. Neither path
@@ -700,8 +715,9 @@ or traces because its high-frequency requests obscure Agent diagnostics. The
 dashboard DTO also exposes the latest retained real knowledge-maintenance attempt
 for the Agent Panel empty-state hint; disabled and dropped jobs do not advance it.
 Dashboard keeps an aggregate Overview and a Session-oriented execution view.
-The Session view joins device-local Agent History with Metrics by Agent run id:
-History remains authoritative for Session and user-Turn order, while Metrics
+The Session view lists device-local Agent History and visible Vault `.stela.chat`
+files through `agentMetrics.listSessions`, then joins their turns to Metrics by
+Agent run id. Each source remains authoritative for Session and user-Turn order, while Metrics
 provides model steps, child tool/maintenance runs, timing, tokens, cache usage,
 and redacted payloads. It does not persist a second Session model in Metrics.
 Each user Turn can be inspected as a conversation or as an action-oriented
@@ -716,7 +732,11 @@ their tool action instead of being duplicated in model output. Context-window
 occupancy uses provider-reported prompt tokens and therefore excludes the current
 step's output. Post-answer Skill maintenance has a separate background section. Missing
 or expired Metrics leave the conversation readable and show an unavailable
-trace. Refresh is explicit rather than polled. See
+trace. Chat inspection is read-only, preserves SQL-only turns and lifecycle state,
+and checks both Vault containment and document identity; it never invokes editor
+recovery writes. Unreadable Chat sources are reported as listing warnings. See
+[ADR-0105](./adr/0105-dashboard-conversation-sources.md).
+Refresh is explicit rather than polled. See
 [ADR-0065](./adr/0065-session-oriented-agent-observability.md) and
 [ADR-0071](./adr/0071-action-oriented-agent-execution-traces.md).
 
@@ -814,6 +834,53 @@ bounded cursor context
 | `electron/services/ai/sql-guard.ts` | read-only vs mutation classification |
 | `src/components/ai/` | Agent panel, unified inline resource composer, quick actions, Add to Chat |
 
+## SQL Conversation Workspace
+
+`*.stela.chat` files are authoritative, versioned Vault conversation documents.
+They store drafts, immutable submitted inputs, ordered Agent events, proposal
+responses, execution references and the embedded pi session JSONL. Saved documents are
+independent of temporary Chat retention. SQL result
+rows continue to live in the existing execution journal and disposable SQLite
+cache. A main-owned filesystem adapter persists pi session writes atomically
+inside the conversation document rather than creating a second session authority.
+
+The conversation preload capability validates inputs with Zod. Main serializes
+submissions per document, deduplicates request IDs, resolves the selected
+connection and routes clear single SQL statements directly to the connector.
+Natural language, mixed input and repair use the existing AgentHarness. Direct
+queries use the same execution recorder as Agent queries; successful direct SQL
+does not call the model. Shared SQL guards apply to both paths, including explicit
+approval for mutations when enabled. Prior successful result IDs are scoped to
+the conversation and available through `read_conversation_result`; saved rows
+are historical, potentially capped evidence, not instructions or implicit authority.
+
+Committed session entries, events and results use serial, etag-checked atomic
+writes. Failed writes abort further Agent actions and preserve an attempted
+snapshot in a separate recovery conversation when disk permits. External files
+are never overwritten on conflict. Restart marks unfinished turns interrupted
+and never replays SQL. Closing a tab keeps its execution alive; stopping aborts
+subsequent work but cannot necessarily interrupt an already dispatched connector
+query. Vault switching is blocked until an active conversation releases the
+shared connector/result-store context.
+
+The renderer shares RunSQL CodeMirror SQL/schema/inline-completion extensions,
+BlockResult tables and Agent timeline components. A dedicated Zustand store owns
+per-path drafts and incoming snapshots. `chat-workspace` owns placement and moves
+one `ConversationView` between workspace and sidebar, preserving draft, selection,
+connection and scroll without restarting execution. Note switches do not inject
+context; references and quick actions do so explicitly.
+
+New Chat sessions are temporary: blank ones stay in memory; non-empty ones use
+`.stela/chat-sessions.local/` (ignored by Git). Non-empty sessions remain recoverable without count-based cleanup. Explicit Save promotes the same
+session into a visible Vault file and subsequent changes autosave. Promotion and
+maintenance writes share the document queue; callbacks address their original turn.
+Closing a view neither cancels execution nor discards history. Legacy Panel history
+is readable and imported on continuation; Dashboard deduplicates by session ID.
+Maintenance jobs returned by Agent execution are scheduled through the existing
+maintenance queue, including after foreground completion.
+See ADR-0100, ADR-0101 and ADR-0110. Run `npm run test:conversation` for the isolated Electron
+integration fixture (local connector and local streaming model server).
+
 ## IPC Contract
 
 ### Invoke channels (bidirectional, Zod-validated)
@@ -907,3 +974,87 @@ Forbidden-text scanning:
 - [../.cursor/skills/create-adr/SKILL.md](../.cursor/skills/create-adr/SKILL.md) — create/supersede ADR checklist
 - [../README.md](../README.md) — product overview (bilingual)
 - [../examples/demo-vault/README.md](../examples/demo-vault/README.md) — demo setup
+
+### Shared conversation composer
+
+Agent Panel and durable Chat use one CodeMirror composer (ADR-0102), with
+renderer-owned per-conversation selection/history and deterministic SQL tooling.
+Reference candidates use existing typed index/search/vault bridges; RunSQL bodies
+come from current note buffers or complete file parsing, never rendered DOM.
+Structured drafts/messages extend existing conversation draft/submit IPC using
+the same strict AgentMessageContent schema (ADR-0103). Main derives legacy text,
+persists references, and forwards them to AgentHarness. Only resource-free SQL
+qualifies for the direct execution path. Active runs do not own the next draft.
+
+### Validated Canvas authoring
+
+Per ADR-0104, both Agent Panel and Chat dispatch Canvas authoring through the same
+structured tools and validation path. The host assembles file metadata, audits
+query bindings and validates card fields against available result rows before an
+atomic write. Artifact events are emitted only after persistence. Renderer error
+boundaries isolate individual card failures; persistence success is not a claim
+of successful rendering or business correctness. `npm run test:canvas` covers
+schema/tool/service checks plus an isolated Electron renderer using actual Flow,
+chart, table, KPI and Markdown components and saved Canvas files.
+
+
+Automatic maintenance uses explicit GLM-compatible thinking disablement and a
+2,048-token output cap without changing the foreground model. Local bounded
+candidate receipts at `.stela/skill-maintenance.local.json` reuse completed
+source versions and cool down incomplete attempts for one hour; explicit
+maintenance bypasses this optimization. Receipts are not knowledge authority.
+Metrics retain source preparation, decision and save timing, input size and
+observed thinking output (ADR-0106).
+
+The SQL authority guard receives the selected connection dialect. Closed
+StarRocks optimizer hints are allowed in structural inspection; executable
+comments remain uncertain. `unknown` SQL requires review under the existing
+policy and remains blocked in read-only Python queries (ADR-0107).
+
+## Custom OpenAI protocol
+
+Per ADR-0109, `AiProviderProfile.customApi` selects `chat-completions` (legacy default) or `responses`. The existing pi-ai adapter owns the selected wire format, streamed events and tool-result replay. Custom `off` explicitly maps to `none`; other requested efforts use the selected protocol. Base URLs identify the API root, usually ending in `/v1`. Built-in providers retain their catalog protocol and reasoning capabilities.
+
+## Chat tabs and local history
+
+ADR-0110 supersedes ADR-0108. Sidebar tabs share the existing conversation store and
+execution service; main-area Chat uses workspace tabs. Open-tab order is in-memory
+and is reset across Vault changes/restarts. Closing only removes a view; drafts and
+turns remain in local history without newest-20 pruning, including legacy history.
+Blank sessions remain memory-only. Tabs preserve identity when moved or promoted
+to a file. The More menu exposes promotion as “Store as local file”; subsequent
+writes autosave. History merges sources by session identity, prefers file-backed
+entries, searches titles/paths and reveals 50 more rows at a time. File entries
+display the actual filename and Vault-relative directory; storage/version labels
+are not product UI. Protection/discard IPC remains compatible, with no count-based
+deletion and no discard control in Chat. Result-cache lifetimes are unchanged.
+
+### Agent recovery and publication evidence (ADR-0111, ADR-0112)
+
+The current session branch's latest unfinished plan is restored into the next run,
+with its origin, step evidence and saved-file receipts. Restoration does not replay
+queries, approvals or writes. A new task explicitly replaces its plan. Optional
+note/Canvas deliveries receive receipts only from successful host writes; run
+completion, step completion, persistence and analytical correctness remain distinct.
+Legacy undeclared deliveries have unknown completion.
+
+Canvas authoring collects independent source/card validation issues before its
+atomic write. Schema and content repairs share a six-attempt per-tool run budget;
+actual execution failures retain their existing three-consecutive-failure breaker.
+Harness schema rejections count even when the dispatcher never runs.
+
+Cross-stage Python comparisons declare population, grain, identity key and source
+references. Bounded checks inspect registered source IDs, not model-supplied counts.
+Even matching IDs do not prove business scope. Unverified comparisons remain visible
+in the final delivery; no added model call or universal answer gate is introduced.
+
+Automatic knowledge maintenance excludes notes modified in the foreground run from
+independent source collection. Publication is conservative and extractive: exact
+bounded excerpts must match independent sources, whose hashes are rechecked before
+saving. Proposed model prose does not become an automatically loaded rule. Absence
+claims and unsupported candidates stay in maintenance diagnostics; existing
+structured Skills require explicit review rather than being overwritten by an
+automatic excerpt refresh. Qualified physical-table candidates are retained;
+unqualified/ambiguous names are not asserted as physical tables. Existing maintenance
+input/output budgets are unchanged. These checks establish provenance and bounded
+observations, not general semantic truth.

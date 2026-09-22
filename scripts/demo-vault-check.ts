@@ -41,7 +41,9 @@ const journal = (await readDemo(".stela/history/history_demo.jsonl"))
   .trim()
   .split("\n")
   .map((line) => JSON.parse(line) as JournalLine);
-assert.equal(journal.length, expectedResults.size * 2);
+// Keep the deterministic fixtures and the captured runs referenced by showcase files.
+assert.ok(journal.length >= expectedResults.size * 2);
+assert.equal(new Set(journal.map((line) => line.runId)).size, journal.length);
 const journalByRunId = new Map(journal.map((line) => [line.runId, line]));
 
 for (const locale of ["en", "zh"]) {

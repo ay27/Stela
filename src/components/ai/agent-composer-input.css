@@ -1,132 +1,48 @@
+.stela-composer-region { flex-shrink: 0; padding-block: 12px; }
+
 .stela-agent-composer {
   width: 100%;
-  min-width: 120px;
-  flex: 1 1 auto;
-  border: 1px solid hsl(var(--border));
-  border-radius: 5px;
-  background: hsl(var(--muted) / 0.35);
-  color: hsl(var(--foreground));
-  cursor: text;
-  padding: 4px 8px;
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.stela-agent-composer:focus-within {
-  border-color: hsl(var(--primary) / 0.55);
-  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.12);
-}
-
-.stela-agent-composer.is-disabled {
-  cursor: progress;
-  opacity: 0.65;
-}
-
-.stela-agent-composer__editor {
-  min-height: inherit;
-  box-sizing: border-box;
-  outline: none;
-  color: hsl(var(--foreground));
-  font-size: 12px;
-  line-height: 1.4;
-  caret-color: hsl(var(--foreground));
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.stela-agent-composer__editor p {
-  min-height: inherit;
-  margin: 0;
-}
-
-.stela-agent-composer__editor[data-empty]::before {
-  content: attr(data-placeholder);
-  float: left;
-  height: 0;
-  color: hsl(var(--muted-foreground));
-  pointer-events: none;
-}
-
-.stela-agent-resource-pill {
-  display: inline-block;
-  max-width: 100%;
-  appearance: none;
-  border: 0;
-  border-radius: 999px;
-  background: hsl(var(--primary) / 0.14);
-  color: hsl(var(--primary));
-  font-family: inherit;
-  font-weight: 500;
-  font-size: 11px;
-  line-height: 1.4;
-  padding: 1px 4px;
-  overflow: hidden;
-  text-align: left;
-  text-overflow: ellipsis;
-  vertical-align: -3px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.stela-agent-resource-pill::before {
-  margin-right: 3px;
-  font-size: 9px;
-}
-
-.stela-agent-resource-pill:hover {
-  background: hsl(var(--primary) / 0.2);
-}
-
-.stela-agent-resource-pill--table::before { content: "▦"; }
-.stela-agent-resource-pill--note::before { content: "▤"; }
-.stela-agent-resource-pill--canvas::before { content: "◇"; }
-.stela-agent-resource-pill--runsql::before { content: "▶"; }
-.stela-agent-resource-pill--selection::before { content: "❝"; }
-
-.stela-agent-composer__suggestions {
-  z-index: 1000;
-  max-height: 220px;
-  overflow-y: auto;
-  border: 1px solid hsl(var(--border));
-  border-radius: 6px;
-  background: hsl(var(--background));
-  padding: 4px;
-  box-shadow:
-    0 12px 28px hsl(var(--foreground) / 0.14),
-    0 2px 6px hsl(var(--foreground) / 0.08);
-  font-size: 12px;
-}
-
-.stela-agent-composer__suggestion {
-  display: flex;
-  width: 100%;
   min-width: 0;
-  align-items: center;
-  gap: 8px;
-  border-radius: 4px;
-  padding: 5px 8px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--background));
   color: hsl(var(--foreground));
-  text-align: left;
+  font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+  box-shadow: 0 2px 8px hsl(var(--foreground) / 0.025);
+  transition: border-color 120ms, box-shadow 120ms;
 }
+.stela-agent-composer:focus-within {
+  border-color: hsl(var(--primary) / .4);
+  box-shadow: 0 0 0 2px hsl(var(--primary) / .07);
+}
+.stela-composer-editing { padding: 12px 12px 4px; cursor: text; }
+.stela-composer-footer { display: flex; align-items: center; gap: 4px; padding: 4px 8px 8px; }
+.stela-composer-action {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; flex: none;
+  border: 0; border-radius: 6px;
+  color: hsl(var(--muted-foreground)); background: transparent;
+}
+.stela-composer-action:hover { color: hsl(var(--foreground)); background: hsl(var(--muted) / .6); }
+.stela-composer-action:focus-visible { outline: 2px solid hsl(var(--primary) / .4); outline-offset: 1px; }
+.stela-agent-composer.is-disabled { opacity: .65; }
+.stela-composer-sql { font-family: var(--font-mono, ui-monospace, monospace); }
+.stela-agent-resource-pill {
+  display: inline-block; max-width: 100%; vertical-align: baseline;
+  border: 0; border-radius: 5px; padding: 1px 5px;
+  background: hsl(var(--primary) / .08); color: hsl(var(--primary));
+  font: 500 12px/1.5 var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+  cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.stela-agent-resource-pill:hover { background: hsl(var(--primary) / .14); }
+.stela-agent-composer .cm-tooltip-autocomplete > ul { max-width: min(420px, 85vw); font-family: inherit; font-size: 12px; }
+.stela-agent-composer .cm-tooltip-autocomplete > ul > li { padding: 6px 8px; }
+.stela-agent-composer .cm-tooltip-autocomplete > ul > li[aria-selected] { background: hsl(var(--primary) / .1); color: hsl(var(--foreground)); }
+.stela-agent-composer .cm-completionDetail { font-size: 11px; color: hsl(var(--muted-foreground)); }
 
-.stela-agent-composer__suggestion:hover,
-.stela-agent-composer__suggestion[aria-selected="true"] {
-  background: hsl(var(--accent));
-  color: hsl(var(--accent-foreground));
-}
-
-.stela-agent-composer__suggestion-empty {
-  padding: 5px 8px;
-  color: hsl(var(--muted-foreground));
-}
-
-.stela-resource-kind {
-  flex: none;
-  border-radius: 999px;
-  background: hsl(var(--primary) / 0.12);
-  padding: 1px 5px;
-  color: hsl(var(--primary));
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 9px;
-  text-transform: uppercase;
-}
+.stela-agent-composer { --stela-sql-keyword: #8050a8; --stela-sql-string: #287940; --stela-sql-number: #986000; --stela-sql-comment: #7a7d83; }
+.dark .stela-agent-composer { --stela-sql-keyword: #c7a1e8; --stela-sql-string: #99c794; --stela-sql-number: #f0be7c; --stela-sql-comment: #9b9fa7; }
+.stela-agent-composer .tok-keyword { color: var(--stela-sql-keyword); }
+.stela-agent-composer :is(.tok-string, .tok-string2) { color: var(--stela-sql-string); }
+.stela-agent-composer .tok-number { color: var(--stela-sql-number); }
+.stela-agent-composer .tok-comment { color: var(--stela-sql-comment); }

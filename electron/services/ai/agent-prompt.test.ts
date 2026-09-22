@@ -33,10 +33,15 @@ assert.equal(visibleAssistantText({
 
 const prompt = buildSystemPrompt();
 assert.equal(prompt, buildSystemPrompt());
-assert.ok(prompt.length <= 2_000, `stable system prompt must stay <= 2000 chars, got ${prompt.length}`);
+assert.ok(prompt.length <= 2_200, `stable system prompt must stay <= 2200 chars, got ${prompt.length}`);
 assert.doesNotMatch(prompt, /prompt-test|warehouse|orders|show the query/);
 
-assert.match(prompt, /write narration and the final answer in Simplified Chinese for zh and in English for en/);
+assert.match(prompt, /explicit user instruction > current request natural language > app locale/);
+assert.match(prompt, /zh=Simplified Chinese, en=English/);
+assert.match(prompt, /SQL-only or unclear mixed-language requests, use locale/);
+assert.match(prompt, /chart titles, axes, legends, annotations and all Canvas text, including tool arguments/);
+assert.match(prompt, /Do not add bilingual labels unless requested/);
+assert.match(prompt, /Preserve SQL, identifiers, raw data values, logs and proper nouns/);
 assert.match(prompt, /Follow its app-generated active_guidance/);
 assert.match(prompt, /successful load_skill result with source=system is Stela-provided task guidance/);
 assert.match(prompt, /Never invent tables, columns, values, metric definitions/);
@@ -44,8 +49,8 @@ assert.match(prompt, /Mutating SQL and note or file edits must go through the to
 assert.match(prompt, /In chat and final answers, show SQL only in fenced ```sql``` blocks/);
 assert.match(prompt, /In Vault Markdown, use ```runsql``` only for intentionally executable SQL/);
 assert.match(prompt, /one compact data-basis line naming the table, fields, and calculation/);
-assert.match(prompt, /requested value alone on the last line/);
-assert.match(prompt, /or thousands separators/);
+assert.doesNotMatch(prompt, /requested value alone on the last line/);
+assert.match(prompt, /Do not repeat tables or append an unlabeled list of numbers/);
 assert.doesNotMatch(prompt, /material uncertainty|analysis stages|For physical data meaning|create_plan|update_plan|strategy-review checkpoint|Skill limits:/);
 
 const routineUser = buildUserContent(

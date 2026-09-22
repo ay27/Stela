@@ -2,7 +2,7 @@
  * LLM transport via `@earendil-works/pi-ai`.
  *
  * - Builtin vendors: pi provider factories (catalog + native API).
- * - Custom: createProvider + openAICompletionsApi (arbitrary OpenAI-compatible gateways).
+ * - Custom: createProvider + explicit Chat Completions or Responses adapter.
  * Credentials stay Stela-owned (safeStorage shards). pi's auth.json is not used.
  */
 
@@ -20,6 +20,7 @@ import {
   type ModelThinkingLevel,
 } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 import { AppError, isAppError } from "@shared/errors";
@@ -277,6 +278,7 @@ export async function upsertProfile(
     baseUrl: profile.baseUrl.trim(),
     contextWindow: profile.contextWindow,
     reasoningEffort: profile.reasoningEffort,
+    customApi: profile.customApi ?? "chat-completions",
     hasApiKey,
   };
   const profiles = current.ai.profiles.some((p) => p.id === id)
@@ -368,8 +370,9 @@ export function createStelaCredentialStore(apiKey: string): CredentialStore {
   };
 }
 
-function createCustomProvider(): Provider<"openai-completions"> {
-  return createProvider<"openai-completions">({
+type CustomApi = "openai-completions" | "openai-responses";
+function createCustomProvider(responses: boolean): Provider<CustomApi> {
+  return createProvider<CustomApi>({
     id: CUSTOM_PROVIDER_ID,
     name: "Custom OpenAI-compatible",
     auth: {
@@ -385,24 +388,25 @@ function createCustomProvider(): Provider<"openai-completions"> {
       },
     },
     models: [],
-    api: openAICompletionsApi(),
+    api: responses ? openAIResponsesApi() : openAICompletionsApi(),
   });
 }
 
-function buildCustomModel(profile: AiProviderProfile): Model<"openai-completions"> {
+function buildCustomModel(profile: AiProviderProfile): Model<CustomApi> {
   const contextWindow = profile.contextWindow || 128_000;
   return {
     id: profile.model,
     name: profile.model,
-    api: "openai-completions",
+    api: profile.customApi === "responses" ? "openai-responses" : "openai-completions",
     provider: CUSTOM_PROVIDER_ID,
     baseUrl: profile.baseUrl.replace(/\/+$/, ""),
-    reasoning: profile.reasoningEffort !== "off",
+    reasoning: true,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow,
     maxTokens: Math.min(16_384, Math.max(1_024, Math.floor(contextWindow / 8))),
     thinkingLevelMap: {
+      off: "none",
       xhigh: "xhigh",
       max: "max",
     },
@@ -460,7 +464,7 @@ export function createTransportForProfile(
     if (!profile.baseUrl.trim()) {
       throw new AppError("ai_missing_base_url", "AI provider base URL is not configured.");
     }
-    models.setProvider(createCustomProvider());
+    models.setProvider(createCustomProvider(profile.customApi === "responses"));
     const model = buildCustomModel(profile);
     return { models, model, profile, reasoning: resolveReasoningEffort(model, profile.reasoningEffort) };
   }

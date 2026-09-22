@@ -195,7 +195,9 @@ function renderSummary() {
     : `${totals.strategyReviewsCompleted ?? 0} completed · ${totals.strategyReviewsFailed ?? 0} failed`;
   const resultReviewNote = `${totals.resultReviewsSkipped ?? 0} 仅结构门 · ${totals.resultReviewsExhausted ?? 0} 两轮耗尽 · ${totals.resultReviewsUnavailable ?? 0} 不可用 · ${totals.resultReviewsStructuralFailed ?? 0} 结构失败`;
   target.replaceChildren(
-    metric("通过率", `${totals.valid} / ${totals.cases}`, validNote),
+    metric("榜单 Pass@1", totals.leaderboard?.passAt1 == null ? "—" : formatPercent(totals.leaderboard.passAt1),
+      `${totals.leaderboard?.coveredQueries ?? 0}/54 题 · 数据集等权 · ${totals.leaderboard?.hasRequiredTrials ? "每题至少 5 次；仍需核验提交资格" : "未满足每题至少 5 次"} · 原评分未重评`),
+    metric("按 trial 通过率", `${totals.valid} / ${totals.cases}`, validNote),
     metric("平均耗时", formatDuration(totals.averageElapsedMs), durationNote),
     metric("工具调用", formatNumber(totals.toolCalls), toolNote),
     metric("模型输出 Token", compactNumber(totals.outputTokens), outputNote),

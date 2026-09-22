@@ -90,6 +90,8 @@ export interface AiProviderProfile {
 }
 
 export interface AiSettings {
+  semanticOptimizationEnabled?: boolean;
+  automaticAnalysisContractsEnabled?: boolean;
   semanticProfileId?: string | null;
   semanticBudget?: import("../../electron/shared/semantic").SemanticBudget;
   providerMode: AiProviderMode;
@@ -168,6 +170,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     agentMaxIterations: 200,
     agentWallClockMs: 300_000,
     agentAllowMutations: false,
+    semanticOptimizationEnabled: false,
+    automaticAnalysisContractsEnabled: false,
     agentAutoApplyEdits: false,
     automaticSkillMaintenanceEnabled: true,
   },

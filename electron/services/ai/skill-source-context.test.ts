@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { symlink, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -31,12 +31,28 @@ try {
     filters.push(filter);
     return filter.readTable ? latest : [];
   };
+  const preferred = await collectSkillSourceNotes(root, [], async () => [], 3, [join(root, "notes", "new.md")]);
+  assert.equal(preferred[0]?.path, "notes/new.md");
+  assert.equal((await collectSkillSourceNotes(root, [], async () => [], 3, ["../outside.md"])).length, 0);
+  const excluded = await collectSkillSourceNotes(root, ["demo.orders"], async () => [hit("notes/new.md"), hit("notes/old.md")], 1,
+    ["notes/new.md"], new Set(["notes/new.md"]));
+  assert.deepEqual(excluded.map(note => note.path), ["notes/old.md"], "generated sources are excluded before ranking, not after truncation");
+  assert.equal((await collectSkillSourceNotes(root, [], async () => [], 3, ["./notes/new.md"], new Set(["notes/new.md"]))).length, 0);
+  await symlink(join(root, "notes/new.md"), join(root, "alias.md"));
+  assert.equal((await collectSkillSourceNotes(root, [], async () => [], 3, ["alias.md"], new Set(["notes/new.md"]))).length, 0, "path aliases cannot launder generated evidence");
   const notes = await collectSkillSourceNotes(root, ["demo.orders"], query);
   assert.deepEqual(notes.map((note) => note.path), ["notes/old.md"]);
   assert.deepEqual(filters, [
     { readTable: "demo.orders", maxHits: 60 },
     { writeTable: "demo.orders", maxHits: 60 },
   ]);
+
+  const diagnostics = { candidates: [] as string[], excluded: [] as string[], unreadable: [] as string[] };
+  const noSources = await collectSkillSourceNotes(root, [], async () => [], 3,
+    ["notes/old.md", "missing.md"], new Set(["notes/old.md"]), diagnostics);
+  assert.deepEqual(noSources, []);
+  assert.deepEqual(diagnostics.excluded, ["notes/old.md"]);
+  assert.deepEqual(diagnostics.unreadable, ["missing.md"]);
 
   await saveAgentSkill(
     root,
@@ -77,9 +93,10 @@ Compare grouped totals.`,
   });
   skill = (await loadAgentSkills(root)).loaded[0]!;
   latest = [hit("notes/new.md")];
+  // Additional retrieved sources may trigger refresh, but recorded sources stay preferred.
   assert.equal(await isSkillStale(root, skill, query), true);
   latest = [];
-  assert.equal(await isSkillStale(root, skill, query), true);
+  assert.equal(await isSkillStale(root, skill, query), false);
 
   await saveAgentSkill(
     root,

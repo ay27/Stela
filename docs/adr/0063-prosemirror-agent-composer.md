@@ -2,7 +2,8 @@
 type: ADR
 id: "0063"
 title: "ProseMirror-backed Agent composer"
-status: active
+status: superseded
+superseded_by: "0102"
 date: 2026-08-12
 ---
 

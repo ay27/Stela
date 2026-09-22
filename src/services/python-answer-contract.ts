@@ -1,6 +1,8 @@
 /** Local evidence bookkeeping, not an LLM reviewer or authority over business meaning. */
 export const PYTHON_ANSWER_CONTRACT_SCRIPT = String.raw`
 import re as _stela_contract_re
+import weakref as _stela_contract_weakref
+import hashlib as _stela_contract_hash
 
 class _StelaAnswerContract:
     def __init__(self, required):
@@ -8,7 +10,8 @@ class _StelaAnswerContract:
         if not required or not set(required) <= allowed:
             raise ValueError('Declare relevant contract fields: ' + ', '.join(sorted(allowed)))
         self.required = list(dict.fromkeys(required))
-        self.claims, self.checks = {}, {}
+        self.claims, self.checks, self.comparisons = {}, {}, {}
+        self._comparison_versions = {}
 
     def claim(self, field, value, *, source, evidence):
         if field not in self.required or not isinstance(value, str) or not value.strip():
@@ -19,6 +22,71 @@ class _StelaAnswerContract:
             raise ValueError('Conflicting claim: create a revised contract explicitly, do not silently overwrite ' + field)
         self.claims[field] = claim
         return self
+
+    def comparison(self, name, *, population, grain, key, upstream_source, downstream_source, definition_source, definition_evidence):
+        self._evidence(definition_source, definition_evidence)
+        values = (name, population, grain, key, upstream_source, downstream_source)
+        if any(not isinstance(v, str) or not v.strip() or len(v) > 256 for v in values):
+            raise ValueError('Comparison requires bounded population, grain, key and source references')
+        if len(self.comparisons) >= 8 or name in self.comparisons:
+            raise ValueError('Revise the contract explicitly to change a comparison')
+        self.comparisons[name] = dict(name=name, population=population, grain=grain, key=key,
+            upstreamSource=upstream_source, downstreamSource=downstream_source,
+            definitionSource=definition_source, definitionResolved=_stela_source(definition_source, definition_evidence),
+            state='unverified', reason='stage_relationship_missing')
+        return self
+
+    def check_relationship(self, name):
+        # Use registered source rows, not caller-supplied counts or fabricated DataFrames.
+        c = self.comparisons[name]
+        c.update(state='unverified', reason='stage_relationship_missing')
+        workspace = globals().get('__stela_workspace', {})
+        def resolve(ref):
+            return next((s for s in workspace.get('sources', {}).values() if ref in (s['alias'], s['version'])), None)
+        upstream, downstream = resolve(c['upstreamSource']), resolve(c['downstreamSource'])
+        if not upstream or not downstream:
+            c['reason'] = 'source_unavailable'
+            return self
+        if any(s.get('incomplete') or s['rowCount'] > 100000 for s in (upstream, downstream)):
+            c['reason'] = 'verification_limit'
+            return self
+        ids = []
+        for source in (upstream, downstream):
+            relation = workspace['tables'][source['alias']]
+            if c['key'] not in relation.columns:
+                c['reason'] = 'identity_key_missing'
+                return self
+            # Projection bounds memory even for wide source tables.
+            frame = relation.df() if source['rowCount'] * len(relation.columns) <= 1000000 else None
+            if frame is None:
+                c['reason'] = 'verification_limit'
+                return self
+            values = frame[c['key']]
+            if values.isna().any() or not values.is_unique:
+                c['reason'] = 'identity_grain_mismatch'
+                return self
+            ids.append(set(json.dumps(v, sort_keys=True, ensure_ascii=False) for v in values.tolist()))
+        if not ids[0] or not ids[1]:
+            c['reason'] = 'empty_population'
+        elif not ids[1].issubset(ids[0]):
+            c['reason'] = 'population_mismatch'
+        else:
+            c.update(state='identity_checked', reason='source_ids_contained_business_scope_unverified')
+            self._comparison_versions[name] = (upstream['version'], downstream['version'], _stela_analysis_state()['epoch'])
+        return self
+
+    def comparison_report(self):
+        sources = globals().get('__stela_workspace', {}).get('sources', {})
+        result = []
+        for name, comparison in self.comparisons.items():
+            item = dict(comparison)
+            if item['state'] == 'identity_checked':
+                versions = tuple(next((s['version'] for s in sources.values() if ref in (s['alias'], s['version'])), None)
+                    for ref in (item['upstreamSource'], item['downstreamSource'])) + (_stela_analysis_state()['epoch'],)
+                if self._comparison_versions.get(name) != versions:
+                    item.update(state='unverified', reason='source_changed_or_execution_failed')
+            result.append(item)
+        return result
 
     def _evidence(self, source, evidence):
         if not all(isinstance(v, str) and v.strip() and len(v) <= 4000 for v in (source, evidence)):
@@ -47,7 +115,12 @@ class _StelaAnswerContract:
     def report(self):
         missing = [f for f in self.required if f not in self.claims]
         failed = [name for name, check in self.checks.items() if not check['passed']]
-        return dict(claims=self.claims, checks=self.checks, unresolved=missing, failedChecks=failed,
+        observations = {}
+        if _stela_contract_context().get('automaticContracts'):
+            observations['coverage'] = _stela_current_coverage(self)
+            if hasattr(self, '_operation_coverage'):
+                observations['operationCoverage'] = dict(self._operation_coverage)
+        return dict(claims=self.claims, checks=self.checks, comparisons=self.comparison_report(), unresolved=missing, failedChecks=failed, **observations,
             structurallyReady=not missing and not failed and bool(self.checks),
             caveat='Checks validate supplied observations, not business truth or completeness of an already filtered source.')
 
@@ -57,7 +130,228 @@ class _StelaAnswerContract:
             raise ValueError('Answer contract has missing claims, failed checks or no verification: ' + str(report))
         return report
 
+    def bind_population(self, df, *, id_column, source, source_id_column=None):
+        try:
+            return self._bind_population(df, id_column=id_column, source=source, source_id_column=source_id_column)
+        except ValueError:
+            self._coverage = _stela_unknown_coverage(self, 'binding_failed')
+            raise
+
+    def _bind_population(self, df, *, id_column, source, source_id_column):
+        if not _stela_contract_context().get('automaticContracts'):
+            raise ValueError('Automatic analysis contracts experiment is disabled')
+        if hasattr(self, '_binding'):
+            raise ValueError('Population is frozen; create an explicit revised contract to change it')
+        workspace = globals()['__stela_workspace']
+        match = next((s for s in workspace['sources'].values() if source in (s['alias'], s['version'])), None)
+        if match is None:
+            aliases = ', '.join(str(a)[:80] for a in list(workspace['sources'])[:16])
+            raise ValueError('population_source_unknown: use an existing source alias or run ID. Available aliases: ' + aliases)
+        source_id = source_id_column if source_id_column is not None else id_column
+        rows = _stela_fingerprints(df, id_column)
+        # Bound before converting a large relation to pandas.
+        if match['rowCount'] > 100000 or match['rowCount'] * len(workspace['tables'][match['alias']].columns) > 1000000:
+            raise ValueError('verification_limit: source exceeds 100000 rows or 1000000 cells')
+        original_df = workspace['tables'][match['alias']].df()
+        original = _stela_fingerprints(original_df, source_id)
+        # Only the explicitly mapped identity column may have a different name.
+        if source_id != id_column:
+            if id_column in original_df.columns:
+                raise ValueError('population_id_mapping_conflict: target ID column already exists in source')
+            original = {k: {(id_column if c == source_id else c): v for c, v in row.items()} for k, row in original.items()}
+        if not _stela_related(rows, original):
+            raise ValueError('population_values_mismatch: bind original input columns whose values match the source; derived labels and changed IDs are not source evidence')
+        self._binding = dict(rows=rows, id_column=id_column, source=match['version'], alias=match['alias'],
+            full=len(rows)==len(original) and not match.get('incomplete'))
+        self._coverage = _stela_unknown_coverage(self, 'no_operation')
+        self._coverage_epoch = _stela_analysis_state()['epoch']
+        return self
+
+    def observe(self, batch):
+        if not _stela_contract_context().get('automaticContracts'):
+            raise ValueError('Automatic analysis contracts experiment is disabled')
+        try:
+            record = _stela_analysis_state()['operations'].get(batch)
+        except TypeError:
+            record = None
+        if record is None:
+            self._coverage = _stela_unknown_coverage(self, 'operation_unavailable')
+            raise ValueError('operation_unavailable: use a semantic result from this run and workspace, not a copied DataFrame or fabricated summary')
+        _stela_apply_operation(self, record)
+        return self
+
 class _StelaAnalysis:
+    @property
+    def current(self):
+        if not _stela_contract_context().get('automaticContracts'):
+            raise ValueError('Automatic analysis contracts experiment is disabled')
+        return _stela_current_contract()
+
     def contract(self, *, required):
-        return _StelaAnswerContract(required)
+        contract = _StelaAnswerContract(required)
+        contract._explicit = True
+        return _stela_register_contract(contract)
+
+    def history(self):
+        return _stela_copy.deepcopy(_stela_analysis_state()['previous'])
+
+def _stela_contract_context():
+    return json.loads(globals().get('__stela_analysis_context', '{}'))
+
+def _stela_analysis_enabled():
+    context = _stela_contract_context()
+    state = globals().get('__stela_workspace', {}).get('analysis_state') or {}
+    return bool(context.get('automaticContracts') or (context.get('runId') and state.get('runId') == context.get('runId')
+        and getattr(state.get('current'), '_explicit', False)))
+
+def _stela_source(source, evidence=''):
+    context = _stela_contract_context()
+    if source == 'question':
+        return bool(evidence and evidence in context.get('question', ''))
+    return any(source in (s['alias'], s['version']) for s in globals().get('__stela_workspace', {}).get('sources', {}).values())
+
+def _stela_json_equal(left, right):
+    return json.dumps(left, sort_keys=True, ensure_ascii=False) == json.dumps(right, sort_keys=True, ensure_ascii=False)
+
+def _stela_fingerprints(df, id_column):
+    if not isinstance(df, pd.DataFrame) or not df.columns.is_unique:
+        raise ValueError('population_columns_invalid: bind a DataFrame with unique columns')
+    if len(df) > 100000 or df.size > 1000000:
+        raise ValueError('verification_limit: at most 100000 rows and 1000000 cells can be verified')
+    if id_column is None or id_column not in df.columns:
+        columns = ', '.join(str(c)[:80] for c in list(df.columns)[:16])
+        raise ValueError('population_id_column_missing: supply id_column and, if renamed, source_id_column. Available columns: ' + columns)
+    ids = df[id_column]
+    if ids.isna().any():
+        raise ValueError('population_id_null: identity must be non-null')
+    if not ids.is_unique:
+        raise ValueError('population_id_duplicate: identity must be unique')
+    values = _stela_exact_json_frame(df)
+    keys = [json.dumps(v, sort_keys=True, ensure_ascii=False) for v in ids.tolist()]
+    # Hash each cell independently so verified projections remain possible without retaining text.
+    return {key: {c: _stela_contract_hash.sha256(json.dumps(v, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+                  for c, v in row.items()} for key, row in zip(keys, values)}
+
+def _stela_related(rows, original):
+    return all(k in original and all(c in original[k] and original[k][c] == v for c, v in row.items()) for k, row in rows.items())
+
+def _stela_unknown_coverage(contract, reason):
+    binding = getattr(contract, '_binding', None)
+    total = len(binding['rows']) if binding else None
+    return dict(state='unknown', total=total, processed=0, unresolved=0,
+        unprocessed=total or 0, source=binding['source'] if binding else None, reason=reason)
+
+def _stela_analysis_state():
+    workspace = globals().get('__stela_workspace', {})
+    config = _stela_contract_context()
+    state = workspace.get('analysis_state')
+    if state is None or state['runId'] != config.get('runId', ''):
+        state = dict(runId=config.get('runId', ''), current=None, previous=[], version=0, epoch=0, operations=_stela_contract_weakref.WeakKeyDictionary())
+        workspace['analysis_state'] = state
+    return state
+
+def _stela_register_contract(contract):
+    state = _stela_analysis_state()
+    if state['current'] is not None:
+        # Historical observations are bounded and remain distinct from the new population.
+        state['previous'].append(_stela_analysis_snapshot())
+        state['previous'] = state['previous'][-16:]
+    state['version'] += 1
+    state['current'] = contract
+    return contract
+
+def _stela_current_contract():
+    state = _stela_analysis_state()
+    if state['current'] is None:
+        _stela_register_contract(_StelaAnswerContract(['population', 'metric', 'granularity']))
+    return state['current']
+
+def _stela_apply_operation(contract, record):
+    state = _stela_analysis_state()
+    binding = getattr(contract, '_binding', None)
+    contract._operation_coverage = dict(record['counts'])
+    contract._coverage_epoch = record['epoch']
+    reason = record['reason']
+    if record['epoch'] != state['epoch']:
+        reason = 'execution_failed'
+    elif binding is None:
+        reason = reason or 'population_unbound'
+    else:
+        source = globals()['__stela_workspace']['sources'].get(binding['alias'], {})
+        if source.get('version') != binding['source'] or record['sources'].get(binding['alias']) != binding['source']:
+            reason = 'source_changed'
+        elif not reason and (record['id_column'] != binding['id_column'] or not _stela_related(record['rows'], binding['rows'])):
+            reason = 'identity_mismatch'
+    if reason:
+        contract._coverage = _stela_unknown_coverage(contract, reason)
+        return
+    counts = record['counts']
+    total = len(binding['rows'])
+    full = len(record['rows']) == total and counts['success'] == total and binding['full']
+    contract._coverage = dict(state='full' if full else 'subset', total=total,
+        processed=counts['success'], unresolved=counts['unresolved'],
+        unprocessed=total-counts['success']-counts['unresolved'], source=binding['source'],
+        reason='verified' if full else 'partial_coverage')
+
+def _stela_observe_semantic(df, id_column, output):
+    if not _stela_contract_context().get('automaticContracts'):
+        return
+    state = _stela_analysis_state()
+    # Called synchronously before returning a result to user code. Later edits to rows/summary
+    # cannot change this independent execution observation.
+    counts = {key: output.summary[key] for key in ('total', 'success', 'unresolved', 'failed', 'unprocessed')}
+    rows, reason = None, None
+    try:
+        rows = _stela_fingerprints(df, id_column)
+    except ValueError as error:
+        reason = 'verification_limit' if str(error).startswith('verification_limit') else 'identity_mismatch'
+    record = dict(rows=rows, reason=reason, counts=counts, epoch=state['epoch'], id_column=id_column,
+        sources={a:s['version'] for a,s in globals()['__stela_workspace']['sources'].items()})
+    state['operations'][output] = record
+    _stela_apply_operation(_stela_current_contract(), record)
+
+def _stela_current_coverage(contract):
+    coverage = dict(getattr(contract, '_coverage', _stela_unknown_coverage(contract, 'no_operation')))
+    binding = getattr(contract, '_binding', None)
+    if getattr(contract, '_coverage_epoch', _stela_analysis_state()['epoch']) != _stela_analysis_state()['epoch']:
+        coverage = _stela_unknown_coverage(contract, 'execution_failed')
+    elif binding is not None and globals()['__stela_workspace']['sources'].get(binding['alias'], {}).get('version') != binding['source']:
+        coverage = _stela_unknown_coverage(contract, 'source_changed')
+    contract._coverage = coverage
+    return coverage
+
+def _stela_analysis_snapshot(status='observed'):
+    if not _stela_analysis_enabled():
+        return None
+    state = _stela_analysis_state()
+    contract = _stela_current_contract()
+    sources = list(globals()['__stela_workspace']['sources'].values())
+    missing = [f for f in contract.required if f not in contract.claims]
+    failed = [str(n)[:128] for n, c in contract.checks.items() if not c['passed']]
+    coverage = _stela_current_coverage(contract)
+    if status != 'observed':
+        state['epoch'] += 1
+        coverage = _stela_unknown_coverage(contract, 'workspace_lost' if status == 'lost' else 'execution_failed')
+        contract._coverage = coverage
+    return dict(runId=state['runId'][:256], version=state['version'], generation=globals()['__stela_workspace']['generation'][:128],
+        status=status, missingClaims=missing, failedChecks=failed[:20],
+        claims=[dict(field=f, value=str(c['value'])[:500], source=c['source'][:256], evidence=c['evidence'][:500],
+            sourceResolved=_stela_source(c['source'], c['evidence'])) for f, c in contract.claims.items()][:6],
+        checks=[dict(name=str(n)[:128], passed=bool(c['passed']), sourceResolved=_stela_source(c['source'], c['evidence'])) for n, c in list(contract.checks.items())[:20]],
+        sources=[dict(ref=s['version'][:256], rowCount=s['rowCount'], incomplete=s.get('incomplete', False)) for s in sources[:16]],
+        coverage=coverage, comparisons=contract.comparison_report(),
+        **({'operationCoverage': dict(contract._operation_coverage)} if hasattr(contract, '_operation_coverage') else {}),
+        previousVersions=state['version']-1, truncated=len(sources)>16 or len(contract.checks)>20)
+
+
+def _stela_safe_analysis_snapshot(status='observed'):
+    try:
+        return _stela_analysis_snapshot(status)
+    except Exception:
+        # Bookkeeping must never hide the cell's actual error or turn success into failure.
+        config = _stela_contract_context()
+        return dict(runId=config.get('runId', '')[:256], version=0,
+            generation=globals().get('__stela_workspace', {}).get('generation', '')[:128], status=status,
+            missingClaims=['population', 'metric', 'granularity'], failedChecks=['snapshot_unavailable'], claims=[], checks=[], sources=[],
+            coverage=dict(state='unknown', total=None, processed=0, unresolved=0, unprocessed=0, source=None, reason='snapshot_unavailable'), previousVersions=0, truncated=True)
 `;

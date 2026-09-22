@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -93,6 +94,8 @@ import {
   HeadlessPyodidePool,
 } from "./data-agent-bench/headless-python";
 
+import { isLeaderboardCase, leaderboardScore } from "./data-agent-bench/leaderboard";
+
 const execFileAsync = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../..");
@@ -108,6 +111,7 @@ interface CliOptions {
   runs: number;
   hints: boolean;
   all: boolean;
+  suite: "leaderboard" | "all";
   resume: boolean;
   selfCheck: boolean;
   maxModelTurns: number;
@@ -122,6 +126,8 @@ interface CliOptions {
   noPython: boolean;
   statefulPython: boolean;
   semantic: boolean;
+  semanticOptimization: boolean;
+  analysisContracts: boolean;
   semanticModel: string | null;
   semanticBudget: SemanticBudget;
   strategyReview: boolean;
@@ -196,7 +202,7 @@ function intArg(value: string | undefined, name: string, minimum: number): numbe
   return parsed;
 }
 
-function parseArgs(argv: string[]): CliOptions {
+export function parseArgs(argv: string[]): CliOptions {
   const value = (name: string): string | undefined => {
     const index = argv.indexOf(name);
     return index >= 0 ? argv[index + 1] : undefined;
@@ -208,15 +214,17 @@ function parseArgs(argv: string[]): CliOptions {
   if (mongoFixtureMode !== "per-run" && mongoFixtureMode !== "shared") {
     throw new Error("--mongo-fixture-mode must be 'per-run' or 'shared'.");
   }
+  const suite = value("--suite") ?? "leaderboard";
+  if (suite !== "leaderboard" && suite !== "all") throw new Error("--suite must be leaderboard or all.");
   return {
+    suite,
     dabRoot: path.resolve(dabRoot),
     output: value("--output") ? path.resolve(value("--output")!) : null,
     dataset: value("--dataset") ?? null,
     queryId: value("--query-id") ? intArg(value("--query-id"), "--query-id", 1) : null,
     failedFrom: value("--failed-from") ? path.resolve(value("--failed-from")!) : null,
-    // One run per case leaves a ~5 point binomial standard error, which is larger
-    // than the differences these comparisons try to resolve.
-    runs: intArg(value("--runs") ?? "3", "--runs", 1),
+    // Official submissions require at least five unselected trials per query.
+    runs: intArg(value("--runs") ?? "5", "--runs", 1),
     hints: !argv.includes("--no-hints"),
     all: argv.includes("--all"),
     resume: argv.includes("--resume"),
@@ -239,6 +247,8 @@ function parseArgs(argv: string[]): CliOptions {
     noPython: argv.includes("--no-python"),
     statefulPython: !argv.includes("--stateless-python"),
     semantic: argv.includes("--allow-semantic-transmission"),
+    semanticOptimization: argv.includes("--semantic-optimization"),
+    analysisContracts: argv.includes("--analysis-contracts"),
     semanticModel: value("--semantic-model") ?? null,
     semanticBudget: semanticBudgetSchema.parse({
       records: intArg(value("--semantic-records") ?? String(DEFAULT_SEMANTIC_BUDGET.records), "--semantic-records", 1),
@@ -317,11 +327,14 @@ async function readFailedCaseSelection(source: string): Promise<FailedCaseSelect
   return { source, cases, keys: new Set(cases.map((item) => taskKey(item.dataset, item.queryId))) };
 }
 
-function selectTasks(
+export function selectTasks(
   tasks: DabTask[],
   options: CliOptions,
   failedSelection: FailedCaseSelection | null,
 ): DabTask[] {
+  if (options.suite === "leaderboard") {
+    tasks = tasks.filter((task) => isLeaderboardCase(task.dataset, task.queryId));
+  }
   if (failedSelection && (options.all || options.dataset !== null || options.queryId !== null || options.selfCheck)) {
     throw new Error("--failed-from cannot be combined with --all, --dataset, --query-id, or --self-check.");
   }
@@ -342,7 +355,9 @@ function selectTasks(
   if (selected.length === 0) throw new Error("No matching DAB tasks found.");
   if (failedSelection) {
     const discovered = new Set(selected.map((task) => taskKey(task.dataset, task.queryId)));
-    const missing = failedSelection.cases.filter((item) => !discovered.has(taskKey(item.dataset, item.queryId)));
+    const missing = failedSelection.cases.filter((item) =>
+      (options.suite === "all" || isLeaderboardCase(item.dataset, item.queryId)) &&
+      !discovered.has(taskKey(item.dataset, item.queryId)));
     if (missing.length > 0) {
       throw new Error(
         "Failed cases are absent from the current DAB root: " +
@@ -350,6 +365,9 @@ function selectTasks(
           (missing.length > 20 ? `, and ${missing.length - 20} more` : ""),
       );
     }
+  }
+  if (options.all && options.suite === "leaderboard" && selected.length !== 54) {
+    throw new Error(`Official leaderboard requires 54 queries; discovered ${selected.length}.`);
   }
   return selected;
 }
@@ -644,7 +662,7 @@ async function runTask(input: {
     : { models, model, reasoning };
   const semantic = new SemanticExecution({
     identity: JSON.stringify([semanticTransport.model.id, semanticTransport.reasoning.effective]),
-    signal: reviewAbort.signal, budget: options.semanticBudget,
+    signal: reviewAbort.signal, budget: options.semanticBudget, optimizationEnabled: options.semanticOptimization,
     authorize: async () => options.semantic,
     complete: async (system, user, maxTokens, signal) => {
       if (Buffer.byteLength(system + user) + maxTokens > semanticTransport.model.contextWindow) throw new Error("Semantic input exceeds model context");
@@ -704,6 +722,7 @@ async function runTask(input: {
         connectionName: "dab",
         connection,
         aiSettings: settings,
+        analysisContext: { runId: request.runId, question: request.prompt, semanticOptimization: options.semanticOptimization, automaticContracts: options.analysisContracts },
         connector: {
           listKinds: () => [{
             kind: "dab",
@@ -1066,6 +1085,7 @@ async function writeSummary(output: string, results: FinalRun[]): Promise<void> 
     valid,
     total: results.length,
     validRate: results.length > 0 ? valid / results.length : 0,
+    leaderboard: leaderboardScore(results),
     requestedReasoningEffort: results[0]?.requestedReasoningEffort ?? null,
     effectiveReasoningEffort: results[0]?.effectiveReasoningEffort ?? null,
     byDataset,
@@ -1086,6 +1106,8 @@ async function writeSummary(output: string, results: FinalRun[]): Promise<void> 
   const lines = [
     "# Stela DataAgentBench internal baseline",
     "",
+    `- Leaderboard Pass@1 (dataset-macro): ${summary.leaderboard.passAt1 === null ? "n/a (partial query coverage)" : `${(summary.leaderboard.passAt1 * 100).toFixed(2)}%`}`,
+    `- Required trial coverage: ${summary.leaderboard.hasRequiredTrials ? "met (not an eligibility certification)" : "not met; at least 5 trials for every official query required"}`,
     `- Valid rate: ${valid}/${results.length} (${(summary.validRate * 100).toFixed(1)}%)`,
     `- Reasoning effort: ${summary.requestedReasoningEffort ?? "n/a"}` +
       (summary.requestedReasoningEffort !== summary.effectiveReasoningEffort
@@ -1131,16 +1153,31 @@ async function main(): Promise<void> {
     credentials.baseUrl,
     options.reasoningEffort,
   );
+  settings.semanticOptimizationEnabled = options.semanticOptimization;
+  settings.automaticAnalysisContractsEnabled = options.analysisContracts;
   const output = options.output ?? path.join(
     path.dirname(options.dabRoot),
     "dab-results",
     `stela-product-${safeSlug(credentials.model)}-${options.hints ? "hints" : "no-hints"}`,
   );
   await fs.mkdir(output, { recursive: true });
+  const evaluationHash = createHash("sha256");
+  for (const task of tasks) {
+    for (const name of ["query.json", "validate.py", "ground_truth.csv", "ground_truth.json"]) {
+      const contents = await fs.readFile(path.join(task.queryDir, name)).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (contents) evaluationHash.update(`${task.dataset}/${task.queryId}/${name}\0`).update(contents);
+    }
+  }
   const featureConditions = {
     sourceFingerprint: await sourceFingerprint(repoRoot),
     executionPolicy: "semantic-operation-v1-generation-lifecycle-v2-answer-contract-v1",
     runtimeConditions: {
+      suite: options.suite,
+      evaluationFingerprint: evaluationHash.digest("hex"),
+      semanticOptimization: options.semanticOptimization, analysisContracts: options.analysisContracts,
       model: credentials.model, endpointHash: endpointHash(credentials.baseUrl), reasoningEffort: options.reasoningEffort,
       concurrency: options.concurrency, mongoConcurrency: options.mongoConcurrency, mongoFixtureMode: options.mongoFixtureMode,
       pythonConcurrency: options.noPython ? 0 : options.pythonConcurrency, hints: options.hints, strategyReview: options.strategyReview,
@@ -1208,6 +1245,8 @@ async function main(): Promise<void> {
     generatedAt: new Date().toISOString(),
     stela: stelaGit,
     dab: dabGit,
+    dabUpstreamSync: await fs.readFile(path.join(options.dabRoot, ".stela-upstream-sync.json"), "utf8")
+      .then((text) => JSON.parse(text) as unknown).catch(() => null),
     model: credentials.model,
     requestedReasoningEffort: options.reasoningEffort,
     effectiveReasoningEffort: options.reasoningEffort,
@@ -1227,11 +1266,14 @@ async function main(): Promise<void> {
     ...featureConditions,
     strategyReview: options.strategyReview,
     salvageMs: options.salvageMs,
+    suite: options.suite,
+    scoring: "dataset_mean_of_query_mean_pass_rates",
+    selectedCases: tasks.map(({ dataset, queryId }) => ({ dataset, queryId })),
     selection: failedSelection
       ? {
           mode: "failed_from",
           source: failedSelection.source,
-          cases: failedSelection.cases,
+          cases: tasks.map(({ dataset, queryId }) => ({ dataset, queryId })),
         }
       : { mode: options.all ? "all" : "dataset" },
     host: { platform: process.platform, arch: process.arch, node: process.version },

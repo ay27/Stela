@@ -1,3 +1,4 @@
+import { createSqlConversation } from "@/services/conversation-actions";
 /**
  * cmd+K 命令面板。
  *
@@ -32,6 +33,7 @@ import { listVaultFiles } from "@/services/search";
 import { useSettings } from "@/state/settings";
 import { useWorkspace } from "@/state/workspace";
 import { useT } from "@/i18n/use-t";
+import { formatHotkey } from "@/lib/hotkeys";
 
 export interface CommandHandlers {
   openConnections: () => void;
@@ -74,7 +76,7 @@ export function CommandPalette({ open, onOpenChange, handlers }: Props) {
       return;
     }
     // 传空数组让 service 层用默认 STELA_EXTENSIONS
-    listVaultFiles(vaultPath)
+    listVaultFiles(vaultPath, [".md", ".stela.canvas", ".stela.chat"])
       .then(setFiles)
       .catch((err) => {
         console.error("[stela] listVaultFiles failed", err);
@@ -164,6 +166,7 @@ export function CommandPalette({ open, onOpenChange, handlers }: Props) {
                     handlers.newStelaNote();
                   }}
                 />
+                <CmdItem icon={<Bot className="h-3.5 w-3.5" />} label={t("conversation.new")} hint={formatHotkey("Mod+Shift+N")} onSelect={() => { close(); void createSqlConversation(); }} />
                 <CmdItem
                   icon={<Bot className="h-3.5 w-3.5" />}
                   label={t("commandPalette.openAgent.label")}

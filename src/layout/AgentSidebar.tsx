@@ -13,7 +13,7 @@
  * w-8 等控件，flex 子项默认 min-width:auto，会把 width:0 顶成一条可见竖缝。
  */
 
-import { AgentPanel } from "@/components/ai/agent-panel";
+import { ChatSidebar } from "@/components/ai/chat-sidebar";
 import { useLayout } from "@/state/layout";
 import { cn } from "@/lib/utils";
 
@@ -33,7 +33,7 @@ export function AgentSidebar() {
       )}
     >
       {collapsed ? null : <AgentPanelResizer />}
-      {collapsed ? null : <AgentPanel />}
+      {collapsed ? null : <ChatSidebar />}
     </aside>
   );
 }

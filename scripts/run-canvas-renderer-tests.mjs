@@ -1,0 +1,17 @@
+import { build } from "esbuild";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+import postcss from "postcss";
+import tailwind from "tailwindcss";
+const require = createRequire(import.meta.url);
+const dir = "out/tests/canvas";
+await mkdir(dir, { recursive: true });
+await build({ entryPoints: ["scripts/tests/canvas-main.ts"], outfile: `${dir}/main.mjs`, bundle: true, platform: "node", format: "esm", packages: "external" });
+await build({ entryPoints: ["scripts/tests/canvas-preload.ts"], outfile: `${dir}/preload.cjs`, bundle: true, platform: "node", format: "cjs", external: ["electron"] });
+await build({ entryPoints: ["scripts/tests/canvas-renderer.tsx"], outfile: `${dir}/renderer.js`, bundle: true, platform: "browser", format: "iife", external: ["node:*", "pyodide"], define: { "process.env.NODE_ENV": '"production"', "import.meta.env": "{}" }, logLevel: "warning" });
+const css = await postcss([tailwind()]).process(await readFile("src/styles/globals.css", "utf8"), { from: "src/styles/globals.css" });
+await writeFile(`${dir}/app.css`, css.css);
+await writeFile(`${dir}/index.html`, '<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="app.css"><link rel="stylesheet" href="renderer.css"><div id="root"></div><script src="renderer.js"></script>');
+const result = spawnSync(require("electron"), [`${dir}/main.mjs`], { stdio: "inherit", timeout: 60000, env: { ...process.env, ELECTRON_RUN_AS_NODE: "" } });
+process.exitCode = result.status ?? 1;

@@ -26,6 +26,7 @@ import {
   type CommandHandlers,
 } from "@/components/command-palette";
 import { createNewStelaNote } from "@/services/note-actions";
+import { createSqlConversation } from "@/services/conversation-actions";
 import { installExternalLinkHandler } from "@/services/opener";
 import { installVaultWatcherSubscriber } from "@/services/vault-watcher-subscriber";
 import { installSqlIndexSubscriber } from "@/state/sql-search";
@@ -182,6 +183,11 @@ export function AppShell() {
         keys: "Mod+N",
         context: "always",
         handler: () => void handlers.newStelaNote(),
+      },
+      {
+        keys: "Mod+Shift+N",
+        context: "always",
+        handler: (e) => { if (!e.repeat) void createSqlConversation(); },
       },
       {
         keys: "Mod+W",

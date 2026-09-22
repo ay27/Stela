@@ -1,0 +1,48 @@
+/* Shared by the Agent panel and workspace chat; keep note RunSQL styling local. */
+.stela-assistant-output {
+  min-width: 0;
+  color: hsl(var(--foreground));
+}
+
+.stela-assistant-output table {
+  width: 100%;
+  font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+  font-size: 12px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.stela-assistant-output table :is(th, td) {
+  border: 0;
+  border-bottom: 1px solid hsl(var(--border) / 0.65);
+  padding: 6px 8px;
+}
+
+.stela-assistant-output table thead,
+.stela-assistant-output table th {
+  background: hsl(var(--muted) / 0.25);
+}
+
+.stela-assistant-output .stela-cb__result-bar {
+  padding: 2px 0 6px;
+  background: transparent;
+}
+
+.stela-assistant-output .stela-cb__result-body {
+  border-top: 0;
+}
+
+/* Keep turn boundaries independent of the compact rhythm within an answer. */
+.stela-reply-boundary { display: flow-root; }
+.stela-assistant-reply-divider { margin: 24px 0; }
+.stela-agent-reply + .stela-agent-reply { margin-top: 48px; }
+.stela-reply-body { display: flex; flex-direction: column; gap: 6px; }
+.stela-assistant-output .stela-ai-markdown > * { margin-top: 6px; margin-bottom: 6px; }
+.stela-assistant-output .stela-ai-markdown > :first-child { margin-top: 0; }
+.stela-assistant-output .stela-ai-markdown > :last-child { margin-bottom: 0; }
+.stela-assistant-output .stela-ai-markdown > .font-semibold { margin-top: 10px; margin-bottom: 4px; }
+.stela-assistant-output .stela-ai-markdown > .font-semibold:first-child { margin-top: 0; }
+.stela-assistant-output .stela-ai-markdown li + li { margin-top: 2px; }
+
+.stela-user-message-bubble { background: hsl(var(--primary) / .09); }
+.dark .stela-user-message-bubble { background: hsl(var(--primary) / .16); }

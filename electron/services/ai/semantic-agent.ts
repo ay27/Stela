@@ -30,6 +30,7 @@ export function createSemanticAgent(input: {
   let approval: Promise<boolean> | null = null;
   return new SemanticExecution({
     identity: identity + profile.reasoningEffort, signal: AbortSignal.any([input.signal, semanticGrantSignal(input.vault)]),
+    optimizationEnabled: input.settings.semanticOptimizationEnabled,
     budget: input.settings.semanticBudget, cache: caches.get(cacheKey),
     authorize: async (batch, budget, signal) => {
       if (semanticGrantEpoch(input.vault) !== epoch) throw new Error("Semantic authorization revoked; start a new run to authorize again");

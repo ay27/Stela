@@ -1,3 +1,4 @@
+import type { IConversationBridge, IConversationSnapshot, IConversationSubmit, IConversationSummary, IConversationTask } from "@shared/conversation";
 /**
  * Preload：唯一桥接 main / renderer 的脚本。
  *
@@ -32,6 +33,8 @@ import type {
   AgentMetricRunFilter,
   AgentMetricRunPage,
   AgentMetricSessionTrace,
+  AgentMetricSessionRef,
+  IAgentMetricSessionList,
   AgentMetricTrace,
   AgentMetricsDashboard,
   AnalysisCanvasFile,
@@ -253,6 +256,25 @@ const stela = {
       call<number>(IPC.STORAGE_CLEANUP, { keepDays }),
   },
 
+  conversation: {
+    temporary: (title?: string) => call<IConversationSnapshot>(IPC.CONVERSATION_TEMPORARY, { title }),
+    recent: () => call<IConversationSummary[]>(IPC.CONVERSATION_RECENT, {}),
+    saveAs: (path: string, etag: string, directory: string, title: string) => call<IConversationSnapshot>(IPC.CONVERSATION_SAVE_AS, { path, etag, directory, title }),
+    discard: (path: string) => call<void>(IPC.CONVERSATION_DISCARD, { path }),
+    protect: (paths: string[]) => call<void>(IPC.CONVERSATION_PROTECT, { paths }),
+    importHistory: (ref: { deviceSlug: string; sessionId: string }) => call<IConversationSnapshot>(IPC.CONVERSATION_IMPORT_HISTORY, { deviceSlug: ref.deviceSlug, sessionId: ref.sessionId }),
+    create: (directory: string, title: string) => call<IConversationSnapshot>(IPC.CONVERSATION_CREATE, { directory, title }),
+    read: (path: string) => call<IConversationSnapshot>(IPC.CONVERSATION_READ, { path }),
+    draft: (path: string, etag: string, draft: string, connectionName: string | null, draftMessage?: import("@shared/types").AgentMessageContent, task?: IConversationTask) => call<IConversationSnapshot>(IPC.CONVERSATION_DRAFT, { path, etag, draft, connectionName, draftMessage, task }),
+    submit: (input: IConversationSubmit) => call<IConversationSnapshot>(IPC.CONVERSATION_SUBMIT, input),
+    cancel: (path: string) => call<void>(IPC.CONVERSATION_CANCEL, { path }),
+    respond: (path: string, response: AgentProposalResponse) => call<void>(IPC.CONVERSATION_RESPOND, { path, response }),
+    onChanged: (callback: (snapshot: IConversationSnapshot) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, snapshot: IConversationSnapshot) => callback(snapshot);
+      ipcRenderer.on(IPC_EVENTS.CONVERSATION_CHANGED, handler);
+      return () => { ipcRenderer.removeListener(IPC_EVENTS.CONVERSATION_CHANGED, handler); };
+    },
+  } satisfies IConversationBridge,
   canvas: {
     read: (path: string) => call<AnalysisCanvasFile>(IPC.CANVAS_READ, { path }),
     create: (directory: string, title: string) => call<AnalysisCanvasFile>(IPC.CANVAS_CREATE, { directory, title }),
@@ -407,7 +429,8 @@ const stela = {
       call<AgentMetricRunPage>(IPC.AI_METRICS_LIST_RUNS, { filter }),
     getTrace: (runId: string) =>
       call<AgentMetricTrace>(IPC.AI_METRICS_GET_TRACE, { runId }),
-    getSessionTrace: (ref: AgentHistoryRef) =>
+    listSessions: () => call<IAgentMetricSessionList>(IPC.AI_METRICS_LIST_SESSIONS, {}),
+    getSessionTrace: (ref: AgentMetricSessionRef) =>
       call<AgentMetricSessionTrace>(IPC.AI_METRICS_GET_SESSION_TRACE, ref),
     clear: () => call<void>(IPC.AI_METRICS_CLEAR, {}),
   },

@@ -51,6 +51,7 @@ interface PendingJob {
   queryAliasCounter: number;
   queryBytes: number;
   runQuery?: PythonJobQueryRunner;
+  analysisContext?: import("../../shared/types").IAnalysisExecutionContext;
   runSemantic?: SemanticRunner;
   externalWaits: number;
   abort: AbortController;
@@ -130,6 +131,7 @@ export async function executePython(input: {
   vaultPath: string;
   sessionId: string;
   code: string;
+  analysisContext?: import("../../shared/types").IAnalysisExecutionContext;
   runSemantic?: SemanticRunner;
   artifacts: Record<string, QueryArtifactDescriptor>;
   runQuery?: PythonJobQueryRunner;
@@ -174,6 +176,7 @@ export async function executePython(input: {
     timeoutMs,
     canQuery: Boolean(input.runQuery),
     canSemantic: Boolean(input.runSemantic),
+    analysisContext: input.analysisContext,
   };
   return new Promise<PythonExecutionResult>((resolve, reject) => {
     const job: PendingJob = {

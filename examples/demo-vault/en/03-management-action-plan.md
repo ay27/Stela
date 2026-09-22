@@ -6,6 +6,26 @@ created_at: "2026-07-08T02:00:00.000Z"
 
 # 3. Management action plan
 
+## Confirmed metric definition (channel reviews)
+
+**Contribution profit = net revenue − product cost − fulfillment cost − return processing cost − channel marketing spend.** Net revenue already nets out **refunds** (net revenue = gross sales − discounts − refunds), so refunds reach contribution profit through net revenue, and return processing cost is deducted on top.
+
+Grain rule: **deduct channel marketing spend once per month and channel, never once per joined order.** `marketing_spend` holds one row per month and channel; join it on `month` + `channel` (or aggregate it to that grain first) so each channel's spend is subtracted a single time.
+
+Correct — spend enters the aggregate once per channel:
+
+```sql
+SELECT oe.channel,
+       COUNT(*) AS orders,
+       ROUND(SUM(oe.profit_before_marketing) - ms.spend, 2) AS contribution_profit
+FROM order_economics oe
+JOIN marketing_spend ms ON ms.month = oe.order_month AND ms.channel = oe.channel
+WHERE oe.order_month = '2026-06'
+GROUP BY oe.channel, ms.spend;   -- one spend value per channel row
+```
+
+Avoid — repeating monthly spend next to every joined order and subtracting it per row: the deduction is then multiplied by the order count and the channel looks far worse than it is.
+
 ## Decision
 
 June did not reveal a broad product-demand problem. Northstar combined three individually risky choices in one campaign:

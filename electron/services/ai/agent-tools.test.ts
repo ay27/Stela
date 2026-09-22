@@ -1,5 +1,7 @@
+import { ToolRepairBudget } from "./tool-repair";
+import { mixedAuthoringFixture } from "@shared/canvas-authoring.fixture";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -19,6 +21,7 @@ import { updateAnalysisCanvasFlowLayout } from "../analysis-canvas";
  */
 const dispatchTool: typeof dispatchToolRaw = (name, rawArguments, ctx) => {
   ctx.run.toolFailureStreak.clear();
+  delete ctx.run.repairBudget;
   return dispatchToolRaw(name, rawArguments, ctx);
 };
 
@@ -111,12 +114,12 @@ try {
     }, requestProposal: async () => false });
     assert.match(semanticTools.find((tool) => tool.name === "execute_python")!.description,
       /semantic\.classify\/extract\/resolve.*load_skill name=semantic-analysis/);
-    // Semantic-capable runs include the helper discovery contract (~220 chars).
-    assert.ok(JSON.stringify(semanticTools).length <= 17_000, `semantic discovery stays within tool prompt budget: ${JSON.stringify(semanticTools).length}`);
+    // Structured Canvas schemas replace opaque JSON; bound the explicit schema cost (ADR-0104).
+    assert.ok(JSON.stringify(semanticTools).length <= 48_000, `semantic discovery stays within tool prompt budget: ${JSON.stringify(semanticTools).length}`);
     const serializedTools = JSON.stringify(tools);
     assert.ok(
-      serializedTools.length <= 17_000,
-      `provider-facing tools must stay <= 17000 chars, got ${serializedTools.length}`,
+      serializedTools.length <= 48_000,
+      `provider-facing tools must stay <= 48000 chars, got ${serializedTools.length}`,
     );
     assert.equal(tools.some((tool) => tool.name === "list_catalog"), true);
     assert.equal(tools.some((tool) => tool.name === "plan"), true);
@@ -286,6 +289,23 @@ try {
       throw new Error("requestProposal should not be called when mutations are blocked by default");
     },
   };
+
+  // Connection dialect reaches the execution authority guard without rewriting SQL.
+  {
+    const query = "SELECT /*+ SET_VAR(query_mem_limit=214748364800) */ task_name FROM demo.orders";
+    let executed = "";
+    const ctx = { ...withConnection, connectionDialects: { demo: "StarRocks" },
+      connector: { ...fakeConnector, execute: async (_kind: string, _config: unknown, sql: string) => {
+        executed = sql;
+        return { kind: "query" as const, columns: ["task_name"], rows: [["test"]], elapsedMs: 1 };
+      } } };
+    const accepted = await dispatchTool("run_query", JSON.stringify({ query }), ctx);
+    assert.equal(accepted.ok, true, accepted.text);
+    assert.equal(executed, query);
+    const uncertain = await dispatchTool("run_query", JSON.stringify({ query }), { ...ctx, connectionDialects: {} });
+    assert.equal(uncertain.ok, false);
+    assert.match(uncertain.text, /Ambiguous SQL/);
+  }
 
   // list_catalog auto-selects a sole database and returns an actionable domain rejection for ambiguity.
   {
@@ -575,6 +595,42 @@ try {
   }
 
   // create_chart 只能引用本轮真实 run_query 结果，并校验字段。
+  {
+    const ctx = { ...withConnection, aiSettings: { ...AI_SETTINGS, activeProfileId: "fixture", profiles: [], inlineCompletionEnabled: false,
+      completionProfileId: null, automaticSkillMaintenanceEnabled: false, automaticAnalysisContractsEnabled: true },
+      run: { ...baseCtx.run, toolFailureStreak: new Map<string, number>() }, analysisRuns: new Map(),
+      connector: { ...fakeConnector, execute: async () => ({ kind: "query" as const,
+        columns: [{ name: "count", typeName: "BIGINT" }], rows: [[42]], elapsedMs: 1 }) } };
+    const query = await dispatchTool("run_sql", JSON.stringify({ sql: "SELECT 42 AS count" }), ctx);
+    assert.equal(query.ok, true, query.text);
+    const observed = JSON.parse(query.text);
+    assert.equal(observed.analysis.generation, "host", "SQL-only evidence needs no Python worker");
+    assert.deepEqual(observed.analysis.missingClaims, ["population", "metric", "granularity"]);
+    assert.equal(observed.analysis.sources[0].ref, observed.runId);
+    assert.equal(observed.analysis.sources[0].rowCount, 1);
+    assert.equal(observed.analysis.coverage.state, "unknown", "a row count is not proof of task coverage");
+    const failed = await dispatchTool("run_sql", JSON.stringify({ sql: "DELETE FROM demo" }), { ...ctx, requestProposal: async () => false });
+    assert.equal(failed.ok, false);
+    assert.ok(JSON.parse(failed.text).analysis, "query failure retains observational state");
+    assert.equal(observed.analysis.coverage.reason, "no_operation");
+    const invalidations: boolean[] = [];
+    const pythonCtx = { ...ctx, run: { ...ctx.run, sessionId: "contract-test" }, queryArtifacts: {} as never, pythonExecutor: {
+      execute: async (input: { analysisContext?: { invalidateEvidence?: boolean } }) => {
+        invalidations.push(input.analysisContext?.invalidateEvidence === true);
+        return { ok: true, stdout: "", value: { kind: "scalar" as const, value: 1 }, elapsedMs: 1,
+          analysis: { ...observed.analysis, status: "observed" as const,
+            coverage: { ...observed.analysis.coverage, reason: "execution_failed" as const } } };
+      },
+    } };
+    const beforeWorker = await dispatchTool("execute_python", JSON.stringify({ code: "" }), pythonCtx);
+    assert.equal(beforeWorker.ok, false);
+    assert.equal(invalidations.length, 0, "failure happens before entering the worker");
+    const afterFailure = await dispatchTool("execute_python", JSON.stringify({ code: "result=1" }), pythonCtx);
+    assert.equal(afterFailure.ok, true, afterFailure.text);
+    assert.equal((await dispatchTool("execute_python", JSON.stringify({ code: "result=2" }), pythonCtx)).ok, true);
+    assert.deepEqual(invalidations, [true, false], "worker consumes host failure invalidation once");
+  }
+
   {
     const chartRuns = new Map();
     const ctx = {
@@ -1242,7 +1298,7 @@ try {
     assert.equal(elided(preview.oldContent ?? "").length, 2);
   }
 
-  // 自动维护可创建新 Skill，但不能静默覆盖或归档已有知识。
+  // Seed explicitly maintained knowledge; automatic maintenance cannot overwrite or archive it.
   {
     const content = `---
 name: verified-gotcha
@@ -1271,8 +1327,8 @@ Inspect the live schema first.`;
     };
     const created = await dispatchTool(
       "save_skill",
-      JSON.stringify({ name: "verified-gotcha", content, reason: "Verified by live schema." }),
-      maintenanceCtx,
+      JSON.stringify({ name: "verified-gotcha", content, reason: "Verified by live schema.", sourcePaths: ["note.md"], sourceTables: ["threed.verified"] }),
+      { ...maintenanceCtx, mode: "normal", explicitSkillMaintenance: true, skillEvidence: { notePaths: new Set(["note.md"]), tables: new Set(["threed.verified"]) } },
     );
     assert.equal(created.ok, true);
     const skillUsage: Array<{ type: string; source: string; origin: "system" | "vault"; name: string; category: string | null }> = [];
@@ -1552,8 +1608,8 @@ Inspect the live schema first.`;
       }),
       { ...maintenanceCtx, maintenanceDialect: "starrocks" },
     );
-    assert.equal(wrongDialect.ok, false);
-    assert.match(wrongDialect.text, /does not match active SQL dialect/i);
+    assert.equal(wrongDialect.ok, true);
+    assert.match(wrongDialect.text, /candidate_not_published/);
     const runbook = await dispatchTool(
       "save_skill",
       JSON.stringify({
@@ -1581,8 +1637,16 @@ Inspect the live schema first.`;
       columns: [{ name: "category", typeName: "VARCHAR" }, { name: "total", typeName: "BIGINT" }],
       rows: [["A", 2], ["B", 1]],
     }]]);
+    const deliveryPlan = new ExecutionPlanStore("test-run");
+    deliveryPlan.create([{ id: "files", title: "Files", intent: "Deliver files", acceptance: "Note and Canvas" }],
+      { deliveries: [{ kind: "note", path: "receipt.md" }, { kind: "canvas" }] });
+    await writeFile(join(root, "receipt.md"), "# Empty");
+    const noteReceipt = await dispatchTool("propose_edit", JSON.stringify({ path: "receipt.md", newContent: "# Saved note", description: "Write requested note" }), { ...baseCtx, plan: deliveryPlan });
+    assert.equal(noteReceipt.ok, true, noteReceipt.text);
+    assert.equal(deliveryPlan.get()?.deliveries?.[0]?.receipt?.path, "receipt.md");
     const canvasCtx = {
       ...baseCtx,
+      plan: deliveryPlan,
       run: { ...baseCtx.run, notePath: join(root, "note.md") },
       chartRuns,
       resolveChartRun: async (runId: string) => chartRuns.has(runId) ? {
@@ -1599,9 +1663,63 @@ Inspect the live schema first.`;
       } : null,
       onCanvasUpdated: (event: { action: "created" | "updated"; path: string }) => events.push(event),
     };
+    const beforeInvalid = await readdir(root);
+    const invalidCreate = await dispatchTool("create_analysis_canvas", JSON.stringify({
+      canvas: { title: "Invalid flow", sources: [], sections: [{ id: "s", title: "S", cards: [{
+        id: "f", type: "flow", nodes: [{ id: "a", kind: "source", label: "A" }],
+        edges: [{ id: "e", source: "a", target: "missing" }],
+      }] }] }, sourceRuns: [],
+    }), canvasCtx);
+    assert.equal(invalidCreate.ok, false);
+    assert.match(invalidCreate.text, /Unknown flow target/);
+    assert.deepEqual(await readdir(root), beforeInvalid, "Invalid creation must leave no file");
+    assert.equal(events.length, 0, "No created event for rejected content");
+    const invalidField = await dispatchTool("create_analysis_canvas", JSON.stringify({
+      canvas: { title: "Invalid field", sources: [{ id: "data", title: "Data" }], sections: [{ id: "s", title: "S", cards: [{
+        id: "t", type: "table", sourceId: "data", columns: [{ field: "missing" }],
+      }] }] }, sourceRuns: [{ sourceId: "data", runId: "canvas-run" }],
+    }), canvasCtx);
+    assert.equal(invalidField.ok, false);
+    assert.match(invalidField.text, /field_missing/);
+    assert.deepEqual(await readdir(root), beforeInvalid);
+    const multipleIssues = { canvas: { title: "Broken delivery", sources: [{ id: "data", title: "Data" }], sections: [{ id: "s", title: "S", cards: [
+      { id: "kpi", type: "kpi", sourceId: "data", value: { field: "missing" } },
+    ] }] }, sourceRuns: [{ sourceId: "data", runId: "constant-canvas-run" }] };
+    const repairs = { ...canvasCtx, run: { ...canvasCtx.run, toolFailureStreak: new Map<string, number>(), repairBudget: new ToolRepairBudget() } };
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const rejected = await dispatchToolRaw("create_analysis_canvas", JSON.stringify(multipleIssues), repairs);
+      assert.equal(rejected.ok, false);
+      assert.match(rejected.text, /source_not_refreshable/);
+      assert.match(rejected.text, /field_missing/);
+      assert.match(rejected.text, /kpi_row_count/);
+      assert.equal(repairs.run.toolFailureStreak.size, 0, "authoring failures must not consume execution retries");
+    }
+    const exhausted = await dispatchToolRaw("create_analysis_canvas", JSON.stringify({ canvas: mixedAuthoringFixture, sourceRuns: [{ sourceId: "data", runId: "canvas-run" }] }), repairs);
+    assert.match(exhausted.text, /budget exhausted/);
+    assert.deepEqual(await readdir(root), beforeInvalid, "all validation attempts are atomic");
+    assert.equal(deliveryPlan.get()?.deliveries?.[1]?.receipt, undefined);
+    const mixed = await dispatchTool("create_analysis_canvas", JSON.stringify({ canvas: mixedAuthoringFixture, sourceRuns: [{ sourceId: "data", runId: "canvas-run" }] }), canvasCtx);
+    assert.equal(mixed.ok, true, mixed.text);
+    assert.ok(deliveryPlan.get()?.deliveries?.[1]?.receipt?.path);
+    const mixedFile = JSON.parse(mixed.text) as { path: string; content: string; etag: string };
+    assert.equal(await readFile(mixedFile.path, "utf8"), mixedFile.content);
+    const mixedCanvas = JSON.parse(mixedFile.content);
+    assert.equal(mixedCanvas.sections[0].cards.length, 5);
+    assert.equal(mixedCanvas.createdBySessionId, null);
+    const badUpdate = await dispatchTool("update_analysis_canvas", JSON.stringify({ path: mixedFile.path, etag: mixedFile.etag,
+      canvas: { ...mixedAuthoringFixture, sections: [{ id: "s", title: "S", cards: [{ id: "bad", type: "table", sourceId: "missing" }] }] }, sourceRuns: [],
+    }), canvasCtx);
+    assert.equal(badUpdate.ok, false);
+    assert.equal(await readFile(mixedFile.path, "utf8"), mixedFile.content, "Rejected updates preserve exact prior bytes");
+    const goodUpdate = await dispatchTool("update_analysis_canvas", JSON.stringify({ path: mixedFile.path, etag: mixedFile.etag,
+      canvas: { ...mixedAuthoringFixture, title: "Updated mixed" }, sourceRuns: [],
+    }), canvasCtx);
+    assert.equal(goodUpdate.ok, true, goodUpdate.text);
+    const changed = JSON.parse((JSON.parse(goodUpdate.text) as { content: string }).content);
+    for (const field of ["id", "createdAt", "createdBySessionId"]) assert.equal(changed[field], mixedCanvas[field]);
     const created = await dispatchTool(
       "create_analysis_canvas",
-      JSON.stringify({ title: "Agent Report" }),
+      JSON.stringify({ canvas: { title: "Agent Report", sources: [], sections: [{ id: "intro", title: "Intro", cards: [{ id: "intro", type: "markdown", markdown: "Report" }] }] }, sourceRuns: [] }),
       canvasCtx,
     );
     assert.equal(created.ok, true, created.text);
@@ -1610,6 +1728,24 @@ Inspect the live schema first.`;
       sources: unknown[];
       sections: unknown[];
     };
+    // Regression: repeated missing node kinds used to hide malformed edges
+    // behind the first 12 errors, consuming the three-retry budget.
+    const malformedFlow = {
+      ...content, createdAt: undefined, updatedAt: undefined,
+      sections: [{ id: "flow", title: "Flow", cards: [{ id: "flow", type: "flow",
+        nodes: Array.from({ length: 20 }, (_, i) => ({ id: `n${i}`, label: `Node ${i}` })),
+        edges: [{ from: "n0", to: "n1" }],
+      }] }],
+    };
+    const malformed = await dispatchTool("update_analysis_canvas", JSON.stringify({
+      path: createdPayload.path, etag: createdPayload.etag, content: JSON.stringify(malformedFlow), sourceRuns: [],
+    }), canvasCtx);
+    assert.equal(malformed.ok, false);
+    for (const field of ["createdAt", "updatedAt", "nodes.0.kind", "edges.0.id", "edges.0.source", "edges.0.target"]) {
+      assert.ok(malformed.text.includes(field), `Missing actionable error: ${field}`);
+    }
+    assert.match(malformed.text, /step\|decision\|source\|result\|note/);
+    assert.match(malformed.text, /createdBySessionId/);
     content.sources = [{
       id: "overview",
       title: "Overview",
@@ -1781,7 +1917,7 @@ Inspect the live schema first.`;
     assert.equal(secondAtomicUpdate.ok, false);
     assert.match(secondAtomicUpdate.text, /already committed/i);
     assert.equal(await readFile(createdPayload.path, "utf8"), afterAtomic, "second atomic update must not write");
-    assert.deepEqual(events.map((event) => event.action), ["created", "updated", "updated", "updated"]);
+    assert.deepEqual(events.map((event) => event.action), ["created", "updated", "created", "updated", "updated", "updated"]);
   }
 
   {

@@ -6,7 +6,7 @@
  */
 
 import { create } from "zustand";
-import type { EditorState } from "@milkdown/prose/state";
+import type { EditorState } from "@codemirror/state";
 
 import type {
   AgentEntryPoint,
@@ -268,7 +268,7 @@ function toolCallEntry(call: AgentToolCallInfo): AgentTimelineEntry {
   return { kind: "tool", id: nextId(), callId: call.callId, name: call.name, args: call.arguments };
 }
 
-function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTimelineEntry[] {
+export function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTimelineEntry[] {
   switch (event.type) {
     case "started":
     case "context_usage":
@@ -327,7 +327,7 @@ function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTim
                 status: event.outcome === "error" ? "error"
                   : event.outcome === "timeout" || event.outcome === "turn_limit" ? "timeout"
                   : event.outcome === "cancelled" ? "cancelled"
-                  : event.outcome === "no_source" || event.outcome === "input_too_large" || event.outcome === "dropped" ? "skipped"
+                  : event.outcome === "unchanged" || event.outcome === "cooldown" || event.outcome === "no_source" || event.outcome === "input_too_large" || event.outcome === "dropped" ? "skipped"
                   : event.outcome === "no_change" ? "none"
                   : event.actions.length > 0 ? "updated" : "unknown",
                 outcome: event.outcome,

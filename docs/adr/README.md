@@ -99,7 +99,7 @@ proposed → active → superseded
 | [0044](0044-associative-skill-distillation.md) | Associative Skill distillation | superseded → [0045](0045-recency-ordered-skill-distillation.md) |
 | [0045](0045-recency-ordered-skill-distillation.md) | Recency-ordered Skill distillation | superseded → [0050](0050-source-tracked-template-driven-skills.md) |
 | [0046](0046-device-sharded-agent-session-history.md) | Device-sharded Agent session history | active |
-| [0047](0047-bounded-device-agent-history-retention.md) | Bounded device Agent history retention | active |
+| [0047](0047-bounded-device-agent-history-retention.md) | Bounded device Agent history retention | superseded by 0110 |
 | [0048](0048-vault-markdown-sql-template-library.md) | Vault Markdown SQL template library | active |
 | [0049](0049-independent-bounded-skill-maintenance.md) | Independent bounded Skill maintenance | active |
 | [0050](0050-source-tracked-template-driven-skills.md) | Source-tracked template-driven Skills | superseded → [0073](0073-three-state-skill-freshness.md) |
@@ -115,7 +115,7 @@ proposed → active → superseded
 | [0060](0060-cache-stable-agent-prompts.md) | Cache-stable Agent prompts and immutable plan snapshots | active |
 | [0061](0061-ordered-inline-agent-message-resources.md) | Ordered inline Agent message resources | superseded → [0062](0062-implicit-workspace-context-explicit-inline-resources.md) |
 | [0062](0062-implicit-workspace-context-explicit-inline-resources.md) | Implicit Workspace context and explicit inline resources | active |
-| [0063](0063-prosemirror-agent-composer.md) | ProseMirror-backed Agent composer | active |
+| [0063](0063-prosemirror-agent-composer.md) | ProseMirror-backed Agent composer | superseded → [0102](0102-unified-codemirror-composer.md) |
 | [0064](0064-session-query-artifacts-and-sandboxed-python.md) | Session query artifacts and sandboxed Python | superseded → [0079](0079-sandbox-query-rpc.md) |
 | [0065](0065-session-oriented-agent-observability.md) | Session-oriented Agent observability projection | active |
 | [0066](0066-structured-read-only-agent-queries.md) | Structured read-only Agent queries across connector languages | superseded → [0067](0067-safe-mongodb-aggregation-queries.md) |
@@ -145,7 +145,23 @@ proposed → active → superseded
 | [0090](0090-bounded-semantic-execution.md) | Bounded host-mediated semantic execution | active |
 | [0091](0091-semantic-operation-completeness.md) | Preflight and resumable semantic operations | active |
 | [0092](0092-bounded-generation-recovery.md) | Bounded model generation recovery | superseded → [0095](0095-generation-lifecycle-and-safe-closeout.md) |
-| [0093](0093-evidence-backed-answer-contract.md) | Evidence-backed Python answer contracts | active |
+| [0093](0093-evidence-backed-answer-contract.md) | Evidence-backed Python answer contracts | superseded → [0098](0098-automatic-observational-analysis-contracts.md) |
 | [0094](0094-uncommitted-generation-previews.md) | Uncommitted generation previews | active |
 | [0095](0095-generation-lifecycle-and-safe-closeout.md) | Generation lifecycle and evidence-only closeout | active |
 | [0096](0096-explicit-knowledge-maintenance-outcomes.md) | Explicit knowledge-maintenance outcomes | active |
+| [0097](0097-semantic-input-reduction-and-cost-probe.md) | Semantic input reduction and bounded cost probing | active |
+| [0098](0098-automatic-observational-analysis-contracts.md) | Automatic observational analysis contracts | active |
+| [0099](0099-reusable-analysis-operation-evidence.md) | Reusable analysis operation evidence | active |
+| [0100](0100-durable-conversation-files.md) | durable conversation files | active |
+| [0101](0101-sql-first-conversation-execution.md) | sql first conversation execution | active |
+| [0102](0102-unified-codemirror-composer.md) | Unified CodeMirror conversation composer | active |
+| [0103](0103-conversation-structured-drafts.md) | Structured messages in durable conversations | active |
+| [0104](0104-validated-structured-canvas-authoring.md) | Validated structured Canvas authoring | active |
+| [0105](0105-dashboard-conversation-sources.md) | Dashboard conversation sources | active |
+| [0106](0106-bounded-incremental-knowledge-maintenance.md) | Bounded incremental knowledge maintenance | active |
+| [0107](0107-dialect-aware-sql-review-classification.md) | Dialect-aware SQL review classification | active |
+| [0108](0108-unified-chat-lifecycle.md) | Unified temporary and saved Chat lifecycle | superseded by 0110 |
+| [0109](0109-custom-openai-wire-protocol.md) | Explicit Custom OpenAI wire protocol | active |
+| [0110](0110-chat-tabs-and-retained-history.md) | Chat tabs and retained local history | active |
+| [0111](0111-evidence-aware-agent-recovery.md) | Evidence-aware Agent recovery and delivery | active |
+| [0112](0112-maintenance-evidence-publication.md) | Independent evidence for automatic knowledge publication | active |

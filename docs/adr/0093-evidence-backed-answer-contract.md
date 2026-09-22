@@ -2,7 +2,8 @@
 type: ADR
 id: "0093"
 title: "Evidence-backed Python answer contracts"
-status: active
+status: superseded
+superseded_by: "0098"
 date: 2026-09-06
 ---
 

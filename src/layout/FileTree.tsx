@@ -1,3 +1,4 @@
+import { createSqlConversation } from "@/services/conversation-actions";
 /**
  * Vault 文件树。
  *
@@ -542,6 +543,10 @@ export function FileTree({ rootPath }: { rootPath: string }) {
                 icon={<ChartNoAxesCombined className="h-3.5 w-3.5" />}
                 label={t("fileTree.newAnalysisCanvas")}
                 onSelect={() => void createAnalysisCanvas(target.path)}
+              />
+              <CtxItem icon={<ChartNoAxesCombined className="h-3.5 w-3.5" />}
+                label={t("conversation.new")}
+                onSelect={() => void createSqlConversation(target.path)}
               />
               <ContextMenu.Separator className="my-1 h-px bg-border" />
             </>

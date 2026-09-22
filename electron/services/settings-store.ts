@@ -102,6 +102,7 @@ function sanitizeProfile(input: unknown, fallbackHasKey: boolean): AiProviderPro
     baseUrl: baseUrl || (vendorId === "custom" ? "https://api.openai.com/v1" : ""),
     contextWindow: snapContextWindow(r.contextWindow, 128_000),
     reasoningEffort: sanitizeReasoningEffort(r.reasoningEffort),
+    customApi: r.customApi === "responses" ? "responses" : "chat-completions",
     hasApiKey: r.hasApiKey === true || fallbackHasKey,
   };
 }
@@ -162,6 +163,8 @@ const AI_DEFAULT: AiSettings = syncActiveMirrors({
   agentMaxIterations: 200,
   agentWallClockMs: 300_000,
   agentAllowMutations: false,
+  semanticOptimizationEnabled: false,
+  automaticAnalysisContractsEnabled: false,
   agentAutoApplyEdits: false,
   automaticSkillMaintenanceEnabled: true,
 });
@@ -256,6 +259,8 @@ function sanitizeAi(input: unknown): AiSettings {
     inlineCompletionEnabled:
       r.inlineCompletionEnabled === true && completionProfileId !== null,
     completionProfileId,
+    semanticOptimizationEnabled: r.semanticOptimizationEnabled === true,
+    automaticAnalysisContractsEnabled: r.automaticAnalysisContractsEnabled === true,
     semanticProfileId: typeof r.semanticProfileId === "string" && profiles.some((p) => p.id === r.semanticProfileId) ? r.semanticProfileId : null,
     semanticBudget: semanticBudgetSchema.safeParse(r.semanticBudget).success
       ? semanticBudgetSchema.parse(r.semanticBudget) : { ...DEFAULT_SEMANTIC_BUDGET },

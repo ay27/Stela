@@ -24,7 +24,8 @@ function tablesFromSql(sql: unknown): string[] {
       new Set(
         extractSqlFacts(sql)
           .flatMap((statement) => [...statement.readTables, ...statement.writeTables])
-          .map((table) => table.db ? `${table.db}.${table.table}` : table.table),
+          .filter(table => table.db !== null && table.table.toLowerCase() !== "dual")
+          .map((table) => `${table.db}.${table.table}`),
       ),
     );
   } catch {

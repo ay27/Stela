@@ -69,18 +69,22 @@ export async function readAnalysisCanvas(vaultPath: string, filePath: string): P
   return { path: target, content, etag: etag(content) };
 }
 
-export async function createAnalysisCanvas(vaultPath: string, directory: string, title: string, sessionId?: string | null): Promise<AnalysisCanvasFile> {
+export function newAnalysisCanvas(title: string, sessionId?: string | null): AnalysisCanvas {
+  const now = Date.now();
+  return analysisCanvasSchema.parse({
+    kind: "stela-analysis-canvas", version: 1, id: `canvas_${randomUUID().replace(/-/g, "")}`,
+    title, status: "working", createdAt: now, updatedAt: now, createdBySessionId: sessionId ?? null,
+    sources: [], sections: [],
+  });
+}
+
+export async function createAnalysisCanvas(vaultPath: string, directory: string, title: string, sessionId?: string | null, initial?: AnalysisCanvas): Promise<AnalysisCanvasFile> {
   const dir = await ensureWithinVault(vaultPath, directory);
   const stem = safeStem(title);
   let target = path.join(dir, `${stem}${ANALYSIS_CANVAS_EXTENSION}`);
   for (let suffix = 1; await pathExists(target); suffix++) target = path.join(dir, `${stem} (${suffix})${ANALYSIS_CANVAS_EXTENSION}`);
   target = await canvasTarget(vaultPath, target);
-  const now = Date.now();
-  const canvas = analysisCanvasSchema.parse({
-    kind: "stela-analysis-canvas", version: 1, id: `canvas_${randomUUID().replace(/-/g, "")}`,
-    title, status: "working", createdAt: now, updatedAt: now, createdBySessionId: sessionId ?? null,
-    sources: [], sections: [],
-  });
+  const canvas = initial ? analysisCanvasSchema.parse(initial) : newAnalysisCanvas(title, sessionId);
   const content = stringifyAnalysisCanvas(canvas);
   await atomicWriteFile(target, content);
   return { path: target, content, etag: etag(content) };

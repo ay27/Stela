@@ -1,3 +1,4 @@
+import { createSqlConversation } from "@/services/conversation-actions";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
@@ -6,6 +7,7 @@ import {
   ChevronDown,
   FileText,
   Loader2,
+  MessageSquarePlus,
   Pin,
   PinOff,
   X,
@@ -194,6 +196,15 @@ export function TabBar() {
           onClose={closeTab}
         />
       ) : null}
+      <button
+        type="button"
+        onClick={() => void createSqlConversation()}
+        title={`${t("conversation.new")} (${formatHotkey("Mod+Shift+N")})`}
+        aria-label={t("conversation.new")}
+        className="stela-app-no-drag flex w-8 flex-none items-center justify-center border-l border-border text-muted-foreground hover:bg-background/50 hover:text-foreground"
+      >
+        <MessageSquarePlus className="h-3.5 w-3.5" />
+      </button>
       <button
         type="button"
         onClick={() =>
@@ -546,7 +557,7 @@ function OverflowItem({
     >
       {tab.pinned ? (
         <Pin className="h-3.5 w-3.5 flex-none text-primary" />
-      ) : tab.kind === "analysis" ? (
+      ) : tab.kind === "conversation" ? (<Bot className="h-3.5 w-3.5" />) : tab.kind === "analysis" ? (
         <ChartNoAxesCombined className="h-3.5 w-3.5 flex-none text-muted-foreground" />
       ) : (
         <FileText className="h-3.5 w-3.5 flex-none text-muted-foreground" />

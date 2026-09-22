@@ -1,0 +1,311 @@
+{
+  "kind": "stela-analysis-canvas",
+  "version": 1,
+  "id": "canvas_f3dcb0257e66484ca971808d9b00825f",
+  "title": "贡献利润数据血缘",
+  "status": "complete",
+  "createdAt": 1789890875231,
+  "updatedAt": 1789971709490,
+  "createdBySessionId": "39a16d19-bb5e-42b9-94c9-1950ed5f758b",
+  "sources": [
+    {
+      "id": "s_june_pnl",
+      "title": "六月损益汇总（order_economics，2026-06）",
+      "connectionName": "local-mysql",
+      "sql": "SELECT COUNT(*) AS orders,\n       COUNT(DISTINCT oe.channel) AS channels,\n       ROUND(SUM(oe.gross_sales), 2) AS gross_sales,\n       ROUND(SUM(oe.discounts), 2) AS discounts,\n       ROUND(SUM(oe.refunds), 2) AS refunds,\n       ROUND(SUM(oe.net_revenue), 2) AS net_revenue,\n       ROUND(SUM(oe.cogs), 2) AS cogs,\n       ROUND(SUM(oe.fulfillment_cost), 2) AS fulfillment_cost,\n       ROUND(SUM(oe.return_cost), 2) AS return_cost,\n       ROUND(SUM(oe.profit_before_marketing), 2) AS profit_before_marketing\nFROM order_economics oe\nWHERE oe.order_month = '2026-06';",
+      "lastRunId": "01c3f8f6-c4cc-4213-b0ca-c61e3acfc1fd-query-a457b830-e4cf-4888-acc1-b5cb91f938ae",
+      "lastRunAt": 1789971658603,
+      "lastError": null
+    },
+    {
+      "id": "s_june_lines",
+      "title": "六月明细行数（order_items / returns，2026-06）",
+      "connectionName": "local-mysql",
+      "sql": "SELECT COUNT(*) AS item_rows,\n       COUNT(DISTINCT oi.order_id) AS item_orders,\n       SUM(oi.quantity) AS units,\n       (SELECT COUNT(*) FROM returns r JOIN order_items oi2 ON oi2.id = r.order_item_id JOIN orders o2 ON o2.id = oi2.order_id WHERE o2.order_date >= '2026-06-01' AND o2.order_date < '2026-07-01') AS return_rows\nFROM order_items oi\nJOIN orders o ON o.id = oi.order_id\nWHERE o.order_date >= '2026-06-01' AND o.order_date < '2026-07-01';",
+      "lastRunId": "01c3f8f6-c4cc-4213-b0ca-c61e3acfc1fd-query-c3864d6a-0ecb-446c-b835-e67ff5518f93",
+      "lastRunAt": 1789971658603,
+      "lastError": null
+    },
+    {
+      "id": "s_june_spend",
+      "title": "六月营销花费与渠道行数（marketing_spend，2026-06）",
+      "connectionName": "local-mysql",
+      "sql": "SELECT ROUND(SUM(spend), 2) AS marketing_spend,\n       COUNT(*) AS spend_rows,\n       COUNT(DISTINCT channel) AS spend_channels,\n       ROUND(SUM(CASE WHEN channel = 'paid_social' THEN spend ELSE 0 END), 2) AS paid_social_spend\nFROM marketing_spend\nWHERE month = '2026-06';",
+      "lastRunId": "01c3f8f6-c4cc-4213-b0ca-c61e3acfc1fd-query-5a08db37-1eda-402f-8969-b1656d546f98",
+      "lastRunAt": 1789971658603,
+      "lastError": null
+    },
+    {
+      "id": "s_oe_view",
+      "title": "order_economics 视图定义（information_schema.VIEWS）",
+      "connectionName": "local-mysql",
+      "sql": "SELECT VIEW_DEFINITION\nFROM information_schema.VIEWS\nWHERE TABLE_SCHEMA = 'stela_demo' AND TABLE_NAME = 'order_economics';",
+      "lastRunId": "45ab9fd1-0419-4e80-bc4b-ead24e99c781-query-02c35885-1b7d-4303-a1d8-593c777060c2",
+      "lastRunAt": 1789971231295,
+      "lastError": null
+    },
+    {
+      "id": "s_oe_grain",
+      "title": "orders / order_economics 行数与粒度校验",
+      "connectionName": "local-mysql",
+      "sql": "SELECT\n  (SELECT COUNT(*) FROM orders) AS orders_rows,\n  (SELECT COUNT(*) FROM order_economics) AS view_rows,\n  (SELECT COUNT(DISTINCT order_id) FROM order_economics) AS distinct_order_ids,\n  (SELECT COUNT(DISTINCT order_month, channel) FROM order_economics) AS view_month_channel_keys,\n  (SELECT MIN(order_month) FROM order_economics) AS min_month,\n  (SELECT MAX(order_month) FROM order_economics) AS max_month,\n  (SELECT COUNT(*) FROM marketing_spend) AS spend_rows,\n  (SELECT COUNT(DISTINCT month, channel) FROM marketing_spend) AS spend_keys,\n  (SELECT COUNT(DISTINCT month) FROM marketing_spend) AS spend_months,\n  (SELECT COUNT(DISTINCT channel) FROM marketing_spend) AS spend_channels;",
+      "lastRunId": "45ab9fd1-0419-4e80-bc4b-ead24e99c781-query-47c8513a-33ad-41cf-a099-e1ab4d2f0635",
+      "lastRunAt": 1789971231296,
+      "lastError": null
+    },
+    {
+      "id": "s_spend_grain",
+      "title": "marketing_spend 粒度校验（month+channel 唯一）",
+      "connectionName": "local-mysql",
+      "sql": "SELECT\n  (SELECT COUNT(*) FROM orders) AS orders_rows,\n  (SELECT COUNT(*) FROM order_economics) AS view_rows,\n  (SELECT COUNT(DISTINCT order_id) FROM order_economics) AS distinct_order_ids,\n  (SELECT COUNT(DISTINCT order_month, channel) FROM order_economics) AS view_month_channel_keys,\n  (SELECT MIN(order_month) FROM order_economics) AS min_month,\n  (SELECT MAX(order_month) FROM order_economics) AS max_month,\n  (SELECT COUNT(*) FROM marketing_spend) AS spend_rows,\n  (SELECT COUNT(DISTINCT month, channel) FROM marketing_spend) AS spend_keys,\n  (SELECT COUNT(DISTINCT month) FROM marketing_spend) AS spend_months,\n  (SELECT COUNT(DISTINCT channel) FROM marketing_spend) AS spend_channels;",
+      "lastRunId": "45ab9fd1-0419-4e80-bc4b-ead24e99c781-query-47c8513a-33ad-41cf-a099-e1ab4d2f0635",
+      "lastRunAt": 1789971231296,
+      "lastError": null
+    },
+    {
+      "id": "s_join_safety",
+      "title": "明细粒度与 month×channel 关联防扇出校验",
+      "connectionName": "local-mysql",
+      "sql": "SELECT\n  (SELECT COUNT(*) FROM order_items) AS item_rows,\n  (SELECT COUNT(DISTINCT id) FROM order_items) AS item_ids,\n  (SELECT COUNT(DISTINCT order_id) FROM order_items) AS items_order_keys,\n  (SELECT COUNT(*) FROM returns) AS return_rows,\n  (SELECT COUNT(DISTINCT id) FROM returns) AS return_ids,\n  (SELECT COUNT(DISTINCT order_item_id) FROM returns) AS return_item_keys,\n  (SELECT COUNT(*) FROM (\n      SELECT oe.order_month, oe.channel\n      FROM order_economics oe\n      JOIN marketing_spend ms\n        ON ms.month = oe.order_month AND ms.channel = oe.channel\n      GROUP BY oe.order_month, oe.channel\n   ) t) AS covered_month_channel_pairs,\n  (SELECT COUNT(DISTINCT order_month, channel) FROM order_economics) AS view_month_channel_pairs,\n  (SELECT COUNT(*)\n     FROM order_economics oe\n     JOIN marketing_spend ms\n       ON ms.month = oe.order_month AND ms.channel = oe.channel) AS joined_rows;",
+      "lastRunId": "45ab9fd1-0419-4e80-bc4b-ead24e99c781-query-18d9eab6-6ae9-484a-b190-6771d40212db",
+      "lastRunAt": 1789971231296,
+      "lastError": null
+    }
+  ],
+  "sections": [
+    {
+      "id": "lineage",
+      "title": "六月贡献利润数据血缘",
+      "description": "以 2026-06 实跑数据展示贡献利润的逐层扣除：商品销售额 → 扣折扣、退款 → 净收入 → 扣商品成本、履约费、退货处理费 → 营销前利润 → 扣营销花费 → 贡献利润与贡献利润率，金额统一 USD。",
+      "cards": [
+        {
+          "id": "flow_lineage",
+          "title": "六月贡献利润计算流程（USD）",
+          "width": "full",
+          "type": "flow",
+          "direction": "TB",
+          "nodes": [
+            {
+              "id": "src_items",
+              "kind": "source",
+              "label": "订单明细 666 行（375 笔订单）",
+              "description": "来源：order_items × products；六月 666 行商品明细。",
+              "tone": "neutral",
+              "position": {
+                "x": 25,
+                "y": 24
+              }
+            },
+            {
+              "id": "v_gross",
+              "kind": "step",
+              "label": "商品销售额 $64,130.00",
+              "description": "来源：order_items.quantity × unit_price，按订单汇总。",
+              "tone": "info",
+              "position": {
+                "x": 24,
+                "y": 182
+              }
+            },
+            {
+              "id": "v_discounts",
+              "kind": "step",
+              "label": "折扣 −$4,704.40",
+              "description": "来源：order_items.discount_amount。",
+              "tone": "warning",
+              "position": {
+                "x": 389,
+                "y": 182
+              }
+            },
+            {
+              "id": "v_refunds",
+              "kind": "step",
+              "label": "退款 −$5,408.80",
+              "description": "来源：returns.refund_amount；六月 51 条退货记录。",
+              "tone": "warning",
+              "position": {
+                "x": 737,
+                "y": 182
+              }
+            },
+            {
+              "id": "v_net",
+              "kind": "step",
+              "label": "净收入 $54,016.80",
+              "description": "来源：order_economics；订单级 375 行 = 375 笔订单 / 5 个渠道。",
+              "tone": "info",
+              "position": {
+                "x": 198.75,
+                "y": 340
+              }
+            },
+            {
+              "id": "v_cogs",
+              "kind": "step",
+              "label": "商品成本 −$24,183.00",
+              "description": "来源：order_items.quantity × products.unit_cost。",
+              "tone": "warning",
+              "position": {
+                "x": 570.75,
+                "y": 340
+              }
+            },
+            {
+              "id": "v_fulfill",
+              "kind": "step",
+              "label": "履约费 −$3,244.50",
+              "description": "来源：orders.fulfillment_cost。",
+              "tone": "warning",
+              "position": {
+                "x": 933.75,
+                "y": 340
+              }
+            },
+            {
+              "id": "v_returncost",
+              "kind": "step",
+              "label": "退货处理费 −$433.50",
+              "description": "来源：returns.processing_cost。",
+              "tone": "warning",
+              "position": {
+                "x": 1276.75,
+                "y": 340
+              }
+            },
+            {
+              "id": "v_pbm",
+              "kind": "step",
+              "label": "营销前利润 $26,155.80",
+              "description": "来源：order_economics.profit_before_marketing。",
+              "tone": "info",
+              "position": {
+                "x": 904.75,
+                "y": 498
+              }
+            },
+            {
+              "id": "v_mc",
+              "kind": "step",
+              "label": "渠道汇总 5 行 = 5 个渠道",
+              "description": "来源：order_economics 按 order_month × channel 汇总；六月 5 行 = 5 个渠道 × 1 个月。",
+              "tone": "info",
+              "position": {
+                "x": 890.25,
+                "y": 656
+              }
+            },
+            {
+              "id": "v_spend",
+              "kind": "source",
+              "label": "营销花费 −$17,065.25",
+              "description": "来源：marketing_spend；六月 5 行 = 5 个渠道 × 1 个月，花费只扣一次。",
+              "tone": "warning",
+              "position": {
+                "x": 1280.25,
+                "y": 656
+              }
+            },
+            {
+              "id": "v_cp",
+              "kind": "result",
+              "label": "贡献利润 $9,090.55｜贡献利润率 16.83%",
+              "description": "来源：营销前利润 − 营销花费，金额单位 USD。",
+              "tone": "success",
+              "position": {
+                "x": 1110,
+                "y": 814
+              }
+            }
+          ],
+          "edges": [
+            {
+              "id": "e_items_gross",
+              "source": "src_items",
+              "target": "v_gross",
+              "label": "汇总",
+              "tone": "neutral"
+            },
+            {
+              "id": "e_disc_net",
+              "source": "v_discounts",
+              "target": "v_net",
+              "label": "扣除",
+              "tone": "warning"
+            },
+            {
+              "id": "e_ref_net",
+              "source": "v_refunds",
+              "target": "v_net",
+              "label": "扣除",
+              "tone": "warning"
+            },
+            {
+              "id": "e_gross_net",
+              "source": "v_gross",
+              "target": "v_net",
+              "label": "扣除",
+              "tone": "neutral"
+            },
+            {
+              "id": "e_net_pbm",
+              "source": "v_net",
+              "target": "v_pbm",
+              "label": "扣除",
+              "tone": "neutral"
+            },
+            {
+              "id": "e_cogs_pbm",
+              "source": "v_cogs",
+              "target": "v_pbm",
+              "label": "扣除",
+              "tone": "warning"
+            },
+            {
+              "id": "e_ful_pbm",
+              "source": "v_fulfill",
+              "target": "v_pbm",
+              "label": "扣除",
+              "tone": "warning"
+            },
+            {
+              "id": "e_ret_pbm",
+              "source": "v_returncost",
+              "target": "v_pbm",
+              "label": "扣除",
+              "tone": "warning"
+            },
+            {
+              "id": "e_pbm_mc",
+              "source": "v_pbm",
+              "target": "v_mc",
+              "label": "汇总",
+              "tone": "neutral"
+            },
+            {
+              "id": "e_mc_cp",
+              "source": "v_mc",
+              "target": "v_cp",
+              "label": "扣除",
+              "tone": "neutral"
+            },
+            {
+              "id": "e_spend_cp",
+              "source": "v_spend",
+              "target": "v_cp",
+              "label": "扣除",
+              "tone": "warning"
+            }
+          ]
+        },
+        {
+          "id": "notes_scope",
+          "title": "关联键、勾稽与口径（图下说明）",
+          "width": "full",
+          "type": "markdown",
+          "markdown": "**六月勾稽（USD）**\n\n- 商品销售额 $64,130.00 − 折扣 $4,704.40 − 退款 $5,408.80 = 净收入 $54,016.80\n- 净收入 $54,016.80 − 商品成本 $24,183.00 − 履约费 $3,244.50 − 退货处理费 $433.50 = 营销前利润 $26,155.80\n- 营销前利润 $26,155.80 − 营销花费 $17,065.25 = 贡献利润 $9,090.55；贡献利润率 = 9,090.55 / 54,016.80 = 0.1683（16.83%）\n\n**关键关联键**\n\n- 商品汇总：`order_items JOIN products ON p.id = oi.product_id`，再 `GROUP BY oi.order_id`。\n- 退货汇总：`returns JOIN order_items ON oi.id = r.order_item_id`，再 `GROUP BY oi.order_id`（与商品汇总是两个独立子查询）。\n- 订单级视图：`orders o JOIN it ON it.order_id = o.id`（内连接）、`LEFT JOIN rt ON rt.order_id = o.id`（无退货时 `COALESCE` 补 0）。\n- 渠道汇总与花费：`oe.order_month = ms.month AND oe.channel = ms.channel`；`marketing_spend` 在 (month, channel) 上唯一，所以花费在月份×渠道粒度只扣一次，不会随订单行放大。\n\n**口径与粒度区分**\n\n- 行数不能混：六月商品明细 666 行（order_items，对应 375 笔订单）；订单级 375 行（order_economics，1 行/订单）；月份×渠道汇总 5 行 = 5 个渠道（marketing_spend 六月也是 5 行）；六月退货记录 51 行。\n- 退款与退货处理费不同：退款 $5,408.80 冲减净收入；处理费 $433.50 作为单独成本扣除。\n- 金额均为 USD；固定工资与管理费用不在贡献利润口径内；`customers`、`promotion_code` 不参与计算。"
+        }
+      ]
+    }
+  ]
+}

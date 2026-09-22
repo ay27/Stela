@@ -2,7 +2,7 @@
  * Stela MySQL connector 插件（官方，进程内 module 形态）。
  *
  * 基于 mysql2/promise。原内置 `electron/services/connectors/mysql.ts` 的行为照搬：
- *   - 按 user@host:port/database 缓存 Pool（connectionLimit: 4）
+ *   - 按 user@host:port/database 缓存 Pool，密码变更时替换旧池（connectionLimit: 4）
  *   - SELECT/SHOW/DESC/EXPLAIN/WITH → query；其余 → mutation
  *   - 单元格归一化：Date→ISO、Buffer→<base64:...>、BigInt→string、DECIMAL 保留字符串
  *   - dispose()：vault 切换 / 卸载时关掉所有 Pool（module 插件相对子进程多了这步）
@@ -126,7 +126,7 @@ function typeNameFromCode(code: number | undefined): string {
 }
 
 class MysqlConnector implements Connector {
-  private readonly pools = new Map<string, Pool>();
+  private readonly pools = new Map<string, { pool: Pool; password: string }>();
   private readonly log: PluginContext["log"];
 
   constructor(ctx: PluginContext) {
@@ -136,7 +136,13 @@ class MysqlConnector implements Connector {
   private getPool(cfg: MysqlConfig): Pool {
     const key = cacheKey(cfg);
     const existing = this.pools.get(key);
-    if (existing) return existing;
+    if (existing?.password === cfg.password) return existing.pool;
+    if (existing) {
+      this.pools.delete(key);
+      void existing.pool.end().catch((err: unknown) => {
+        this.log.warn("pool end failed after credential change", { key, err: err instanceof Error ? err.message : String(err) });
+      });
+    }
     const pool = mysql.createPool({
       host: cfg.host,
       port: cfg.port,
@@ -151,7 +157,7 @@ class MysqlConnector implements Connector {
       supportBigNumbers: true,
       bigNumberStrings: true,
     });
-    this.pools.set(key, pool);
+    this.pools.set(key, { pool, password: cfg.password });
     return pool;
   }
 
@@ -266,7 +272,7 @@ class MysqlConnector implements Connector {
   }
 
   async dispose(): Promise<void> {
-    for (const [key, pool] of this.pools.entries()) {
+    for (const [key, { pool }] of this.pools.entries()) {
       try {
         await pool.end();
       } catch (err) {

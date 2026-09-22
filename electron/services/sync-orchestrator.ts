@@ -91,7 +91,7 @@ export function classifyChangedDomains(paths: string[]): GitSyncChangedDomain[] 
     else if (relPath.startsWith(".stela/agent-history/")) domains.add("agent-history");
     else if (relPath.startsWith(".stela/skills/")) domains.add("skills");
     else if (relPath.startsWith(".stela/sql-templates/")) domains.add("templates");
-    else if (relPath.endsWith(".md") || relPath.endsWith(".stela.canvas")) domains.add("vault-files");
+    else if (relPath.endsWith(".md") || relPath.endsWith(".stela.canvas") || relPath.endsWith(".stela.chat")) domains.add("vault-files");
   }
   return [...domains];
 }

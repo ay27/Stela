@@ -1,5 +1,27 @@
 # Stela × DataAgentBench
 
+## 2026-09-12：对齐官方榜单
+
+默认 `--suite leaderboard`：`--all` 只运行官方 12 个数据集的 54 题，
+默认 `--runs 5`。题目清单见 `leaderboard.ts`；以官方网页的 54 题范围为准，
+不按本地 `query_*` 目录数量扩展。`--suite all` 显式保留扩展题集和自定义 fixture。
+`--failed-from` 会与当前 suite 求交集；旧 104 题失败目录不会带入额外 50 题。
+快速复测仍可显式 `--runs 1`，请使用新 output。
+
+`summary.json` 的 `leaderboard.passAt1` 为主指标：先对每题的 trial 求平均，
+再在数据集内对题目平均，最后对 12 个数据集等权平均。未覆盖全部 54 题时为
+null；`validRate` 保留原按 trial 通过率。`hasRequiredTrials` 仅表示每题至少
+5 次的数量要求，不证明未挑选运行、数据版本一致或官方审核通过。失败复测
+及跨版本累计不作为正式榜单成绩。
+
+远程固定目录：Stela `/root/stela-opensource`，DAB `/root/data_agent_bench`。
+后者目前为无 `.git` 的运行副本；官方 checkout 位于
+`/root/data-agent-bench-upstream-20260912`。更新时从 checkout 同步代码和评分文件，
+保留 `query_dataset`、`db_config.py`、`db_config.yaml`、`.env`；更新记录在
+DAB 根目录 `.stela-upstream-sync.json`，新 manifest 保留该记录。
+题目与评分文件的指纹写入运行条件，评分文件变更后不能 resume 到旧 output。
+禁止将 LFS 指针覆盖真实数据文件。
+
 ## 2026-09-06 执行修复后的对照
 
 主模型启用与桌面一致的生成级恢复：最多三次尝试、共享单次生成 180 秒期限，
@@ -299,7 +321,8 @@ Use `status: "partial"` for interrupted runs and `status: "historical"` when the
 analysis was reconstructed after the fact. Malformed notes fail report
 generation instead of being silently omitted.
 
-`--runs` defaults to 3 and reports a **valid rate**, not leaderboard Pass@1. A
+`--runs` defaults to 5. The primary metric is dataset-macro leaderboard Pass@1;
+`validRate` remains the trial-weighted rate for compatibility. A
 single run per case leaves roughly a five-point binomial standard error, which is
 larger than the differences prompt and gate changes usually produce, so `--runs 1`
 is for smoke checks only. For a leaderboard-shaped result use `--all --runs 5`;
@@ -356,7 +379,7 @@ node /absolute/path/to/stela/scripts/eval/data-agent-bench/ssh-connector.mjs \
   --host root@9.134.85.45 \
   --port 36000 \
   --remote-bridge /absolute/linux/path/to/stela/scripts/eval/data-agent-bench/bridge.py \
-  --dab-root /jinmianye-cfs-sh-3/jinmianye/data_agent_bench \
+  --dab-root /root/data_agent_bench \
   --conda-env dabench
 ```
 

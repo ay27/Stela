@@ -206,3 +206,28 @@ assert.throws(() => parseInput(IPC.AI_PYTHON_RUNTIME_READ_INPUT, {
 }));
 
 console.log("ipc-schema tests passed.");
+
+for (const [semanticOptimizationEnabled, automaticAnalysisContractsEnabled] of [[true, false], [false, true], [false, false]]) {
+  const patch = { ai: { semanticOptimizationEnabled, automaticAnalysisContractsEnabled } };
+  assert.deepEqual(parseInput(IPC.SETTINGS_PATCH, { patch }), { patch }, "experiment switches survive IPC parsing independently");
+}
+assert.throws(() => parseInput(IPC.SETTINGS_PATCH, { patch: { ai: { semanticOptimizationEnabled: "true" } } }));
+
+const badReference = { version: 1, segments: [{ kind: "resource", resourceId: "absent" }], resources: [] };
+assert.throws(() => parseInput(IPC.CONVERSATION_DRAFT, { path: "/vault/chat.stela.chat", etag: "a".repeat(64), draft: "", draftMessage: badReference, connectionName: null }));
+assert.throws(() => parseInput(IPC.CONVERSATION_SUBMIT, { path: "/vault/chat.stela.chat", etag: "a".repeat(64), requestId: "00000000-0000-4000-8000-000000000000", input: "query", message: badReference, connectionName: null }));
+
+const localizedConversation = { path: "/vault/chat.stela.chat", etag: "a".repeat(64), requestId: "00000000-0000-4000-8000-000000000000", input: "分析链路", connectionName: null, locale: "zh" };
+assert.deepEqual(parseInput(IPC.CONVERSATION_SUBMIT, localizedConversation), localizedConversation);
+assert.throws(() => parseInput(IPC.CONVERSATION_SUBMIT, { ...localizedConversation, locale: "invalid" }));
+
+// Unified Chat lifecycle and explicit quick-action scope stay typed at IPC.
+assert.deepEqual(parseInput(IPC.CONVERSATION_TEMPORARY, {}), {});
+assert.throws(() => parseInput(IPC.CONVERSATION_TEMPORARY, { path: "/tmp/chat" }));
+assert.throws(() => parseInput(IPC.CONVERSATION_IMPORT_HISTORY, { deviceSlug: "../other", sessionId: "session" }));
+assert.throws(() => parseInput(IPC.CONVERSATION_PROTECT, { paths: Array(257).fill("chat.stela.chat") }));
+const chatDraft = { path: "chat.stela.chat", etag: "a".repeat(64), draft: "refresh", connectionName: null };
+assert.doesNotThrow(() => parseInput(IPC.CONVERSATION_DRAFT, { ...chatDraft, task: { entryPoint: "canvas-refresh", canvasRefresh: { path: "chart.stela.canvas", sourceId: "source-1" } } }));
+assert.throws(() => parseInput(IPC.CONVERSATION_DRAFT, { ...chatDraft, task: { entryPoint: "canvas-refresh" } }));
+assert.throws(() => parseInput(IPC.CONVERSATION_DRAFT, { ...chatDraft, task: { entryPoint: "chat", canvasRefresh: { path: "chart.stela.canvas" } } }));
+console.log("Unified Chat IPC: strict lifecycle inputs and Canvas task scope passed.");

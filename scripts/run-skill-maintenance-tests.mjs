@@ -15,6 +15,7 @@ try {
     plugins: [{ name: "electron-test-boundary", setup(build) {
       build.onResolve({ filter: /^electron$/ }, () => ({ path: "electron", namespace: "test" }));
       build.onLoad({ filter: /.*/, namespace: "test" }, () => ({ contents: `
+        export const shell = { trashItem() { throw new Error("Trash is unavailable in maintenance tests"); } };
         export const app = {
           getPath() { throw new Error("Host userData is unavailable in this test"); },
           getAppPath() { return process.cwd(); }, isPackaged: false

@@ -96,6 +96,63 @@ extensions and binary-like text are not editable. A source file is deliberately
 excluded from implicit `AgentWorkspaceContext`, whose public contract remains
 `note | canvas`.
 
+## SQL Conversation
+
+Both conversation surfaces render assistant prose and SQL results inline, without
+outer cards. Each user turn is followed by one muted divider before any SQL result, tool
+activity, process narration or final reply. The divider has no timing label.
+Shared assistant-output styles align tables and quiet result controls;
+user messages and actionable approval/question prompts retain their own treatment.
+
+The workspace conversation reuses the Agent panel's timeline renderer, tool and
+process grouping, proposal/question cards, model picker and send/stop controls.
+Pending questions stay above the composer. The SQL composer shares the Agent
+input shell and Mod-Enter submission contract, with completion dismissal taking
+precedence over submission; CodeMirror supplies SQL completion without gutters.
+Each reply has one collapsed execution disclosure containing tool calls, SQL,
+retries, process narration, and intermediate results. Pending decisions and terminal
+errors remain visible. Final prose and its tables form the main response; when
+there is no Markdown table, the latest successful recorded result is shown once
+below the answer. Direct SQL without an Agent reply shows its result immediately,
+with SQL folded behind a lightweight control.
+
+`ConversationDocument` (`electron/shared/conversation.ts`) is a version-1
+`stela-conversation` JSON document stored as `*.stela.chat`. It contains identity,
+title/timestamps, default connection, draft, turns and embedded `sessionJsonl`.
+New Chat actions create temporary sessions. Blank sessions remain in memory; drafts
+and turns persist locally under `.stela/chat-sessions.local/`. Non-empty sessions remain in local history without count-based cleanup. Explicit
+Save chooses a visible Vault directory (default `Chats/`) and title, preserves
+session identity and rejects filename collisions. Subsequent changes autosave.
+Saved conversations appear as files in the Vault (ADR-0110).
+Optional `draftMessage` and turn `message` retain ordered structured references;
+legacy strings remain readable text projections (ADR-0103).
+Conversation submissions carry the resolved UI locale (`zh` or `en`) into the
+Agent request, matching the Agent Panel output-language contract. This locale is
+the fallback: an explicit user language instruction takes priority, followed by
+the current request's natural language. SQL-only or unclear mixed-language
+requests fall back to the app locale. The policy covers narration and all generated
+chart/Canvas display text, including tool arguments; identifiers and raw data
+values are preserved. Bilingual labels require a user request.
+Each turn retains its request ID, original input, connection snapshot, start time,
+status, Agent events, proposal responses and `RunRecord` references. Rows are
+loaded by run ID through existing result storage, never embedded in this file.
+
+`IConversationSnapshot` carries the canonical path, etag and document, plus an
+optional persistence failure, temporary flag and previous-path alias after Save. `IConversationSubmit` carries path, expected etag,
+UUID request ID, input and connection. The typed `conversation` bridge exposes
+temporary/recent/saveAs/discard/protect/importHistory, plus
+create/read/draft/submit/cancel/respond/onChanged. Optional task metadata preserves
+quick-action entry points, Canvas refresh targets and explicit workspace context. A completed request ID cannot
+execute twice. Stored terminal turns are append-only from the product UI; edit
+and resend creates a new turn. Reopened in-flight turns become `interrupted`.
+
+`TabKind` includes `conversation`; source-note buffer autosave does not own these
+files. Draft saves and all execution/session appends are main-owned. Model-only
+runtime caches, Python variables and full result rows are not conversation-file
+authorities. A cross-device reopening rebuilds the harness from stored messages;
+any missing runtime data requires explicit re-evaluation rather than silent SQL
+replay. File conflicts produce a separate recovery file when possible.
+
 ## DetailMeta
 
 The parsed form of a `<detail>` HTML block. **Single canonical implementation** in `electron/shared/detail-meta.ts`; renderer re-exports from `src/editor/runsql/detail-meta.ts`.
@@ -800,18 +857,19 @@ rewrite targets are keyed by the renderer-owned `rewriteTargetId` on the request
 message resources — never by `resource.id`, and never read off the deprecated
 `attachments` field, which no production renderer path sets.
 
-The Agent composer is a renderer-only ProseMirror document with one paragraph,
-plain text, hard breaks, and atomic resource nodes. Each Agent tab retains its
-own disposable EditorState so selection and undo history survive panel
-unmounting and tab switches. A resource-catalog plugin holds the full typed
-resource bodies; atom nodes contain only id, kind, and label. Sending or adding
-a timeline entry serializes that state back to AgentMessageContent, so no
-ProseMirror JSON or selection coordinate crosses IPC or enters Agent history.
+Agent Panel and workspace Chat share a CodeMirror 6 composer. Persisted in-memory editor states contain only model extensions (content, resource atoms, selection and undo history); view extensions are replaced on mount, never appended to a previously mounted state. SQL highlighting and completion share incremental parse states. Each conversation
+retains a disposable EditorState, including selection and undo. A transaction-
+mapped resource field backs atomic replacement widgets; only AgentMessageContent
+crosses IPC. External Add to Chat inserts at the saved selection head. Clipboard
+paste remains text-only: copied pills carry their visible label, not a live body
+([ADR-0102](./adr/0102-unified-codemirror-composer.md)).
 
-External Add to Chat inserts at the saved selection head without deleting a
-previous Composer range. Clipboard paste is intentionally plain text: copied
-pills paste as their visible `@Kind · Label`, never as SQL/path-bearing live
-resources ([ADR-0063](./adr/0063-prosemirror-agent-composer.md)).
+Enter inserts a newline; Mod-Enter submits, or closes an open completion menu
+first. Mod-Alt-L formats the selection or current unambiguous SQL region.
+Deterministic SQL completion reuses RunSQL schema caches, with no AI completion.
+References search the Vault; choosing a document's SQL entry loads complete
+RunSQL blocks from its current buffer or file. The composer remains editable
+while a run is active; new drafts are saved but never automatically submitted.
 
 Agent session files are native pi JSONL under
 `{vault}/.stela/agent-history/<deviceSlug>/<sessionId>.jsonl`. Besides pi
@@ -830,8 +888,7 @@ While a run is active, process entries stay in causal order around tool groups.
 After settlement, prior process entries collect into one closed disclosure, and
 strategy-review entries are also closed by default
 ([ADR-0074](./adr/0074-streamed-agent-process-narration.md)).
-Each device retains only its 20 most recently updated session files; cleanup
-never deletes another device's directory ([ADR-0047](./adr/0047-bounded-device-agent-history-retention.md)).
+Device session files remain locally retained without count-based cleanup (ADR-0110); other devices' histories are read without mutation.
 
 Agent `run_query` accepts an optional Vault `connectionName`; omission selects
 the current note connection. The connector's `queryLanguages` and
@@ -997,6 +1054,36 @@ Supported fields: population/metric/granularity/denominator/business_rule/time_r
 gate. Model-authored claims and completeness of a filtered input are not certified.
 Recipes are in the bundled `analysis-verification` Skill; skip trivial tasks.
 
+Default-off `AiSettings.semanticOptimizationEnabled` and
+`automaticAnalysisContractsEnabled` select the experiments in ADR-0097/0098.
+`IAnalysisExecutionContext` carries trusted run ID, original question and flags on
+`PythonExecutionRequest`. The shared strict `analysisSnapshotSchema` bounds optional
+`PythonExecutionResult.analysis`: version/generation/status, model claims/checks and
+source-resolution flags, source row counts, full/subset/unknown coverage, previous
+version count and truncation. Source refresh, cell failure and unknown lineage
+cannot certify current coverage. `analysis.current` is lazy; explicit contracts are
+registered as revisions. `bind_population(df, id_column=..., source=..., source_id_column=None)` freezes
+source-verified typed IDs and per-cell fingerprints; it cannot be silently rebound to a smaller cohort.
+Snapshots are automatically captured and preserved through existing tool history.
+`contract.observe(batch)` (ADR-0099) verifies an existing operation via a weak
+run-local registry, independent of mutable public result rows/summary. Records retain
+at most 100,000 rows / 1,000,000 cells of fingerprints, not text copies. Operation
+counts (`operationCoverage`) are separate from bound-population `coverage`; its
+optional `reason` explains unknown/partial status. Epoch invalidation survives later
+successful cells; host-side failures propagate using optional trusted
+`IAnalysisExecutionContext.invalidateEvidence`. Source versions must still match.
+No implicit ID normalization, batch union or business certification is added.
+Legacy explicit contract behavior remains when the experiment is off.
+
+Optimized classify/extract returns all original IDs after exact selected-content
+reuse. Preflight checks every unique cache key and exposes scale, packed request
+counts and conservative reservations. The `pilot` semantic phase requires host
+experiment enablement and an operation signature; one attempt and a 10% reservation
+cap share the existing run ledger. Model/definition/full-input identity constrain
+reuse, and forecasts never authorize sampling or guarantee completion. Resolve
+and the selected inference profile are unchanged. See
+[experiment protocol and API example](./testing/analysis-experiments.md).
+
 `AiSettings.semanticProfileId` defaults to the current run profile;
 `semanticBudget` supplies configurable limits. Grants are local under application
 userData, keyed by Vault and endpoint/vendor/model, never in Vault settings or Git.
@@ -1081,8 +1168,9 @@ may read stale or untracked bodies only as untrusted drafts and must verify thei
 rules before saving.
 
 After a normal completion with successful tool evidence, an independent bounded
-maintenance job receives the complete current-task conversation, structured
-evidence, at most three ordered source documents, and related Skill metadata. All
+maintenance job receives a bounded conversation excerpt, structured evidence,
+complete relevant source blocks with sanitized-document line ranges and SHA-256 hashes from at most
+three notes, and related Skill metadata, within 12,000 characters. All
 retrieval is deterministic; the maintenance harness exposes only `save_skill` and
 may create one templated Skill or no-op. It cannot overwrite or archive existing
 Skills, call SQL, search the Vault broadly, or edit notes. Automatic creation
@@ -1128,8 +1216,8 @@ carry the redacted trace. Tool and maintenance runs use their Agent run as
 `parentRunId`.
 
 `AgentMetricSessionTrace` is a read-only projection, not a third storage
-authority. It contains the authoritative `AgentHistorySession`, one-based user
-Turns in history order, and an optional `AgentMetricRunTree` for every history
+authority. It contains an `IAgentMetricSessionHistory` projected from Agent History
+or a durable Chat document, one-based user Turns in source order, and an optional `AgentMetricRunTree` for every history
 run. A run tree contains the root Agent trace and every descendant tool or
 maintenance trace. The tree is `null` when local Metrics have expired or been
 cleared. Harness model context, provider requests, first-token arrival,
@@ -1165,9 +1253,13 @@ occupancy is `promptTokens / contextWindow`, not total tokens, so the current
 step's output and reasoning are not counted as input context.
 
 The renderer can only call `agentMetrics.getDashboard`, `listRuns`, `getTrace`,
-`getSessionTrace`, and `clear`. `getSessionTrace` accepts an `AgentHistoryRef`;
-the main process loads that history and joins it to the already-open local
-Metrics store by `agent:<runId>`. Date ranges are exactly `7d`, `30d`, or `90d`; trace queries are
+`listSessions`, `getSessionTrace`, and `clear`. `listSessions` returns typed
+source references plus warnings for unreadable sources. `getSessionTrace` accepts
+an `AgentMetricSessionRef`: a legacy `AgentHistoryRef` or a Chat path/session id.
+The main process loads that source and joins it to the already-open local Metrics
+store by `agent:<runId>`. Chat runs preserve structured messages, responses, SQL
+outcomes and lifecycle status; their missing completion timestamps remain null.
+Chat references do not assert which device originally executed their turns. Date ranges are exactly `7d`, `30d`, or `90d`; trace queries are
 cursor-paginated, bounded to 100 records by IPC, and displayed ten at a time.
 Inline completion does not enter this store; schema version 2 removes legacy
 inline runs and their events. Cancellations are reported separately from
@@ -1298,3 +1390,95 @@ only because the fallback scan still evaluates Git state.
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — system architecture and data flow
 - [adr/](./adr/) — decision records for each major choice above
+
+### Structured Agent Canvas authoring (ADR-0104)
+
+Agent create/update accept `canvas: {title, status, sources: [{id, title}], sections}`
+and `sourceRuns` bindings. The provider JSON Schema is generated from the existing
+Zod card/section schemas. File identity, timestamps, session attribution, SQL and
+saved-run metadata are host-owned. A complete nonempty artifact is checked for
+referential integrity and data-card compatibility before persistence. Manual
+empty creation and version-1 files remain supported; legacy update JSON uses the
+same final validation. Invalid creation leaves no file/event, and invalid updates
+preserve the previous bytes. Rendering failures are isolated per card.
+
+
+Automatic maintenance outcomes additionally include `unchanged` (a previously
+reviewed candidate with unchanged source/Skill content) and `cooldown` (an
+incomplete candidate suppressed for one hour). Both render as neutral skips;
+individual attempts remain in Metrics. Time and turn limits have distinct labels,
+and saved actions remain visible when the job did not fully complete.
+`.stela/skill-maintenance.local.json` stores version 1, at most 256 hash-keyed
+receipts with Skill-set hash, timestamp and outcome; it contains no source text.
+Manual knowledge maintenance bypasses receipts (ADR-0106).
+
+`SqlGuardClassification` includes `unknown` separately from `mutation`.
+Ambiguous syntax and unrecognized statements require review, with an explicit
+uncertainty explanation; callers must never treat unknown as read-only. The
+optional dialect argument enables only dialect-specific lexical exceptions
+(ADR-0107).
+
+## Custom OpenAI protocol
+
+Per ADR-0109, `AiProviderProfile.customApi` selects `chat-completions` (legacy default) or `responses`. The existing pi-ai adapter owns the selected wire format, streamed events and tool-result replay. Custom `off` explicitly maps to `none`; other requested efforts use the selected protocol. Base URLs identify the API root, usually ending in `/v1`. Built-in providers retain their catalog protocol and reasoning capabilities.
+
+## Chat tabs and local history
+
+ADR-0110 supersedes ADR-0108. Sidebar tabs share the existing conversation store and
+execution service; main-area Chat uses workspace tabs. Open-tab order is in-memory
+and is reset across Vault changes/restarts. Closing only removes a view; drafts and
+turns remain in local history without newest-20 pruning, including legacy history.
+Blank sessions remain memory-only. Tabs preserve identity when moved or promoted
+to a file. The More menu exposes promotion as “Store as local file”; subsequent
+writes autosave. History merges sources by session identity, prefers file-backed
+entries, searches titles/paths and reveals 50 more rows at a time. File entries
+display the actual filename and Vault-relative directory; storage/version labels
+are not product UI. Protection/discard IPC remains compatible, with no count-based
+deletion and no discard control in Chat. Result-cache lifetimes are unchanged.
+
+Opening the Chat sidebar with no open tabs creates one blank in-memory conversation.
+Closing its last tab while the sidebar remains open also creates a blank composer.
+Concurrent initialization is deduplicated and must not replace tabs opened while
+creation is pending; empty conversations do not enter persistent history.
+
+## Agent recovery evidence (ADR-0111, ADR-0112)
+
+`AgentPlanSnapshot.originRunId` records the first run when unfinished progress is
+restored. Optional `deliveries` declare `note`/`canvas` outputs and optional expected
+Vault-relative paths. Only host writes add `{path, runId}` receipts; model step
+updates cannot supply them. Duplicate writes to one path do not satisfy multiple
+outputs. An absent declaration means unknown completion. `plan.create` accepts an
+explicit `replace` flag; old terminal plans are not resurrected.
+
+Canvas validation diagnostics carry a stable code, affected source/card/field,
+observed shape and repair guidance. Validation does not mutate the file and does
+not consume the execution-failure streak.
+
+Python `analysis.contract(...).comparison(name, population=..., grain=..., key=...,
+upstream_source=..., downstream_source=..., definition_source=...,
+definition_evidence=...)` separates a sourced definition from relationship evidence.
+`check_relationship(name)` checks unique non-null identity containment in bounded
+registered sources. Snapshots optionally contain `comparisons` with `unverified` or
+`identity_checked` state; neither denotes verified business scope. Refreshes or
+failed execution invalidate identity observations. Oversized, incomplete, empty,
+missing-key or mismatched populations remain unverified. Grouped totals cannot
+prove asset-level stage conversion.
+
+Automatic `save_skill` requires `claims=[{sourcePath, quote}]`. The host publishes
+only grounded excerpts using a fixed source-scoped template. Generated candidate
+prose is retained only when publication is rejected, in a bounded
+`candidate_not_published` maintenance event. This outcome survives history reload
+and is distinct from saved/no-change/timeout. No additional review model runs.
+
+### Knowledge library inspection
+
+The knowledge library expands a Skill into a read-only Markdown body using the
+existing Vault file reader. `AgentSkillListItem.sources` exposes the source paths
+and hashes already returned by the Skill metadata loader; source links open the
+corresponding Vault notes. Missing source metadata is shown explicitly and does
+not imply that the Skill was automatically generated.
+
+Maintenance retains `no_source` as its terminal outcome and records a more specific
+reason in the trace: `only_self_authored_sources`, `source_documents_unreadable`,
+or `no_matching_source_documents`. Diagnostics include candidate, excluded, and
+unreadable paths; user-facing summaries follow the request language.

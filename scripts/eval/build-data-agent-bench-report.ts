@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { leaderboardScore } from "./data-agent-bench/leaderboard";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -157,6 +158,7 @@ export interface DataAgentBenchReport {
   manifest: Record<string, unknown>;
   analysis: DataAgentBenchAnalysisNotes | null;
   totals: {
+    leaderboard?: ReturnType<typeof leaderboardScore>;
     cases: number;
     valid: number;
     validRate: number;
@@ -684,6 +686,7 @@ export async function buildDataAgentBenchReport(input: string): Promise<DataAgen
     manifest,
     analysis,
     totals: {
+      leaderboard: leaderboardScore(cases.map((item) => ({ ...item, query: String(item.query) }))),
       cases: cases.length,
       valid,
       validRate: valid / cases.length,

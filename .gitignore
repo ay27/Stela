@@ -15,6 +15,8 @@ out
 .stela/secrets/
 .stela/history/*.local.jsonl
 .stela/recent-files.local.json
+.stela/skill-maintenance.local.json
+.stela/chat-sessions.local/
 .stela/agent-metrics.local.sqlite*
 examples/demo-vault/.stela/plugins/
 

@@ -2,7 +2,8 @@
 type: ADR
 id: "0047"
 title: "Bounded device Agent history retention"
-status: active
+status: superseded
+superseded_by: "0110"
 date: 2026-07-31
 ---
 

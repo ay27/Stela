@@ -1,3 +1,4 @@
+import { sqlStructuralText } from "@shared/sql-lexical";
 /**
  * Agent 侧 SQL 护栏：只读放行，改动类默认拦截，禁止多语句堆叠。
  *
@@ -9,7 +10,7 @@
  * 的 SQL parser（如 node-sql-parser）按 AST 分类。
  */
 
-export type SqlGuardClassification = "read-only" | "mutation" | "multi-statement";
+export type SqlGuardClassification = "read-only" | "mutation" | "unknown" | "multi-statement";
 
 export interface SqlGuardResult {
   classification: SqlGuardClassification;
@@ -34,12 +35,8 @@ const MUTATION_KEYWORDS = new Set([
   "REVOKE",
 ]);
 
-function stripComments(sql: string): string {
-  return sql.replace(/--.*$/gm, " ").replace(/\/\*[\s\S]*?\*\//g, " ");
-}
-
 function isMultiStatement(sql: string): boolean {
-  return /;\s*\S/.test(sql.trim());
+  return sql.split(";").filter(part => part.trim()).length > 1;
 }
 
 function firstKeyword(sql: string): string | null {
@@ -62,8 +59,9 @@ function classifyStatement(keyword: string | null): "read-only" | "mutation" | "
  *   - true：改动类语句仍标记 `blockedReason`，但由调用方决定是否走 confirm
  *     proposal（v1 harness 循环里始终发 proposal 等用户 approve，而不是自动放行）。
  */
-export function classifySql(sql: string, allowMutations: boolean): SqlGuardResult {
-  const cleaned = stripComments(sql);
+export function classifySql(sql: string, allowMutations: boolean, dialect?: string | null): SqlGuardResult {
+  const cleaned = sqlStructuralText(sql, { optimizerHints: dialect?.toLowerCase() === "starrocks" });
+  if (cleaned === null) return { classification: "unknown", keyword: null, blockedReason: "Ambiguous SQL syntax requires review before execution." };
   if (isMultiStatement(cleaned)) {
     return {
       classification: "multi-statement",
@@ -72,7 +70,8 @@ export function classifySql(sql: string, allowMutations: boolean): SqlGuardResul
     };
   }
   const keyword = firstKeyword(cleaned);
-  const kind = classifyStatement(keyword);
+  const hasEmbeddedWrite = /\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|REPLACE|MERGE|GRANT|REVOKE|INTO|OUTFILE|DUMPFILE|CALL)\b/i.test(cleaned);
+  const kind = hasEmbeddedWrite ? "mutation" : classifyStatement(keyword);
   if (kind === "read-only") {
     return { classification: "read-only", keyword, blockedReason: null };
   }
@@ -87,7 +86,7 @@ export function classifySql(sql: string, allowMutations: boolean): SqlGuardResul
   }
   // 未识别关键字（如存储过程调用、方言专属语句）保守地当改动处理，走同样的拦截路径。
   return {
-    classification: "mutation",
+    classification: "unknown",
     keyword,
     blockedReason: allowMutations
       ? "Unrecognized statement type requires user approval before running."

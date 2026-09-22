@@ -595,6 +595,13 @@ export function AiTab() {
                   )}
                 </Field>
 
+                {isCustom && <Field label={t("ai.customApi.label")} hint={t("ai.customApi.description")}>
+                  <select className={fieldClass} value={draft.customApi ?? "chat-completions"}
+                    onChange={e => updateDraft({ customApi: e.target.value as "chat-completions" | "responses" })}>
+                    <option value="chat-completions">Chat Completions</option>
+                    <option value="responses">Responses</option>
+                  </select>
+                </Field>}
                 <Field
                   label={t("ai.reasoningEffort.label")}
                   hint={
@@ -797,6 +804,12 @@ export function AiTab() {
               }} />
           </Row>
         ))}
+        <Row label={t("ai.semantic.optimization")} description={t("ai.semantic.optimizationHint")}>
+          <Toggle checked={settings.semanticOptimizationEnabled === true} onChange={(checked) => void patch({ ai: { semanticOptimizationEnabled: checked } })} />
+        </Row>
+        <Row label={t("ai.semantic.contracts")} description={t("ai.semantic.contractsHint")}>
+          <Toggle checked={settings.automaticAnalysisContractsEnabled === true} onChange={(checked) => void patch({ ai: { automaticAnalysisContractsEnabled: checked } })} />
+        </Row>
         <button type="button" className="stela-semantic-revoke rounded border border-border px-2 py-1 text-xs"
           onClick={() => { void window.stela.pythonRuntime.revokeSemantic().then(() => setSemanticNotice(t("ai.semantic.revoked"))).catch((e) => setError(String(e))); }}>
           {t("ai.semantic.revoke")}

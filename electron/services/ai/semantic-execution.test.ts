@@ -108,3 +108,26 @@ for (const code of ["Provider finish_reason: sensitive", "quota exhausted"]) {
   assert.ok(result.rows.every((r) => r.status === "failed"));
 }
 console.log("semantic execution tests passed: protocol, row repair, evidence, preflight, budgets and terminal errors");
+
+// Experimental pilot: one request, no repair and no retry after failure/cancellation.
+for (const mode of ["invalid", "unknown", "cancel"] as const) {
+  const controller = new AbortController();
+  let calls = 0;
+  const pilot = new SemanticExecution({ identity: mode, optimizationEnabled: true, signal: new AbortController().signal,
+    budget: { records: 100, requests: 100, tokens: 200000 }, authorize: async () => true,
+    complete: async () => { calls++; if (mode === "cancel") controller.abort(); return { text: "not json" }; } });
+  const raw = JSON.stringify({ ...request, phase: "pilot", operationKey: "a".repeat(64) });
+  if (mode === "cancel") await assert.rejects(pilot.execute(raw, controller.signal));
+  else await pilot.execute(raw);
+  const repeated = await pilot.execute(raw);
+  assert.equal(calls, 1);
+  assert.equal(repeated.control?.reason, "pilot_already_used");
+  assert.ok(pilot.usage.tokens > 0, "unknown usage and cancellation keep conservative reservations");
+}
+await assert.rejects(preflight.execute(JSON.stringify({ ...request, phase: "pilot", operationKey: "a".repeat(64) })), /unavailable/);
+console.log("experimental pilot host limits passed");
+const missingProviderUsage = new SemanticExecution({ identity: "sdk-zero-usage", optimizationEnabled: true,
+  signal: abort.signal, authorize: async () => true, complete: async () => ({ tokens: 0, text: '{"rows":[]}' }) });
+const zeroUsage = await missingProviderUsage.execute(JSON.stringify({ ...request, phase: "pilot", operationKey: "b".repeat(64) }));
+assert.equal(zeroUsage.control?.pilot?.reason, "pilot_usage_unknown", "SDK zero-default usage is not a free measured pilot");
+assert.ok(missingProviderUsage.usage.tokens > 0);

@@ -1,3 +1,4 @@
+import type { IConversationBridge } from "@shared/conversation";
 /**
  * Renderer 全局 window.stela 类型声明。
  *
@@ -19,6 +20,8 @@ import type {
   AgentMetricRunFilter,
   AgentMetricRunPage,
   AgentMetricSessionTrace,
+  AgentMetricSessionRef,
+  IAgentMetricSessionList,
   AgentMetricTrace,
   AgentMetricsDashboard,
   AnalysisCanvasFile,
@@ -84,6 +87,7 @@ import type { AnalysisCanvasFlowLayoutPatch } from "@shared/analysis-canvas";
 import type { VaultExternalChangePayload } from "@shared/ipc-events";
 
 interface StelaBridge {
+  conversation: IConversationBridge;
   vault: {
     listDir: (path: string) => Promise<FileNode[]>;
     readFile: (path: string) => Promise<string>;
@@ -286,7 +290,8 @@ interface StelaBridge {
     getDashboard: (range: AgentMetricRange) => Promise<AgentMetricsDashboard>;
     listRuns: (filter: AgentMetricRunFilter) => Promise<AgentMetricRunPage>;
     getTrace: (runId: string) => Promise<AgentMetricTrace>;
-    getSessionTrace: (ref: AgentHistoryRef) => Promise<AgentMetricSessionTrace>;
+    listSessions: () => Promise<IAgentMetricSessionList>;
+    getSessionTrace: (ref: AgentMetricSessionRef) => Promise<AgentMetricSessionTrace>;
     clear: () => Promise<void>;
   };
   git: {

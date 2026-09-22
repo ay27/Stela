@@ -12,6 +12,7 @@
  */
 
 export const IPC_EVENTS = {
+  CONVERSATION_CHANGED: "conversation:changed",
   /** vault watcher 检测到外部文件变更（v0.2 #7）。payload: VaultExternalChangePayload */
   VAULT_EXTERNAL_CHANGE: "vault:external-change",
   /** Vault index 增量更新（v0.3 双链 M2）。payload: void —— renderer 收到后失效缓存 / 重查 */

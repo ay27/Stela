@@ -65,7 +65,7 @@ try {
   const skills = await loadAgentSkills(root);
   const events: AgentEvent[] = [];
   const base = {
-    vaultPath: root, request: { runId: "offline-parent", prompt: "Explain orders revenue" },
+    forceMaintenance: true, vaultPath: root, request: { runId: "offline-parent", prompt: "Explain orders revenue" },
     conversation: "Revenue sums paid orders only, as verified in orders.md.",
     evidence: [{ tool: "run_query", kind: "success" as const, source: ["demo.orders"], tables: ["demo.orders"] }],
     model, models, skills, connection: null, dialect: null, aiSettings,
@@ -92,14 +92,16 @@ try {
 
   // Real production entry, queue, ranking, source index, Harness and save_skill filesystem write.
   replies = [reply([{ type: "toolCall", id: "save-1", name: "save_skill",
-    arguments: { name: "orders-paid-revenue", content, reason: "Source note defines reusable revenue." } }], "toolUse"),
+    arguments: { name: "orders-paid-revenue", content, claims: [{ sourcePath: "orders.md", quote: "Revenue sums paid orders only." }], reason: "Source note defines reusable revenue." } }], "toolUse"),
     reply([{ type: "text", text: "Saved." }])];
   const saved = await run("saved");
   assert.equal(saved.saved, true);
   assert.equal(saved.trace.run.outcome, "saved");
+  assert.equal(calls, 1, "save must end maintenance without another generation");
   assert.ok(saved.trace.events.some(e => e.type === "provider_prompt"));
   const file = await readFile(join(root, ".stela/skills/orders-paid-revenue/SKILL.md"), "utf8");
-  assert.match(file, /Revenue is SUM/);
+  assert.match(file, /Revenue sums paid orders only/);
+  assert.doesNotMatch(file, /Revenue is SUM/, "uncited generated content is not published");
   assert.match(file, /orders\.md/);
   assert.ok(events.some(e => e.type === "skill_maintenance" && e.actions.length === 1));
 
@@ -178,6 +180,30 @@ try {
   models.streamSimple = streamSimple;
   replies = [reply([{ type: "text", text: "No new durable knowledge." }])];
   assert.equal((await run("after-failure")).trace.run.outcome, "no_change");
+  const beforeSkip = calls;
+  assert.equal((await run("unchanged-candidate", { forceMaintenance: false, historyStorage: storage })).trace.run.outcome, "unchanged");
+  assert.equal(calls, beforeSkip, "unchanged candidate must not invoke a model");
+  const skippedHistory = await loadAgentHistory(root, { deviceSlug: "offline", sessionId: "maintenance-history" });
+  assert.ok(skippedHistory.runs[0].events.some(event => event.type === "skill_maintenance" && event.outcome === "unchanged"), "new skip outcome survives disk history validation");
+  replies = [reply([{ type: "thinking", thinking: "Still reasoning" }], "length")];
+  assert.equal((await run("thinking-only")).trace.run.outcome, "error");
+  assert.equal((await run("cooldown-candidate", { forceMaintenance: false })).trace.run.outcome, "cooldown");
+  replies = Array.from({ length: 5 }, (_, index) => reply([{ type: "toolCall", id: `bad-save-${index}`, name: "save_skill", arguments: { name: "invalid", content: "Missing required metadata" } }], "toolUse"));
+  const limited = await run("turn-limited");
+  assert.equal(limited.trace.run.outcome, "turn_limit");
+  assert.equal(limited.saved, false);
+  const beforeGenerated = calls;
+  const generatedOnly = await run("generated-only", { generatedNotePaths: new Set(["orders.md"]) });
+  assert.equal(generatedOnly.trace.run.outcome, "no_source");
+  assert.equal((generatedOnly.trace.response as { reasonCode: string }).reasonCode, "only_self_authored_sources");
+  assert.equal(calls, beforeGenerated, "self-authored note cannot trigger independent evidence maintenance");
+  replies = [reply([{ type: "toolCall", id: "unsupported", name: "save_skill", arguments: {
+    name: "unsupported-rule", content, reason: "inference without sources" } }], "toolUse")];
+  const candidate = await run("candidate");
+  assert.equal(candidate.saved, false);
+  assert.equal(candidate.trace.run.outcome, "candidate_not_published");
+  assert.ok(candidate.trace.events.some(event => event.type === "candidate_not_published"));
+  await assert.rejects(readFile(join(root, ".stela/skills/unsupported-rule/SKILL.md")));
   console.log("skill-maintenance integration: saved/readback, no source, init/provider failures, cancellation, timeout, queue continuation passed");
 } finally {
   await sqlIndex.stop();

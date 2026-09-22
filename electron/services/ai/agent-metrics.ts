@@ -16,7 +16,7 @@ import type {
   AgentMetricSurface,
   AgentMetricTrace,
   AgentMetricsDashboard,
-  AgentHistorySession,
+  IAgentMetricSessionHistory,
 } from "@shared/types";
 
 import { vaultConfigDir } from "../vault-paths";
@@ -630,7 +630,7 @@ export function getRunTree(runId: string): AgentMetricRunTree {
   };
 }
 
-export function getSessionTrace(history: AgentHistorySession): AgentMetricSessionTrace {
+export function getSessionTrace(history: IAgentMetricSessionHistory): AgentMetricSessionTrace {
   const turns = history.runs.map((run, index) => {
     let trace: AgentMetricRunTree | null = null;
     try {
