@@ -1,7 +1,0 @@
-{
-  "id": "connector-http-sample",
-  "kind": "http-sample",
-  "displayName": "HTTP Gateway Sample",
-  "apiVersion": 2,
-  "entry": "dist/index.cjs"
-}

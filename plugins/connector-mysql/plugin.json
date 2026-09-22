@@ -1,7 +1,0 @@
-{
-  "id": "connector-mysql",
-  "kind": "mysql",
-  "displayName": "MySQL",
-  "apiVersion": 2,
-  "entry": "dist/index.cjs"
-}
