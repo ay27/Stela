@@ -1,40 +1,25 @@
-# Product Hunt screenshot checklist
+# Product screenshot checklist
 
-Use the real Stela desktop app with `examples/demo-vault`; do not use synthetic
-HTML mockups for the Product Hunt gallery source shots.
+Use the real desktop app with an isolated public Demo Vault and profile.
+The website introduces the product; screenshots support the capability copy.
+They should not turn the page into a narrated business case study.
 
-`gallery.html` wraps the real screenshots below in four fixed `1270 × 760`
-marketing cards. Open it in Chrome and capture one `.artboard` at a time.
+Capture SQL in Markdown, mixed SQL/analysis Chat, Pi-powered Agent work,
+Canvas, knowledge management, connection settings and connector plugins.
+Use consistent window size, zoom and theme. Keep private Vaults and credentials
+out of the capture profile. Only use an authorized model configuration.
 
-## Capture marketing cards
+Retain original PNGs and compressed WebP derivatives in `docs/assets/product/`.
+Check legibility, chart labels, layout and image enlargement on mobile.
+Never fabricate a model answer, SQL result, or knowledge-maintenance event.
+Clearly distinguish bundled saved results from a new live execution.
 
-1. Open `docs/producthunt/gallery.html` in Chrome (file URL is fine).
-2. Set zoom to **100%**.
-3. Capture each `.artboard` at exactly **1270 × 760** (DevTools node
-   screenshot, or a window-capture tool clipped to the card).
-4. Upload the four PNGs to the Product Hunt gallery in the same order as below.
+Current assets and provenance: [product gallery](../marketing/gallery.md) and
+[capture manifest](../marketing/capture-manifest.md). The old `p1`–`p4` assets
+and `gallery.html` in this directory are historical materials.
 
-## Before taking source screenshots
-
-1. Run `cd examples/demo-vault && docker compose up -d`.
-2. Open the folder as a Stela vault, use English and the light theme.
-3. Run every SQL block in `notes/weekly-release-health.md`.
-4. Crop the editor title bar if it exposes the local absolute vault path.
-
-## Gallery sequence
-
-1. **Markdown + RunSQL + Agent** (`showall.png`) — Open
-   `weekly-release-health.md`; show the Markdown narrative, executed SQL
-   result, unfinished ghost query, and the right Agent sidebar.
-2. **Data Agent** (`edit_approve.png`) — Collapse the left sidebar, widen the
-   Agent sidebar, and ask:
-   `Why did open tasks rise after the rollout? Cite SQL evidence.`
-   Capture the real tool timeline and final response.
-3. **Experience Knowledge** (`knowledge_management.png`) — Open **Experience
-   Knowledge** from the bottom dock while `weekly-release-health.md` is
-   visible behind it. Show the `open-task-triage` skill; if the Agent saved a
-   skill in this session, also expand its Brain maintenance indicator.
-4. **Connections and plugins** (`plugin_for_connector.png`) — In Settings,
-   capture the two local demo connections with a successful test, then the
-   real Connector Plugins tab with its installed MySQL/PostgreSQL connectors
-   and installation controls.
+The official positioning is **Stela — Your AI Workbench for Data Analysis**:
+SQL in Markdown, SQL in Chat, Data Agent, Canvas, notes and automatic knowledge
+maintenance, plugin-based database connections, and local-first ownership.
+Do not publish benchmark claims before the actual submission is accepted.
+Publishing or uploading assets is a separate action.

@@ -1,0 +1,93 @@
+:root {
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --ink: #202b38;
+  --muted: #566372;
+  --blue: #2262b7;
+  --line: #e3e8ee;
+  --soft: #f7f9fc;
+}
+* { box-sizing: border-box; }
+html { scroll-padding-top: 24px; }
+body { margin: 0; color: var(--ink); background: #fff; font-size: 15px; line-height: 1.8; }
+a { color: var(--blue); text-decoration: none; text-underline-offset: 4px; }
+a:hover { text-decoration: underline; }
+button { font: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 4px; }
+h1, h2, h3, p, figure { margin: 0; }
+h1, h2, h3 { line-height: 1.35; font-weight: 650; letter-spacing: -.025em; }
+h2 { font-size: 24px; }
+h3 { font-size: 20px; }
+p { color: var(--muted); }
+img { display: block; max-width: 100%; height: auto; }
+.stela-wrap { width: min(1160px, calc(100% - 48px)); margin-inline: auto; }
+.stela-skip { position: fixed; left: 16px; top: -60px; background: #fff; border: 1px solid var(--line); padding: 8px 12px; z-index: 5; }
+.stela-skip:focus { top: 12px; }
+.stela-header { display: flex; align-items: center; gap: 28px; min-height: 76px; border-bottom: 1px solid var(--line); }
+.stela-brand { display: flex; align-items: center; gap: 8px; font-size: 21px; font-weight: 650; color: var(--ink); }
+.stela-header nav { display: flex; gap: 24px; margin-left: auto; font-size: 13px; }
+.stela-header nav a { color: var(--muted); }
+.stela-language { display: flex; gap: 2px; border-left: 1px solid var(--line); padding-left: 18px; }
+.stela-language button { border: 0; color: var(--muted); background: transparent; padding: 3px 6px; font-size: 12px; border-radius: 3px; }
+.stela-language button[aria-pressed="true"] { color: var(--blue); background: #edf4fd; }
+.stela-hero { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.25fr); gap: 48px; align-items: center; padding-block: 48px; }
+.stela-hero-copy { min-width: 0; }
+.stela-hero h1 { font-size: 48px; letter-spacing: -.045em; line-height: 1.15; }
+.stela-tagline { color: var(--ink); font-size: 27px; line-height: 1.4; letter-spacing: -.02em; margin-top: 10px; }
+.stela-intro { font-size: 16px; line-height: 1.85; margin-top: 19px; max-width: 735px; }
+.stela-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 23px; }
+.stela-button { display: inline-flex; align-items: center; padding: 8px 19px; border: 1px solid #cbdcf3; border-radius: 5px; color: #164f99; background: #eef5ff; font-size: 14px; font-weight: 600; }
+.stela-button:hover { background: #e3efff; text-decoration: none; }
+.stela-source { font-size: 14px; }
+.stela-meta { display: flex; flex-wrap: wrap; gap: 10px 24px; color: #687583; font-size: 12px; margin-top: 17px; }
+.stela-shot { margin: 0; min-width: 0; }
+.stela-shot > button, .stela-shot > a { display: block; padding: 0; width: 100%; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; background: var(--soft); }
+.stela-shot > button, .stela-shot > a { cursor: zoom-in; }
+.stela-shot img { width: 100%; }
+.stela-shot figcaption { color: #687583; font-size: 12px; line-height: 1.6; margin-top: 10px; }
+.stela-section { padding-block: 38px; border-bottom: 1px solid var(--line); }
+#features { margin-top: 12px; }
+.stela-section > h2 { margin-bottom: 27px; }
+.stela-features > h2 { font-size: 22px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+.stela-feature-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 40px 48px; padding-top: 32px; }
+.stela-feature { display: flex; flex-direction: column; min-width: 0; gap: 24px; padding-bottom: 32px; border-bottom: 1px solid var(--line); }
+.stela-feature > .stela-shot { margin-top: auto; }
+.stela-feature-copy { min-width: 0; overflow-wrap: anywhere; }
+.stela-feature-copy h3 { font-size: 22px; margin-bottom: 12px; }
+.stela-feature-copy p + p { margin-top: 12px; }
+.stela-lead { font-weight: 600; color: var(--ink); }
+.stela-note { font-size: 12px; color: #687583; }
+.stela-inline-link { display: inline-block; margin-top: 12px; font-size: 13px; }
+code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.stela-resource-links { display: flex; gap: 20px; font-size: 13px; }
+.stela-footer { display: flex; flex-wrap: wrap; gap: 12px 22px; padding-block: 24px 34px; font-size: 12px; color: #687583; }
+.stela-footer > span:first-child { color: var(--ink); font-weight: 600; }
+.stela-footer > a:first-of-type { margin-left: auto; }
+@media (max-width: 720px) {
+  .stela-wrap { width: calc(100% - 36px); }
+  .stela-header { gap: 14px; min-height: 66px; }
+  .stela-header nav { gap: 14px; font-size: 12px; }
+  .stela-header nav a:first-child { display: none; }
+  .stela-brand { font-size: 19px; gap: 5px; }
+  .stela-brand img { width: 22px; }
+  .stela-language { padding-left: 9px; }
+  .stela-language button { padding-inline: 4px; }
+  .stela-hero { padding-block: 32px 28px; }
+  .stela-hero h1 { font-size: 40px; }
+  .stela-tagline { font-size: 23px; }
+  .stela-intro { font-size: 15px; margin-top: 15px; }
+  .stela-actions { margin-top: 20px; }
+  .stela-meta { font-size: 11px; gap: 6px 16px; }
+  .stela-section { padding-block: 28px; }
+  .stela-section > h2 { margin-bottom: 22px; font-size: 22px; }
+  .stela-footer { gap: 10px 16px; }
+  .stela-footer > a:first-of-type { margin-left: 0; }
+}
+
+@media (max-width: 820px) {
+  .stela-hero { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .stela-feature-grid { grid-template-columns: minmax(0, 1fr); gap: 28px; padding-top: 28px; }
+  .stela-hero-copy { max-width: 650px; }
+  .stela-feature { padding-bottom: 28px; }
+  .stela-feature-copy h3 { font-size: 21px; }
+}

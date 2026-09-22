@@ -1,211 +1,192 @@
-<p align="center">
-  <img src="./stela_icon_rounded.png" alt="Stela icon" width="96" />
-</p>
+<p><img src="./stela_icon_rounded.png" alt="Stela" width="64" /></p>
 
-<h1 align="center">Stela</h1>
+# Stela — Your AI Workbench for Data Analysis
 
-<p align="center">
-  <strong>Run SQL in Markdown. Analyze data in Stela.</strong>
-</p>
+Run SQL in Markdown. Analyze data in Stela.
 
-<p align="center">
-  <a href="https://www.producthunt.com/products/stela-data-analysis-workspace?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-stela-data-analysis-workspace" target="_blank" rel="noopener noreferrer"><img alt="Stela — Data Analysis Workspace - Run SQL in Markdown. Analyze data in Stela. | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1206754&amp;theme=light&amp;t=1785047121229"></a>
-</p>
+Run SQL in your notes and conversations, or ask an Agent to query data, write code, and create charts. Keep the work in local files and build a knowledge base your Agent can use in future analyses.
 
-<p align="center">
-  <a href="#english">English</a> · <a href="#中文">中文</a> · <a href="#screenshots--产品截图">Screenshots</a>
-</p>
+[Download](https://github.com/ay27/Stela/releases/latest) · [Website](https://ay27.github.io/Stela/?lang=en) · [中文](#中文)
 
----
 
-## English
+## What you can do with Stela
 
-**Stela is an AI-native data workspace that brings SQL and analysis into your Markdown notes.**
+### SQL in Markdown
 
-Stop switching between note-taking apps, SQL clients, and AI chat windows. Stela combines them all in one place: write your analysis in Markdown, run SQL queries directly in your notes, and let the Data Agent handle the heavy lifting—all while keeping your data local and portable.
+**Write and run SQL inside your notes.** Add a runsql block to a Markdown note to query your database and view a result table. The editor includes syntax highlighting, database completion, and formatting.
 
-The built-in **Try Demo Vault** follows one complete commerce review: Northstar Outfitters grows June orders by 25%, but contribution margin falls from 42.2% to 16.8%. Connect its MySQL fixture, follow the audited SQL evidence, present the decision in Canvas, ask the Agent to verify it, inspect that real run in Agent Dashboard, and reuse the analysis through SQL templates. The same Vault includes English and Chinese walkthroughs.
+Keep the business context, query, and explanation together. Results and execution history are saved, so you can reopen the note and continue your work.
 
-### What you can do with Stela
+[![SQL blocks and saved result tables inside a Markdown note.](./docs/assets/product/markdown.webp)](./docs/assets/product/markdown.png)
 
-- **AI-assisted data analysis** — The Data Agent understands your database schema, searches past queries and notes, and helps you write SQL, interpret results, and spot anomalies. Use `@table` to reference database objects and `[[note]]` to link your analysis notes—the Agent reads them as context.
+### SQL in Chat
 
-- **Analysis Canvas** — Turn audited query results into a structured, Git-trackable `*.stela.canvas` with KPI, chart, table, narrative, and flow cards. Ask the Agent to atomically re-analyze current data, adjust flow layout, or export the whole canvas as HTML.
+**One input for SQL and questions.** Executable SQL returns a result table. Questions and input mixing SQL with natural language go to the Agent. When a query needs work, the Agent can help correct it and continue the analysis.
 
-- **Reusable SQL templates** — Keep parameterized SQL as ordinary Markdown files inside the vault. Insert a template with `Mod+Alt+T`; repeated `{{variables}}` edit together and move with `Tab` / `Shift+Tab`.
+Ask follow-up questions and create charts or flow diagrams in the same conversation. Reference notes, Canvas files, and SQL blocks with @ to bring existing work into the discussion.
 
-- **Agent Dashboard** — Inspect local completion rate, latency, token usage, tool calls, Skill usage, knowledge-maintenance outcomes, and redacted traces. Metrics remain in a Git-ignored, 90-day local store.
+> SQL Chat is a development preview. Check Releases for availability in downloadable builds.
 
-- **SQL that lives in your notes** — Drop a `runsql` block anywhere in a Markdown note. The query, its results, and your commentary stay together in one file. No more scattered scratchpads.
+[![SQL and natural language in the Chat composer, shown as an unsent draft.](./docs/assets/product/chat.webp)](./docs/assets/product/chat.png)
 
-- **Connect to your data sources** — Bundled plugins support MySQL, PostgreSQL, and MongoDB out of the box. The plugin system and HTTP gateway example make it easy to add any other data source you need.
+### Data Agent
 
-- **Sandboxed Python analysis** — The Data Agent can analyze query artifacts with Pyodide, DuckDB, pandas, and NumPy without requiring a system Python installation or exposing host filesystem and network access.
+**An Agent that works with your data across multiple steps.** Built on Pi, the Agent can look up schemas and business notes, write and execute SQL, calculate with Python, and investigate further based on the results.
 
-- **Keep a complete audit trail** — Every query, including failures, is logged. Compare execution results side by side, inspect metadata, or export a note when you need to share your findings.
+Inspect tool calls, SQL, and results as the analysis progresses. Ask follow-up questions, adjust queries, or have the Agent write findings into notes and Canvas. Agent Panel opens beside your current document.
 
-- **Wiki-style note linking** — Use `[[wikilinks]]` to connect related notes, with automatic backlinks. Search across note content, table names, column names, or even past query usage.
+[Built on Pi](https://github.com/earendil-works/pi)
 
-- **Your data, your tools, your control** — Notes are plain `*.md` files—open them in VS Code, Obsidian, or any Markdown editor. Execution history is stored as append-only JSONL in `.stela/history/`, and the local SQLite cache can be rebuilt anytime.
+[![Agent Panel beside the current Canvas, ready for questions and analysis.](./docs/assets/product/agent.webp)](./docs/assets/product/agent.png)
 
-### Quick example
+### Canvas
 
-````markdown
-```runsql
-SELECT oe.channel,
-       ROUND(SUM(oe.profit_before_marketing) - ms.spend, 2) AS contribution_profit
-FROM order_economics oe
-JOIN marketing_spend ms
-  ON ms.channel = oe.channel AND ms.month = oe.order_month
-WHERE oe.order_month = '2026-06'
-GROUP BY oe.channel, ms.spend
-ORDER BY contribution_profit;
+**Put charts, tables, and findings in one analysis canvas.** Combine metrics, charts, result tables, text, and flow diagrams. Have the Agent create a Canvas, then edit its contents, keep the underlying queries, and refresh the data.
+
+A Canvas is saved as its own file. Reopen it to continue working, or export it as HTML to share the analysis.
+
+[![Charts and tables in Canvas, showing saved public example results.](./docs/assets/product/canvas.webp)](./docs/assets/product/canvas.png)
+
+### Notes & automatic knowledge maintenance
+
+**Keep your analysis history and give the Agent more business context.** Stela is also a note-taking app. Scripts, queries, conversations, and analysis records stay in your Vault. Automatic knowledge maintenance extracts supported, reusable guidance, such as metric definitions, table relationships, and query methods.
+
+In later analyses, the Agent can find and use that knowledge, so you spend less time explaining the same business context. Knowledge is stored in readable, editable files that you can inspect and change.
+
+[![Knowledge management shows active Vault knowledge; this entry is bundled example knowledge.](./docs/assets/product/knowledge.webp)](./docs/assets/product/knowledge.png)
+
+### Database connector plugins
+
+**Manage connections in one place. Add data sources through plugins.** Install connector plugins in Settings, then configure, test, and manage your database connections. Markdown, Chat, and the Agent use these connections to access data.
+
+The release configuration includes MySQL, PostgreSQL, and an HTTP connector example. You can build a connector plugin for other data sources.
+
+[![An installed and loaded MySQL connector plugin.](./docs/assets/product/plugins.webp)](./docs/assets/product/plugins.png)
+
+### Local-first
+
+**Your work lives in a folder you control.** A Vault is a local working folder. It holds your Markdown notes, Chat files, Canvas files, and execution records. Back it up, move it, and use Git to track changes.
+
+SQL runs on your connected database. When you use AI, relevant context is sent to your configured model provider. Notes and SQL work without enabling AI.
+
+[![Markdown, Chat, and Canvas files in a local folder.](./docs/assets/product/local.webp)](./docs/assets/product/local.png)
+
+## Get started
+
+1. Download Stela and open or create a Vault.
+2. Install a database connector plugin and configure a connection in Settings.
+3. Add a runsql block to a Markdown note, then write and run SQL.
+4. Configure a model provider to analyze data and create charts and Canvas with the Agent.
+
+[Explore the Demo Vault](./examples/demo-vault/README.md) — Includes notes, saved results, and Canvas files you can open right away.
+
+## Develop & contribute
+
+Stela is built with Electron, React, and TypeScript. Report issues, improve features, or build a connector plugin.
+
+```bash
+git clone https://github.com/ay27/Stela.git
+cd Stela
+npm install
+npm run dev
 ```
-````
 
+[Architecture](./docs/ARCHITECTURE.md) · [Abstractions](./docs/ABSTRACTIONS.md) · [ADRs](./docs/adr/) · [Keyboard shortcuts](./docs/keybindings.md)
 
-That's it. Write the question, run the SQL, and keep the answer right next to it.
-
-### Why Stela?
-
-Stela is built for the kind of data work that starts with a question in a notebook and ends with a query that answers it. Instead of juggling tools, you keep everything—the question, the SQL, the results, and the reasoning—in one folder. And because your notes are standard Markdown, you're never locked in.
-
-### Get started
-
-1. [Download Stela from GitHub Releases](https://github.com/ay27/Stela/releases/latest)
-
-2. Choose **Try Demo Vault** for the complete bilingual Northstar commerce review, or open your own folder as a vault.
-
-3. Add a database connection in Settings: give it a name, pick the database type, enter the connection details, and test it.
-
-4. Create a note, select your connection, and add a `runsql` block. Stela saves the query result and run history right alongside your vault.
-
-For system design and contributor information, see [Architecture](./docs/ARCHITECTURE.md), [Abstractions](./docs/ABSTRACTIONS.md), and the [ADRs](./docs/adr/).
-
-For contributors, `npm install` configures the repository's tracked pre-commit hook. It runs the full test suite, public-release gate, and production build before each commit. Run the same gate manually with `npm run check:precommit`.
-
----
-
-## Screenshots / 产品截图
-
-### One analysis, from evidence to action / 一场从证据到行动的完整分析
-
-<p align="center">
-  <img src="./docs/assets/canvas.png" alt="Northstar commerce review in Stela Analysis Canvas" />
-  <br />
-  <strong>Analysis Canvas / 分析画布</strong> — Revenue grew while contribution margin collapsed; channel, promotion, return evidence, and the July response stay in one audited view. / 收入增长但贡献利润率骤降，渠道、促销、退货证据和七月行动都在同一个可审计视图中。
-</p>
-
-<table>
-  <tr>
-    <td width="50%">
-      <img src="./docs/assets/sql-templates.png" alt="Bilingual SQL template library" />
-      <br />
-      <strong>SQL Templates / SQL 模板</strong><br />
-      Reuse the channel and high-return-SKU investigation with linked variables. / 用联动变量复用渠道和高退货商品诊断。
-    </td>
-    <td width="50%">
-      <img src="./docs/assets/agent-dashboard.png" alt="Local Agent Dashboard" />
-      <br />
-      <strong>Agent Dashboard</strong><br />
-      Starts empty by design, then records the real Agent run that verifies and updates the Canvas. / 初始保持空白，运行复核任务后记录更新 Canvas 的真实 Agent 行为。
-    </td>
-  </tr>
-</table>
-
-### More workflows / 更多工作流
-
-<table>
-  <tr>
-    <td width="50%">
-      <img src="./docs/producthunt/p1.png" alt="Run SQL in Markdown" />
-      <br />
-      <strong>Run SQL in Markdown / 在 Markdown 中运行 SQL</strong>
-    </td>
-    <td width="50%">
-      <img src="./docs/producthunt/p2.png" alt="AI-assisted data analysis" />
-      <br />
-      <strong>AI-assisted data analysis / AI 辅助数据分析</strong>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <img src="./docs/producthunt/p3.png" alt="Experience knowledge that compounds" />
-      <br />
-      <strong>Experience knowledge / 经验知识沉淀</strong>
-    </td>
-    <td width="50%">
-      <img src="./docs/producthunt/p4.png" alt="Connect to your data sources" />
-      <br />
-      <strong>Connect to your data sources / 连接数据源</strong>
-    </td>
-  </tr>
-</table>
+`npm install` enables the tracked pre-commit hook. `npm run check:precommit` runs tests, the public-release gate, and the production build. The build checks renderer types and Electron symbols/imports; `npm run check:main-types` separately reports strict main-process diagnostics.
 
 ---
 
 ## 中文
 
-<p align="center">
-  <strong>Stela：在 Markdown 笔记里跑 SQL 的 AI 数据分析工作台</strong>
-</p>
+### Stela，面向数据分析的 AI 工作台
 
-**Stela 是专为数据从业者设计的 AI 工作台，将笔记、SQL 和 AI 分析融合在同一个 Markdown 环境中。**
+在笔记和对话中直接运行 SQL，也可以让 Agent 查询数据、编写代码、生成图表。分析过程与结论保存在本地，并逐步整理成 Agent 可以复用的知识。
 
-日常工作中，你可以在记录分析思路的同时直接执行 SQL 查询，让 Data Agent 帮你完成历史对比、异常检测和数据洞察——所有操作都在本地完成，数据始终掌握在你自己手中。
+[下载](https://github.com/ay27/Stela/releases/latest) · [官网](https://ay27.github.io/Stela/?lang=zh)
 
-内置的 **Try Demo Vault** 是一场完整的电商经营复盘：Northstar Outfitters 六月订单增长 25%，贡献利润率却从 42.2% 跌至 16.8%。你会连接 MySQL、沿着可审计 SQL 逐层定位问题、在 Canvas 汇总决策、让 Agent 复核、在 Agent Dashboard 检查这次真实运行，最后用 SQL 模板复用分析。中英文流程位于同一个 Vault。
+## Stela 能做什么
 
-### 核心能力
+### SQL in Markdown
 
-- **原生 Markdown 兼容** — 所有笔记都是标准 `*.md` 文件，可用任意笔记软件或 IDE 打开，数据永不锁定。
+**把 SQL 写进笔记，并直接执行。** 在 Markdown 中插入 runsql 代码块，就能连接数据库、执行查询、查看结果表格。编辑器支持代码高亮、数据库补全与格式化。
 
-- **分析画布** — 把可审计的查询结果组织成 `*.stela.canvas`，在同一画布展示 KPI、图表、表格、说明文字和流程图；支持 Agent 基于最新数据原子重分析、调整流程布局和导出 HTML。
+业务背景、SQL 和分析说明写在一起，查询结果与执行历史也会保存。以后打开笔记，可以接着分析。
 
-- **SQL 模板** — 参数化 SQL 以普通 Markdown 文件保存在 Vault 中。按 `Mod+Alt+T` 插入模板；同名 `{{变量}}` 会联动编辑，并可用 `Tab` / `Shift+Tab` 依次跳转。
+[![Markdown 中的 SQL 代码块与保存的结果表格。](./docs/assets/product/markdown.webp)](./docs/assets/product/markdown.png)
 
-- **Agent Dashboard** — 本地查看完成率、耗时、Token、工具调用、Skill 使用、知识维护结果与脱敏 Trace；指标保存在 Git 忽略的 90 天本地存储中。
+### SQL in Chat
 
-- **连接任何数据源** — 内置插件支持 MySQL、PostgreSQL 与 MongoDB，也可以通过插件系统继续扩展其他数据源。
+**一个输入框，既写 SQL，也向 AI 提问。** 可直接执行的 SQL 返回结果表格；自然语言、SQL 与文字混合的输入交给 Agent 理解和处理。遇到查询问题，可以让 Agent 修正 SQL，继续分析。
 
-- **沙箱 Python 分析** — Data Agent 可以使用 Pyodide、DuckDB、pandas 与 NumPy 分析查询结果，无需安装系统 Python，也不会获得宿主文件系统或网络访问权限。
+在同一段对话里追问数据、生成分析图表或流程图。通过 @ 引用笔记、Canvas 和 SQL 块，把已有工作带入对话。
 
-- **AI 原生数据分析** — 内置 Data Agent 辅助写 SQL、解读查询结果、自动生成分析报告。
+> SQL Chat 为开发版预览，下载版本的功能以 Releases 为准。
 
-- **本地优先，隐私可控** — 数据不出本地，支持接入任意 OpenAI 兼容的 LLM API。
+[![SQL Chat 的混合输入示例：SQL 与自然语言，尚未发送。](./docs/assets/product/chat.webp)](./docs/assets/product/chat.png)
 
-### 示例
+### Data Agent
 
-````markdown
-```runsql
-SELECT oe.channel,
-       ROUND(SUM(oe.profit_before_marketing) - ms.spend, 2) AS contribution_profit
-FROM order_economics oe
-JOIN marketing_spend ms
-  ON ms.channel = oe.channel AND ms.month = oe.order_month
-WHERE oe.order_month = '2026-06'
-GROUP BY oe.channel, ms.spend
-ORDER BY contribution_profit;
+**让 Agent 实际操作数据，完成多步骤分析。** Stela 的 Agent 基于 Pi。给它一个分析任务，它可以查找表结构和业务笔记，编写并执行 SQL，使用 Python 计算，再根据结果继续调查。
+
+工具调用、SQL 和结果都可以查看。你可以继续追问、调整查询，或让它把结论整理到笔记和 Canvas 中。Agent Panel 可以在当前文档旁打开。
+
+[基于 Pi 构建](https://github.com/earendil-works/pi)
+
+[![当前 Canvas 旁的 Agent Panel，可继续提问和分析。](./docs/assets/product/agent.webp)](./docs/assets/product/agent.png)
+
+### Canvas
+
+**把图表、表格和结论放到一张分析画布中。** Canvas 可以组合指标、图表、结果表格、文字和流程图。让 Agent 创建画布后，你可以继续编辑内容，保留底层查询，并刷新数据。
+
+分析不只是一条对话回复：Canvas 会保存为独立文件，可以再次打开，也可以导出 HTML 分享。
+
+[![Canvas 中的图表与表格，展示公开示例的已保存结果。](./docs/assets/product/canvas.webp)](./docs/assets/product/canvas.png)
+
+### 笔记与自动知识维护
+
+**记录你做过的分析，让 Agent 逐渐理解你的业务。** Stela 也是笔记软件。脚本、查询、对话和分析记录保存在 Vault 中；自动知识维护从这些记录中整理有依据、可复用的经验，例如指标口径、表之间的关系和查询方法。
+
+后续分析时，Agent 可以查找并使用这些知识，减少你反复解释同一套业务背景。知识保存在可读、可编辑的文件中，你可以检查和修改。
+
+[![知识管理界面：查看 Vault 中生效的知识。图中为随附示例知识。](./docs/assets/product/knowledge.webp)](./docs/assets/product/knowledge.png)
+
+### 插件化数据库连接
+
+**统一管理连接，通过插件扩展数据源。** 在设置中安装连接器插件，配置、测试和管理数据库连接。Markdown、Chat 和 Agent 使用这些连接访问数据。
+
+当前发布配置包含 MySQL、PostgreSQL 和 HTTP 连接器示例。需要其他数据源时，可以开发自己的连接器插件。
+
+[![已安装并加载的 MySQL 连接器插件。](./docs/assets/product/plugins.webp)](./docs/assets/product/plugins.png)
+
+### Local-first
+
+**工作文件保存在你自己的文件夹里。** Vault 就是本地工作文件夹。Markdown 笔记、Chat、Canvas 和执行记录都保存在其中，可以备份、迁移，并通过 Git 管理版本。
+
+SQL 在你连接的数据库上执行。使用 AI 时，相关上下文会发送到你配置的模型服务；不启用 AI 也能使用笔记和 SQL。
+
+[![在本地文件夹中查看 Markdown、Chat 和 Canvas 文件。](./docs/assets/product/local.webp)](./docs/assets/product/local.png)
+
+## 开始使用
+
+1. 下载 Stela，打开或创建一个 Vault。
+2. 安装数据库连接器插件，在设置中配置连接。
+3. 在 Markdown 中添加 runsql 块，编写并运行 SQL。
+4. 配置模型服务，即可让 Agent 分析数据、生成图表和 Canvas。
+
+[先浏览 Demo Vault](./examples/demo-vault/README.md) — 包含可直接打开的笔记、已保存结果和 Canvas。
+
+## 开发与贡献
+
+Stela 使用 Electron、React 和 TypeScript。欢迎报告问题、改进功能或开发连接器插件。
+
+```bash
+git clone https://github.com/ay27/Stela.git
+cd Stela
+npm install
+npm run dev
 ```
-````
 
-问题、查询和结果，全部留在同一篇笔记里。
+[Architecture](./docs/ARCHITECTURE.md) · [Abstractions](./docs/ABSTRACTIONS.md) · [ADRs](./docs/adr/) · [Keyboard shortcuts](./docs/keybindings.md)
 
-### 为什么用 Stela？
-Stela 适合那些从“我想看看数据”这个念头开始做分析的人。说明文字、SQL 和执行历史都放在同一个文件夹里，不用在不同的工具之间切来切去。笔记是纯 Markdown 格式，用 VS Code、GitHub、Obsidian 或其他工具都能打开，永远不会被格式绑架。
-
-### 快速体验
-1. [从 GitHub Releases 下载 Stela](https://github.com/ay27/Stela/releases/latest)
-
-2. 选择 **Try Demo Vault** 体验完整的中英文 Northstar 电商复盘，或打开自己的文件夹作为笔记库。
-
-3. 在“设置”中添加数据库连接：填写连接名称、选择数据库类型、输入连接信息，然后测试连接。
-
-4. 新建一篇笔记，选中配置好的连接，再插入一个 runsql 代码块即可开始。查询结果和执行历史会跟着笔记库一起保存。
-
-
-系统设计和贡献者相关细节见 [Architecture](./docs/ARCHITECTURE.md)、[Abstractions](./docs/ABSTRACTIONS.md) 与 [ADR](./docs/adr/)。
-
-贡献者执行 `npm install` 后会自动启用仓库内置的提交前检查：每次提交前运行完整测试、公开发布检查和生产构建。也可以手动执行 `npm run check:precommit`。
-
-`npm run build` 同时执行 Renderer 类型检查和 Electron 未定义符号／导入检查（`check:main-symbols`）。后者是过渡门禁，不代表主进程完整严格类型检查通过；`npm run check:main-types` 可查看尚未清理的历史类型错误。`npm run test:skill-maintenance` 使用离线模型替身、真实维护链路和临时 Vault 验证知识保存及异常收尾，不访问真实数据库或模型服务。
+`npm install` 会启用提交前检查。`npm run check:precommit` 运行测试、公开发布检查与生产构建；构建包含 Renderer 类型及 Electron 符号／导入检查，主进程严格类型诊断通过 `npm run check:main-types` 单独检查。
