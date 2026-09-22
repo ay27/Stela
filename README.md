@@ -17,7 +17,7 @@ Run SQL in your notes and conversations, or ask an Agent to query data, write co
 
 Keep the business context, query, and explanation together. Results and execution history are saved, so you can reopen the note and continue your work.
 
-[![SQL blocks and saved result tables inside a Markdown note.](./docs/assets/product/markdown.webp)](./docs/assets/product/markdown.png)
+[![SQL blocks and saved result tables inside a Markdown note.](./docs/assets/screenshots/en-markdown.webp)](./docs/assets/screenshots/en-markdown.png)
 
 ### SQL in Chat
 
@@ -27,7 +27,7 @@ Ask follow-up questions and create charts or flow diagrams in the same conversat
 
 > SQL Chat is a development preview. Check Releases for availability in downloadable builds.
 
-[![SQL and natural language in the Chat composer, shown as an unsent draft.](./docs/assets/product/chat.webp)](./docs/assets/product/chat.png)
+[![Queries, analysis and charts in one conversation.](./docs/assets/screenshots/en-chat.webp)](./docs/assets/screenshots/en-chat.png)
 
 ### Data Agent
 
@@ -37,7 +37,7 @@ Inspect tool calls, SQL, and results as the analysis progresses. Ask follow-up q
 
 [Built on Pi](https://github.com/earendil-works/pi)
 
-[![Agent Panel beside the current Canvas, ready for questions and analysis.](./docs/assets/product/agent.webp)](./docs/assets/product/agent.png)
+[![Analysis grounded in query results.](./docs/assets/screenshots/en-agent.webp)](./docs/assets/screenshots/en-agent.png)
 
 ### Canvas
 
@@ -45,7 +45,9 @@ Inspect tool calls, SQL, and results as the analysis progresses. Ask follow-up q
 
 A Canvas is saved as its own file. Reopen it to continue working, or export it as HTML to share the analysis.
 
-[![Charts and tables in Canvas, showing saved public example results.](./docs/assets/product/canvas.webp)](./docs/assets/product/canvas.png)
+[![Charts and tables in Canvas, showing saved public example results.](./docs/assets/screenshots/en-canvas.webp)](./docs/assets/screenshots/en-canvas.png)
+
+[![Data lineage with actual amounts](./docs/assets/screenshots/en-lineage.webp)](./docs/assets/screenshots/en-lineage.png)
 
 ### Notes & automatic knowledge maintenance
 
@@ -53,7 +55,7 @@ A Canvas is saved as its own file. Reopen it to continue working, or export it a
 
 In later analyses, the Agent can find and use that knowledge, so you spend less time explaining the same business context. Knowledge is stored in readable, editable files that you can inspect and change.
 
-[![Knowledge management shows active Vault knowledge; this entry is bundled example knowledge.](./docs/assets/product/knowledge.webp)](./docs/assets/product/knowledge.png)
+[![Maintained knowledge with source notes.](./docs/assets/screenshots/en-knowledge.webp)](./docs/assets/screenshots/en-knowledge.png)
 
 ### Database connector plugins
 
@@ -61,7 +63,7 @@ In later analyses, the Agent can find and use that knowledge, so you spend less 
 
 The release configuration includes MySQL, PostgreSQL, and an HTTP connector example. You can build a connector plugin for other data sources.
 
-[![An installed and loaded MySQL connector plugin.](./docs/assets/product/plugins.webp)](./docs/assets/product/plugins.png)
+[![An installed and loaded MySQL connector plugin.](./docs/assets/screenshots/en-plugins.webp)](./docs/assets/screenshots/en-plugins.png)
 
 ### Local-first
 
@@ -113,7 +115,7 @@ npm run dev
 
 业务背景、SQL 和分析说明写在一起，查询结果与执行历史也会保存。以后打开笔记，可以接着分析。
 
-[![Markdown 中的 SQL 代码块与保存的结果表格。](./docs/assets/product/markdown.webp)](./docs/assets/product/markdown.png)
+[![Markdown 中的 SQL 代码块与保存的结果表格。](./docs/assets/screenshots/zh-markdown.webp)](./docs/assets/screenshots/zh-markdown.png)
 
 ### SQL in Chat
 
@@ -123,7 +125,7 @@ npm run dev
 
 > SQL Chat 为开发版预览，下载版本的功能以 Releases 为准。
 
-[![SQL Chat 的混合输入示例：SQL 与自然语言，尚未发送。](./docs/assets/product/chat.webp)](./docs/assets/product/chat.png)
+[![SQL Chat 中的查询、分析与图表。](./docs/assets/screenshots/zh-chat.webp)](./docs/assets/screenshots/zh-chat.png)
 
 ### Data Agent
 
@@ -133,7 +135,7 @@ npm run dev
 
 [基于 Pi 构建](https://github.com/earendil-works/pi)
 
-[![当前 Canvas 旁的 Agent Panel，可继续提问和分析。](./docs/assets/product/agent.webp)](./docs/assets/product/agent.png)
+[![当前 Canvas 旁的 Agent Panel，可继续提问和分析。](./docs/assets/screenshots/zh-agent.webp)](./docs/assets/screenshots/zh-agent.png)
 
 ### Canvas
 
@@ -141,7 +143,9 @@ npm run dev
 
 分析不只是一条对话回复：Canvas 会保存为独立文件，可以再次打开，也可以导出 HTML 分享。
 
-[![Canvas 中的图表与表格，展示公开示例的已保存结果。](./docs/assets/product/canvas.webp)](./docs/assets/product/canvas.png)
+[![Canvas 中的图表与表格，展示公开示例的已保存结果。](./docs/assets/screenshots/zh-canvas.webp)](./docs/assets/screenshots/zh-canvas.png)
+
+[![数据血缘与实际金额](./docs/assets/screenshots/zh-lineage.webp)](./docs/assets/screenshots/zh-lineage.png)
 
 ### 笔记与自动知识维护
 
@@ -149,7 +153,7 @@ npm run dev
 
 后续分析时，Agent 可以查找并使用这些知识，减少你反复解释同一套业务背景。知识保存在可读、可编辑的文件中，你可以检查和修改。
 
-[![知识管理界面：查看 Vault 中生效的知识。图中为随附示例知识。](./docs/assets/product/knowledge.webp)](./docs/assets/product/knowledge.png)
+[![知识管理界面：查看 Vault 中生效的知识。图中为随附示例知识。](./docs/assets/screenshots/zh-knowledge.webp)](./docs/assets/screenshots/zh-knowledge.png)
 
 ### 插件化数据库连接
 
@@ -157,7 +161,7 @@ npm run dev
 
 当前发布配置包含 MySQL、PostgreSQL 和 HTTP 连接器示例。需要其他数据源时，可以开发自己的连接器插件。
 
-[![已安装并加载的 MySQL 连接器插件。](./docs/assets/product/plugins.webp)](./docs/assets/product/plugins.png)
+[![已安装并加载的 MySQL 连接器插件。](./docs/assets/screenshots/zh-plugins.webp)](./docs/assets/screenshots/zh-plugins.png)
 
 ### Local-first
 

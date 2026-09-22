@@ -38,10 +38,11 @@ const copy = {
     "downloadMac": "下载 Mac 版（Apple Silicon）",
     "workspaceShot": "Canvas 与 Agent 并列的工作台总览",
     "mdShot": "SQL 笔记与保存的查询结果",
-    "chatShot": "SQL 与自然语言混合输入（发送前）",
-    "agentShot": "在 Canvas 旁打开 Agent，继续分析",
+    "chatShot": "对话中的 SQL 查询、分析与图表",
+    "agentShot": "基于查询结果展开分析",
+    "lineageShot": "数据血缘：从原始数据到贡献利润",
     "canvasShot": "示例 Canvas：图表与结果表格",
-    "knowledgeShot": "知识管理：已启用的示例 Skill",
+    "knowledgeShot": "查看知识正文与指标口径（预置 Skill）",
     "pluginsShot": "插件管理：已加载的 MySQL 连接器"
   },
   "en": {
@@ -83,10 +84,11 @@ const copy = {
     "downloadMac": "Download for Mac (Apple Silicon)",
     "workspaceShot": "Workspace overview with Canvas and the Agent panel",
     "mdShot": "SQL notes with saved query results",
-    "chatShot": "SQL and natural language in the composer, before sending",
-    "agentShot": "Agent panel beside a Canvas, ready for analysis",
+    "chatShot": "Queries, analysis and charts in one conversation",
+    "agentShot": "Analysis grounded in query results",
+    "lineageShot": "Data lineage: from source data to contribution profit",
     "canvasShot": "Example Canvas with charts and result tables",
-    "knowledgeShot": "Knowledge manager with an active example Skill",
+    "knowledgeShot": "Maintained knowledge with source notes",
     "pluginsShot": "Plugin manager with the MySQL connector loaded"
   }
 };
@@ -100,6 +102,12 @@ function setLanguage(language) {
   document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = text[el.dataset.i18n]; });
   document.querySelectorAll('[data-i18n-alt]').forEach(el => { el.alt = text[el.dataset.i18nAlt]; });
   document.querySelectorAll('[data-lang]').forEach(el => el.setAttribute('aria-pressed', String(el.dataset.lang === lang)));
+  document.querySelectorAll('[data-shot]').forEach(img => {
+    const base = `assets/screenshots/${lang}-${img.dataset.shot}`;
+    img.src = `${base}.webp`;
+    img.srcset = `${base}-900.webp 900w, ${base}.webp 1800w`;
+    img.closest('a').href = `${base}.png`;
+  });
   document.title = text.title;
   ['description','og:description','twitter:description'].forEach(key => document.querySelector(`meta[name="${key}"],meta[property="${key}"]`).content = text.meta);
   ['og:title','twitter:title'].forEach(key => document.querySelector(`meta[name="${key}"],meta[property="${key}"]`).content = text.title);

@@ -91,3 +91,7 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
   .stela-feature { padding-bottom: 28px; }
   .stela-feature-copy h3 { font-size: 21px; }
 }
+
+.stela-canvas-gallery { display: flex; gap: 16px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 12px; margin-top: auto; }
+.stela-canvas-gallery .stela-shot { flex: 0 0 92%; scroll-snap-align: start; }
+.stela-shot > a { border-radius: 10px; }
