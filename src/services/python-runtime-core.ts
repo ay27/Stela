@@ -207,7 +207,7 @@ async def _stela_main(_code, _staged_json, _query_bridge):
 
     try:
         existing_tasks = _stela_asyncio.all_tasks()
-        if _stela_contract_context().get('automaticContracts') and _stela_contract_context().get('invalidateEvidence'):
+        if _stela_analysis_enabled() and _stela_contract_context().get('invalidateEvidence'):
             _stela_analysis_snapshot('partial_mutation_possible')
         try:
             with contextlib.redirect_stdout(stdout):
@@ -239,7 +239,7 @@ async def _stela_main(_code, _staged_json, _query_bridge):
             'stdout': (schema + stdout.getvalue())[-8000:],
             'stdoutTruncated': len(schema + stdout.getvalue()) > 8000,
             'workspace': snapshot('ready'),
-            **({'analysis': _stela_safe_analysis_snapshot()} if _stela_contract_context().get('automaticContracts') else {}),
+            **({'analysis': _stela_safe_analysis_snapshot()} if _stela_analysis_enabled() else {}),
             'value': payload,
         }, default=str)
         if len(result_json) > 2_000_000:
@@ -247,7 +247,7 @@ async def _stela_main(_code, _staged_json, _query_bridge):
                 'ok': False,
                 'stdout': (schema + stdout.getvalue())[-8000:],
                 'workspace': snapshot('ready'),
-                **({'analysis': _stela_safe_analysis_snapshot()} if _stela_contract_context().get('automaticContracts') else {}),
+                **({'analysis': _stela_safe_analysis_snapshot()} if _stela_analysis_enabled() else {}),
                 'value': {'kind': 'none'},
                 'error': 'Python result exceeds the 2 MB response limit; aggregate or select fewer columns.',
             })
@@ -257,7 +257,7 @@ async def _stela_main(_code, _staged_json, _query_bridge):
             'ok': False,
             'stdout': (schema + stdout.getvalue())[-8000:],
             'workspace': snapshot('partial_mutation_possible'),
-            **({'analysis': _stela_safe_analysis_snapshot('partial_mutation_possible')} if _stela_contract_context().get('automaticContracts') else {}),
+            **({'analysis': _stela_safe_analysis_snapshot('partial_mutation_possible')} if _stela_analysis_enabled() else {}),
             'value': {'kind': 'none'},
             'error': ''.join(traceback.format_exception_only(type(error), error)).strip()[:16000],
         })

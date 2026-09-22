@@ -37,7 +37,12 @@ export async function collectSkillSourceNotes(
   query: SkillSourceQuery,
   maxNotes = 3,
   preferredPaths: string[] = [],
+  excludedPaths: ReadonlySet<string> = new Set(),
+  diagnostics?: { candidates: string[]; excluded: string[]; unreadable: string[] },
 ): Promise<SkillSourceNote[]> {
+  const excludedTargets = new Set(await Promise.all([...excludedPaths].map(async source => {
+    try { return await ensureWithinVault(vaultPath, source); } catch { return null; }
+  })));
   const hits = (await Promise.all(
     Array.from(new Set(tables)).slice(0, 8).flatMap((table) => [
       query({ readTable: table, maxHits: 60 }),
@@ -46,13 +51,15 @@ export async function collectSkillSourceNotes(
   )).flat();
   const preferred = new Set(preferredPaths.filter(p => p.endsWith(".md")).map(p => path.isAbsolute(p) ? path.relative(vaultPath, p).split(path.sep).join("/") : p));
   const paths = Array.from(new Set([...preferred, ...hits.map((hit) => hit.relPath)])).slice(0, 120);
+  diagnostics?.candidates.push(...paths);
   const candidates = await Promise.all(paths.map(async (relativePath) => {
     try {
       const absolutePath = await ensureWithinVault(vaultPath, relativePath);
+      if (excludedTargets.has(absolutePath)) { diagnostics?.excluded.push(relativePath); return null; }
       const stat = await fs.stat(absolutePath);
-      if (!stat.isFile()) return null;
+      if (!stat.isFile()) { diagnostics?.unreadable.push(relativePath); return null; }
       return { path: relativePath.split(path.sep).join("/"), updatedAt: stat.mtime.toISOString() };
-    } catch { return null; }
+    } catch { diagnostics?.unreadable.push(relativePath); return null; }
   }));
   const selected = candidates.filter((item): item is NonNullable<typeof item> => item !== null)
     .sort((a, b) => Number(preferred.has(b.path)) - Number(preferred.has(a.path)) || b.updatedAt.localeCompare(a.updatedAt) || a.path.localeCompare(b.path))
@@ -61,7 +68,7 @@ export async function collectSkillSourceNotes(
     try {
       const raw = await fs.readFile(await ensureWithinVault(vaultPath, note.path), "utf-8");
       return { ...note, sha256: skillSourceSha256(raw), content: sanitizeDocument(raw) };
-    } catch { return null; }
+    } catch { diagnostics?.unreadable.push(note.path); return null; }
   }));
   return notes.filter((note): note is SkillSourceNote => note !== null);
 

@@ -23,6 +23,12 @@ export const analysisSnapshotSchema = z.object({
     reason: analysisCoverageReasonSchema.optional() }).strict(),
   operationCoverage: z.object({ total: count, success: count, unresolved: count,
     failed: count, unprocessed: count }).strict().optional(),
+  comparisons: z.array(z.object({
+    name: z.string().max(256), population: z.string().max(256), grain: z.string().max(256), key: z.string().max(256),
+    upstreamSource: z.string().max(256), downstreamSource: z.string().max(256),
+    definitionSource: z.string().max(4000), definitionResolved: z.boolean(),
+    state: z.enum(["unverified", "identity_checked"]), reason: z.string().max(256),
+  }).strict()).max(8).optional(),
   previousVersions: count,
   truncated: z.boolean(),
 }).strict();

@@ -451,6 +451,9 @@
   "agent.panel.history": "对话历史",
   "agent.panel.historyLoading": "正在加载对话历史…",
   "agent.panel.historyEmpty": "暂无已保存的对话。",
+  "agent.panel.deliverySaved": "已写入 {{kind}}：{{path}}",
+  "agent.panel.deliveryMissing": "尚未写入 {{kind}}：{{path}}",
+  "agent.panel.skillCandidate": "知识候选已留存，证据不足，未发布",
   "agent.panel.planProgress": "执行计划 {{completed}}/{{total}}",
   "agent.panel.strategyReview": "策略复盘",
   "agent.panel.strategyReviewWorkingTitle": "正在复盘分析策略…",
@@ -689,6 +692,10 @@
   "ai.quick.canvasRefreshSourceTitle": "刷新 {{sourceTitle}}",
   "ai.quick.canvasRefreshAllPrompt": "请基于最新数据原子刷新这个分析画布。读取画布并重新执行其中全部 SQL 数据源；如查询因 schema 变化失效，先调查并修复。只有全部数据源都在本轮成功后，才能一次性更新画布并绑定所有新 runId。重新评估 KPI、图表、表格、Markdown 结论和流程图语义，保持稳定 id 与用户流程图布局。任一数据源最终失败时不要更新画布，直接说明失败证据。",
   "ai.quick.canvasRefreshSourcePrompt": "请基于最新数据原子刷新这个分析画布中的数据源“{{sourceTitle}}”（id: {{sourceId}}）。读取完整画布并重新执行该 SQL；如查询因 schema 变化失效，先调查并修复。只有该数据源在本轮成功后，才能一次性更新画布并绑定新 runId。重新评估所有受它影响的 KPI、图表、表格、Markdown 结论和流程图语义，保持无关内容、稳定 id 与用户流程图布局。最终失败时不要更新画布，直接说明失败证据。",
+  "analysisCanvas.flowZoomOut": "缩小",
+  "analysisCanvas.flowZoomIn": "放大",
+  "analysisCanvas.flowActualSize": "原始尺寸（100%）",
+  "analysisCanvas.flowFit": "适应视图",
   "analysisCanvas.flowExpand": "展开流程图",
   "agent.panel.canvasCreated": "已创建分析画布",
   "agent.panel.canvasUpdated": "已更新分析画布",
@@ -1235,5 +1242,9 @@
   "chat.loadingHistory": "正在加载…",
   "chat.showMore": "显示更多",
   "chat.historyHelp": "会话自动保留在本地，关闭标签不会删除。",
-  "chat.waitToStore": "当前任务完成后可存为文件。"
+  "chat.waitToStore": "当前任务完成后可存为文件。",
+  "skills.library.viewContent": "查看正文",
+  "skills.library.hideContent": "收起正文",
+  "skills.library.sources": "来源笔记",
+  "skills.library.noSources": "此知识未记录来源笔记。"
 }

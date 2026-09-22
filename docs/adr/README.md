@@ -163,3 +163,5 @@ proposed → active → superseded
 | [0108](0108-unified-chat-lifecycle.md) | Unified temporary and saved Chat lifecycle | superseded by 0110 |
 | [0109](0109-custom-openai-wire-protocol.md) | Explicit Custom OpenAI wire protocol | active |
 | [0110](0110-chat-tabs-and-retained-history.md) | Chat tabs and retained local history | active |
+| [0111](0111-evidence-aware-agent-recovery.md) | Evidence-aware Agent recovery and delivery | active |
+| [0112](0112-maintenance-evidence-publication.md) | Independent evidence for automatic knowledge publication | active |

@@ -3,6 +3,9 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Archive, BookOpen, FolderOpen, Loader2, RefreshCw, Trash2, X } from "lucide-react";
 
 import type { AgentSkillListItem } from "@shared/types";
+import { renderMarkdown } from "@/components/ai/markdown-renderer";
+import { splitFrontmatter } from "@/core/markdown";
+import { useWorkspace } from "@/state/workspace";
 import { useT } from "@/i18n/use-t";
 
 interface ExperienceKnowledgeDialogProps {
@@ -86,7 +89,7 @@ export function ExperienceKnowledgeDialog({
             ) : (
               <div className="space-y-3">
                 {skills.map((skill) => (
-                  <SkillCard key={skill.relativePath} skill={skill} onDeleted={refresh} />
+                  <SkillCard key={skill.relativePath} skill={skill} onDeleted={refresh} onOpenSource={() => onOpenChange(false)} />
                 ))}
               </div>
             )}
@@ -100,11 +103,27 @@ export function ExperienceKnowledgeDialog({
 function SkillCard({
   skill,
   onDeleted,
+  onOpenSource,
 }: {
   skill: AgentSkillListItem;
   onDeleted: () => Promise<void>;
+  onOpenSource: () => void;
 }) {
   const t = useT();
+  const vaultPath = useWorkspace(state => state.vaultPath);
+  const [expanded, setExpanded] = useState(false);
+  const [body, setBody] = useState<string | null>(null);
+  const [readFailed, setReadFailed] = useState(false);
+  useEffect(() => {
+    if (!expanded || !vaultPath) return;
+    let cancelled = false;
+    setBody(null);
+    setReadFailed(false);
+    void window.stela.vault.readFile(`${vaultPath}/${skill.relativePath}`).then(raw => {
+      if (!cancelled) setBody(splitFrontmatter(raw).body);
+    }).catch(() => { if (!cancelled) setReadFailed(true); });
+    return () => { cancelled = true; };
+  }, [expanded, vaultPath, skill.relativePath]);
   const archived = skill.status === "archived";
   const [deleting, setDeleting] = useState(false);
   const deleteSkill = async () => {
@@ -123,7 +142,7 @@ function SkillCard({
     <article className="rounded-lg border border-border bg-muted/20 p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-          <h3 className="break-words text-sm font-semibold">{skill.name}</h3>
+          <h3 className="break-words text-sm font-semibold"><button type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)} className="text-left hover:text-primary">{skill.name}</button></h3>
           <button
             type="button"
             onClick={() => void window.stela.shell.showItemInFolder(skill.relativePath)}
@@ -175,6 +194,22 @@ function SkillCard({
       <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-muted-foreground">
         {skill.description}
       </p>
+      <button type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)} className="mt-3 text-xs text-primary hover:underline">
+        {t(expanded ? "skills.library.hideContent" : "skills.library.viewContent")}
+      </button>
+      {expanded ? <div className="stela-skill-detail mt-4 border-t border-border pt-4">
+        {readFailed ? <p role="alert" className="text-sm text-destructive">{t("skills.library.loadFailed")}</p>
+          : body === null ? <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
+          : <div className="break-words text-sm leading-6">{renderMarkdown(body, { charts: false })}</div>}
+        <h4 className="mt-4 text-xs font-semibold">{t("skills.library.sources")}</h4>
+        {skill.sources?.length ? <ul className="mt-2 space-y-1">{skill.sources.map(source => <li key={source.path}>
+          <button type="button" className="break-all text-left text-xs text-primary hover:underline" onClick={() => {
+            if (!vaultPath) return;
+            useWorkspace.getState().openFile(`${vaultPath}/${source.path}`);
+            onOpenSource();
+          }}>{source.path}</button>
+        </li>)}</ul> : <p className="mt-2 text-xs text-muted-foreground">{t("skills.library.noSources")}</p>}
+      </div> : null}
     </article>
   );
 }

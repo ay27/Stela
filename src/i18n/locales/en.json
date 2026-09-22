@@ -451,6 +451,9 @@
   "agent.panel.history": "Chat history",
   "agent.panel.historyLoading": "Loading chat history…",
   "agent.panel.historyEmpty": "No saved conversations yet.",
+  "agent.panel.deliverySaved": "Saved {{kind}}: {{path}}",
+  "agent.panel.deliveryMissing": "Not yet saved {{kind}}: {{path}}",
+  "agent.panel.skillCandidate": "Knowledge candidate retained; not published",
   "agent.panel.planProgress": "Execution plan {{completed}}/{{total}}",
   "agent.panel.strategyReview": "Strategy review",
   "agent.panel.strategyReviewWorkingTitle": "Reviewing analysis strategy…",
@@ -689,6 +692,10 @@
   "ai.quick.canvasRefreshSourceTitle": "Refresh {{sourceTitle}}",
   "ai.quick.canvasRefreshAllPrompt": "Atomically refresh this Analysis Canvas from current data. Read the Canvas and rerun every SQL source; if schema drift breaks a query, investigate and repair it first. Update the Canvas once and bind every new runId only after all sources succeed in this Agent run. Re-evaluate KPIs, charts, tables, Markdown conclusions, and Flow semantics while preserving stable ids and the user's Flow layout. If any source ultimately fails, do not update the Canvas and report the failure evidence.",
   "ai.quick.canvasRefreshSourcePrompt": "Atomically refresh source \"{{sourceTitle}}\" (id: {{sourceId}}) in this Analysis Canvas from current data. Read the complete Canvas and rerun that SQL; if schema drift breaks it, investigate and repair it first. Update the Canvas once and bind the new runId only after this source succeeds in this Agent run. Re-evaluate every affected KPI, chart, table, Markdown conclusion, and Flow semantic while preserving unrelated content, stable ids, and the user's Flow layout. If the source ultimately fails, do not update the Canvas and report the failure evidence.",
+  "analysisCanvas.flowZoomOut": "Zoom out",
+  "analysisCanvas.flowZoomIn": "Zoom in",
+  "analysisCanvas.flowActualSize": "Actual size (100%)",
+  "analysisCanvas.flowFit": "Fit to view",
   "analysisCanvas.flowExpand": "Expand flow diagram",
   "agent.panel.canvasCreated": "Analysis Canvas created",
   "agent.panel.canvasUpdated": "Analysis Canvas updated",
@@ -1235,5 +1242,9 @@
   "chat.loadingHistory": "Loading…",
   "chat.showMore": "Show more",
   "chat.historyHelp": "Conversations are retained locally. Closing a tab does not delete them.",
-  "chat.waitToStore": "Finish the current turn before storing as a file."
+  "chat.waitToStore": "Finish the current turn before storing as a file.",
+  "skills.library.viewContent": "View content",
+  "skills.library.hideContent": "Hide content",
+  "skills.library.sources": "Source notes",
+  "skills.library.noSources": "No source notes are recorded for this skill."
 }

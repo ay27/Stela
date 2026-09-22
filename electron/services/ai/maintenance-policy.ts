@@ -112,7 +112,8 @@ export function buildSkillMaintenanceInput(
   return [
     refreshSkill ? `Refresh only this Skill:\n${refreshSkill.content}` : "Create at most one new Skill.",
     `Current-task conversation (context, not proof):\n${conversation}`,
-    "Verified tool evidence:",
+    "Automatic save requires claims=[{sourcePath, quote}] with exact independent excerpts. Only the cited excerpts are published; inferred prose stays a candidate. Absence claims need complete schema proof and are deferred.",
+    "Observed tool evidence (success does not establish business meaning):",
     formatSkillMaintenanceEvidence(evidence) || "No tool evidence was available.",
     `Source excerpts, current-task sources first:\n${notes.map((note) =>
       `--- SOURCE ${note.path} · ${note.updatedAt} · SHA256 ${note.sha256} ---\n${note.content}`

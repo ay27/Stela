@@ -127,7 +127,12 @@ Saved conversations appear as files in the Vault (ADR-0110).
 Optional `draftMessage` and turn `message` retain ordered structured references;
 legacy strings remain readable text projections (ADR-0103).
 Conversation submissions carry the resolved UI locale (`zh` or `en`) into the
-Agent request, matching the Agent Panel output-language contract.
+Agent request, matching the Agent Panel output-language contract. This locale is
+the fallback: an explicit user language instruction takes priority, followed by
+the current request's natural language. SQL-only or unclear mixed-language
+requests fall back to the app locale. The policy covers narration and all generated
+chart/Canvas display text, including tool arguments; identifiers and raw data
+values are preserved. Bilingual labels require a user request.
 Each turn retains its request ID, original input, connection snapshot, start time,
 status, Agent events, proposal responses and `RunRecord` references. Rows are
 loaded by run ID through existing result storage, never embedded in this file.
@@ -1435,3 +1440,45 @@ Opening the Chat sidebar with no open tabs creates one blank in-memory conversat
 Closing its last tab while the sidebar remains open also creates a blank composer.
 Concurrent initialization is deduplicated and must not replace tabs opened while
 creation is pending; empty conversations do not enter persistent history.
+
+## Agent recovery evidence (ADR-0111, ADR-0112)
+
+`AgentPlanSnapshot.originRunId` records the first run when unfinished progress is
+restored. Optional `deliveries` declare `note`/`canvas` outputs and optional expected
+Vault-relative paths. Only host writes add `{path, runId}` receipts; model step
+updates cannot supply them. Duplicate writes to one path do not satisfy multiple
+outputs. An absent declaration means unknown completion. `plan.create` accepts an
+explicit `replace` flag; old terminal plans are not resurrected.
+
+Canvas validation diagnostics carry a stable code, affected source/card/field,
+observed shape and repair guidance. Validation does not mutate the file and does
+not consume the execution-failure streak.
+
+Python `analysis.contract(...).comparison(name, population=..., grain=..., key=...,
+upstream_source=..., downstream_source=..., definition_source=...,
+definition_evidence=...)` separates a sourced definition from relationship evidence.
+`check_relationship(name)` checks unique non-null identity containment in bounded
+registered sources. Snapshots optionally contain `comparisons` with `unverified` or
+`identity_checked` state; neither denotes verified business scope. Refreshes or
+failed execution invalidate identity observations. Oversized, incomplete, empty,
+missing-key or mismatched populations remain unverified. Grouped totals cannot
+prove asset-level stage conversion.
+
+Automatic `save_skill` requires `claims=[{sourcePath, quote}]`. The host publishes
+only grounded excerpts using a fixed source-scoped template. Generated candidate
+prose is retained only when publication is rejected, in a bounded
+`candidate_not_published` maintenance event. This outcome survives history reload
+and is distinct from saved/no-change/timeout. No additional review model runs.
+
+### Knowledge library inspection
+
+The knowledge library expands a Skill into a read-only Markdown body using the
+existing Vault file reader. `AgentSkillListItem.sources` exposes the source paths
+and hashes already returned by the Skill metadata loader; source links open the
+corresponding Vault notes. Missing source metadata is shown explicitly and does
+not imply that the Skill was automatically generated.
+
+Maintenance retains `no_source` as its terminal outcome and records a more specific
+reason in the trace: `only_self_authored_sources`, `source_documents_unreadable`,
+or `no_matching_source_documents`. Diagnostics include candidate, excluded, and
+unreadable paths; user-facing summaries follow the request language.

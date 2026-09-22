@@ -33,6 +33,7 @@ import {
 
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n/use-t";
+import { useWorkspace } from "@/state/workspace";
 import {
   fetchBundledPlugins,
   usePluginLogs,
@@ -561,6 +562,13 @@ function BuiltinDetail({ plugin }: { plugin: PluginInfo }) {
 
 function ModuleDetail({ plugin }: { plugin: PluginInfo }) {
   const t = useT();
+  const vaultPath = useWorkspace((state) => state.vaultPath);
+  const directory = plugin.dir?.replace(/\\/g, "/").replace(/\/+$/, "");
+  const vault = vaultPath?.replace(/\\/g, "/").replace(/\/+$/, "");
+  // Keep local usernames and parent directories out of the settings display.
+  const displayDirectory = !directory ? "—"
+    : vault && directory.startsWith(`${vault}/`) ? directory.slice(vault.length + 1)
+      : directory === vault ? "." : directory.split("/").at(-1);
   return (
     <div className="space-y-4">
       {plugin.loadError ? (
@@ -584,7 +592,7 @@ function ModuleDetail({ plugin }: { plugin: PluginInfo }) {
         <dt className="text-muted-foreground">{t("plugins.field.description")}</dt>
         <dd className="text-muted-foreground">{plugin.displayName}</dd>
         <dt className="text-muted-foreground">{t("plugins.field.installDir")}</dt>
-        <dd className="break-all font-mono text-[11px]">{plugin.dir ?? "—"}</dd>
+        <dd className="break-all font-mono text-[11px]">{displayDirectory}</dd>
         <dt className="text-muted-foreground">{t("plugins.field.status")}</dt>
         <dd>
           {plugin.loadError

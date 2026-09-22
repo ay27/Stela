@@ -47,6 +47,27 @@ try {
     assert.equal(saved.ai.semanticOptimizationEnabled, semanticOptimizationEnabled);
     assert.equal(saved.ai.automaticAnalysisContractsEnabled, automaticAnalysisContractsEnabled);
   }
+  // Frozen synthetic regression: aaa source IDs and an unrelated broad downstream cohort.
+  const upstream = await writeBufferedQueryArtifact({ vaultPath: root, sessionId: "experiment", runId: "source-aaa", columns: [{ name: "id", typeName: "INTEGER" }], rows: [[1], [2]] });
+  const downstream = await writeBufferedQueryArtifact({ vaultPath: root, sessionId: "experiment", runId: "broad-pbr", columns: [{ name: "id", typeName: "INTEGER" }], rows: [[2], [99]] });
+  assert.ok(upstream && downstream);
+  const comparison = await workspace.execute({ ...base, artifacts: { upstream, downstream }, code:
+    "c = analysis.contract(required=['population']); c.comparison('aaa-pbr', population='aaa', grain='asset', key='id', upstream_source='upstream', downstream_source='downstream', definition_source='question', definition_evidence='Classify every article by topic'); c.check_relationship('aaa-pbr'); result = c.report()" });
+  assert.equal(comparison.ok, true, comparison.error);
+  assert.equal(comparison.analysis?.comparisons?.[0]?.definitionResolved, true);
+  assert.equal(comparison.analysis?.comparisons?.[0]?.state, "unverified");
+  assert.equal(comparison.analysis?.comparisons?.[0]?.reason, "population_mismatch");
+  const related = await workspace.execute({ ...base, code:
+    "c.comparison('same-source', population='aaa', grain='asset', key='id', upstream_source='upstream', downstream_source='upstream', definition_source='question', definition_evidence='Classify every article by topic'); c.check_relationship('same-source'); result = c.report()" });
+  assert.equal(related.analysis?.comparisons?.[1]?.state, "identity_checked");
+  assert.match(related.analysis?.comparisons?.[1]?.reason ?? "", /business_scope_unverified/);
+  analysisSnapshotSchema.parse(related.analysis);
+  const staleRelation = await workspace.execute({ ...base, code: "raise ValueError('invalidate comparison')" });
+  assert.equal(staleRelation.analysis?.comparisons?.[1]?.state, "unverified");
+  const explicitOnly = await workspace.execute({ ...base, analysisContext: { ...base.analysisContext, automaticContracts: false }, code:
+    "explicit = analysis.contract(required=['population']); explicit.comparison('declared', population='aaa', grain='asset', key='id', upstream_source='upstream', downstream_source='downstream', definition_source='question', definition_evidence='Classify every article by topic'); result = 1" });
+  assert.equal(explicitOnly.analysis?.comparisons?.[0]?.state, "unverified", "explicit comparison survives without automatic contracts");
+  await workspace.reset();
   const inference = executor(200000);
   const result = await workspace.execute({ ...base, ...inference,
     code: `df = pd.DataFrame({'id':range(10000), 'text':['article '+str(i%100) for i in range(10000)]})\nbatch = ${classify}\nresult = dict(summary=batch.summary, rowCount=len(batch.rows), ids=batch.rows.id.nunique())` });

@@ -1,3 +1,7 @@
+import { skillSourceSha256 } from "./agent-skills";
+import { reviewMaintenancePublication } from "./maintenance-publication";
+import type { SkillSourceNote } from "./skill-source-context";
+import { ToolRepairBudget } from "./tool-repair";
 import { extractSqlSymbols } from "./sql-symbols";
 /**
  * Agent 工具集：JSON Schema 定义 + dispatch 到现有 service 函数。
@@ -312,10 +316,15 @@ function boundedPreview(
   };
 }
 
+function validationFailure(message: string): ToolOutcome {
+  return { ok: false, text: message, failureKind: "validation" };
+}
+
 export interface ToolOutcome {
   ok: boolean;
   text: string;
   terminate?: boolean;
+  failureKind?: "validation";
 }
 
 export interface AgentAnalysisRunEvidence {
@@ -397,6 +406,10 @@ export interface AgentToolContext {
   getSkillFreshness?: (skill: LoadedAgentSkill) => Promise<AgentSkillFreshness>;
   /** 排入后台 Skill 刷新队列，不阻塞当前工具调用。 */
   scheduleSkillRefresh?: (skill: LoadedAgentSkill) => void;
+  maintenanceSourceNotes?: SkillSourceNote[];
+  maintenanceObservedColumns?: string[];
+  onMaintenanceCandidate?: (candidate: { name: string; content: string; reasons: string[] }) => void;
+  onNoteWritten?: (path: string) => void;
   onSkillMaintenance?: (record: AgentSkillMaintenanceRecord) => void;
   onSkillUsage?: (record: {
     type: "candidate" | "loaded";
@@ -425,6 +438,7 @@ export interface AgentToolContext {
     notePath: string | null;
     questionsAsked: number;
     toolFailureStreak: Map<string, number>;
+    repairBudget?: ToolRepairBudget;
     analysis?: import("../../shared/analysis-contract").IAnalysisSnapshot;
   };
   plan?: ExecutionPlanStore;
@@ -554,7 +568,7 @@ export function createAgentTools(options: {
         (ctx.runSemantic
           ? " Batch classification/extraction/entity matching: await semantic.classify/extract/resolve inside Python. First load_skill name=semantic-analysis. No database needed; host authorizes and budgets calls. Retain batches for resume."
           : "") + " For material scope/grain/denominator risks, load_skill name=analysis-verification: analysis.contract retains sourced claims/checks. Skip trivial arithmetic." +
-        (ctx.aiSettings.automaticAnalysisContractsEnabled ? " Automatic evidence is enabled: analysis.current exists without setup; use .claim(field, meaning, source='question' or existing alias/run ID, evidence=exact quote), .bind_population(df, id_column='id', source='alias', source_id_column='original_id'). Omit source_id_column when the ID column is unchanged. Bind source input columns, not derived result labels. After late binding use .observe(batch) to verify prior execution without new inference; inspect coverage.reason and operationCoverage. No implicit ID normalization or union of batches. Explicit analysis.contract(required=[...]) starts a revision; sources/checks do not certify business truth. Snapshots are automatic, no final gate." : "") +
+        (ctx.aiSettings.automaticAnalysisContractsEnabled ? " Automatic evidence is enabled: analysis.current exists without setup; use .claim(field, meaning, source='question' or existing alias/run ID, evidence=exact quote), .bind_population(df, id_column='id', source='alias', source_id_column='original_id'). Omit source_id_column when the ID column is unchanged. Bind source input columns, not derived result labels. After late binding use .observe(batch) to verify prior execution without new inference; inspect coverage.reason and operationCoverage. No implicit ID normalization or union of batches. Explicit analysis.contract(required=[...]) starts a revision; sources/checks do not certify business truth. For cross-stage ratios, declare c.comparison(name, population=..., grain=..., key=..., upstream_source=..., downstream_source=..., definition_source='question', definition_evidence=exact_quote), then c.check_relationship(name). It checks bounded source identities, never business scope. Missing relation or different populations permit separate descriptive totals only, not a verified conversion/expansion ratio. Snapshots are automatic, no final gate." : "") +
         (ctx.aiSettings.semanticOptimizationEnabled ? " Exact selected-content deduplication and all-input cost preflight are enabled for classify/extract. Prefer SQL/rules first; unmatched text is unresolved, not negative. One bounded pilot may consume existing budget. Inspect summary.preflight, pilot, forecastTokens and stopReason; partial work never permits extrapolation." : ""),
       parameters: Type.Object({
         reset: Type.Optional(Type.Boolean()),
@@ -731,7 +745,7 @@ export function createAgentTools(options: {
       name: "plan",
       label: "Manage execution plan",
       description:
-        "Create, update, or recover a progress plan for complex analyses. Skip routine lookups; plans never gate answers.",
+        "Create, update, or recover a progress plan for complex analyses. Declare deliveries for requested notes/Canvases; only successful writes supply receipts. Use replace=true for a new task. Skip routine lookups; plans never gate answers.",
       parameters: Type.Object({
         action: Type.String({ enum: ["create", "update", "get"] }),
         steps: Type.Optional(Type.Array(
@@ -742,6 +756,8 @@ export function createAgentTools(options: {
             acceptance: Type.String(),
           }),
         )),
+        replace: Type.Optional(Type.Boolean({ description: "Explicitly replace the previous plan for a new task." })),
+        deliveries: Type.Optional(Type.Array(Type.Object({ kind: Type.String({ enum: ["note", "canvas"] }), path: Type.Optional(Type.String()) }), { maxItems: 8 })),
         stepId: Type.Optional(Type.String()),
         status: Type.Optional(Type.String({ enum: ["completed", "blocked", "skipped"] })),
         evidence: Type.Optional(Type.String()),
@@ -786,6 +802,7 @@ export function createAgentTools(options: {
           }),
         ),
         reason: Type.String({ description: "Required short factual reason for saving or archiving." }),
+        claims: Type.Optional(Type.Array(Type.Object({ sourcePath: Type.String(), quote: Type.String({ description: "Exact independent source excerpt. No model inference." }) }), { minItems: 1, maxItems: 4 })),
         sourcePaths: Type.Optional(Type.Array(Type.String(), {
           description: "For explicit knowledge maintenance, up to three supporting Vault note paths actually read in this turn.",
           maxItems: 3,
@@ -859,12 +876,13 @@ async function runTool(
   baseCtx: Omit<AgentToolContext, "requestProposal">,
   requestProposal: (toolCallId: string, proposal: ProposalRequest) => Promise<boolean | string>,
 ) {
+  (baseCtx.run.repairBudget ??= new ToolRepairBudget()).dispatched.add(toolCallId);
   const outcome = await dispatchTool(name, JSON.stringify(params ?? {}), {
     ...baseCtx,
     requestProposal: (proposal) => requestProposal(toolCallId, proposal),
   });
   if (!outcome.ok) {
-    throw new Error(outcome.text);
+    throw new Error((outcome.failureKind === "validation" ? "[content_validation] " : "") + outcome.text);
   }
   return {
     content: [{ type: "text" as const, text: outcome.text }],
@@ -1877,19 +1895,19 @@ async function runUpdateAnalysisCanvas(args: Record<string, unknown>, ctx: Agent
 }
 
 async function runWriteAnalysisCanvas(args: Record<string, unknown>, ctx: AgentToolContext, creating: boolean): Promise<ToolOutcome> {
-  if (!creating && (typeof args.path !== "string" || typeof args.etag !== "string")) return fail("path and etag are required.");
+  if (!creating && (typeof args.path !== "string" || typeof args.etag !== "string")) return validationFailure("path and etag are required.");
   if (creating || args.canvas !== undefined) {
     const checked = (creating ? createCanvasToolSchema : updateCanvasToolSchema).safeParse(args);
-    if (!checked.success) return fail(`Invalid Canvas content: ${describeZodError(checked.error)}`);
+    if (!checked.success) return validationFailure(JSON.stringify({ error: "canvas_schema", issues: checked.error.issues.map(issue => ({ code: issue.code, field: issue.path.join("."), remedy: issue.message })) }));
   }
   const target = creating ? "" : resolveVaultTarget(ctx.vaultPath, args.path as string);
   if (ctx.canvasRefresh) {
     const refreshTarget = resolveVaultTarget(ctx.vaultPath, ctx.canvasRefresh.path);
     if (path.resolve(target) !== path.resolve(refreshTarget)) {
-      return fail("This Canvas refresh run may update only its requested Canvas.");
+      return validationFailure("This Canvas refresh run may update only its requested Canvas.");
     }
     if (ctx.canvasRefresh.committed) {
-      return fail("This Canvas refresh has already committed its one atomic update.");
+      return validationFailure("This Canvas refresh has already committed its one atomic update.");
     }
   }
   const current = creating
@@ -1905,26 +1923,26 @@ async function runWriteAnalysisCanvas(args: Record<string, unknown>, ctx: AgentT
         ...current.sources.find(existing => existing.id === source.id), ...source,
       })) };
     } else {
-      if (typeof args.content !== "string") return fail("Structured canvas content is required.");
+      if (typeof args.content !== "string") return validationFailure("Structured canvas content is required.");
       desired = parseAnalysisCanvas(args.content);
       canvasAuthoringSchema.parse({ title: desired.title, status: desired.status === "error" ? "working" : desired.status, sources: desired.sources.map(({ id, title }) => ({ id, title })), sections: desired.sections });
     }
-  } catch (error) { return fail(`Invalid Canvas JSON: ${describeZodError(error)}. ${CANVAS_DOCUMENT_RULES}`); }
+  } catch (error) { return validationFailure(`Invalid Canvas JSON: ${describeZodError(error)}. ${CANVAS_DOCUMENT_RULES}`); }
   if (
     desired.id !== current.id ||
     desired.createdAt !== current.createdAt ||
     desired.createdBySessionId !== current.createdBySessionId
   ) {
-    return fail("Canvas id, createdAt, and createdBySessionId are immutable.");
+    return validationFailure("Canvas id, createdAt, and createdBySessionId are immutable.");
   }
   const rawBindings = Array.isArray(args.sourceRuns) ? args.sourceRuns : [];
   const bindings = new Map<string, string>();
   for (const raw of rawBindings) {
-    if (!raw || typeof raw !== "object") return fail("sourceRuns entries must be objects.");
+    if (!raw || typeof raw !== "object") return validationFailure("sourceRuns entries must be objects.");
     const item = raw as Record<string, unknown>;
-    if (typeof item.sourceId !== "string" || typeof item.runId !== "string") return fail("Each sourceRuns entry needs sourceId and runId.");
-    if (bindings.has(item.sourceId)) return fail(`Duplicate sourceRuns binding: ${item.sourceId}`);
-    if (!desired.sources.some(source => source.id === item.sourceId)) return fail(`Unknown sourceRuns source: ${item.sourceId}`);
+    if (typeof item.sourceId !== "string" || typeof item.runId !== "string") return validationFailure("Each sourceRuns entry needs sourceId and runId.");
+    if (bindings.has(item.sourceId)) return validationFailure(`Duplicate sourceRuns binding: ${item.sourceId}`);
+    if (!desired.sources.some(source => source.id === item.sourceId)) return validationFailure(`Unknown sourceRuns source: ${item.sourceId}`);
     bindings.set(item.sourceId, item.runId);
   }
   if (ctx.canvasRefresh) {
@@ -1933,38 +1951,62 @@ async function runWriteAnalysisCanvas(args: Record<string, unknown>, ctx: AgentT
       : current.sources.map((source) => source.id);
     for (const sourceId of targetSourceIds) {
       if (!current.sources.some((source) => source.id === sourceId)) {
-        return fail(`Atomic Canvas refresh target source does not exist: ${sourceId}`);
+        return validationFailure(`Atomic Canvas refresh target source does not exist: ${sourceId}`);
       }
       if (!desired.sources.some((source) => source.id === sourceId)) {
-        return fail(`Atomic Canvas refresh must preserve target source ${sourceId}.`);
+        return validationFailure(`Atomic Canvas refresh must preserve target source ${sourceId}.`);
       }
       if (!bindings.has(sourceId)) {
-        return fail(`Atomic Canvas refresh requires a successful run binding for target source ${sourceId}.`);
+        return validationFailure(`Atomic Canvas refresh requires a successful run binding for target source ${sourceId}.`);
       }
     }
   }
+  const issues: Array<{ code: string; sourceId?: string; cardId?: string; field?: string; actual?: unknown; remedy: string }> = [];
   const sources = [] as AnalysisCanvas["sources"];
   for (const source of desired.sources) {
     const boundRunId = bindings.get(source.id);
     if (boundRunId) {
-      const currentRun = ctx.chartRuns?.get(boundRunId);
-      if (!currentRun) {
-        return fail(`runId ${boundRunId} must come from a successful query in this Agent run.`);
+      const data = ctx.chartRuns?.get(boundRunId);
+      const run = data ? await ctx.resolveChartRun?.(boundRunId) : null;
+      if (!data || !run || run.status !== "ok") {
+        issues.push({ code: "binding_unavailable", sourceId: source.id, actual: boundRunId, remedy: "Bind a successful audited query from this Agent run." });
+        continue;
       }
-      const run = await ctx.resolveChartRun?.(boundRunId);
-      if (!run || run.status !== "ok") return fail(`runId ${boundRunId} is not an audited successful run.`);
-      const sqlIssue = analysisCanvasService.analysisCanvasSqlIssue(currentRun.sql);
-      if (sqlIssue) return fail(`Canvas source ${source.id} is not refreshable: ${sqlIssue}`);
-      sources.push({ ...source, connectionName: run.connectionName, sql: currentRun.sql, lastRunId: run.runId, lastRunAt: run.startedAt, lastError: null });
+      const sqlIssue = analysisCanvasService.analysisCanvasSqlIssue(data.sql);
+      if (sqlIssue) issues.push({ code: "source_not_refreshable", sourceId: source.id, actual: sqlIssue, remedy: "Query the underlying database table instead of embedding literal results." });
+      sources.push({ ...source, connectionName: run.connectionName, sql: data.sql, lastRunId: run.runId, lastRunAt: run.startedAt, lastError: null });
+    } else {
+      const existing = current.sources.find(item => item.id === source.id);
+      if (!existing || source.sql !== existing.sql || source.connectionName !== existing.connectionName) {
+        issues.push({ code: "binding_required", sourceId: source.id, remedy: "Bind the new or changed source through sourceRuns." });
+        continue;
+      }
+      const sqlIssue = analysisCanvasService.analysisCanvasSqlIssue(existing.sql);
+      if (sqlIssue) issues.push({ code: "source_not_refreshable", sourceId: source.id, actual: sqlIssue, remedy: "Rebind a refreshable database query." });
+      sources.push({ ...source, ...existing });
+    }
+  }
+  for (const section of desired.sections) for (const card of section.cards) {
+    if (card.type === "flow" || card.type === "markdown") continue;
+    const source = sources.find(item => item.id === card.sourceId);
+    if (!source) continue; // The source error already explains this dependent failure.
+    const data = ctx.chartRuns?.get(source.lastRunId!);
+    const oldCard = current.sections.flatMap(section => section.cards).find(old => old.id === card.id);
+    if (!data) {
+      if (JSON.stringify(oldCard) === JSON.stringify(card) && !bindings.has(source.id)) continue;
+      issues.push({ code: "rows_unavailable", sourceId: source.id, cardId: card.id, remedy: "Rebind to a successful query before changing this view." });
       continue;
     }
-    const existing = current.sources.find((item) => item.id === source.id);
-    if (!existing) return fail(`New source ${source.id} must be bound through sourceRuns.`);
-    if (source.sql !== existing.sql || source.connectionName !== existing.connectionName) return fail(`Changed source ${source.id} must be rebound through sourceRuns.`);
-    const sqlIssue = analysisCanvasService.analysisCanvasSqlIssue(existing.sql);
-    if (sqlIssue) return fail(`Canvas source ${source.id} is not refreshable: ${sqlIssue}`);
-    sources.push({ ...source, sql: existing.sql, connectionName: existing.connectionName, lastRunId: existing.lastRunId, lastRunAt: existing.lastRunAt, lastError: existing.lastError });
+    const fields = new Set(data.columns.map(column => column.name));
+    const requiredFields = card.type === "kpi" ? [card.value.field] : card.type === "table" ? (card.columns ?? []).map(column => column.field) : [];
+    for (const field of requiredFields) if (!fields.has(field)) issues.push({ code: "field_missing", cardId: card.id, sourceId: source.id, field, actual: [...fields], remedy: "Use an existing result column or fix the query." });
+    if (card.type === "kpi" && data.rows.length !== 1) issues.push({ code: "kpi_row_count", cardId: card.id, sourceId: source.id, actual: { rows: data.rows.length, columns: [...fields] }, remedy: "Use a table/chart for grouped rows or explicitly query the intended single aggregate. Do not silently sum groups." });
+    if (card.type === "chart") {
+      try { validateStelaChartData({ ...card.chart, version: 2, source: { kind: "run", runId: source.lastRunId! } }, data.columns, data.rows); }
+      catch (error) { issues.push({ code: "chart_shape", cardId: card.id, sourceId: source.id, actual: describeZodError(error), remedy: "Align chart fields and types with the saved query columns." }); }
+    }
   }
+  if (issues.length) return validationFailure(JSON.stringify({ error: "canvas_validation", issues }));
   const sections = desired.sections.map((section) => ({
     ...section,
     cards: section.cards.map((card) => {
@@ -1981,21 +2023,7 @@ async function runWriteAnalysisCanvas(args: Record<string, unknown>, ctx: AgentT
   let nextDesired: AnalysisCanvas;
   try {
     nextDesired = parseAnalysisCanvas(JSON.stringify({ ...desired, sources, sections }));
-    for (const section of nextDesired.sections) for (const card of section.cards) {
-      if (card.type === "flow" || card.type === "markdown") continue;
-      const source = sources.find(source => source.id === card.sourceId)!;
-      const data = ctx.chartRuns?.get(source.lastRunId!);
-      const oldCard = current.sections.flatMap(section => section.cards).find(old => old.id === card.id);
-      if (!data) {
-        if (JSON.stringify(oldCard) === JSON.stringify(card) && !bindings.has(source.id)) continue;
-        throw new Error(`Card ${card.id}: source ${source.id} must have saved rows available in this run or be rebound to an audited query before changing its data view.`);
-      }
-      const fields = new Set(data.columns.map(column => column.name));
-      if (card.type === "table" && card.columns?.some(column => !fields.has(column.field))) throw new Error(`Card ${card.id}: table column missing from source ${source.id}.`);
-      if (card.type === "kpi" && (!fields.has(card.value.field) || data.rows.length !== 1)) throw new Error(`Card ${card.id}: KPI needs its field and exactly one result row.`);
-      if (card.type === "chart") validateStelaChartData({ ...card.chart, version: 2, source: { kind: "run", runId: source.lastRunId! } }, data.columns, data.rows);
-    }
-  } catch (error) { return fail(`Invalid Canvas: ${describeZodError(error)}`); }
+  } catch (error) { return validationFailure(`Invalid Canvas: ${describeZodError(error)}`); }
   const directory = typeof args.directory === "string" && args.directory.trim()
     ? resolveVaultTarget(ctx.vaultPath, args.directory)
     : ctx.run.notePath ? path.dirname(ctx.run.notePath) : ctx.vaultPath;
@@ -2334,6 +2362,7 @@ async function runSaveSkill(
     reason?: unknown;
     sourcePaths?: unknown;
     sourceTables?: unknown;
+    claims?: unknown;
   },
   ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
@@ -2351,6 +2380,8 @@ async function runSaveSkill(
   if (ctx.mode === "refresh" && ctx.maintenanceRefreshName !== name) {
     return fail(`Refresh may update only '${ctx.maintenanceRefreshName ?? "the selected Skill"}'.`);
   }
+  if (systemNames.includes(name)) return fail(`'${name}' is a read-only System Skill.`);
+  if (ctx.mode === "maintenance" && action === "save" && ctx.skills.some(skill => skill.metadata.name === name)) return fail("Automatic maintenance cannot overwrite existing Skills.");
   const requestedSourcePaths = stringList(args.sourcePaths).slice(0, 3);
   const requestedSourceTables = stringList(args.sourceTables).map((table) => table.toLowerCase()).slice(0, 8);
   if (ctx.explicitSkillMaintenance) {
@@ -2365,17 +2396,43 @@ async function runSaveSkill(
   } else if (requestedSourcePaths.length > 0 || requestedSourceTables.length > 0) {
     return fail("sourcePaths and sourceTables are available only during explicit knowledge maintenance.");
   }
+  if (ctx.mode === "maintenance" && typeof args.content === "string" && /category:\s*analysis-runbook/.test(args.content)) return fail("Automatic maintenance cannot create analysis-runbook Skills.");
+  let groundedContent = typeof args.content === "string" ? args.content : undefined;
+  let groundedPaths = ctx.maintenanceSourcePaths;
+  if ((ctx.mode === "maintenance" || ctx.mode === "refresh") && action === "save") {
+    if (ctx.mode === "refresh" && !ctx.skills.find(skill => skill.metadata.name === name)?.metadata.tags.includes("source-excerpts")) {
+      const reasons = ["existing_structured_skill_requires_explicit_review"];
+      ctx.onMaintenanceCandidate?.({ name, content: groundedContent?.slice(0, 6000) ?? "", reasons });
+      return ok({ status: "candidate_not_published", reasons }, RESULT_CHAR_BUDGET, true);
+    }
+    const review = reviewMaintenancePublication(name, args.claims, ctx.maintenanceSourceNotes ?? [], ctx.maintenanceObservedColumns);
+    if (!review.ok) {
+      ctx.onMaintenanceCandidate?.({ name, content: groundedContent?.slice(0, 6000) ?? "", reasons: review.reasons });
+      return ok({ status: "candidate_not_published", reasons: review.reasons, instruction: "Candidate retained in maintenance diagnostics. No Skill was written." }, RESULT_CHAR_BUDGET, true);
+    }
+    for (const sourcePath of review.sourcePaths) {
+      const note = ctx.maintenanceSourceNotes?.find(note => note.path === sourcePath);
+      const raw = await vaultFs.readFile(await vaultFs.ensureWithinVault(ctx.vaultPath, sourcePath));
+      if (!note || skillSourceSha256(raw) !== note.sha256) {
+        const reasons = ["source_changed_since_collection"];
+        ctx.onMaintenanceCandidate?.({ name, content: groundedContent?.slice(0, 6000) ?? "", reasons });
+        return ok({ status: "candidate_not_published", reasons }, RESULT_CHAR_BUDGET, true);
+      }
+    }
+    groundedContent = review.content;
+    groundedPaths = review.sourcePaths;
+  }
   const record =
     action === "save"
-      ? typeof args.content === "string"
-        ? await saveAgentSkill(ctx.vaultPath, name, args.content, reason, {
+      ? typeof groundedContent === "string"
+        ? await saveAgentSkill(ctx.vaultPath, name, groundedContent, reason, {
           overwrite: ctx.mode !== "maintenance",
           dialect: ctx.mode === "maintenance" || ctx.mode === "refresh" ? ctx.maintenanceDialect : null,
           automatic: ctx.mode === "maintenance",
           templateDriven: ctx.mode === "maintenance" || ctx.mode === "refresh",
           sourcePaths: ctx.explicitSkillMaintenance
             ? requestedSourcePaths
-            : ctx.maintenanceSourcePaths,
+            : groundedPaths,
           sourceTables: ctx.explicitSkillMaintenance
             ? requestedSourceTables
             : ctx.maintenanceTables,
@@ -2611,6 +2668,7 @@ async function runProposeRunsqlEdit(
     },
   });
   if (!approved) return fail("The user rejected this RunSQL rewrite. Do not retry it as-is.");
+  if (target.sourcePath) ctx.onNoteWritten?.(vaultRelativePath(ctx.vaultPath, resolveVaultTarget(ctx.vaultPath, target.sourcePath)));
   return ok({ targetId, approved: true, message: "The renderer applied the approved RunSQL rewrite." });
 }
 
@@ -2647,12 +2705,12 @@ async function runAskUser(
 }
 
 async function runCreatePlan(
-  args: { steps?: unknown },
+  args: { steps?: unknown; replace?: unknown; deliveries?: unknown },
   ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
   if (!ctx.plan) return fail("Execution plans are unavailable for this run.");
   const existing = ctx.plan.get();
-  if (existing) {
+  if (existing && args.replace !== true) {
     return ok({
       created: false,
       plan: existing,
@@ -2660,7 +2718,9 @@ async function runCreatePlan(
     });
   }
   if (!Array.isArray(args.steps)) return fail("steps must be an array.");
-  const snapshot = ctx.plan.create(args.steps as CreatePlanStep[]);
+  const deliveries = z.array(z.object({ kind: z.enum(["note", "canvas"]), path: z.string().min(1).optional() }).strict()).max(8).optional().parse(args.deliveries);
+  const snapshot = ctx.plan.create(args.steps as CreatePlanStep[], { replace: args.replace === true,
+    deliveries: deliveries?.map(item => ({ ...item, ...(item.path ? { path: vaultRelativePath(ctx.vaultPath, resolveVaultTarget(ctx.vaultPath, item.path)) } : {}) })) });
   await ctx.persistPlan?.(snapshot);
   return ok({ created: true, plan: snapshot });
 }
@@ -2693,6 +2753,8 @@ function runGetPlan(ctx: AgentToolContext): ToolOutcome {
 async function runPlan(
   args: {
     action?: unknown;
+    replace?: unknown;
+    deliveries?: unknown;
     steps?: unknown;
     stepId?: unknown;
     status?: unknown;
@@ -2738,6 +2800,9 @@ export async function dispatchTool(
   rawArguments: string,
   ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
+  const repair = ctx.run.repairBudget ??= new ToolRepairBudget();
+  const blocked = repair.blocked(name);
+  if (blocked) return fail(blocked);
   const exempt = UNBREAKABLE_TOOLS.has(name);
   const streak = ctx.run.toolFailureStreak;
   if (!exempt && (streak.get(name) ?? 0) >= MAX_CONSECUTIVE_TOOL_FAILURES) {
@@ -2753,6 +2818,16 @@ export async function dispatchTool(
       coverage: { state: "unknown", total: null, processed: 0, unresolved: 0, unprocessed: 0, source: null, reason: "no_operation" }, previousVersions: 0, truncated: false };
   }
   const outcome = await dispatchToolCall(name, rawArguments, ctx);
+  if (outcome.ok && ["propose_edit", "create_analysis_canvas", "update_analysis_canvas"].includes(name)) {
+    try {
+      const result = JSON.parse(outcome.text) as { path?: string; bytesWrittenMatch?: boolean; validation?: string };
+      if (result.path && (result.bytesWrittenMatch || result.validation === "saved")) {
+        if (name === "propose_edit") ctx.onNoteWritten?.(vaultRelativePath(ctx.vaultPath, resolveVaultTarget(ctx.vaultPath, result.path)));
+        const saved = ctx.plan?.recordDelivery(name === "propose_edit" ? "note" : "canvas", vaultRelativePath(ctx.vaultPath, resolveVaultTarget(ctx.vaultPath, result.path)));
+        if (saved) await ctx.persistPlan?.(saved);
+      }
+    } catch { /* Non-file tool outputs carry no delivery receipt. */ }
+  }
   if (dataTool && ctx.aiSettings.automaticAnalysisContractsEnabled && ctx.run.analysis) {
     const snapshot = ctx.run.analysis;
     if (!outcome.ok && name === "execute_python") {
@@ -2770,7 +2845,9 @@ export async function dispatchTool(
     catch { body = outcome.ok ? { resultPreview: outcome.text, truncated: true } : { error: outcome.text }; }
     outcome.text = JSON.stringify({ ...body, analysis: snapshot });
   }
-  if (!exempt) {
+  if (outcome.failureKind === "validation") {
+    outcome.text += "\n" + repair.validation(name, outcome.text.replace(/runId [^ ]+/g, "runId").slice(0, 120));
+  } else if (!exempt) {
     if (outcome.ok) streak.delete(name);
     else streak.set(name, (streak.get(name) ?? 0) + 1);
   }
@@ -2843,6 +2920,7 @@ async function dispatchToolCall(
         return fail(`Unknown tool: ${name}`);
     }
   } catch (err) {
+    if (err instanceof z.ZodError) return validationFailure(JSON.stringify({ error: "schema_validation", issues: err.issues }));
     return fail(err instanceof Error ? err.message : String(err));
   }
 }

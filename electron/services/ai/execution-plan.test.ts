@@ -1,3 +1,9 @@
+import { Session, JsonlSessionStorage } from "@earendil-works/pi-agent-core";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { restoreSessionPlan } from "./execution-plan";
 import assert from "node:assert/strict";
 
 import {
@@ -93,3 +99,50 @@ assert.match(
 }
 
 console.log("execution plan tests passed.");
+
+// Continuation restores progress and receipts, never completed plans or previous executions.
+{
+  const old = new ExecutionPlanStore("old");
+  old.create([{ id: "deliver", title: "Deliver", intent: "Write files", acceptance: "Both files saved" }],
+    { deliveries: [{ kind: "note", path: "report.md" }, { kind: "canvas" }] });
+  old.recordDelivery("note", "report.md");
+  old.update({ stepId: "deliver", status: "completed", evidence: "Model says done" });
+  const next = new ExecutionPlanStore("next");
+  const restored = next.restore(JSON.parse(JSON.stringify(old.get())));
+  assert.equal(restored?.originRunId, "old");
+  assert.equal(restored?.deliveries?.[0]?.receipt?.runId, "old");
+  assert.equal(restored?.deliveries?.[1]?.receipt, undefined, "prose completion cannot create a receipt");
+  assert.throws(() => next.create([{ id: "x", title: "x", intent: "x", acceptance: "x" }]));
+  next.recordDelivery("canvas", "report.stela.canvas");
+  assert.equal(new ExecutionPlanStore("later").restore(next.get()), null);
+  next.create([{ id: "x", title: "x", intent: "x", acceptance: "x" }], { replace: true });
+  assert.equal(next.get()?.deliveries, undefined);
+  assert.equal(next.get()?.originRunId, undefined);
+}
+
+const directory = await mkdtemp(join(tmpdir(), "stela-plan-restart-"));
+try {
+  const env = new NodeExecutionEnv({ cwd: directory });
+  const file = join(directory, "session.jsonl");
+  const session = new Session(await JsonlSessionStorage.create(env, file, { cwd: directory, sessionId: "restart" }));
+  await session.appendCustomEntry("execution_plan", { plan: snapshot });
+  const restarted = new Session(await JsonlSessionStorage.open(env, file));
+  const recovered = await restoreSessionPlan(new ExecutionPlanStore("restart-run"), restarted);
+  assert.equal(recovered?.originRunId, snapshot.runId);
+  assert.equal(recovered?.steps[0]?.status, "running");
+  await restarted.appendCustomEntry("execution_plan", { plan: completed });
+  assert.equal(await restoreSessionPlan(new ExecutionPlanStore("later"), restarted), null, "never fall back to an older unfinished snapshot");
+} finally { await rm(directory, { recursive: true, force: true }); }
+
+{
+  let failed = false;
+  const saved: number[] = [];
+  const buffer = createPlanPersistenceBuffer(async plan => {
+    if (!failed) { failed = true; throw new Error("temporary persistence failure"); }
+    saved.push(plan.version);
+  });
+  await buffer.enqueue(snapshot);
+  await assert.rejects(buffer.flush());
+  await buffer.flush();
+  assert.deepEqual(saved, [snapshot.version], "failed writes remain queued for recovery");
+}

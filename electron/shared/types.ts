@@ -816,6 +816,8 @@ export interface AgentPlanStep {
 export interface AgentPlanSnapshot {
   runId: string;
   version: number;
+  originRunId?: string;
+  deliveries?: Array<{ kind: "note" | "canvas"; path?: string; receipt?: { path: string; runId: string } }>;
   steps: AgentPlanStep[];
 }
 
@@ -943,6 +945,7 @@ export interface PythonRuntimeInputChunk {
 }
 
 export interface AgentSkillListItem {
+  sources?: Array<{ path: string; sha256: string }>;
   name: string;
   description: string;
   category: string | null;
@@ -1176,7 +1179,7 @@ export type AgentEvent =
       type: "skill_maintenance";
       runId: string;
       /** Absent on legacy history: an empty action list does not prove success. */
-      outcome?: "unchanged" | "cooldown" | "saved" | "no_change" | "no_source" | "input_too_large" | "cancelled" | "timeout" | "turn_limit" | "dropped" | "error";
+      outcome?: "unchanged" | "cooldown" | "saved" | "candidate_not_published" | "no_change" | "no_source" | "input_too_large" | "cancelled" | "timeout" | "turn_limit" | "dropped" | "error";
       diagnostic?: { stage: string; message: string; metricRunId: string };
       actions: Array<{
         action: "saved" | "archived";

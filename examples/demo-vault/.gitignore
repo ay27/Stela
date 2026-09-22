@@ -9,3 +9,7 @@
 
 # Stela machine-local (auto-added)
 .stela/agent-metrics.local.sqlite*
+
+# Stela machine-local (auto-added)
+.stela/skill-maintenance.local.json
+.stela/chat-sessions.local/

@@ -8,7 +8,7 @@ services:
       MYSQL_USER: demo
       MYSQL_PASSWORD: demo
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - ./seed/mysql:/docker-entrypoint-initdb.d:ro
     healthcheck:

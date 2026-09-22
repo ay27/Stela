@@ -1,0 +1,263 @@
+{
+  "kind": "stela-analysis-canvas",
+  "version": 1,
+  "id": "canvas_b40c51ed344a4b00bc683688e4cf5565",
+  "title": "Contribution Profit Data Lineage",
+  "status": "complete",
+  "createdAt": 1790073009912,
+  "updatedAt": 1790073009912,
+  "createdBySessionId": "726278d0-1b54-4081-85ac-cd312067b231",
+  "sources": [
+    {
+      "id": "s_june_pnl",
+      "title": "June P&L summary (order_economics, 2026-06)",
+      "connectionName": "local-mysql",
+      "sql": "SELECT COUNT(*) AS orders,\n       COUNT(DISTINCT oe.channel) AS channels,\n       ROUND(SUM(oe.gross_sales), 2) AS gross_sales,\n       ROUND(SUM(oe.discounts), 2) AS discounts,\n       ROUND(SUM(oe.refunds), 2) AS refunds,\n       ROUND(SUM(oe.net_revenue), 2) AS net_revenue,\n       ROUND(SUM(oe.cogs), 2) AS cogs,\n       ROUND(SUM(oe.fulfillment_cost), 2) AS fulfillment_cost,\n       ROUND(SUM(oe.return_cost), 2) AS return_cost,\n       ROUND(SUM(oe.profit_before_marketing), 2) AS profit_before_marketing\nFROM order_economics oe\nWHERE oe.order_month = '2026-06';",
+      "lastRunId": "1df6b63f-d188-4f36-b718-cd6a74699f71-query-43f98835-8102-4852-a73b-f23c6508f489",
+      "lastRunAt": 1790072993954,
+      "lastError": null
+    },
+    {
+      "id": "s_june_lines",
+      "title": "June detail row counts (order_items / returns, 2026-06)",
+      "connectionName": "local-mysql",
+      "sql": "SELECT COUNT(*) AS item_rows,\n       COUNT(DISTINCT oi.order_id) AS item_orders,\n       SUM(oi.quantity) AS units,\n       (SELECT COUNT(*) FROM returns r JOIN order_items oi2 ON oi2.id = r.order_item_id JOIN orders o2 ON o2.id = oi2.order_id WHERE o2.order_date >= '2026-06-01' AND o2.order_date < '2026-07-01') AS return_rows\nFROM order_items oi\nJOIN orders o ON o.id = oi.order_id\nWHERE o.order_date >= '2026-06-01' AND o.order_date < '2026-07-01';",
+      "lastRunId": "1df6b63f-d188-4f36-b718-cd6a74699f71-query-43301b6b-4aae-481b-9ffb-8f9c96e5a8ca",
+      "lastRunAt": 1790072993954,
+      "lastError": null
+    },
+    {
+      "id": "s_june_spend",
+      "title": "June marketing spend and channel row counts (marketing_spend, 2026-06)",
+      "connectionName": "local-mysql",
+      "sql": "SELECT ROUND(SUM(spend), 2) AS marketing_spend,\n       COUNT(*) AS spend_rows,\n       COUNT(DISTINCT channel) AS spend_channels,\n       ROUND(SUM(CASE WHEN channel = 'paid_social' THEN spend ELSE 0 END), 2) AS paid_social_spend\nFROM marketing_spend\nWHERE month = '2026-06';",
+      "lastRunId": "1df6b63f-d188-4f36-b718-cd6a74699f71-query-48a003f7-d7f8-469a-9706-c1d0d51625e0",
+      "lastRunAt": 1790072993954,
+      "lastError": null
+    },
+    {
+      "id": "s_oe_view",
+      "title": "order_economics view definition (information_schema.VIEWS)",
+      "connectionName": "local-mysql",
+      "sql": "SELECT VIEW_DEFINITION\nFROM information_schema.VIEWS\nWHERE TABLE_SCHEMA = 'stela_demo' AND TABLE_NAME = 'order_economics';",
+      "lastRunId": "1df6b63f-d188-4f36-b718-cd6a74699f71-query-ff2debcc-4418-4194-b0f2-4b6a26df9e91",
+      "lastRunAt": 1790072996407,
+      "lastError": null
+    },
+    {
+      "id": "s_oe_grain",
+      "title": "orders / order_economics row counts and grain check",
+      "connectionName": "local-mysql",
+      "sql": "SELECT\n  (SELECT COUNT(*) FROM orders) AS orders_rows,\n  (SELECT COUNT(*) FROM order_economics) AS view_rows,\n  (SELECT COUNT(DISTINCT order_id) FROM order_economics) AS distinct_order_ids,\n  (SELECT COUNT(DISTINCT order_month, channel) FROM order_economics) AS view_month_channel_keys,\n  (SELECT MIN(order_month) FROM order_economics) AS min_month,\n  (SELECT MAX(order_month) FROM order_economics) AS max_month,\n  (SELECT COUNT(*) FROM marketing_spend) AS spend_rows,\n  (SELECT COUNT(DISTINCT month, channel) FROM marketing_spend) AS spend_keys,\n  (SELECT COUNT(DISTINCT month) FROM marketing_spend) AS spend_months,\n  (SELECT COUNT(DISTINCT channel) FROM marketing_spend) AS spend_channels;",
+      "lastRunId": "1df6b63f-d188-4f36-b718-cd6a74699f71-query-a1a6c6af-b3a9-47d3-b5fb-7dd6151bf25e",
+      "lastRunAt": 1790072996408,
+      "lastError": null
+    },
+    {
+      "id": "s_spend_grain",
+      "title": "marketing_spend grain check (month+channel unique)",
+      "connectionName": "local-mysql",
+      "sql": "SELECT\n  (SELECT COUNT(*) FROM orders) AS orders_rows,\n  (SELECT COUNT(*) FROM order_economics) AS view_rows,\n  (SELECT COUNT(DISTINCT order_id) FROM order_economics) AS distinct_order_ids,\n  (SELECT COUNT(DISTINCT order_month, channel) FROM order_economics) AS view_month_channel_keys,\n  (SELECT MIN(order_month) FROM order_economics) AS min_month,\n  (SELECT MAX(order_month) FROM order_economics) AS max_month,\n  (SELECT COUNT(*) FROM marketing_spend) AS spend_rows,\n  (SELECT COUNT(DISTINCT month, channel) FROM marketing_spend) AS spend_keys,\n  (SELECT COUNT(DISTINCT month) FROM marketing_spend) AS spend_months,\n  (SELECT COUNT(DISTINCT channel) FROM marketing_spend) AS spend_channels;",
+      "lastRunId": "1df6b63f-d188-4f36-b718-cd6a74699f71-query-a1a6c6af-b3a9-47d3-b5fb-7dd6151bf25e",
+      "lastRunAt": 1790072996408,
+      "lastError": null
+    },
+    {
+      "id": "s_join_safety",
+      "title": "Detail grain and month×channel join fan-out check",
+      "connectionName": "local-mysql",
+      "sql": "SELECT\n  (SELECT COUNT(*) FROM order_items) AS item_rows,\n  (SELECT COUNT(DISTINCT id) FROM order_items) AS item_ids,\n  (SELECT COUNT(DISTINCT order_id) FROM order_items) AS items_order_keys,\n  (SELECT COUNT(*) FROM returns) AS return_rows,\n  (SELECT COUNT(DISTINCT id) FROM returns) AS return_ids,\n  (SELECT COUNT(DISTINCT order_item_id) FROM returns) AS return_item_keys,\n  (SELECT COUNT(*) FROM (\n      SELECT oe.order_month, oe.channel\n      FROM order_economics oe\n      JOIN marketing_spend ms\n        ON ms.month = oe.order_month AND ms.channel = oe.channel\n      GROUP BY oe.order_month, oe.channel\n   ) t) AS covered_month_channel_pairs,\n  (SELECT COUNT(DISTINCT order_month, channel) FROM order_economics) AS view_month_channel_pairs,\n  (SELECT COUNT(*)\n     FROM order_economics oe\n     JOIN marketing_spend ms\n       ON ms.month = oe.order_month AND ms.channel = oe.channel) AS joined_rows;",
+      "lastRunId": "1df6b63f-d188-4f36-b718-cd6a74699f71-query-60b3c021-a777-4f0c-98f1-f8e5e5f7ca0d",
+      "lastRunAt": 1790072996408,
+      "lastError": null
+    }
+  ],
+  "sections": [
+    {
+      "id": "lineage",
+      "title": "June Contribution Profit Data Lineage",
+      "description": "Uses actual 2026-06 run data to show the layered deductions behind contribution profit: gross sales → less discounts and refunds → net revenue → less product cost, fulfillment cost, return processing cost → profit before marketing → less marketing spend → contribution profit and contribution margin; all amounts in USD.",
+      "cards": [
+        {
+          "id": "flow_lineage",
+          "title": "June contribution profit calculation flow (USD)",
+          "width": "full",
+          "type": "flow",
+          "direction": "TB",
+          "nodes": [
+            {
+              "id": "src_items",
+              "kind": "source",
+              "label": "Order line items 666 rows (375 orders)",
+              "description": "Source: order_items × products; 666 product-line rows in June.",
+              "tone": "neutral"
+            },
+            {
+              "id": "v_gross",
+              "kind": "step",
+              "label": "Gross sales $64,130.00",
+              "description": "Source: order_items.quantity × unit_price, aggregated by order.",
+              "tone": "info"
+            },
+            {
+              "id": "v_discounts",
+              "kind": "step",
+              "label": "Discounts −$4,704.40",
+              "description": "Source: order_items.discount_amount.",
+              "tone": "warning"
+            },
+            {
+              "id": "v_refunds",
+              "kind": "step",
+              "label": "Refunds −$5,408.80",
+              "description": "Source: returns.refund_amount; 51 return records in June.",
+              "tone": "warning"
+            },
+            {
+              "id": "v_net",
+              "kind": "step",
+              "label": "Net revenue $54,016.80",
+              "description": "Source: order_economics; 375 order-level rows = 375 orders / 5 channels.",
+              "tone": "info"
+            },
+            {
+              "id": "v_cogs",
+              "kind": "step",
+              "label": "Product cost −$24,183.00",
+              "description": "Source: order_items.quantity × products.unit_cost.",
+              "tone": "warning"
+            },
+            {
+              "id": "v_fulfill",
+              "kind": "step",
+              "label": "Fulfillment cost −$3,244.50",
+              "description": "Source: orders.fulfillment_cost.",
+              "tone": "warning"
+            },
+            {
+              "id": "v_returncost",
+              "kind": "step",
+              "label": "Return processing cost −$433.50",
+              "description": "Source: returns.processing_cost.",
+              "tone": "warning"
+            },
+            {
+              "id": "v_pbm",
+              "kind": "step",
+              "label": "Profit before marketing $26,155.80",
+              "description": "Source: order_economics.profit_before_marketing.",
+              "tone": "info"
+            },
+            {
+              "id": "v_mc",
+              "kind": "step",
+              "label": "Channel rollup 5 rows = 5 channels",
+              "description": "Source: order_economics aggregated by order_month × channel; June = 5 rows = 5 channels × 1 month.",
+              "tone": "info"
+            },
+            {
+              "id": "v_spend",
+              "kind": "source",
+              "label": "Marketing spend −$17,065.25",
+              "description": "Source: marketing_spend; June = 5 rows = 5 channels × 1 month, so spend is deducted only once.",
+              "tone": "warning"
+            },
+            {
+              "id": "v_cp",
+              "kind": "result",
+              "label": "Contribution profit $9,090.55 | Contribution margin 16.83%",
+              "description": "Source: profit before marketing − marketing spend; amount in USD.",
+              "tone": "success"
+            }
+          ],
+          "edges": [
+            {
+              "id": "e_items_gross",
+              "source": "src_items",
+              "target": "v_gross",
+              "label": "Aggregate",
+              "tone": "neutral"
+            },
+            {
+              "id": "e_disc_net",
+              "source": "v_discounts",
+              "target": "v_net",
+              "label": "Deduct",
+              "tone": "warning"
+            },
+            {
+              "id": "e_ref_net",
+              "source": "v_refunds",
+              "target": "v_net",
+              "label": "Deduct",
+              "tone": "warning"
+            },
+            {
+              "id": "e_gross_net",
+              "source": "v_gross",
+              "target": "v_net",
+              "label": "Deduct",
+              "tone": "neutral"
+            },
+            {
+              "id": "e_net_pbm",
+              "source": "v_net",
+              "target": "v_pbm",
+              "label": "Deduct",
+              "tone": "neutral"
+            },
+            {
+              "id": "e_cogs_pbm",
+              "source": "v_cogs",
+              "target": "v_pbm",
+              "label": "Deduct",
+              "tone": "warning"
+            },
+            {
+              "id": "e_ful_pbm",
+              "source": "v_fulfill",
+              "target": "v_pbm",
+              "label": "Deduct",
+              "tone": "warning"
+            },
+            {
+              "id": "e_ret_pbm",
+              "source": "v_returncost",
+              "target": "v_pbm",
+              "label": "Deduct",
+              "tone": "warning"
+            },
+            {
+              "id": "e_pbm_mc",
+              "source": "v_pbm",
+              "target": "v_mc",
+              "label": "Aggregate",
+              "tone": "neutral"
+            },
+            {
+              "id": "e_mc_cp",
+              "source": "v_mc",
+              "target": "v_cp",
+              "label": "Deduct",
+              "tone": "neutral"
+            },
+            {
+              "id": "e_spend_cp",
+              "source": "v_spend",
+              "target": "v_cp",
+              "label": "Deduct",
+              "tone": "warning"
+            }
+          ]
+        },
+        {
+          "id": "notes_scope",
+          "title": "Join keys, reconciliation, and grain (notes below the diagram)",
+          "width": "full",
+          "type": "markdown",
+          "markdown": "**June reconciliation (USD)**\n\n- Gross sales $64,130.00 − discounts $4,704.40 − refunds $5,408.80 = net revenue $54,016.80\n- Net revenue $54,016.80 − product cost $24,183.00 − fulfillment cost $3,244.50 − return processing cost $433.50 = profit before marketing $26,155.80\n- Profit before marketing $26,155.80 − marketing spend $17,065.25 = contribution profit $9,090.55; contribution margin = 9,090.55 / 54,016.80 = 0.1683 (16.83%)\n\n**Key join keys**\n\n- Product rollup: `order_items JOIN products ON p.id = oi.product_id`, then `GROUP BY oi.order_id`.\n- Return rollup: `returns JOIN order_items ON oi.id = r.order_item_id`, then `GROUP BY oi.order_id` (a separate subquery from the product rollup).\n- Order-level view: `orders o JOIN it ON it.order_id = o.id` (inner join), `LEFT JOIN rt ON rt.order_id = o.id` (`COALESCE` fills 0 when there are no returns).\n- Channel rollup and spend: `oe.order_month = ms.month AND oe.channel = ms.channel`; `marketing_spend` is unique on (month, channel), so spend is deducted only once at month×channel grain and is never multiplied by order rows.\n\n**Grain and definition distinctions**\n\n- Row counts are not interchangeable: June product lines = 666 rows (order_items, mapping to 375 orders); order level = 375 rows (order_economics, 1 row/order); month×channel rollup = 5 rows = 5 channels (marketing_spend is also 5 rows in June); June return records = 51 rows.\n- Refunds and return processing cost are different: refunds of $5,408.80 reduce net revenue, while processing cost of $433.50 is deducted as a separate cost.\n- All amounts are USD; fixed salaries and administrative expenses are outside the contribution profit definition; `customers` and `promotion_code` do not participate in the calculation."
+        }
+      ]
+    }
+  ]
+}

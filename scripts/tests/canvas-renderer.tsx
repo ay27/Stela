@@ -22,8 +22,14 @@ async function test() {
   const { AnalysisCanvasView } = await import("../../src/views/AnalysisCanvasView");
   const root = createRoot(document.getElementById("root")!);
   root.render(<AnalysisCanvasView tabId="fixture" path="fixture.stela.canvas" />);
-  await waitFor(() => document.querySelectorAll('[aria-label="流程图"] > div > div').length === 20 && !!document.querySelector(".h-80[role=img] svg"));
-  assert(document.querySelectorAll('[aria-label="流程图"] > div > svg > g').length === 20, "All pipeline edges should render");
+  await waitFor(() => document.querySelectorAll('[aria-label="流程图"] .absolute.flex').length === 20 && !!document.querySelector(".h-80[role=img] svg"));
+  assert(document.querySelectorAll('[aria-label="流程图"] svg > g').length === 20, "All pipeline edges should render");
+  const flowPreview = document.querySelector('[aria-label="流程图"]')!;
+  const viewport = flowPreview.getBoundingClientRect();
+  assert([...flowPreview.querySelectorAll('.absolute.flex')].every(node => {
+    const bounds = node.getBoundingClientRect();
+    return bounds.left >= viewport.left && bounds.right <= viewport.right && bounds.top >= viewport.top && bounds.bottom <= viewport.bottom;
+  }), "Initial preview must fit every node inside the document card");
   assert(document.querySelectorAll("table tbody tr").length === 1, "Saved table result should load");
   assert(document.body.innerText.includes("42"), "KPI should load its saved result");
   assert(document.body.innerText.includes("流程说明"), "Markdown should render");

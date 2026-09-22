@@ -208,7 +208,9 @@ export function buildStelaChartOption(
     const xId = layer.encoding.x ?? sharedX!;
     const yId = layer.encoding.y!;
     const colorId = layer.encoding.color;
-    const groups = colorId ? [...new Set(rows.map((row) => text(valueAt(row, colorId))))] : [spec.fields[yId]?.title ?? spec.fields[yId]?.field ?? yId];
+    const horizontal = layer.mark === "bar" && spec.fields[xId]?.type === "quantitative";
+    const valueId = horizontal ? xId : yId;
+    const groups = colorId ? [...new Set(rows.map((row) => text(valueAt(row, colorId))))] : [spec.fields[valueId]?.title ?? spec.fields[valueId]?.field ?? valueId];
     const totals = new Map<string, number>();
     if (layer.stack === "percent" && colorId) {
       for (const row of rows) {
@@ -220,8 +222,8 @@ export function buildStelaChartOption(
       const filtered = colorId ? rows.filter((row) => text(valueAt(row, colorId)) === group) : rows;
       const data = filtered.map((row) => {
         const x = valueAt(row, xId);
-        let y = number(valueAt(row, yId));
-        if (layer.stack === "percent" && y !== null) y = (totals.get(text(x)) ?? 0) === 0 ? 0 : y / totals.get(text(x))!;
+        let y = valueAt(row, yId);
+        if (layer.stack === "percent" && typeof y === "number") y = (totals.get(text(x)) ?? 0) === 0 ? 0 : y / totals.get(text(x))!;
         return [x, y, ...(layer.encoding.size ? [number(valueAt(row, layer.encoding.size))] : [])];
       });
       series.push({
@@ -229,7 +231,7 @@ export function buildStelaChartOption(
         data,
         tooltip: { valueFormatter: (value: unknown) => {
           const tuple = Array.isArray(value) ? value : [];
-          return labelFor(yId, tuple[1] ?? value);
+          return labelFor(valueId, tuple[horizontal ? 0 : 1] ?? value);
         } },
         symbolSize: layer.mark === "point" && layer.encoding.size ? (value: unknown) => {
           const row = Array.isArray(value) ? value : [];
@@ -249,8 +251,8 @@ export function buildStelaChartOption(
   return {
     ...common,
     legend: series.length > 1 ? { type: "scroll", bottom: 0, textStyle: { color } } : undefined,
-    grid: { left: 64, right: hasRightAxis ? 64 : 24, top: spec.title ? 52 : 24, bottom: series.length > 1 ? 52 : 40, containLabel: true },
-    xAxis: { type: axisType(xDefinition), name: xDefinition.title, axisLabel: { color, hideOverlap: true, formatter: (value: unknown) => labelFor(xId, value) } },
+    grid: { left: 64, right: hasRightAxis ? 64 : 24, top: spec.title ? 52 : 24, bottom: series.length > 1 ? 72 : 52, containLabel: true },
+    xAxis: { type: axisType(xDefinition), name: xDefinition.title, nameLocation: "middle", nameGap: 30, axisLabel: { color, hideOverlap: true, formatter: (value: unknown) => labelFor(xId, value) } },
     yAxis: yDefinitions.slice(0, hasRightAxis ? 2 : 1).map((definition, index) => ({
       type: axisType(definition),
       name: definition.title,

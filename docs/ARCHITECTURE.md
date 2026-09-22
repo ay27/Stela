@@ -1028,3 +1028,33 @@ entries, searches titles/paths and reveals 50 more rows at a time. File entries
 display the actual filename and Vault-relative directory; storage/version labels
 are not product UI. Protection/discard IPC remains compatible, with no count-based
 deletion and no discard control in Chat. Result-cache lifetimes are unchanged.
+
+### Agent recovery and publication evidence (ADR-0111, ADR-0112)
+
+The current session branch's latest unfinished plan is restored into the next run,
+with its origin, step evidence and saved-file receipts. Restoration does not replay
+queries, approvals or writes. A new task explicitly replaces its plan. Optional
+note/Canvas deliveries receive receipts only from successful host writes; run
+completion, step completion, persistence and analytical correctness remain distinct.
+Legacy undeclared deliveries have unknown completion.
+
+Canvas authoring collects independent source/card validation issues before its
+atomic write. Schema and content repairs share a six-attempt per-tool run budget;
+actual execution failures retain their existing three-consecutive-failure breaker.
+Harness schema rejections count even when the dispatcher never runs.
+
+Cross-stage Python comparisons declare population, grain, identity key and source
+references. Bounded checks inspect registered source IDs, not model-supplied counts.
+Even matching IDs do not prove business scope. Unverified comparisons remain visible
+in the final delivery; no added model call or universal answer gate is introduced.
+
+Automatic knowledge maintenance excludes notes modified in the foreground run from
+independent source collection. Publication is conservative and extractive: exact
+bounded excerpts must match independent sources, whose hashes are rechecked before
+saving. Proposed model prose does not become an automatically loaded rule. Absence
+claims and unsupported candidates stay in maintenance diagnostics; existing
+structured Skills require explicit review rather than being overwritten by an
+automatic excerpt refresh. Qualified physical-table candidates are retained;
+unqualified/ambiguous names are not asserted as physical tables. Existing maintenance
+input/output budgets are unchanged. These checks establish provenance and bounded
+observations, not general semantic truth.

@@ -1,5 +1,6 @@
+import { ToolRepairBudget } from "./tool-repair";
 import { buildSkillMaintenanceInput, MAINTENANCE_INPUT_CHARS, maintenanceModel, maintenanceHash, maintenanceNotes, maintenanceSkip, recordMaintenance } from "./maintenance-policy";
-import { analysisToolSummary } from "../../shared/analysis-contract";
+import { analysisToolSummary, readAnalysisSnapshot } from "../../shared/analysis-contract";
 /**
  * Harness agent via `@earendil-works/pi-agent-core` AgentHarness.
  *
@@ -71,6 +72,8 @@ import {
   createPlanPersistenceBuffer,
   ExecutionPlanStore,
   formatExecutionPlanEntry,
+  formatPlanDeliveries,
+  restoreSessionPlan,
 } from "./execution-plan";
 import {
   createAgentTools,
@@ -121,7 +124,7 @@ const OVERFLOW_CONTINUE_PROMPT =
   "The previous request exceeded the model context window. Continue from the compacted history and finish the user's last request.";
 const SKILL_PROMPT_LIMIT = 8;
 const SKILL_MAINTENANCE_PROMPT = `You are Stela's internal experience-maintenance agent.
-The application already retrieved, ordered, and validated the material below. You have one decision: call save_skill exactly once for one durable rule, or make no tool call and give a one-sentence reason. Conversation explains intent; only verified evidence and source documents prove facts. Source documents may be excerpts: never infer absence or universal rules from omitted material. A query snapshot does not prove a permanent business rule. If evidence is insufficient, do not save. Never copy result rows, absolute counts, snapshots, private data, narration, or one-off SQL. Automatic creation supports only sql-dialect, metric-definition, business-glossary, and data-lineage; never create analysis-runbook.
+The application retrieved source excerpts and observed tool outcomes. File identity does not establish business truth. You have one decision: call save_skill exactly once for one durable rule, or make no tool call and give a one-sentence reason. Conversation explains intent; only verified evidence and source documents prove facts. Source documents may be excerpts: never infer absence or universal rules from omitted material. A query snapshot does not prove a permanent business rule. If evidence is insufficient, do not save. Never copy result rows, absolute counts, snapshots, private data, narration, or one-off SQL. Automatic creation supports only sql-dialect, metric-definition, business-glossary, and data-lineage; never create analysis-runbook.
 
 Use this frontmatter:
 ---
@@ -354,7 +357,7 @@ function createSession(storage: InMemorySessionStorage | JsonlSessionStorage = n
           role: "user",
           content:
             `Execution plan snapshot for run ${data?.runId ?? snapshot?.runId ?? "unknown"} ` +
-            `version ${snapshot?.version ?? 0}. Use only the highest version matching the current run.\n` +
+            `version ${snapshot?.version ?? 0}. Historical snapshot only. The current runtime plan below is authoritative for progress; never replay old tools.\n` +
             formatExecutionPlanEntry(data ?? {}),
           timestamp: Date.now(),
         }];
@@ -402,6 +405,8 @@ export async function runSkillMaintenance(options: {
   request: AgentRunRequest;
   conversation: string;
   evidence: SkillMaintenanceEvidence[];
+  generatedNotePaths?: ReadonlySet<string>;
+  observedColumns?: string[];
   models: Awaited<ReturnType<typeof createTransportForProfile>>["models"];
   model: Awaited<ReturnType<typeof createTransportForProfile>>["model"];
   skills: Awaited<ReturnType<typeof loadAgentSkills>>;
@@ -465,6 +470,7 @@ export async function runSkillMaintenance(options: {
   let candidateKey: string | null = null;
   let candidateOutcome: string | null = null;
   let stoppedAfterSave = false;
+  let candidateRejected = false;
   const phaseStarted = Date.now();
   try {
     const profile = getActiveProfile(aiSettings, request.profileId);
@@ -497,17 +503,29 @@ export async function runSkillMaintenance(options: {
       );
     }
     stage = "source_collection";
+    const sourceDiagnostics = { candidates: [] as string[], excluded: [] as string[], unreadable: [] as string[] };
     const sourceNotes = await collectSkillSourceNotes(vaultPath, maintenanceTables, sqlIndex.query, 3,
-      refreshSkill?.metadata.sources.map(source => source.path) ?? evidence.filter(item => item.kind === "success").flatMap(item => item.source).filter(source => source.endsWith(".md")));
+      refreshSkill?.metadata.sources.map(source => source.path) ?? evidence.filter(item => item.kind === "success").flatMap(item => item.source).filter(source => source.endsWith(".md")), options.generatedNotePaths, sourceDiagnostics);
     signal.throwIfAborted();
     if (sourceNotes.length === 0) {
+      const generatedOnly = sourceDiagnostics.candidates.length > 0
+        && sourceDiagnostics.excluded.length === sourceDiagnostics.candidates.length;
+      const unreadable = sourceDiagnostics.unreadable.length > 0;
+      const chinese = request.locale === "zh";
       return finishWithoutSource(
-        "no_matching_source_documents",
-        "No verified Vault Markdown source documents matched the tables found in this run, so the maintenance model was not called.",
+        generatedOnly ? "only_self_authored_sources" : unreadable ? "source_documents_unreadable" : "no_matching_source_documents",
+        generatedOnly
+          ? (chinese ? "本轮来源笔记均由 Agent 新建或修改，不能作为独立依据，因此未调用知识维护模型。" : "All candidate notes were created or modified by the Agent in this run. They cannot serve as independent evidence, so knowledge maintenance was skipped.")
+          : unreadable
+            ? (chinese ? "候选来源笔记无法读取，且没有其他可用来源，因此未调用知识维护模型。" : "Candidate source notes could not be read and no other usable sources remained, so knowledge maintenance was skipped.")
+            : (chinese ? "本轮未找到可用的来源笔记，因此未调用知识维护模型。" : "No usable source notes were found for this run, so knowledge maintenance was skipped."),
         {
           sourceTables: maintenanceTables,
           evidenceItems: evidence.length,
-          suggestion: "Link reusable knowledge to a Vault Markdown note, then run the Agent again.",
+          sourceDiagnostics,
+          suggestion: generatedOnly
+            ? "Use independently verified source notes for knowledge maintenance."
+            : "Read a relevant existing Vault Markdown note, then run the Agent again.",
         },
       );
     }
@@ -566,6 +584,12 @@ export async function runSkillMaintenance(options: {
           maintenanceDialect: dialect,
           maintenanceTables,
           maintenanceSourcePaths: boundedNotes.map((note) => note.path),
+          maintenanceSourceNotes: boundedNotes,
+          maintenanceObservedColumns: options.observedColumns,
+          onMaintenanceCandidate: candidate => {
+            candidateRejected = true;
+            if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "candidate_not_published", payload: candidate });
+          },
           maintenanceRefreshName: refreshSkill?.metadata.name ?? null,
           aiSettings,
           connector: {
@@ -579,7 +603,7 @@ export async function runSkillMaintenance(options: {
           skills: skills.vault,
           reservedSkillNames: skills.system.map((skill) => skill.metadata.name),
           mode: refreshSkill ? "refresh" : "maintenance",
-          run: { runId: request.runId, sessionId: request.sessionId, notePath: request.notePath ?? null, questionsAsked: 0, toolFailureStreak: new Map() },
+          run: { runId: request.runId, sessionId: request.sessionId, notePath: request.notePath ?? null, questionsAsked: 0, toolFailureStreak: new Map(), repairBudget: new ToolRepairBudget() },
           recordRun: recordAgentRun(vaultPath),
           onSkillMaintenance: (record) => actions.push(record),
         },
@@ -591,9 +615,9 @@ export async function runSkillMaintenance(options: {
     let saveStartedAt = 0;
     unsubscribe = maintenanceHarness.subscribe((event) => {
       if (event.type === "tool_execution_start") saveStartedAt = Date.now();
-      if (event.type === "tool_execution_end" && !event.isError && actions.length > 0) {
+      if (event.type === "tool_execution_end" && !event.isError && (actions.length > 0 || candidateRejected)) {
         stoppedAfterSave = true;
-        if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "save_completed", payload: { elapsedMs: Date.now() - phaseStarted, saveMs: Date.now() - saveStartedAt, actions: actions.length } });
+        if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: candidateRejected ? "candidate_retained" : "save_completed", payload: { elapsedMs: Date.now() - phaseStarted, saveMs: Date.now() - saveStartedAt, actions: actions.length } });
       }
       if (event.type === "turn_end" && ++turns >= SKILL_MAINTENANCE_MAX_TURNS && event.message.stopReason === "toolUse" && !stoppedAfterSave) {
         void maintenanceHarness.abort();
@@ -620,10 +644,10 @@ export async function runSkillMaintenance(options: {
       throw new Error(result.errorMessage || "Knowledge maintenance model failed.");
     }
     const completed = !signal.aborted && (stoppedAfterSave || result.stopReason !== "aborted");
-    if (completed && actions.length === 0 && (result.stopReason === "length" || !assistantText(result).trim())) {
+    if (completed && !candidateRejected && actions.length === 0 && (result.stopReason === "length" || !assistantText(result).trim())) {
       throw new Error("Maintenance produced no decision before its output limit; thinking-only output is not a no-change decision.");
     }
-    candidateOutcome = completed ? (actions.length ? "saved" : "no_change")
+    candidateOutcome = completed ? (actions.length ? "saved" : candidateRejected ? "candidate_not_published" : "no_change")
       : signal.reason === "timeout" ? "timeout" : signal.aborted ? "cancelled" : "turn_limit";
     if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "decision", payload: {
       turns, saved: actions.length, stoppedAfterSave, stopReason: result.stopReason,
@@ -634,14 +658,14 @@ export async function runSkillMaintenance(options: {
       notify({
         type: "skill_maintenance",
         runId: request.runId,
-        outcome: completed ? (actions.length > 0 ? "saved" : "no_change")
+        outcome: completed ? (actions.length > 0 ? "saved" : candidateRejected ? "candidate_not_published" : "no_change")
           : signal.reason === "timeout" ? "timeout" : signal.aborted ? "cancelled" : "turn_limit",
         actions,
         summary: !completed
           ? "Knowledge maintenance stopped at its time or turn limit."
           : actions.length > 0
             ? `Updated ${actions.length} internal knowledge Skill${actions.length === 1 ? "" : "s"}.`
-            : assistantText(result).trim().slice(0, 120) || "No durable knowledge required a Skill update.",
+            : candidateRejected ? "Knowledge candidate retained for review; independent evidence was insufficient. No Skill was published." : assistantText(result).trim().slice(0, 120) || "No durable knowledge required a Skill update.",
       });
     }
     if (!completed) {
@@ -654,7 +678,7 @@ export async function runSkillMaintenance(options: {
       }
       finishMetric(
         "completed",
-        actions.length > 0 ? "saved" : "no_change",
+        actions.length > 0 ? "saved" : candidateRejected ? "candidate_not_published" : "no_change",
         { result, actions },
       );
     }
@@ -891,6 +915,11 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
     plan = new ExecutionPlanStore(runId, (snapshot) => {
       emit({ type: "plan_updated", runId, plan: snapshot });
     });
+    const restored = await restoreSessionPlan(plan, session);
+    if (restored) await appendPlanEntry(session, restored);
+    const comparisonLimits = new Map<string, string>();
+    const generatedNotePaths = new Set<string>();
+    const repairBudget = new ToolRepairBudget();
     const analysisRuns = new Map<string, AgentAnalysisRunEvidence>();
     const planPersistence = createPlanPersistenceBuffer((snapshot) =>
       appendPlanEntry(session!, snapshot).then(() => undefined)
@@ -997,6 +1026,8 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
                 request,
                 conversation: conversationForMaintenance((await session!.buildContext()).messages),
                 evidence: maintenanceEvidence.slice(-24),
+                generatedNotePaths: new Set(generatedNotePaths),
+                observedColumns: [...new Set([...analysisRuns.values()].flatMap(run => run.columns.map(column => column.name)))],
                 models,
                 model,
                 skills,
@@ -1016,7 +1047,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
               );
             })().catch((error) => log.warn("scheduleSkillRefresh failed", { error }));
           },
-          run: { runId, sessionId: request.sessionId, notePath: request.notePath ?? null, questionsAsked: 0, toolFailureStreak: new Map() },
+          run: { runId, sessionId: request.sessionId, notePath: request.notePath ?? null, questionsAsked: 0, toolFailureStreak: new Map(), repairBudget },
           chartRuns: new Map(),
           conversationRunIds: options.conversationRunIds,
           analysisRuns,
@@ -1029,6 +1060,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
             if (!resultStore.runExists(chartRunId)) await journal.importRun(vaultPath, chartRunId);
             return resultStore.getRun(chartRunId);
           },
+          onNoteWritten: path => generatedNotePaths.add(path),
           onCanvasUpdated: (event) => emit({ type: "canvas_updated", runId, ...event }),
           plan,
           persistPlan: planPersistence.enqueue,
@@ -1059,6 +1091,13 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
     const efficiency = new AnalysisEfficiencyLedger();
     let pendingStrategyCheckpoint: AgentStrategyCheckpoint | null = null;
     const strategyUnsubscribe = harness.on("tool_result", async (event) => {
+      for (const block of event.content) if (block.type === "text") {
+        const snapshot = readAnalysisSnapshot(block.text);
+        for (const comparison of snapshot?.comparisons ?? []) comparisonLimits.set(comparison.name,
+          request.locale === "zh"
+            ? `${comparison.name}：${comparison.state === "identity_checked" ? "已检查 ID 包含关系" : "阶段关系未验证"}（${comparison.reason}）；业务口径仍需独立证据确认。`
+            : `${comparison.name}: ${comparison.state} (${comparison.reason}); source population scope still requires independent justification.`);
+      }
       const signalResult = efficiency.recordResult({
         toolName: event.toolName,
         args: event.input,
@@ -1214,6 +1253,9 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       }
     };
     const contextUnsubscribe = harness.on("context", (event) => {
+      const hint = repairBudget.contextHint();
+      const messages = hint ? [...event.messages, { role: "user" as const,
+        content: `Host tool repair budget (current run):\n${hint}`, timestamp: Date.now() }] : event.messages;
       if (agentMetrics.isOpen()) {
         agentMetrics.addEvent(metricRunId, {
           type: "model_context",
@@ -1225,11 +1267,11 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
             thinkingLevel: harnessThinkingLevel,
             requestedReasoningEffort: reasoning.requested,
             effectiveReasoningEffort: reasoning.effective,
-            messages: event.messages,
+            messages,
           },
         });
       }
-      return undefined;
+      return hint ? { messages } : undefined;
     });
     const providerPayloadUnsubscribe = harness.on("before_provider_payload", (event) => {
       modelRequestStartedAt = Date.now();
@@ -1319,6 +1361,9 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         return;
       }
       if (event.type === "tool_execution_end") {
+        const repairHint = repairBudget.observeHarnessResult(event.toolName, event.toolCallId, event.isError);
+        if (repairHint && agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "tool_validation", name: event.toolName, payload: { kind: "schema_validation", hint: repairHint } });
+        const contentValidation = event.isError && toolResultSummary(event.result).includes("[content_validation]");
         const call = toolCalls.get(event.toolCallId);
         if (call) {
           maintenanceEvidence.push(buildSkillMaintenanceEvidence(
@@ -1332,7 +1377,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
             agentMetrics.finishRun(call.metricRunId, {
               status: event.isError ? "error" : "completed",
               endedAt: Date.now(),
-              errorCode: event.isError ? "tool_error" : null,
+              errorCode: event.isError ? (repairHint ? "schema_validation" : contentValidation ? "content_validation" : "tool_error") : null,
               errorMessage: event.isError ? toolResultSummary(event.result) : null,
               response: event.result,
             });
@@ -1343,7 +1388,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           runId,
           callId: event.toolCallId,
           ok: !event.isError,
-          summary: toolResultSummary(event.result),
+          summary: toolResultSummary(event.result) + (repairHint ? `\n${repairHint}` : ""),
         });
         void emitUsage(true);
         return;
@@ -1484,7 +1529,11 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         return;
       }
 
-      const finalAnswer = visibleAssistantText(result).trim();
+      await planPersistence.flush();
+      const deliverySummary = formatPlanDeliveries(plan.get(), request.locale === "zh");
+      const finalAnswer = visibleAssistantText(result).trim() + (plan.get()?.deliveries?.length ? `\n\n${deliverySummary}` : "") +
+        (comparisonLimits.size ? `\n\n${request.locale === "zh" ? "比较证据的限制：" : "Comparison evidence limitations:"}\n${[...comparisonLimits.values()].join("\n")}` : "");
+      if (agentMetrics.isOpen()) agentMetrics.addEvent(metricRunId, { type: "delivery_status", payload: { summary: deliverySummary, deliveries: plan.get()?.deliveries ?? null } });
 
       if (agentMetrics.isOpen()) {
         agentMetrics.addEvent(metricRunId, { type: "analysis_efficiency", payload: efficiency.metrics() });
@@ -1520,6 +1569,8 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           request,
           conversation: conversationForMaintenance(context.messages),
           evidence: maintenanceEvidence.slice(-24),
+          generatedNotePaths: new Set(generatedNotePaths),
+          observedColumns: [...new Set([...analysisRuns.values()].flatMap(run => run.columns.map(column => column.name)))],
           models,
           model,
           skills,
@@ -1565,6 +1616,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         }
       }
     } finally {
+      await planPersistence.flush();
       clearProgressTimer();
       strategyUnsubscribe();
       contextUnsubscribe();

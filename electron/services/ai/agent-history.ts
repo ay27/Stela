@@ -166,6 +166,12 @@ function asAgentEvent(value: unknown): AgentEvent | null {
         typeof plan.version === "number" &&
         Array.isArray(plan.steps) &&
         plan.steps.every(isPlanStep) &&
+        (plan.deliveries === undefined || (Array.isArray(plan.deliveries) && plan.deliveries.length <= 8 && plan.deliveries.every(value => {
+          const item = asRecord(value);
+          const receipt = asRecord(item?.receipt);
+          return item && (item.kind === "note" || item.kind === "canvas") && (item.path === undefined || typeof item.path === "string") &&
+            (item.receipt === undefined || (receipt && typeof receipt.path === "string" && typeof receipt.runId === "string"));
+        }))) &&
         (plan.analysis === undefined || isPlanAnalysis(plan.analysis))
         ? event as AgentEvent
         : null;
@@ -237,7 +243,7 @@ function asAgentEvent(value: unknown): AgentEvent | null {
     case "skill_maintenance":
       return Array.isArray(event.actions) &&
         event.actions.every(isSkillMaintenanceAction) &&
-        (event.outcome === undefined || (typeof event.outcome === "string" && ["unchanged", "cooldown", "saved", "no_change", "no_source", "input_too_large", "cancelled", "timeout", "turn_limit", "dropped", "error"].includes(event.outcome))) &&
+        (event.outcome === undefined || (typeof event.outcome === "string" && ["unchanged", "cooldown", "saved", "candidate_not_published", "no_change", "no_source", "input_too_large", "cancelled", "timeout", "turn_limit", "dropped", "error"].includes(event.outcome))) &&
         (event.diagnostic === undefined || (
           typeof asRecord(event.diagnostic)?.stage === "string" &&
           typeof asRecord(event.diagnostic)?.message === "string" &&

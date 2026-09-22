@@ -5,52 +5,52 @@
   "title": "Northstar June Business Review",
   "status": "complete",
   "createdAt": 1783476000000,
-  "updatedAt": 1783476000000,
+  "updatedAt": 1790077555638,
   "createdBySessionId": null,
   "sources": [
     {
       "id": "kpi",
-      "title": "June growth quality",
+      "title": "June growth quality (this run)",
       "connectionName": "local-mysql",
       "sql": "WITH monthly AS (\n  SELECT oe.order_month AS month,\n         COUNT(*) AS orders,\n         SUM(oe.net_revenue) AS net_revenue,\n         SUM(oe.profit_before_marketing) - mm.marketing_spend AS contribution_profit\n  FROM order_economics oe\n  JOIN (\n    SELECT month, SUM(spend) AS marketing_spend\n    FROM marketing_spend\n    GROUP BY month\n  ) mm ON mm.month = oe.order_month\n  WHERE oe.order_month IN ('2026-05', '2026-06')\n  GROUP BY oe.order_month, mm.marketing_spend\n), paired AS (\n  SELECT MAX(CASE WHEN month = '2026-05' THEN orders END) AS may_orders,\n         MAX(CASE WHEN month = '2026-06' THEN orders END) AS june_orders,\n         MAX(CASE WHEN month = '2026-05' THEN net_revenue END) AS may_revenue,\n         MAX(CASE WHEN month = '2026-06' THEN net_revenue END) AS june_revenue,\n         MAX(CASE WHEN month = '2026-05' THEN contribution_profit END) AS may_profit,\n         MAX(CASE WHEN month = '2026-06' THEN contribution_profit END) AS june_profit,\n         MAX(CASE WHEN month = '2026-05' THEN contribution_profit / NULLIF(net_revenue, 0) END) AS may_margin,\n         MAX(CASE WHEN month = '2026-06' THEN contribution_profit / NULLIF(net_revenue, 0) END) AS june_margin\n  FROM monthly\n), paid_social AS (\n  SELECT COUNT(*) AS paid_social_orders,\n         SUM(oe.profit_before_marketing) - ms.spend AS contribution_profit\n  FROM order_economics oe\n  JOIN marketing_spend ms ON ms.month = oe.order_month AND ms.channel = oe.channel\n  WHERE oe.order_month = '2026-06' AND oe.channel = 'paid_social'\n  GROUP BY ms.spend\n), trailflex AS (\n  SELECT SUM(oi.quantity) AS sold_units,\n         COALESCE(SUM(r.quantity), 0) AS returned_units,\n         COALESCE(SUM(r.refund_amount + r.processing_cost), 0) AS return_loss\n  FROM order_items oi\n  JOIN orders o ON o.id = oi.order_id\n  JOIN products p ON p.id = oi.product_id\n  LEFT JOIN returns r ON r.order_item_id = oi.id\n  WHERE o.order_date >= '2026-06-01' AND o.order_date < '2026-07-01'\n    AND p.sku = 'NS-FW-004'\n)\nSELECT ROUND((june_orders - may_orders) / may_orders, 4) AS order_growth,\n       ROUND((june_revenue - may_revenue) / may_revenue, 4) AS revenue_growth,\n       ROUND(may_margin, 4) AS may_contribution_margin,\n       ROUND(june_margin, 4) AS june_contribution_margin,\n       ROUND(june_margin - may_margin, 4) AS margin_change,\n       ROUND((june_profit - may_profit) / may_profit, 4) AS contribution_profit_change,\n       ROUND(paid_social.contribution_profit, 2) AS paid_social_contribution_profit,\n       ROUND(paid_social.paid_social_orders / june_orders, 4) AS paid_social_order_share,\n       ROUND(trailflex.returned_units / NULLIF(trailflex.sold_units, 0), 4) AS trailflex_return_rate,\n       ROUND(trailflex.return_loss, 2) AS trailflex_return_loss\nFROM paired\nCROSS JOIN paid_social\nCROSS JOIN trailflex;",
-      "lastRunId": "run_demo_ecommerce_kpi_en",
-      "lastRunAt": 1783476000000,
+      "lastRunId": "373747f5-8c01-4588-a8b1-474a12feed52-query-372c8b1b-e594-4b62-967f-34fc67d11373",
+      "lastRunAt": 1790077540478,
       "lastError": null
     },
     {
       "id": "monthly",
-      "title": "Monthly operating trend",
+      "title": "Monthly operating trend (this run)",
       "connectionName": "local-mysql",
       "sql": "WITH monthly_marketing AS (\n  SELECT month, SUM(spend) AS marketing_spend\n  FROM marketing_spend\n  GROUP BY month\n)\nSELECT oe.order_month AS month,\n       COUNT(*) AS orders,\n       ROUND(SUM(oe.net_revenue), 2) AS net_revenue,\n       ROUND(SUM(oe.profit_before_marketing) - mm.marketing_spend, 2) AS contribution_profit,\n       ROUND((SUM(oe.profit_before_marketing) - mm.marketing_spend) / NULLIF(SUM(oe.net_revenue), 0), 4) AS contribution_margin\nFROM order_economics oe\nJOIN monthly_marketing mm ON mm.month = oe.order_month\nGROUP BY oe.order_month, mm.marketing_spend\nORDER BY oe.order_month;",
-      "lastRunId": "run_demo_ecommerce_monthly_en",
-      "lastRunAt": 1783476000000,
+      "lastRunId": "373747f5-8c01-4588-a8b1-474a12feed52-query-1f11e1f2-2722-4ae8-8756-06be24f89e29",
+      "lastRunAt": 1790077540478,
       "lastError": null
     },
     {
       "id": "channel",
-      "title": "June channel contribution",
+      "title": "June channel contribution (this run)",
       "connectionName": "local-mysql",
-      "sql": "SELECT oe.channel,\n       COUNT(*) AS orders,\n       ROUND(SUM(oe.net_revenue), 2) AS net_revenue,\n       ROUND(ms.spend, 2) AS marketing_spend,\n       ROUND(SUM(oe.profit_before_marketing) - ms.spend, 2) AS contribution_profit,\n       ROUND((SUM(oe.profit_before_marketing) - ms.spend) / NULLIF(SUM(oe.net_revenue), 0), 4) AS contribution_margin\nFROM order_economics oe\nJOIN marketing_spend ms ON ms.month = oe.order_month AND ms.channel = oe.channel\nWHERE oe.order_month = '2026-06'\nGROUP BY oe.channel, ms.spend\nORDER BY contribution_margin ASC;",
-      "lastRunId": "run_demo_ecommerce_channel_en",
-      "lastRunAt": 1783476000000,
+      "sql": "SELECT oe.channel,\n       COUNT(*) AS orders,\n       ROUND(SUM(oe.net_revenue), 2) AS net_revenue,\n       ROUND(ms.spend, 2) AS marketing_spend,\n       ROUND(SUM(oe.profit_before_marketing) - ms.spend, 2) AS contribution_profit,\n       ROUND((SUM(oe.profit_before_marketing) - ms.spend) / NULLIF(SUM(oe.net_revenue), 0), 4) AS contribution_margin\nFROM order_economics oe\nJOIN marketing_spend ms\n  ON ms.month = oe.order_month\n AND ms.channel = oe.channel\nWHERE oe.order_month = '2026-06'\nGROUP BY oe.channel, ms.spend\nORDER BY contribution_profit ASC;",
+      "lastRunId": "373747f5-8c01-4588-a8b1-474a12feed52-query-4173726e-0b2f-4fa4-9888-48861c2671c4",
+      "lastRunAt": 1790077540479,
       "lastError": null
     },
     {
       "id": "promotion",
-      "title": "June promotion quality",
+      "title": "June promotion quality (this run)",
       "connectionName": "local-mysql",
       "sql": "SELECT COALESCE(oe.promotion_code, 'No promotion') AS promotion,\n       COUNT(*) AS orders,\n       ROUND(SUM(oe.discounts), 2) AS discounts,\n       ROUND(SUM(oe.net_revenue), 2) AS net_revenue,\n       ROUND(SUM(oe.profit_before_marketing) / NULLIF(SUM(oe.net_revenue), 0), 4) AS margin_before_marketing\nFROM order_economics oe\nWHERE oe.order_month = '2026-06'\nGROUP BY COALESCE(oe.promotion_code, 'No promotion')\nORDER BY orders DESC;",
-      "lastRunId": "run_demo_ecommerce_promotion_en",
-      "lastRunAt": 1783476000000,
+      "lastRunId": "373747f5-8c01-4588-a8b1-474a12feed52-query-32721ccd-c2c9-4d31-8b13-64090d072c75",
+      "lastRunAt": 1790077540479,
       "lastError": null
     },
     {
       "id": "sku",
-      "title": "June high-return products",
+      "title": "June high-return products (this run)",
       "connectionName": "local-mysql",
       "sql": "SELECT p.sku,\n       p.name,\n       p.category,\n       SUM(oi.quantity) AS sold_units,\n       COALESCE(SUM(r.quantity), 0) AS returned_units,\n       ROUND(COALESCE(SUM(r.quantity), 0) / NULLIF(SUM(oi.quantity), 0), 4) AS return_rate,\n       ROUND(SUM(oi.quantity * oi.unit_price - oi.discount_amount) - COALESCE(SUM(r.refund_amount), 0), 2) AS net_revenue,\n       ROUND(COALESCE(SUM(r.refund_amount + r.processing_cost), 0), 2) AS return_loss\nFROM order_items oi\nJOIN orders o ON o.id = oi.order_id\nJOIN products p ON p.id = oi.product_id\nLEFT JOIN returns r ON r.order_item_id = oi.id\nWHERE o.order_date >= '2026-06-01' AND o.order_date < '2026-07-01'\nGROUP BY p.id, p.sku, p.name, p.category\nHAVING sold_units >= 8\nORDER BY return_rate DESC, return_loss DESC\nLIMIT 8;",
-      "lastRunId": "run_demo_ecommerce_sku_en",
-      "lastRunAt": 1783476000000,
+      "lastRunId": "373747f5-8c01-4588-a8b1-474a12feed52-query-6b2d0628-eb1f-443f-a593-e1e560833dcf",
+      "lastRunAt": 1790077540479,
       "lastError": null
     }
   ],
@@ -58,13 +58,14 @@
     {
       "id": "executive_summary",
       "title": "Executive summary",
-      "description": "Orders and revenue grew while profit quality broke down.",
+      "description": "Orders and revenue grew, but profit quality broke.",
       "cards": [
         {
           "id": "order_growth",
+          "title": "Order growth",
+          "width": "third",
           "type": "kpi",
           "sourceId": "kpi",
-          "title": "Order growth",
           "value": {
             "field": "order_growth",
             "format": {
@@ -73,14 +74,14 @@
               "maximumFractionDigits": 1
             }
           },
-          "label": "May to June",
-          "width": "third"
+          "label": "May to June"
         },
         {
           "id": "revenue_growth",
+          "title": "Net revenue growth",
+          "width": "third",
           "type": "kpi",
           "sourceId": "kpi",
-          "title": "Net revenue growth",
           "value": {
             "field": "revenue_growth",
             "format": {
@@ -89,14 +90,14 @@
               "maximumFractionDigits": 1
             }
           },
-          "label": "May to June",
-          "width": "third"
+          "label": "May to June"
         },
         {
           "id": "june_margin",
+          "title": "June contribution margin",
+          "width": "third",
           "type": "kpi",
           "sourceId": "kpi",
-          "title": "June contribution margin",
           "value": {
             "field": "june_contribution_margin",
             "format": {
@@ -105,27 +106,27 @@
               "maximumFractionDigits": 1
             }
           },
-          "label": "42.2% in May",
-          "width": "third"
+          "label": "42.2% in May"
         },
         {
           "id": "management_readout",
+          "width": "full",
           "type": "markdown",
-          "markdown": "### Growth was bought—and bought too expensively\nPaid social, a site-wide 20% discount, and TrailFlex Runner returns converged in the same orders, cutting contribution margin by **25 percentage points**.",
-          "width": "full"
+          "markdown": "### Growth was bought—and bought too expensively\nPaid social, a site-wide 20% discount, and TrailFlex Runner's high returns stacked onto the same orders, cutting the June contribution margin by **25 percentage points**."
         }
       ]
     },
     {
       "id": "statistical_evidence",
       "title": "Statistical evidence",
-      "description": "Three independent cuts locate where June profit quality broke down.",
+      "description": "Three independent cuts locate where June profit quality declined.",
       "cards": [
         {
           "id": "profit_change",
+          "title": "Contribution profit change",
+          "width": "third",
           "type": "kpi",
           "sourceId": "kpi",
-          "title": "Contribution profit change",
           "value": {
             "field": "contribution_profit_change",
             "format": {
@@ -134,14 +135,14 @@
               "maximumFractionDigits": 1
             }
           },
-          "label": "$19,184 → $9,091",
-          "width": "third"
+          "label": "$19,184 → $9,091"
         },
         {
           "id": "paid_social_loss",
+          "title": "Paid social contribution profit",
+          "width": "third",
           "type": "kpi",
           "sourceId": "kpi",
-          "title": "Paid social contribution",
           "value": {
             "field": "paid_social_contribution_profit",
             "format": {
@@ -150,14 +151,14 @@
               "maximumFractionDigits": 0
             }
           },
-          "label": "152 orders · 40.5% of June volume",
-          "width": "third"
+          "label": "152 orders, 40.5% of June volume"
         },
         {
           "id": "trailflex_returns",
+          "title": "TrailFlex return rate",
+          "width": "third",
           "type": "kpi",
           "sourceId": "kpi",
-          "title": "TrailFlex return rate",
           "value": {
             "field": "trailflex_return_rate",
             "format": {
@@ -166,25 +167,35 @@
               "maximumFractionDigits": 1
             }
           },
-          "label": "$2,942 return loss",
-          "width": "third"
+          "label": "$2,942 return loss"
         }
       ]
     },
     {
       "id": "evidence",
       "title": "Evidence chain",
-      "description": "Move from the trend to channel, campaign, and product evidence.",
+      "description": "Drill from the overall trend down to channel, campaign, and product; the channel block is refreshed with this run's results.",
       "cards": [
         {
           "id": "monthly_trend",
+          "title": "Revenue up, margin down",
+          "width": "full",
           "type": "chart",
           "sourceId": "monthly",
-          "title": "Revenue up, margin down",
           "chart": {
             "title": "Monthly net revenue and contribution margin",
             "preset": "comparison",
             "fields": {
+              "margin": {
+                "field": "contribution_margin",
+                "type": "quantitative",
+                "title": "Contribution margin",
+                "format": {
+                  "kind": "percent",
+                  "input": "ratio",
+                  "maximumFractionDigits": 1
+                }
+              },
               "month": {
                 "field": "month",
                 "type": "ordinal",
@@ -198,16 +209,6 @@
                   "kind": "currency",
                   "currency": "USD",
                   "maximumFractionDigits": 0
-                }
-              },
-              "margin": {
-                "field": "contribution_margin",
-                "type": "quantitative",
-                "title": "Contribution margin",
-                "format": {
-                  "kind": "percent",
-                  "input": "ratio",
-                  "maximumFractionDigits": 1
                 }
               }
             },
@@ -231,16 +232,16 @@
                 "stack": "none"
               }
             ]
-          },
-          "width": "full"
+          }
         },
         {
           "id": "channel_rank",
+          "title": "Channel contribution profit",
+          "width": "full",
           "type": "chart",
           "sourceId": "channel",
-          "title": "Channel contribution profit",
           "chart": {
-            "title": "Paid social is the only loss-making channel",
+            "title": "June channel contribution profit: paid social is the only loss-making channel",
             "preset": "ranking",
             "fields": {
               "channel": {
@@ -270,14 +271,78 @@
                 "stack": "none"
               }
             ]
-          },
-          "width": "half"
+          }
+        },
+        {
+          "id": "channel_table",
+          "title": "June channel query results (2026-06)",
+          "width": "full",
+          "type": "table",
+          "sourceId": "channel",
+          "columns": [
+            {
+              "field": "channel",
+              "title": "Channel"
+            },
+            {
+              "field": "orders",
+              "title": "Orders",
+              "format": {
+                "kind": "number",
+                "maximumFractionDigits": 0
+              }
+            },
+            {
+              "field": "net_revenue",
+              "title": "Net revenue",
+              "format": {
+                "kind": "currency",
+                "currency": "USD",
+                "maximumFractionDigits": 2
+              }
+            },
+            {
+              "field": "marketing_spend",
+              "title": "Marketing spend",
+              "format": {
+                "kind": "currency",
+                "currency": "USD",
+                "maximumFractionDigits": 2
+              }
+            },
+            {
+              "field": "contribution_profit",
+              "title": "Contribution profit",
+              "format": {
+                "kind": "currency",
+                "currency": "USD",
+                "maximumFractionDigits": 2
+              }
+            },
+            {
+              "field": "contribution_margin",
+              "title": "Contribution margin",
+              "format": {
+                "kind": "percent",
+                "input": "ratio",
+                "maximumFractionDigits": 2
+              }
+            }
+          ],
+          "maxRows": 5
+        },
+        {
+          "id": "channel_findings",
+          "width": "full",
+          "type": "markdown",
+          "markdown": "### Channel findings (three)\n\n1. **The only loss-making channel is paid social**: `paid_social` contributed **−$4,972.75** in June at a contribution margin of **−24.04%**, the only negative one of the five channels.\n2. **The other four channels are all contribution-positive**: organic search **$6,653.11** (53.50%) > affiliates **$2,851.79** (41.40%) > email **$2,372.19** (41.15%) > paid search **$2,186.21** (26.53%).\n3. **Scale and efficiency are disconnected**: paid social took **$12,800.00 / $17,065.25 (75.0%)** of June marketing spend and **152/375 (40.5%)** of orders, pushing the five-channel total contribution profit down to **$9,090.55 (16.83%)**."
         },
         {
           "id": "promotion_table",
+          "title": "Promotion quality",
+          "width": "half",
           "type": "table",
           "sourceId": "promotion",
-          "title": "Promotion quality",
           "columns": [
             {
               "field": "promotion",
@@ -310,14 +375,14 @@
               }
             }
           ],
-          "maxRows": 5,
-          "width": "half"
+          "maxRows": 5
         },
         {
           "id": "sku_table",
+          "title": "High-return products",
+          "width": "full",
           "type": "table",
           "sourceId": "sku",
-          "title": "High-return products",
           "columns": [
             {
               "field": "sku",
@@ -354,8 +419,7 @@
               }
             }
           ],
-          "maxRows": 8,
-          "width": "full"
+          "maxRows": 8
         }
       ]
     },
@@ -366,10 +430,10 @@
       "cards": [
         {
           "id": "action_flow",
-          "type": "flow",
-          "title": "July response",
-          "direction": "LR",
+          "title": "July response path",
           "width": "full",
+          "type": "flow",
+          "direction": "LR",
           "nodes": [
             {
               "id": "signal",
@@ -381,15 +445,15 @@
             {
               "id": "channel",
               "kind": "step",
-              "label": "Reduce weak spend",
+              "label": "Cut inefficient spend",
               "description": "Paid social contribution is negative",
               "tone": "warning"
             },
             {
               "id": "offer",
               "kind": "step",
-              "label": "Replace site-wide offer",
-              "description": "Use category-level offers",
+              "label": "Replace the site-wide discount",
+              "description": "Move to category-level offers",
               "tone": "warning"
             },
             {
@@ -402,15 +466,15 @@
             {
               "id": "gate",
               "kind": "decision",
-              "label": "Channel positive again?",
+              "label": "Channel back to positive contribution?",
               "description": "Review weekly",
               "tone": "neutral"
             },
             {
               "id": "scale",
               "kind": "result",
-              "label": "Scale again",
-              "description": "Quality before volume",
+              "label": "Scale growth again",
+              "description": "Profit quality before scale",
               "tone": "success"
             }
           ],

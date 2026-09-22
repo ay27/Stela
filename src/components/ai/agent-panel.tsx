@@ -322,6 +322,7 @@ function SkillMaintenanceIndicator({
     : maintenance.status === "cancelled" ? t("agent.panel.skillCancelled")
     : maintenance.status === "skipped" ? t("agent.panel.skillSkipped")
     : maintenance.status === "unknown" ? t("agent.panel.skillUnknown")
+    : maintenance.outcome === "candidate_not_published" ? t("agent.panel.skillCandidate")
     : updated
       ? t("agent.panel.skillUpdated", { names })
       : t("agent.panel.skillAllMaintained");
@@ -424,6 +425,9 @@ function ExecutionPlanCard({ plan }: { plan: AgentPlanSnapshot }) {
       </button>
       {expanded ? (
         <ol className="space-y-1.5 border-t border-primary/10 px-2.5 py-2">
+          {plan.deliveries?.map((item, index) => <li key={`delivery-${index}`} className="stela-plan-delivery text-muted-foreground">
+            {t(item.receipt ? "agent.panel.deliverySaved" : "agent.panel.deliveryMissing", { kind: item.kind, path: item.receipt?.path ?? item.path ?? "" })}
+          </li>)}
           {plan.steps.map((step) => (
             <li key={step.id} className="flex items-start gap-2">
               <span className="mt-px"><PlanStepIcon status={step.status} /></span>

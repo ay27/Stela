@@ -7,6 +7,16 @@ description: Rules for valid Stela chart presets, marks, channels, layers, and v
 
 Use this before the first `create_chart` call in a run. Keep aggregation in SQL and reference declared field ids from layer encodings.
 
+## Display language
+
+Use the user's explicit language request first, otherwise the natural language of
+this turn, otherwise the app locale. SQL identifiers and quoted source content do
+not determine the response language; use the app locale for SQL-only or unclear
+mixed-language input. Apply the chosen language to chart titles, descriptions,
+field display titles (axes and legends), annotations and custom display labels
+in `create_chart` arguments. Use one language unless bilingual output is requested.
+Keep SQL field names, field ids and raw category values unchanged.
+
 ## Preset and mark
 
 | preset | allowed marks |

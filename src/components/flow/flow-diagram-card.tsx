@@ -14,7 +14,7 @@ import {
   useNodesState,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ArrowDown, ArrowRight, Loader2, Lock, Maximize2, Move, WandSparkles, X } from "lucide-react";
+import { ArrowDown, ArrowRight, Loader2, Lock, Maximize2, Minus, Plus, Scan, Move, WandSparkles, X } from "lucide-react";
 
 import type { AnalysisCanvasFlowLayoutPatch } from "@shared/analysis-canvas";
 import { useT } from "@/i18n/use-t";
@@ -54,19 +54,68 @@ function nodeTone(node: FlowCard["nodes"][number]): FlowNodeData["tone"] {
   return node.tone ?? (node.kind === "source" ? "info" : node.kind === "result" ? "success" : "neutral");
 }
 
-function ReadOnlyFlowPreview({ card, nodes }: { card: FlowCard; nodes: FlowCard["nodes"] }) {
+function ReadOnlyFlowPreview({ card, nodes, onExpand }: { card: FlowCard; nodes: FlowCard["nodes"]; onExpand: () => void }) {
+  const t = useT();
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
+  const [width, setWidth] = useState(0);
+  const [manualZoom, setManualZoom] = useState<number | null>(null);
   const id = useId().replace(/:/g, "");
   const scene = useMemo(() => buildFlowScene(card, nodes), [card, nodes]);
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [scene.nodes.length === 0]);
+  const fitZoom = Math.min(1, width / Math.max(1, scene.width), 440 / Math.max(1, scene.height));
+  const zoom = manualZoom ?? fitZoom;
+  const height = Math.min(440, Math.max(160, scene.height * fitZoom));
+  useEffect(() => {
+    if (manualZoom === null) viewportRef.current?.scrollTo(0, 0);
+  }, [manualZoom, width, scene.width, scene.height]);
+  const buttonClass = "rounded-sm border p-1.5 text-muted-foreground hover:text-foreground disabled:opacity-40";
   const markerId = (tone: NonNullable<FlowCard["edges"][number]["tone"]>) => `${id}-${tone}`;
 
   if (scene.nodes.length === 0) return <div className="flex min-h-24 items-center justify-center rounded-sm border text-xs text-muted-foreground">—</div>;
-  return <div
-    className="max-h-[440px] overflow-auto overscroll-contain rounded-sm border bg-background"
+  return <div className="stela-flow-preview space-y-1.5">
+    <div className="flex items-center justify-end gap-1">
+      <button type="button" className={buttonClass} title={t("analysisCanvas.flowZoomOut")} aria-label={t("analysisCanvas.flowZoomOut")} disabled={zoom <= 0.05} onClick={() => setManualZoom(Math.max(0.05, zoom / 1.25))}><Minus className="h-3.5 w-3.5" /></button>
+      <button type="button" className="min-w-12 rounded-sm px-1 text-[11px] tabular-nums text-muted-foreground" title={t("analysisCanvas.flowActualSize")} aria-label={t("analysisCanvas.flowActualSize")} onClick={() => setManualZoom(1)}>{Math.round(zoom * 100)}%</button>
+      <button type="button" className={buttonClass} title={t("analysisCanvas.flowZoomIn")} aria-label={t("analysisCanvas.flowZoomIn")} disabled={zoom >= 2} onClick={() => setManualZoom(Math.min(2, zoom * 1.25))}><Plus className="h-3.5 w-3.5" /></button>
+      <button type="button" className={buttonClass} title={t("analysisCanvas.flowFit")} aria-label={t("analysisCanvas.flowFit")} aria-pressed={manualZoom === null} onClick={() => setManualZoom(null)}><Scan className="h-3.5 w-3.5" /></button>
+      <button type="button" className={buttonClass} title={t("analysisCanvas.flowExpand")} aria-label={t("analysisCanvas.flowExpand")} onClick={onExpand}><Maximize2 className="h-3.5 w-3.5" /></button>
+    </div>
+    <div
+    ref={viewportRef}
+    className={cn("overflow-hidden rounded-sm border bg-background", manualZoom !== null && "cursor-grab active:cursor-grabbing select-none")}
+    style={{ height }}
+    onPointerDown={(event) => {
+      if (manualZoom === null || event.button !== 0) return;
+      const el = event.currentTarget;
+      dragRef.current = { x: event.clientX, y: event.clientY, left: el.scrollLeft, top: el.scrollTop };
+      el.setPointerCapture(event.pointerId);
+    }}
+    onPointerMove={(event) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      event.currentTarget.scrollTo(drag.left + drag.x - event.clientX, drag.top + drag.y - event.clientY);
+    }}
+    onLostPointerCapture={() => { dragRef.current = null; }}
+    onPointerUp={(event) => { dragRef.current = null; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
+    onKeyDown={(event) => {
+      const delta = { ArrowLeft: [-60, 0], ArrowRight: [60, 0], ArrowUp: [0, -60], ArrowDown: [0, 60] }[event.key];
+      if (manualZoom === null || !delta) return;
+      event.preventDefault();
+      event.currentTarget.scrollBy(delta[0], delta[1]);
+    }}
     role="img"
     aria-label={card.title}
     tabIndex={0}
   >
-    <div className="relative mx-auto shrink-0" style={{ width: scene.width, height: scene.height }}>
+    <div className="mx-auto" style={{ width: scene.width * zoom, height: scene.height * zoom }}>
+    <div className="relative origin-top-left" style={{ width: scene.width, height: scene.height, transform: `scale(${zoom})` }}>
       <svg className="pointer-events-none absolute inset-0 max-w-none" width={scene.width} height={scene.height} viewBox={`0 0 ${scene.width} ${scene.height}`} aria-hidden="true">
         <defs>
           {(Object.keys(edgeStroke) as Array<keyof typeof edgeStroke>).map((tone) => <marker key={tone} id={markerId(tone)} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill={edgeStroke[tone]} /></marker>)}
@@ -92,7 +141,8 @@ function ReadOnlyFlowPreview({ card, nodes }: { card: FlowCard; nodes: FlowCard[
         {node.description ? <div className="mt-1 whitespace-normal break-words text-[10px] leading-4 text-muted-foreground">{node.description}</div> : null}
       </div>)}
     </div>
-  </div>;
+    </div>
+  </div></div>;
 }
 
 function StelaFlowNodeView({ data, selected }: NodeProps<StelaFlowNode>) {
@@ -267,19 +317,8 @@ export function FlowDiagramCard({
 
   if (loading && nodes.length === 0) return <div className="flex h-[440px] items-center justify-center rounded-lg border"><Loader2 className="h-4 w-4 animate-spin" /></div>;
   return <div className="space-y-1.5">
-    <div className="flex items-center justify-end gap-1">
-      <button
-        type="button"
-        onClick={() => setExpanded(true)}
-        className="rounded-sm border p-1.5 text-muted-foreground hover:text-foreground"
-        title={t("analysisCanvas.flowExpand")}
-        aria-label={t("analysisCanvas.flowExpand")}
-      >
-        <Maximize2 className="h-3.5 w-3.5" />
-      </button>
-    </div>
     {error ? <div className="rounded bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</div> : null}
-    <ReadOnlyFlowPreview card={card} nodes={placedNodes} />
+    <ReadOnlyFlowPreview card={card} nodes={placedNodes} onExpand={() => setExpanded(true)} />
     <Dialog.Root open={expanded} onOpenChange={setExpandedOpen}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[90] bg-black/45 backdrop-blur-sm" />

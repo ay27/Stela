@@ -1,3 +1,4 @@
+import { ToolRepairBudget } from "./tool-repair";
 import { mixedAuthoringFixture } from "@shared/canvas-authoring.fixture";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
@@ -20,6 +21,7 @@ import { updateAnalysisCanvasFlowLayout } from "../analysis-canvas";
  */
 const dispatchTool: typeof dispatchToolRaw = (name, rawArguments, ctx) => {
   ctx.run.toolFailureStreak.clear();
+  delete ctx.run.repairBudget;
   return dispatchToolRaw(name, rawArguments, ctx);
 };
 
@@ -1296,7 +1298,7 @@ try {
     assert.equal(elided(preview.oldContent ?? "").length, 2);
   }
 
-  // 自动维护可创建新 Skill，但不能静默覆盖或归档已有知识。
+  // Seed explicitly maintained knowledge; automatic maintenance cannot overwrite or archive it.
   {
     const content = `---
 name: verified-gotcha
@@ -1325,8 +1327,8 @@ Inspect the live schema first.`;
     };
     const created = await dispatchTool(
       "save_skill",
-      JSON.stringify({ name: "verified-gotcha", content, reason: "Verified by live schema." }),
-      maintenanceCtx,
+      JSON.stringify({ name: "verified-gotcha", content, reason: "Verified by live schema.", sourcePaths: ["note.md"], sourceTables: ["threed.verified"] }),
+      { ...maintenanceCtx, mode: "normal", explicitSkillMaintenance: true, skillEvidence: { notePaths: new Set(["note.md"]), tables: new Set(["threed.verified"]) } },
     );
     assert.equal(created.ok, true);
     const skillUsage: Array<{ type: string; source: string; origin: "system" | "vault"; name: string; category: string | null }> = [];
@@ -1606,8 +1608,8 @@ Inspect the live schema first.`;
       }),
       { ...maintenanceCtx, maintenanceDialect: "starrocks" },
     );
-    assert.equal(wrongDialect.ok, false);
-    assert.match(wrongDialect.text, /does not match active SQL dialect/i);
+    assert.equal(wrongDialect.ok, true);
+    assert.match(wrongDialect.text, /candidate_not_published/);
     const runbook = await dispatchTool(
       "save_skill",
       JSON.stringify({
@@ -1635,8 +1637,16 @@ Inspect the live schema first.`;
       columns: [{ name: "category", typeName: "VARCHAR" }, { name: "total", typeName: "BIGINT" }],
       rows: [["A", 2], ["B", 1]],
     }]]);
+    const deliveryPlan = new ExecutionPlanStore("test-run");
+    deliveryPlan.create([{ id: "files", title: "Files", intent: "Deliver files", acceptance: "Note and Canvas" }],
+      { deliveries: [{ kind: "note", path: "receipt.md" }, { kind: "canvas" }] });
+    await writeFile(join(root, "receipt.md"), "# Empty");
+    const noteReceipt = await dispatchTool("propose_edit", JSON.stringify({ path: "receipt.md", newContent: "# Saved note", description: "Write requested note" }), { ...baseCtx, plan: deliveryPlan });
+    assert.equal(noteReceipt.ok, true, noteReceipt.text);
+    assert.equal(deliveryPlan.get()?.deliveries?.[0]?.receipt?.path, "receipt.md");
     const canvasCtx = {
       ...baseCtx,
+      plan: deliveryPlan,
       run: { ...baseCtx.run, notePath: join(root, "note.md") },
       chartRuns,
       resolveChartRun: async (runId: string) => chartRuns.has(runId) ? {
@@ -1670,10 +1680,27 @@ Inspect the live schema first.`;
       }] }] }, sourceRuns: [{ sourceId: "data", runId: "canvas-run" }],
     }), canvasCtx);
     assert.equal(invalidField.ok, false);
-    assert.match(invalidField.text, /column missing/);
+    assert.match(invalidField.text, /field_missing/);
     assert.deepEqual(await readdir(root), beforeInvalid);
+    const multipleIssues = { canvas: { title: "Broken delivery", sources: [{ id: "data", title: "Data" }], sections: [{ id: "s", title: "S", cards: [
+      { id: "kpi", type: "kpi", sourceId: "data", value: { field: "missing" } },
+    ] }] }, sourceRuns: [{ sourceId: "data", runId: "constant-canvas-run" }] };
+    const repairs = { ...canvasCtx, run: { ...canvasCtx.run, toolFailureStreak: new Map<string, number>(), repairBudget: new ToolRepairBudget() } };
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const rejected = await dispatchToolRaw("create_analysis_canvas", JSON.stringify(multipleIssues), repairs);
+      assert.equal(rejected.ok, false);
+      assert.match(rejected.text, /source_not_refreshable/);
+      assert.match(rejected.text, /field_missing/);
+      assert.match(rejected.text, /kpi_row_count/);
+      assert.equal(repairs.run.toolFailureStreak.size, 0, "authoring failures must not consume execution retries");
+    }
+    const exhausted = await dispatchToolRaw("create_analysis_canvas", JSON.stringify({ canvas: mixedAuthoringFixture, sourceRuns: [{ sourceId: "data", runId: "canvas-run" }] }), repairs);
+    assert.match(exhausted.text, /budget exhausted/);
+    assert.deepEqual(await readdir(root), beforeInvalid, "all validation attempts are atomic");
+    assert.equal(deliveryPlan.get()?.deliveries?.[1]?.receipt, undefined);
     const mixed = await dispatchTool("create_analysis_canvas", JSON.stringify({ canvas: mixedAuthoringFixture, sourceRuns: [{ sourceId: "data", runId: "canvas-run" }] }), canvasCtx);
     assert.equal(mixed.ok, true, mixed.text);
+    assert.ok(deliveryPlan.get()?.deliveries?.[1]?.receipt?.path);
     const mixedFile = JSON.parse(mixed.text) as { path: string; content: string; etag: string };
     assert.equal(await readFile(mixedFile.path, "utf8"), mixedFile.content);
     const mixedCanvas = JSON.parse(mixedFile.content);
