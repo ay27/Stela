@@ -15,3 +15,5 @@ The website uses 16 composed images under `docs/assets/screenshots`. Each includ
 PNG files open at full size; WebP images provide 900px and 1800px variants.
 
 Hero compositions use the complete zh-agent.png and en-agent.png captures, with the file tree visible. The overview heading is retained. The English source is displayed unchanged, including its previously noted spend-share discrepancy.
+
+The Chinese and English Markdown captures were replaced with user-edited originals on September 22: the toolbar now shows only the demo-vault-relative path. Full-image composition is preserved.

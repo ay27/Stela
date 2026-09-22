@@ -1,20 +1,5 @@
 [
   {
-    "asset": "zh-markdown",
-    "source": "zh-markdown.png",
-    "sha256": "50bebede0cd21f77577fb83fe66dd96e8bb27285512d12ed33f1926fba2ae4a4",
-    "crop": [
-      0,
-      0,
-      1,
-      1
-    ],
-    "width": 1800,
-    "height": 1320,
-    "title": "思考、查询、结果，写在一起。",
-    "subtitle": "在 Markdown 中执行 SQL，并保留查询结果"
-  },
-  {
     "asset": "zh-chat",
     "source": "zh-sql-in-chat.png",
     "sha256": "9f73872b6630dfad94b406043f342bf7922edbccf018abd1d2a1c8dcb7041abe",
@@ -103,21 +88,6 @@
     "height": 1320,
     "title": "接入数据库，开始分析。",
     "subtitle": "MySQL、PostgreSQL、MongoDB，通过连接器插件扩展"
-  },
-  {
-    "asset": "en-markdown",
-    "source": "en-markdown.png",
-    "sha256": "72292e0ceaffb9297aaaaca0c734e168b32f70c777f40634556fae8be08aa288",
-    "crop": [
-      0,
-      0,
-      1,
-      1
-    ],
-    "width": 1800,
-    "height": 1320,
-    "title": "Your reasoning. Your SQL. Your results.",
-    "subtitle": "Execute SQL in Markdown and keep the results"
   },
   {
     "asset": "en-chat",
@@ -238,5 +208,35 @@
     "height": 1320,
     "title": "Analysis, all in one workspace.",
     "subtitle": "SQL, Chat and Canvas, side by side"
+  },
+  {
+    "asset": "zh-markdown",
+    "source": "zh-markdown.png",
+    "sha256": "7d1cf12abe2f222210bcf82bc23b83b1d74afc5ae82439ff6ae926dccdf4bc4f",
+    "crop": [
+      0,
+      0,
+      1,
+      1
+    ],
+    "width": 1800,
+    "height": 1320,
+    "title": "思考、查询、结果，写在一起。",
+    "subtitle": "在 Markdown 中执行 SQL，并保留查询结果"
+  },
+  {
+    "asset": "en-markdown",
+    "source": "en-markdown.png",
+    "sha256": "b30ad1f8b55352a37efc0e3f15a81c90bb89e77ce5d2dbaee2d9dff55d80840f",
+    "crop": [
+      0,
+      0,
+      1,
+      1
+    ],
+    "width": 1800,
+    "height": 1320,
+    "title": "Your reasoning. Your SQL. Your results.",
+    "subtitle": "Execute SQL in Markdown and keep the results"
   }
 ]
