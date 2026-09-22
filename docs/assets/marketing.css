@@ -92,6 +92,12 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
   .stela-feature-copy h3 { font-size: 21px; }
 }
 
-.stela-canvas-gallery { display: flex; gap: 16px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 12px; margin-top: auto; }
-.stela-canvas-gallery .stela-shot { flex: 0 0 92%; scroll-snap-align: start; }
 .stela-shot > a { border-radius: 10px; }
+
+.stela-more { margin: 64px 0 32px; padding-top: 32px; border-top: 1px solid var(--line); }
+.stela-more h2 { font-size: 22px; margin: 0 0 28px; }
+.stela-more-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px 40px; }
+.stela-more-grid h3 { font-size: 16px; margin: 0 0 8px; }
+.stela-more-grid p { font-size: 14px; line-height: 1.8; color: var(--muted); margin: 0; }
+@media (max-width: 820px) { .stela-more-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 520px) { .stela-more-grid { grid-template-columns: 1fr; gap: 24px; } }

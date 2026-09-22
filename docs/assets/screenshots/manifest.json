@@ -1,8 +1,8 @@
 [
   {
-    "asset": "zh-workspace",
-    "source": "zh-workspace.png",
-    "sha256": "563bf2682b2cd02aa3075157eb8bc10926162977361f8e0c1c0bc35765bce2c5",
+    "asset": "zh-markdown",
+    "source": "zh-markdown.png",
+    "sha256": "50bebede0cd21f77577fb83fe66dd96e8bb27285512d12ed33f1926fba2ae4a4",
     "crop": [
       0,
       0,
@@ -11,48 +11,33 @@
     ],
     "width": 1800,
     "height": 1320,
-    "title": "分析工作，无需切换工具。",
-    "subtitle": "SQL · Chat · Canvas，在同一工作台中展开"
-  },
-  {
-    "asset": "zh-markdown",
-    "source": "zh-markdown.png",
-    "sha256": "50bebede0cd21f77577fb83fe66dd96e8bb27285512d12ed33f1926fba2ae4a4",
-    "crop": [
-      0.24,
-      0.145,
-      0.57,
-      0.76
-    ],
-    "width": 1800,
-    "height": 1320,
     "title": "思考、查询、结果，写在一起。",
     "subtitle": "在 Markdown 中执行 SQL，并保留查询结果"
   },
   {
     "asset": "zh-chat",
-    "source": "zh-chat3.png",
-    "sha256": "feeda4d436d734c98fec7dc97ce81ba739bcab8ac72936630606de50add44ff5",
+    "source": "zh-sql-in-chat.png",
+    "sha256": "9f73872b6630dfad94b406043f342bf7922edbccf018abd1d2a1c8dcb7041abe",
     "crop": [
-      0.31,
-      0.13,
-      0.565,
-      0.65
+      0,
+      0,
+      1,
+      1
     ],
     "width": 1800,
     "height": 1320,
-    "title": "从一句提问，到一张图表。",
-    "subtitle": "查询执行、结果解读与图表，留在同一段对话里"
+    "title": "写 SQL，问问题，就在同一段对话。",
+    "subtitle": "代码补全、查询执行与结果解读，连贯展开"
   },
   {
     "asset": "zh-agent",
     "source": "zh-agent.png",
-    "sha256": "51f694853aa758e431d09977bfd4e6d5a1f2bf7ff2ce16bf9c1bc094bea59779",
+    "sha256": "ee3acad89523c923aeebf4bac7b13e6db389acd83a177045c705b4c3ce40f040",
     "crop": [
-      0.695,
-      0.085,
-      0.29,
-      0.73
+      0,
+      0,
+      1,
+      1
     ],
     "width": 1800,
     "height": 1320,
@@ -79,10 +64,10 @@
     "source": "zh-canvas-lineage2.png",
     "sha256": "cf852b9daa74a8cde1238c0d88b1bbd0ff008ff337bb4b6e4132ce6c20ad1b48",
     "crop": [
-      0.021,
-      0.05,
-      0.958,
-      0.9
+      0,
+      0,
+      1,
+      1
     ],
     "width": 1800,
     "height": 1320,
@@ -94,10 +79,10 @@
     "source": "zh-knowledge.png",
     "sha256": "4b27267f579ea0752fdcaf8a3e5cbd48329298f6856d8017291f0d7dc8415776",
     "crop": [
-      0.166,
-      0.11,
-      0.668,
-      0.78
+      0,
+      0,
+      1,
+      1
     ],
     "width": 1800,
     "height": 1320,
@@ -109,10 +94,10 @@
     "source": "zh-plugins.png",
     "sha256": "1fec4ae50530cbf9274634366030d209307afdc3faa3786f7f25ea4ddfb8f796",
     "crop": [
-      0.188,
-      0.1,
-      0.624,
-      0.8
+      0,
+      0,
+      1,
+      1
     ],
     "width": 1800,
     "height": 1320,
@@ -120,9 +105,9 @@
     "subtitle": "MySQL、PostgreSQL、MongoDB，通过连接器插件扩展"
   },
   {
-    "asset": "en-workspace",
-    "source": "en-workspace.png",
-    "sha256": "15e1353579e19032fd1111af5282e432acaa4e5aff72d7fd8edfd4e027515733",
+    "asset": "en-markdown",
+    "source": "en-markdown.png",
+    "sha256": "72292e0ceaffb9297aaaaca0c734e168b32f70c777f40634556fae8be08aa288",
     "crop": [
       0,
       0,
@@ -131,48 +116,33 @@
     ],
     "width": 1800,
     "height": 1320,
-    "title": "Analysis, all in one workspace.",
-    "subtitle": "SQL, Chat and Canvas, side by side"
-  },
-  {
-    "asset": "en-markdown",
-    "source": "en-markdown.png",
-    "sha256": "72292e0ceaffb9297aaaaca0c734e168b32f70c777f40634556fae8be08aa288",
-    "crop": [
-      0.315,
-      0.1,
-      0.475,
-      0.85
-    ],
-    "width": 1800,
-    "height": 1320,
     "title": "Your reasoning. Your SQL. Your results.",
     "subtitle": "Execute SQL in Markdown and keep the results"
   },
   {
     "asset": "en-chat",
-    "source": "en-chat.png",
-    "sha256": "f6e5c5471a54c47f682bc858e0d916b64cb40988873d8f78acc171abe90e6b4d",
+    "source": "en-sql-in-chat.png",
+    "sha256": "1a8210bbef5936839247da5a6c76906627b09b57c8b1aa8808d2313d96353a5e",
     "crop": [
-      0.36,
-      0.12,
-      0.53,
-      0.68
+      0,
+      0,
+      1,
+      1
     ],
     "width": 1800,
     "height": 1320,
-    "title": "From a question to a chart.",
-    "subtitle": "Queries, analysis and charts in one conversation"
+    "title": "Write SQL. Ask questions. Keep the context.",
+    "subtitle": "SQL completion, execution and analysis in one conversation"
   },
   {
     "asset": "en-agent",
     "source": "en-workspace.png",
     "sha256": "15e1353579e19032fd1111af5282e432acaa4e5aff72d7fd8edfd4e027515733",
     "crop": [
-      0.722,
-      0.08,
-      0.27,
-      0.7
+      0,
+      0,
+      1,
+      1
     ],
     "width": 1800,
     "height": 1320,
@@ -199,10 +169,10 @@
     "source": "en-canvas-lineage2.png",
     "sha256": "3541ee12d3eda00bda8fe0dd50c6cdd794796417bb65e80ddeaf014df0ab04aa",
     "crop": [
-      0.021,
-      0.05,
-      0.958,
-      0.9
+      0,
+      0,
+      1,
+      1
     ],
     "width": 1800,
     "height": 1320,
@@ -214,10 +184,10 @@
     "source": "en-knowledge.png",
     "sha256": "e6ede599899fdba66b699e1f19b017b71b2f741df46af9e024b5ad6f47abe9e5",
     "crop": [
-      0.278,
-      0.112,
-      0.444,
-      0.778
+      0,
+      0,
+      1,
+      1
     ],
     "width": 1800,
     "height": 1320,
@@ -229,14 +199,44 @@
     "source": "en-plugins.png",
     "sha256": "8f29770e9c591a81d6c4e91a6029297d67fcea31b62c55a582d029272bcad175",
     "crop": [
-      0.188,
-      0.1,
-      0.624,
-      0.8
+      0,
+      0,
+      1,
+      1
     ],
     "width": 1800,
     "height": 1320,
     "title": "Connect your database. Start exploring.",
     "subtitle": "Extend Stela with MySQL, PostgreSQL and MongoDB connectors"
+  },
+  {
+    "asset": "zh-workspace",
+    "source": "zh-agent.png",
+    "sha256": "ee3acad89523c923aeebf4bac7b13e6db389acd83a177045c705b4c3ce40f040",
+    "crop": [
+      0,
+      0,
+      1,
+      1
+    ],
+    "width": 1800,
+    "height": 1320,
+    "title": "分析工作，无需切换工具。",
+    "subtitle": "SQL · Chat · Canvas，在同一工作台中展开"
+  },
+  {
+    "asset": "en-workspace",
+    "source": "en-agent.png",
+    "sha256": "cb4ddb31044d9a41b5446b46ed23c015d21ab0a103509885f6f1cd71bfdd46e0",
+    "crop": [
+      0,
+      0,
+      1,
+      1
+    ],
+    "width": 1800,
+    "height": 1320,
+    "title": "Analysis, all in one workspace.",
+    "subtitle": "SQL, Chat and Canvas, side by side"
   }
 ]
