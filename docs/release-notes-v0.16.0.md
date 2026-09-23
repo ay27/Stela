@@ -19,9 +19,7 @@
 
 ### Upgrade Notes
 
-- Old conversations remain readable. Continuing a legacy conversation automatically upgrades its session journal; a `.pre-pi087.bak` backup is retained beside the original before migration. Chat documents using the new journal format have version 2.
-- Older Stela versions cannot resume version-2 Chat files. To roll back an existing conversation, close Stela and restore its pre-upgrade backup. Conversations created in this version have no legacy backup.
-- Backups contain conversation data. Treat them with the same privacy precautions as the original files.
+- Existing Agent conversation history remains readable. Continuing a previous Agent conversation automatically upgrades its storage format and retains a pre-upgrade backup.
 - Notes, database connections, and model credentials do not require manual migration. Interrupted Agent operations are not automatically replayed.
 - Experimental semantic cost and analysis-scope options remain optional. Batch semantic analysis still requires authorization and respects task budgets.
 
@@ -44,8 +42,6 @@
 
 ### 升级说明
 
-- 旧对话仍可查看。继续旧对话时，会自动升级会话记录，并在原文件旁保留 `.pre-pi087.bak` 备份。采用新会话格式的 Chat 文件版本号为 2。
-- 旧版 Stela 无法继续使用版本 2 的 Chat 文件。如需回退已有对话，请先退出 Stela，再恢复升级前的备份。本版新建的对话没有旧格式备份。
-- 备份包含对话数据，请与原文件一样妥善保管。
+- 已有 Agent 历史会话仍可查看，继续使用时会自动升级存储格式，并保留升级前的备份。
 - 笔记、数据库连接和模型凭据无需手动迁移。被中断的 Agent 操作不会自动重放。
 - 语义成本与分析口径的实验选项仍为可选功能。批量语义分析继续遵循授权范围和任务预算。
