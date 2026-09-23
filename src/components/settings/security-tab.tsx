@@ -1,6 +1,6 @@
 import { Loader2, ShieldAlert, ShieldCheck } from "lucide-react";
 
-import { describeBackend, usePrivacyStatus } from "@/services/privacy";
+import { usePrivacyStatus } from "@/services/privacy";
 import { useT } from "@/i18n/use-t";
 
 import { Section, TabContainer } from "./atoms";
@@ -20,9 +20,9 @@ export function SecurityTab() {
         ) : error ? (
           <CredentialErrorBanner message={error} />
         ) : status?.available ? (
-          <CredentialOkBanner backend={describeBackend(status)} />
+          <CredentialOkBanner />
         ) : (
-          <CredentialPlainBanner backend={describeBackend(status)} />
+          <CredentialPlainBanner />
         )}
       </Section>
 
@@ -38,27 +38,27 @@ export function SecurityTab() {
   );
 }
 
-function CredentialOkBanner({ backend }: { backend: string }) {
+function CredentialOkBanner() {
   const t = useT();
   return (
     <div className="flex items-start gap-3 rounded-md border border-emerald-500/40 bg-emerald-50 p-3 text-xs text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
       <ShieldCheck className="mt-0.5 h-4 w-4 flex-none" />
       <div className="space-y-1">
         <div className="font-medium">{t("security.credentials.okTitle")}</div>
-        <p>{t("security.credentials.okBody", { backend })}</p>
+        <p>{t("security.credentials.okBody")}</p>
       </div>
     </div>
   );
 }
 
-function CredentialPlainBanner({ backend }: { backend: string }) {
+function CredentialPlainBanner() {
   const t = useT();
   return (
     <div className="flex items-start gap-3 rounded-md border border-amber-300/40 bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
       <ShieldAlert className="mt-0.5 h-4 w-4 flex-none" />
       <div className="space-y-1.5">
         <div className="font-medium">{t("security.credentials.plainTitle")}</div>
-        <p>{t("security.credentials.plainBody", { backend })}</p>
+        <p>{t("security.credentials.plainBody")}</p>
       </div>
     </div>
   );

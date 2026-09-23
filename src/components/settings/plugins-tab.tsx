@@ -100,15 +100,7 @@ export function PluginsTab() {
             {t("plugins.title")}
           </h3>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            {t("plugins.description", {
-              path: "",
-            }).split("{path}")[0]}
-            <code className="rounded bg-muted px-1 py-0.5 font-mono">
-              {"{vault}/.stela/plugins/"}
-            </code>
-            {t("plugins.description", {
-              path: "{path}",
-            }).split("{path}")[1]}
+            {t("plugins.description")}
           </p>
         </div>
         <div className="flex flex-none items-center gap-2">

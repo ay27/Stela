@@ -713,7 +713,7 @@ function DirSubtree(props: SubtreeProps) {
           ) : null}
           {isRoot && list && list.length === 0 && !showDraft ? (
             <div className="px-3 py-2 text-xs text-muted-foreground">
-              Folder is empty.
+              {t("fileTree.emptyFolder")}
             </div>
           ) : null}
           {isRoot &&

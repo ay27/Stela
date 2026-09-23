@@ -626,8 +626,8 @@ export function AiTab() {
                   {requestedReasoningEffort !== effectiveReasoningEffort ? (
                     <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-400">
                       {t("ai.reasoningEffort.clamped", {
-                        requested: requestedReasoningEffort,
-                        effective: effectiveReasoningEffort,
+                        requested: t(`ai.reasoningEffort.level.${requestedReasoningEffort}`),
+                        effective: t(`ai.reasoningEffort.level.${effectiveReasoningEffort}`),
                       })}
                     </p>
                   ) : null}
@@ -776,11 +776,8 @@ export function AiTab() {
           {error ??
             notice ??
             (draft?.hasApiKey || settings.hasApiKey
-              ? t("ai.status.ready", {
-                  backend: status?.credentialBackend ?? "safeStorage",
-                })
+              ? t("ai.status.ready")
               : t("ai.status.needsKey"))}
-          <FormHint>{t("ai.status.noRag")}</FormHint>
         </div>
       </div>
 
