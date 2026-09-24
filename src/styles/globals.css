@@ -171,6 +171,29 @@
     border: 2px solid transparent;
   }
 
+  /* Explicit Chromium scrollbars stay visible on macOS even when the system
+   * uses auto-hiding overlay scrollbars. Non-auto standard properties would
+   * override these pseudo-elements, so reset the global thin/color settings. */
+  .stela-result-scroll {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+  .stela-result-scroll::-webkit-scrollbar {
+    height: 8px;
+  }
+  .stela-result-scroll::-webkit-scrollbar-track {
+    background: hsl(var(--muted) / 0.4);
+  }
+  .stela-result-scroll::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.4);
+    border: 2px solid transparent;
+    border-radius: 8px;
+    background-clip: content-box;
+  }
+  .stela-result-scroll::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.65);
+  }
+
   /*
    * TabBar 横向滚动专用：隐藏可见滚动条但保留滚动能力。
    * TabBar 高度仅 h-9（36px），10px 滚动条放进去会吃掉近 1/3 高度。

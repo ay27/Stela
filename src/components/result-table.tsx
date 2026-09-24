@@ -201,7 +201,7 @@ export function ResultTable({
   return (
     <div
       ref={wrapperRef}
-      className="relative w-full overflow-x-auto bg-background font-mono text-xs"
+      className="stela-result-scroll relative w-full overflow-x-auto bg-background font-mono text-xs"
       onMouseOver={handleMouseOver}
       onMouseLeave={handleMouseLeave}
     >

@@ -1572,6 +1572,35 @@
   /* ResultTable 自己控制 max-height + overflow，这里只起视觉分隔作用 */
 }
 
+/* Embedded query results are not editable ProseMirror tables. Keep their
+   geometry independent of its table rules and Crepe's blanket padding reset. */
+.stela-cb .stela-cb__result-body table {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  width: 100%;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.stela-cb .stela-cb__result-body table :is(th, td) {
+  vertical-align: middle;
+  padding: 4px 8px;
+  border-width: 0 1px 1px 0;
+  border-style: solid;
+  border-color: hsl(var(--border));
+}
+
+/* Keep edge-cell geometry identical to the other cells. The block frame or
+   history tabs draws the visible outside edge instead of a second grid line. */
+.stela-cb .stela-cb__result-body table > tbody > tr:last-child > td {
+  border-bottom-color: transparent;
+}
+
+.stela-cb .stela-cb__result-body table tr > :last-child {
+  border-right-color: transparent;
+}
+
 /* 底部版本栏：倒置 TabBar —— active tab 顶边与上方表格同色衔接 */
 .stela-cb__run-tabs {
   display: flex;

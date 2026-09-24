@@ -58,7 +58,7 @@ export function ResultDiffTable({ diff }: ResultDiffTableProps) {
     diff.stats.removed === 0;
 
   return (
-    <div className="w-full overflow-x-auto bg-background font-mono text-xs">
+    <div className="stela-result-scroll w-full overflow-x-auto bg-background font-mono text-xs">
       {singleRow
         ? renderTransposed(diff, t)
         : renderRowLevel(diff, t)}
