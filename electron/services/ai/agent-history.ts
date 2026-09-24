@@ -1,3 +1,5 @@
+import { privacyHistory } from "./privacy-history";
+import { PrivacySession } from "./privacy-session";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -543,7 +545,22 @@ export async function forkAgentHistorySession(
   const sourcePath = await sessionPath(vaultPath, source);
   const sessionId = `sess_${randomUUID()}`;
   const destination = await sessionPath(vaultPath, { deviceSlug: localDeviceSlug, sessionId });
-  const raw = await fs.readFile(sourcePath, 'utf8');
+  let raw = await fs.readFile(sourcePath, 'utf8');
+  const sourcePrivacy = (await privacyHistory(vaultPath, source.deviceSlug, source.sessionId)).state;
+  if (sourcePrivacy) {
+    const sourceMap = new PrivacySession(false, { state: sourcePrivacy, save: async () => {} });
+    const destinationMap = new PrivacySession(true, await privacyHistory(vaultPath, localDeviceSlug, sessionId));
+    const replacements = new Map<string, string>();
+    for (const entry of sourcePrivacy.entries) {
+      // Rekey identities without risking a different detector decision.
+      const token = destinationMap.importIdentity(entry.original, entry.kind);
+      replacements.set(entry.token, token);
+    }
+    const entries = raw.split("\n").filter(Boolean).map(line => JSON.parse(line));
+    const rewrite = (v: unknown): unknown => typeof v === "string" ? v.replace(/STELA_PII_[a-f0-9]{24}_[a-f0-9]{24}/g, token => replacements.get(token) ?? sourceMap.restore(token)) : Array.isArray(v) ? v.map(rewrite) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k,x]) => [k,rewrite(x)])) : v;
+    raw = entries.map(e => JSON.stringify(rewrite(e))).join("\n") + "\n";
+    await destinationMap.flush();
+  }
   const lines = raw.split('\n');
   const header = JSON.parse(lines[0]);
   header.id = sessionId;

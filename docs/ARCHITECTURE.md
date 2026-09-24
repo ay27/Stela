@@ -854,6 +854,41 @@ bounded cursor context
 
 ## SQL Conversation Workspace
 
+### Optional local AI privacy mode
+
+ADR-0117 adds a Vault AI setting, `privacyModeEnabled` (default false). Each
+task snapshots it. A pinned argus-redact fast WASM package runs in a Main-owned
+Worker, without network or Python dependencies. All four Models generation
+methods share a privacy transport, including Pi compaction, semantic batches,
+completion, retries and maintenance. Credentials retain irreversible redaction.
+
+Main owns a random conversation dictionary. Version-3 Chat documents embed it
+in `privacy`; temporary Chat remains local, saved Chat follows Git. Legacy Agent
+history stores a neighboring `.privacy.json`; importing or forking preserves or
+rekeys identities respectively. Maps permit restoration to anyone with Vault
+access. Renderer snapshots omit the complete dictionary and receive bounded
+per-event display annotations instead. Local display restoration is never model
+history. Disabling privacy permits plaintext on subsequent tasks and retains old
+maps for viewing; enabling cannot undo previously sent information.
+
+Before generated Python runs, complete JSONL/Parquet artifacts are scanned into
+separate sanitized Parquet inputs. Dynamic queries use the same path. Mapping
+and schema fingerprints constrain cache reuse; original execution IDs preserve
+provenance. Switching privacy state rebuilds the Python workspace. Identity text
+operations are limited; unchanged numeric data and NULLs retain their types.
+Query token restoration happens only inside Main, with SQL literal escaping and
+the normal SQL guards. No mapping or restore helper enters Python.
+
+Detection/size/persistence failures stop transmission rather than falling back
+to plaintext. A single detection segment is bounded to 128 KiB; maps are bounded
+to 64 MiB, and existing complete-artifact limits still apply. Fast is a Chinese
+and English PII minimization aid, not an anonymity guarantee. Novel, encoded or
+derived values may escape recognition. Non-text model payloads are rejected.
+
+The shipped WASM and glue are checksum-pinned public upstream artifacts;
+`vendor/argus-redact/README.md` records their provenance and rebuild recipe.
+Electron packages them as resources, so first use needs no download.
+
 `*.stela.chat` files are authoritative, versioned Vault conversation documents.
 They store drafts, immutable submitted inputs, ordered Agent events, proposal
 responses, execution references and the embedded pi session JSONL. Saved documents are
@@ -1093,7 +1128,8 @@ never automatically resumed or replayed when opening a conversation.
 native v3 import. Read-only legacy inspection leaves the source unchanged. The
 first migration publishes atomically and retains a `.pre-pi087.bak` copy. Embedded
 Chat journals publish through the conversation service, which backs up the complete
-legacy Chat document and upgrades its outer version to 2. New journals use format 4
+legacy Chat document and upgrades its outer version to 2 (retaining version 3
+when a privacy mapping is already present). New journals use format 4
 directly. Backups contain private conversation data and stay beside their source;
 they are not release assets. To downgrade an old conversation, restore its backup
 with Stela closed. A new version-2 Chat has no old-client equivalent.

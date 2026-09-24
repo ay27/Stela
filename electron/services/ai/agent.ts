@@ -1,3 +1,5 @@
+import { PrivacySession, openPrivacySession, type IPrivacyPersistence } from "./privacy-session";
+import { privacyHistory } from "./privacy-history";
 import { AgentHarness } from "./pi-harness";
 import { Session, JsonlSessionStorage, InMemorySessionStorage } from "./pi-session";
 import { ToolRepairBudget } from "./tool-repair";
@@ -394,6 +396,7 @@ async function getOrCreateSession(
 }
 
 export async function runSkillMaintenance(options: {
+  privacy?: PrivacySession;
   vaultPath: string;
   request: AgentRunRequest;
   conversation: string;
@@ -421,6 +424,7 @@ export async function runSkillMaintenance(options: {
   let metricRegistered = !!options.metricRunId;
   const maintenanceEvents: AgentEvent[] = [];
   const notify = (event: AgentEvent) => {
+    if (options.privacy) event = { ...event, privacy: options.privacy.display(event) };
     maintenanceEvents.push(event);
     onEvent(event);
   };
@@ -585,6 +589,7 @@ export async function runSkillMaintenance(options: {
           },
           maintenanceRefreshName: refreshSkill?.metadata.name ?? null,
           aiSettings,
+          privacy: options.privacy,
           connector: {
             listKinds: connectorRegistry.listKinds,
             listDatabases: connectorRegistry.listDatabases,
@@ -746,6 +751,8 @@ export function startSkillMaintenanceJob(vaultPath: string, job: SkillMaintenanc
 }
 
 export interface RunAgentOptions {
+  privacyModeEnabled?: boolean;
+  privacyPersistence?: IPrivacyPersistence;
   storage?: JsonlSessionStorage;
   recordRun?: AgentRunRecorder;
   conversationRunIds?: string[];
@@ -772,8 +779,10 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
   let metricFinished = false;
   let metricFirstResult = false;
   const pending = new Map<string, ProposalResolver>();
+  let privacy: PrivacySession | undefined;
   const historyEvents: AgentEvent[] = [];
   const emit = (event: AgentEvent) => {
+    if (privacy) event = { ...event, privacy: privacy.display(event) };
     historyEvents.push(event);
     onEvent(event);
     if (!metricStarted || !agentMetrics.isOpen()) return;
@@ -800,6 +809,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
     }
   };
   const emitHistoryOnly = (event: AgentEvent) => {
+    if (privacy) event = { ...event, privacy: privacy.display(event) };
     historyEvents.push(event);
     onEvent(event);
   };
@@ -825,8 +835,13 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
     session = opened.session;
     historyStorage = opened.storage;
     await appendAgentHistoryStarted(historyStorage, request);
-    emit({ type: "started", runId });
     const settings = await settingsStore.loadAppSettings(vaultPath);
+    if (options.privacyModeEnabled !== undefined) settings.ai.privacyModeEnabled = options.privacyModeEnabled;
+    privacy = openPrivacySession(`${vaultPath}\0${request.sessionId}`, settings.ai.privacyModeEnabled === true, options.privacyPersistence ?? await privacyHistory(vaultPath, slug, request.sessionId!));
+    const inputMessage = request.message ?? { version: 1 as const, segments: [{ kind: "text" as const, text: request.prompt }], resources: [] };
+    const privacyInput = privacy.enabled ? { ...inputMessage, segments: await Promise.all(inputMessage.segments.map(async segment => segment.kind === "text" ? { ...segment, text: await privacy!.maskText(redactForPrompt(segment.text), "", signal) } : segment)) } : undefined;
+    await privacy.flush();
+    emit({ type: "started", runId, privacyInput });
     if (settings.ai.providerMode === "disabled") {
       emit({ type: "error", runId, message: "AI provider is disabled. Enable it in Settings → AI." });
       return;
@@ -876,9 +891,9 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       SKILL_PROMPT_LIMIT,
       async (skill) => await resolveSkillFreshness(skill) === "fresh",
     );
-    const { models, model, reasoning } = createTransportForProfile(settings.ai, apiKey, profile.id);
+    const { models, model, reasoning } = createTransportForProfile(settings.ai, apiKey, profile.id, privacy);
     const semantic = createSemanticAgent({
-      vault: vaultPath, session: request.sessionId!, slug, settings: settings.ai, profile, signal,
+      privacy, vault: vaultPath, session: request.sessionId!, slug, settings: settings.ai, profile, signal,
       chinese: request.locale === "zh",
       approve: (description, allow, approvalSignal) => makeRequestProposal(runId, `semantic-${randomUUID()}`, emit, pending, approvalSignal)({
         kind: "question", payload: { description, question: description, options: [allow, request.locale === "zh" ? "拒绝" : "Deny"] },
@@ -893,7 +908,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       onUsage: (usage) => { if (agentMetrics.isOpen()) agentMetrics.addUsage(metricRunId, usage); },
     });
     const contextWindow = model.contextWindow;
-    const systemPrompt = buildSystemPrompt();
+    const systemPrompt = buildSystemPrompt() + (privacy.enabled ? "\nPrivacy mode is enabled. STELA_PII tokens represent identities; keep tokens exact. Python inputs are pseudonymized. Never infer real spelling, phone prefixes or locations from tokens. Use full tokens as quoted SQL values when filtering; the host resolves them locally. Do not encode or split identities to bypass privacy.\n" : "");
     const skillMetadata = formatSkillsForSystemPrompt(promptSkills.map((item) => item.skill));
     if (agentMetrics.isOpen()) {
       agentMetrics.addEvent(metricRunId, { type: "system_prompt", payload: systemPrompt });
@@ -983,7 +998,8 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
             resolve: resolveQueryArtifact,
             discard: discardQueryArtifactTarget,
           },
-          pythonExecutor: { execute: executePython, reset: async (vault, sessionId) => {
+          privacy,
+          pythonExecutor: { execute: input => executePython({ ...input, privacy, onPrivacyProgress: (rows, total) => emit({ type: "assistant_progress", runId, stepIndex: -2, content: request.locale === "zh" ? `正在脱敏查询结果：${rows} / ${total} 行` : `Preparing private query data: ${rows} / ${total} rows`, phase: rows === total ? "completed" : "streaming" }) }), reset: async (vault, sessionId) => {
             await resetPythonWorkspace(vault, sessionId);
             clearSemanticWorkspace(vault, sessionId);
           } },
@@ -1005,6 +1021,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
               if (!settings.ai.automaticSkillMaintenanceEnabled) return;
               if (skill.metadata.category === "analysis-runbook" && skill.metadata.sources.length === 0) return;
               const jobOptions = {
+                privacy,
                 vaultPath,
                 request,
                 conversation: conversationForMaintenance((await session!.buildContext()).messages),
@@ -1525,6 +1542,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           agentMetrics.addEvent(maintenanceMetricRunId, { type: "enqueued" });
         }
         const jobOptions = {
+          privacy,
           vaultPath,
           request,
           conversation: conversationForMaintenance(context.messages),

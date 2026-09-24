@@ -1,3 +1,4 @@
+import type { PrivacySession } from "./privacy-session";
 import type { AiSettings, AiProviderProfile } from "../../shared/types";
 import type { ISemanticRow, ISemanticResponse } from "../../shared/semantic";
 import { SemanticExecution } from "./semantic-execution";
@@ -12,6 +13,7 @@ export function clearSemanticWorkspace(vault: string, session: string): void {
   // Keep the map registered: an active run still holds this exact cache object.
 }
 export function createSemanticAgent(input: {
+  privacy?: PrivacySession;
   vault: string; session: string; slug: string; settings: AiSettings; profile: AiProviderProfile;
   signal: AbortSignal; chinese: boolean;
   approve: (description: string, allow: string, signal: AbortSignal) => Promise<boolean | string>;
@@ -51,7 +53,7 @@ export function createSemanticAgent(input: {
     complete: async (system, user, maxTokens, signal) => {
       if (semanticGrantEpoch(input.vault) !== epoch) throw new Error("Semantic authorization revoked");
       const apiKey = await loadApiKey(input.vault, input.slug, profile.id);
-      const transport = createTransportForProfile(input.settings, apiKey, profile.id);
+      const transport = createTransportForProfile(input.settings, apiKey, profile.id, input.privacy);
       if (Buffer.byteLength(system + user, "utf8") + maxTokens > transport.model.contextWindow) throw new Error("Semantic batch exceeds model context; split the input");
       const answer = await transport.models.completeSimple(transport.model, {
         systemPrompt: system, messages: [{ role: "user", content: user, timestamp: Date.now() }],

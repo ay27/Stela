@@ -1,3 +1,5 @@
+import { PrivacyPresentation, PrivacyBadge, PrivacyText, pendingPrivacyText } from "./privacy-presentation";
+import type { IPrivacyDisplay } from "@shared/ai-privacy";
 import { replyExecutionEntries, splitAgentReplies } from "./reply-layout";
 import "./assistant-output.css";
 import { AssistantReplyDivider } from "./assistant-reply-divider";
@@ -152,7 +154,7 @@ export function TimelineItem({
         <div className="stela-reply-boundary">
         <div className="flex justify-end">
           <div className="stela-user-message-bubble max-w-[80%] rounded-lg px-3 py-2 text-sm text-foreground">
-            <AgentUserMessage message={entry.message} />
+            <PrivacyPresentation privacy={entry.privacy}><AgentUserMessage message={entry.message} /></PrivacyPresentation>
           </div>
         </div>
         <AssistantReplyDivider />
@@ -161,7 +163,7 @@ export function TimelineItem({
     case "final":
       return (
         <div className="stela-assistant-output relative">
-          <AssistantMessage content={entry.content} />
+          <AssistantMessage content={entry.content} privacy={entry.privacy} />
           {entry.maintenance ? <SkillMaintenanceIndicator maintenance={entry.maintenance} /> : null}
         </div>
       );
@@ -170,7 +172,7 @@ export function TimelineItem({
     case "error":
       return (
         <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-          {entry.message}
+          <PrivacyText text={entry.message} privacy={entry.privacy} />
         </div>
       );
     case "cancelled":
@@ -185,9 +187,9 @@ export function TimelineItem({
     case "canvas":
       return <button type="button" onClick={() => useWorkspace.getState().openFile(resolveCanvasArtifactPath(entry.path))} className="w-full rounded-lg border border-primary/30 bg-primary/5 p-3 text-left text-xs hover:bg-primary/10"><div className="font-medium text-foreground">{entry.title}</div><div className="mt-1 text-muted-foreground">{t(entry.action === "created" ? "agent.panel.canvasCreated" : "agent.panel.canvasUpdated")} · {t("agent.panel.openCanvas")}</div></button>;
     case "plan":
-      return <ExecutionPlanCard plan={entry.plan} />;
+      return <PrivacyPresentation privacy={entry.privacy}><ExecutionPlanCard plan={entry.plan} /></PrivacyPresentation>;
     case "strategy":
-      return <StrategyReviewCard entry={entry} />;
+      return <PrivacyPresentation privacy={entry.privacy}><StrategyReviewCard entry={entry} /></PrivacyPresentation>;
     case "tool":
       return <ToolChip entry={entry} />;
     case "proposal":
@@ -220,14 +222,14 @@ function StrategyReviewCard({
         {entry.status === "working" ? (
           <div className="text-muted-foreground">{t("agent.panel.strategyReviewWorking")}</div>
         ) : entry.status === "failed" ? (
-          <div className="text-muted-foreground">{entry.message ?? t("agent.panel.strategyReviewFailed")}</div>
+          <div className="text-muted-foreground"><PrivacyText text={entry.message ?? t("agent.panel.strategyReviewFailed")} /></div>
         ) : advice ? (
           <div className="space-y-1.5 text-muted-foreground">
-            <div>{advice.diagnosis}</div>
+            <div><PrivacyText text={advice.diagnosis} /></div>
             <ol className="list-decimal space-y-1 pl-4">
-              {advice.nextActions.map((action, index) => <li key={`${index}-${action}`}>{action}</li>)}
+              {advice.nextActions.map((action, index) => <li key={`${index}-${action}`}><PrivacyText text={action} /></li>)}
             </ol>
-            <div><span className="font-medium text-foreground">{t("agent.panel.strategyReviewAvoid")}:</span> {advice.avoid}</div>
+            <div><span className="font-medium text-foreground">{t("agent.panel.strategyReviewAvoid")}:</span> <PrivacyText text={advice.avoid} /></div>
           </div>
         ) : null}
       </div>
@@ -245,7 +247,7 @@ function ProcessNarrationBubble({ entry }: { entry: AgentProgressTimelineEntry }
           : <Sparkles className="h-3 w-3 text-primary" />}
         {t("agent.panel.processNarration")}
       </div>
-      <AssistantMessage content={entry.content} />
+      <AssistantMessage content={entry.phase === "streaming" ? pendingPrivacyText(entry.content) : entry.content} privacy={entry.privacy} />
     </div>
   );
 }
@@ -293,7 +295,7 @@ export function AgentUserMessage({ message }: { message: AgentMessageContent }) 
   return (
     <div className="whitespace-pre-wrap break-words">
       {message.segments.map((segment, index) => {
-        if (segment.kind === "text") return <span key={`text-${index}`}>{segment.text}</span>;
+        if (segment.kind === "text") return <span key={`text-${index}`}><PrivacyText text={segment.text} /></span>;
         const resource = resources.get(segment.resourceId);
         return resource ? <AgentResourcePill key={`resource-${index}`} resource={resource} /> : null;
       })}
@@ -383,9 +385,9 @@ function SkillMaintenanceIndicator({
   );
 }
 
-export function AssistantMessage({ content }: { content: string }) {
+export function AssistantMessage({ content, privacy }: { content: string; privacy?: IPrivacyDisplay }) {
   if (!content.trim()) return null;
-  return <div className="stela-ai-markdown text-sm leading-6">{renderMarkdown(content)}</div>;
+  return <PrivacyPresentation privacy={privacy}><div className="stela-ai-markdown text-sm leading-6">{renderMarkdown(content)}</div></PrivacyPresentation>;
 }
 
 function PlanStepIcon({ status }: { status: AgentPlanSnapshot["steps"][number]["status"] }) {
@@ -418,7 +420,7 @@ function ExecutionPlanCard({ plan }: { plan: AgentPlanSnapshot }) {
         <span>{t("agent.panel.planProgress", { completed, total: plan.steps.length })}</span>
         <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
           <span className="truncate">
-            {current?.status === "blocked" ? t("agent.panel.blocked") : current?.title}
+            <PrivacyText text={current?.status === "blocked" ? t("agent.panel.blocked") : current?.title ?? ""} />
           </span>
           <ChevronDown className={cn("h-3 w-3 flex-none transition-transform", expanded && "rotate-180")} />
         </span>
@@ -439,9 +441,9 @@ function ExecutionPlanCard({ plan }: { plan: AgentPlanSnapshot }) {
                   step.status === "blocked" && "text-destructive",
                 )}
               >
-                {step.title}
+                <PrivacyText text={step.title} />
                 {step.evidence ? (
-                  <span className="block text-[11px] text-muted-foreground">{step.evidence}</span>
+                  <span className="block text-[11px] text-muted-foreground"><PrivacyText text={step.evidence} /></span>
                 ) : null}
               </span>
             </li>
@@ -478,13 +480,13 @@ function ToolChip({ entry }: { entry: Extract<AgentTimelineEntry, { kind: "tool"
         <div className="space-y-2 py-2 font-mono text-[11px] text-muted-foreground">
           <div>
             <div className="mb-1 text-foreground/70">{t("agent.panel.arguments")}</div>
-            <pre className="overflow-auto whitespace-pre-wrap">{JSON.stringify(entry.args, null, 2)}</pre>
+            <pre className="overflow-auto whitespace-pre-wrap"><PrivacyText text={JSON.stringify(entry.args, null, 2)} privacy={entry.privacy} /></pre>
           </div>
           {entry.result ? (
             <div>
               <div className="mb-1 text-foreground/70">{t("agent.panel.result")}</div>
               <AnalysisEvidence snapshot={readAnalysisSnapshot(entry.result.summary)} />
-              <pre className="max-h-48 overflow-auto whitespace-pre-wrap">{entry.result.summary}</pre>
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap"><PrivacyText text={entry.result.summary} privacy={entry.privacy} /></pre>
             </div>
           ) : null}
         </div>
@@ -743,6 +745,7 @@ export function AgentComposerActions({ busy, canSend, onSend, onCancel, leading 
         <div className="flex w-full items-center justify-between gap-1.5">
           <div className="flex min-w-0 flex-1 items-center gap-1.5">
             {leading}
+            {aiSettings.privacyModeEnabled && <PrivacyBadge />}
             {aiSettings.profiles.length > 0 ? (
               <select
                 value={aiSettings.activeProfileId}

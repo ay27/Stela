@@ -49,6 +49,7 @@ function SqlResult({ run, reuse, number }: { run: RunRecord; reuse: (text: strin
 const Turn = memo(function Turn({ turn, reuse, onRespond }: { turn: ConversationTurn; reuse: (text: string) => void; onRespond: Respond }) {
   const t = useT();
   const timeline = useMemo(() => conversationTimeline(turn), [turn]);
+  const privateInput = turn.events.find(e => e.type === "started" && e.privacyInput);
   const results = useMemo(() => conversationResults(turn, timeline), [turn, timeline]);
   const final = timeline.findLast(entry => entry.kind === "final");
   // The final answer already owns its Markdown tables. Otherwise promote just the
@@ -60,7 +61,7 @@ const Turn = memo(function Turn({ turn, reuse, onRespond }: { turn: Conversation
   const renderResult = (run: RunRecord) => <SqlResult key={run.runId} run={run} reuse={reuse} number={turn.runs.length > 1 ? turn.runs.findIndex(item => item.runId === run.runId) + 1 : undefined} />;
   return (
     <article data-conversation-turn={turn.id} tabIndex={-1} className="stela-conversation-turn outline-none">
-      <TimelineItem entry={{ kind: "user", id: turn.id, message: turn.message ?? { version: 1, segments: [{ kind: "text", text: turn.input }], resources: [] } }} onRespond={onRespond} />
+      <TimelineItem entry={{ kind: "user", id: turn.id, privacy: privateInput?.privacy, message: privateInput?.privacyInput ?? turn.message ?? { version: 1, segments: [{ kind: "text", text: turn.input }], resources: [] } }} onRespond={onRespond} />
       {!timeline.length && results.before.map(renderResult)}
       <AgentTimelineContent timeline={timeline} busy={turn.status === "running"} onRespond={onRespond} executionContent={timeline.length && extraRuns.length ? extraRuns.map(renderResult) : undefined} afterEntry={entry => entry.id === final?.id && primary ? renderResult(primary) : results.byEntry.get(entry.id)?.map(detailsResult)} />
       {!timeline.length && results.after.map(renderResult)}

@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n";
 import { completionStatus } from "@codemirror/autocomplete";
 import {
   EditorSelection,
@@ -127,6 +128,10 @@ class InlineCompletionWidget extends WidgetType {
     const span = document.createElement("span");
     span.className = "cm-stela-inline-completion-ghost";
     span.textContent = this.text;
+    if (useSettings.getState().settings.ai.privacyModeEnabled) {
+      const badge = document.createElement("span"); badge.className = "stela-privacy-badge";
+      badge.textContent = i18n.t("ai.privacy.badge"); badge.title = i18n.t("ai.privacy.hint"); span.append(badge);
+    }
     return span;
   }
 
@@ -555,6 +560,7 @@ export function sqlInlineCompletionExtension({
         const noteContext = getNoteContext?.();
         const siblingSqls = getSiblingSqls();
         const cacheKey = JSON.stringify({
+          privacyModeEnabled: useSettings.getState().settings.ai.privacyModeEnabled === true,
           profileId: profile.id,
           model: profile.model,
           connectionName,

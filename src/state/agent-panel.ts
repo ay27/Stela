@@ -59,7 +59,7 @@ export interface AgentDraft {
   isEmpty: boolean;
 }
 
-export type AgentTimelineEntry =
+export type AgentTimelineEntry = (
   | {
       kind: "user";
       id: string;
@@ -119,7 +119,7 @@ export type AgentTimelineEntry =
       trigger: AgentStrategyReviewTrigger;
       checkpoint?: AgentStrategyCheckpoint;
       message?: string;
-    };
+    }) & { privacy?: import("@shared/ai-privacy").IPrivacyDisplay };
 
 export interface AgentTab {
   id: string;
@@ -269,8 +269,16 @@ function toolCallEntry(call: AgentToolCallInfo): AgentTimelineEntry {
 }
 
 export function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTimelineEntry[] {
+  const next = applyEventCore(timeline, event);
+  return event.privacy ? next.map(entry => timeline.includes(entry) ? entry : { ...entry, privacy: event.privacy }) : next;
+}
+
+function applyEventCore(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTimelineEntry[] {
   switch (event.type) {
-    case "started":
+    case "started": {
+      const lastUser = timeline.findLast(entry => entry.kind === "user");
+      return event.privacyInput ? timeline.map(entry => entry === lastUser ? { ...entry, message: event.privacyInput! } : entry) : timeline;
+    }
     case "context_usage":
     case "semantic_progress":
     case "compaction":

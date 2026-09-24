@@ -1,5 +1,6 @@
+import { PrivacyDisplayContext, PrivacyText, usePrivacyRestore } from "./privacy-presentation";
 /** Shared Markdown renderer for Agent messages and Canvas cards. */
-import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useContext, useMemo, useState, type ReactNode } from "react";
 import { Check, Clipboard } from "lucide-react";
 
 import { useT } from "@/i18n/use-t";
@@ -48,7 +49,7 @@ export function renderMarkdown(
           : level === 2
             ? "mb-2 mt-4 text-base font-semibold"
             : "mb-1 mt-3 text-sm font-semibold";
-      out.push(<div key={out.length} className={cls}>{heading[2]}</div>);
+      out.push(<div key={out.length} className={cls}><PrivacyText text={heading[2]!} /></div>);
       i += 1;
       continue;
     }
@@ -121,6 +122,12 @@ function safeChartFileName(title: string): string {
 
 function MarkdownChartBlock({ code }: { code: string }) {
   const t = useT();
+  const restore = usePrivacyRestore();
+  const privacy = useContext(PrivacyDisplayContext);
+  const restoredLabels = privacy?.annotations.filter(annotation => code.includes(annotation.token)) ?? [];
+  // Restore JSON values after parsing, never interpolate originals into JSON syntax.
+  const restoreValue = (v: unknown): unknown => typeof v === "string" ? restore(v) : Array.isArray(v) ? v.map(restoreValue) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, restoreValue(x)])) : v;
+  try { code = JSON.stringify(restoreValue(JSON.parse(code))); } catch { /* Existing invalid-chart fallback. */ }
   const parsed = useMemo(() => {
     try {
       return { spec: parseStelaChartSpec(code), error: null };
@@ -139,15 +146,16 @@ function MarkdownChartBlock({ code }: { code: string }) {
       filters: [{ name: "SVG", extensions: ["svg"] }],
     });
   };
-  return <div className="my-3"><StelaChart spec={spec} onExportSvg={exportSvg} /></div>;
+  return <div className="my-3"><StelaChart spec={spec} onExportSvg={exportSvg} />{restoredLabels.length > 0 && <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground" title={t("ai.privacy.restored")}>{restoredLabels.map(annotation => <PrivacyText key={annotation.token} text={annotation.token} />)}</div>}</div>;
 }
 
 function MarkdownCodeBlock({ lang, code }: { lang: string; code: string }) {
   const t = useT();
+  const restore = usePrivacyRestore();
   const [copied, setCopied] = useState(false);
 
   const onCopy = () => {
-    window.stela.shell.writeClipboardText(code);
+    window.stela.shell.writeClipboardText(restore(code));
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1500);
   };
@@ -169,7 +177,7 @@ function MarkdownCodeBlock({ lang, code }: { lang: string; code: string }) {
         </button>
       </div>
       <pre className="overflow-auto p-3 font-mono text-[12px] leading-5">
-        <code>{code}</code>
+        <code><PrivacyText text={code} /></code>
       </pre>
     </div>
   );
@@ -183,11 +191,11 @@ function renderInline(text: string): ReactNode {
   const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
   return parts.map((part, idx) => {
     if (/^`[^`]+`$/.test(part)) {
-      return <code key={idx} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]">{part.slice(1, -1)}</code>;
+      return <code key={idx} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]"><PrivacyText text={part.slice(1, -1)} /></code>;
     }
     if (/^\*\*[^*]+\*\*$/.test(part)) {
-      return <strong key={idx}>{part.slice(2, -2)}</strong>;
+      return <strong key={idx}><PrivacyText text={part.slice(2, -2)} /></strong>;
     }
-    return <Fragment key={idx}>{part}</Fragment>;
+    return <Fragment key={idx}><PrivacyText text={part} /></Fragment>;
   });
 }

@@ -135,6 +135,8 @@ export interface MaterializedQueryResult {
 
 /** Machine-local descriptor. Absolute paths never cross a model or renderer API. */
 export interface QueryArtifactDescriptor {
+  sourceRunId?: string;
+  privacyMappingDigest?: string;
   /** Execution-local warning; not an assertion that unflagged data is complete. */
   incomplete?: boolean;
   runId: string;
@@ -369,6 +371,7 @@ export interface AiVendorInfo {
 }
 
 export interface AiSettings {
+  privacyModeEnabled?: boolean;
   semanticOptimizationEnabled?: boolean;
   automaticAnalysisContractsEnabled?: boolean;
   semanticProfileId?: string | null;
@@ -1105,7 +1108,7 @@ export interface AgentProposalPayload {
   options?: string[];
 }
 
-export type AgentEvent =
+export type AgentEvent = (
   | { type: "semantic_progress"; runId: string; sessionId: string; records: number; requests: number; tokens: number; failed: number; unresolved: number }
   | { type: "started"; runId: string }
   | {
@@ -1199,7 +1202,7 @@ export type AgentEvent =
       stepIndex?: number;
     }
   | { type: "error"; runId: string; message: string; partialAnswer?: string }
-  | { type: "cancelled"; runId: string };
+  | { type: "cancelled"; runId: string }) & { privacy?: import("./ai-privacy").IPrivacyDisplay; privacyInput?: AgentMessageContent };
 
 /**
  * 需要用户拍板的三种事：改笔记、跑改动 SQL、以及**回答一个问题**。

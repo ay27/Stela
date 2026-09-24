@@ -1,3 +1,4 @@
+import { PrivacyPresentation } from "./ai/privacy-presentation";
 import {
   AlertTriangle,
   Check,
@@ -197,13 +198,14 @@ function ConversationRunDetails({ run }: { run: IAgentMetricSessionRun }) {
 function ConversationView({ session }: { session: AgentMetricSessionTrace }) {
   const t = useT();
   return <div className="space-y-5 p-5">{session.history.runs.map((run, index) => {
+    const privateInput = run.events.find(event => event.type === "started" && event.privacyInput);
     const final = run.events.findLast((event) => event.type === "final");
     const error = run.events.findLast((event) => event.type === "error");
     const cancelled = run.events.some((event) => event.type === "cancelled");
     return <section key={run.request.runId} className="space-y-2.5">
       <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{t("agentDashboard.turn", { count: index + 1 })}</div>
-      <div className="flex justify-end"><div className="max-w-[82%] rounded-lg bg-muted px-3 py-2 text-sm text-foreground"><AgentUserMessage message={requestAgentMessage(run.request)} /></div></div>
-      {final?.type === "final" ? <div className="rounded-lg border border-border bg-card/40 p-3"><AssistantMessage content={final.content} /></div> : error?.type === "error" ? <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error.message}</div> : cancelled ? <div className="text-xs italic text-muted-foreground">{t("agentDashboard.cancelled")}</div> : run.conversation ? null : <div className="flex items-center gap-2 text-xs text-muted-foreground"><RefreshCw className="h-3 w-3" />{run.finishedAt === null ? t("agentDashboard.running") : t("agentDashboard.traceUnavailable")}</div>}
+      <div className="flex justify-end"><div className="max-w-[82%] rounded-lg bg-muted px-3 py-2 text-sm text-foreground"><PrivacyPresentation privacy={privateInput?.privacy}><AgentUserMessage message={privateInput?.privacyInput ?? requestAgentMessage(run.request)} /></PrivacyPresentation></div></div>
+      {final?.type === "final" ? <div className="rounded-lg border border-border bg-card/40 p-3"><AssistantMessage content={final.content} privacy={final.privacy} /></div> : error?.type === "error" ? <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error.message}</div> : cancelled ? <div className="text-xs italic text-muted-foreground">{t("agentDashboard.cancelled")}</div> : run.conversation ? null : <div className="flex items-center gap-2 text-xs text-muted-foreground"><RefreshCw className="h-3 w-3" />{run.finishedAt === null ? t("agentDashboard.running") : t("agentDashboard.traceUnavailable")}</div>}
       <ConversationRunDetails run={run} />
     </section>;
   })}</div>;

@@ -398,6 +398,12 @@ export function AiTab() {
         </Row>
       </Section>
 
+      <Section title={t("ai.privacy.title")} description={t("ai.privacy.hint")}>
+        <Row label={t("ai.privacy.title")}>
+          <Toggle checked={settings.privacyModeEnabled === true} onChange={(checked) => void patch({ ai: { privacyModeEnabled: checked } })} />
+        </Row>
+      </Section>
+
       <Section
         title={t("ai.inlineCompletion.title")}
         description={t("ai.inlineCompletion.description")}

@@ -144,6 +144,7 @@ function syncActiveMirrors(ai: Omit<AiSettings, "baseUrl" | "model" | "hasApiKey
 }
 
 const AI_DEFAULT: AiSettings = syncActiveMirrors({
+  privacyModeEnabled: false,
   providerMode: "disabled",
   activeProfileId: DEFAULT_PROFILE_ID,
   profiles: [
@@ -259,6 +260,7 @@ function sanitizeAi(input: unknown): AiSettings {
     inlineCompletionEnabled:
       r.inlineCompletionEnabled === true && completionProfileId !== null,
     completionProfileId,
+    privacyModeEnabled: r.privacyModeEnabled === true,
     semanticOptimizationEnabled: r.semanticOptimizationEnabled === true,
     automaticAnalysisContractsEnabled: r.automaticAnalysisContractsEnabled === true,
     semanticProfileId: typeof r.semanticProfileId === "string" && profiles.some((p) => p.id === r.semanticProfileId) ? r.semanticProfileId : null,

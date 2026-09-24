@@ -194,7 +194,7 @@
   "ai.notice.keyCleared": "已清除保存的 API Key。",
   "ai.policy.title": "隐私与 Agent",
   "ai.policy.description": "这些策略对所有配置档生效。",
-  "ai.privacy.title": "隐私",
+  "ai.privacy.title": "隐私模式",
   "ai.privacy.description": "Stela 只发送截断且脱敏后的上下文，不会发送完整结果集。",
   "ai.samples.label": "发送结果样本",
   "ai.samples.description": "允许当前结果的采样行进入 AI prompt。",
@@ -1299,5 +1299,8 @@
   "skills.library.sources": "来源笔记",
   "skills.library.noSources": "此知识未记录来源笔记。",
   "fileTree.emptyFolder": "文件夹为空。",
-  "agentDashboard.skillName": "知识名称"
+  "agentDashboard.skillName": "知识名称",
+  "ai.privacy.badge": "隐私模式 · Fast",
+  "ai.privacy.restored": "此内容发送给模型时已脱敏，当前已在本地还原。",
+  "ai.privacy.hint": "当前 Vault 的 AI 请求使用本地 Fast 脱敏；Python 使用脱敏数据。下次任务生效。可能存在漏检、误检，依赖身份原文的分析会受限。保存的会话及映射可随 Git 同步。"
 }

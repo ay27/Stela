@@ -98,6 +98,25 @@ excluded from implicit `AgentWorkspaceContext`, whose public contract remains
 
 ## SQL Conversation
 
+Privacy-enabled conversations write format version 3 and may contain
+`IPrivacySessionState`: a versioned namespace and exact original/token entries.
+This is Main-owned local state, never an LLM message. The dictionary follows the
+same storage and Git lifecycle as the conversation. Older documents remain
+readable; writing the first privacy mapping upgrades the version. Old clients
+must not write version-3 documents. Renderer snapshots omit this field.
+
+`IPrivacyDisplay` on Agent events carries the task's actual mode and the
+`IPrivacyAnnotation` entries needed for that event only. `privacyInput` projects
+submitted text while preserving resource references. Renderers parse Markdown
+before substituting token text, annotate actual replacements in pale purple,
+and copy displayed originals without markup. Unknown tokens are not guessed.
+
+`AiSettings.privacyModeEnabled` is optional for backward compatibility and
+defaults false. `QueryArtifactDescriptor.sourceRunId` retains evidence identity
+when Python consumes a sanitized artifact; `privacyMappingDigest` prevents
+reusing an artifact with another dictionary. Neither grants access outside the
+active Python job. Sensitive numeric columns become text when pseudonymized.
+
 Both conversation surfaces render assistant prose and SQL results inline, without
 outer cards. Each user turn is followed by one muted divider before any SQL result, tool
 activity, process narration or final reply. The divider has no timing label.
@@ -1490,8 +1509,8 @@ unreadable paths; user-facing summaries follow the request language.
 
 ### Pi journal compatibility (ADR-0113)
 
-`ConversationDocument.version` accepts 1 (legacy journal) and 2 (Pi format-4
-journal). Ordered user-authored `AgentMessageContent.version` remains 1; it is a
+`ConversationDocument.version` accepts 1 (legacy journal), 2 (Pi format-4
+journal), and 3 (conversation privacy mapping; ADR-0117). Ordered user-authored `AgentMessageContent.version` remains 1; it is a
 separate contract. Native Pi entries use numeric timestamps and JSON-compatible
 custom payloads. Stela's `Session` adapter projects legacy workspace-prompt repairs,
 plan entries, and compaction summaries without rewriting source entries. Historical

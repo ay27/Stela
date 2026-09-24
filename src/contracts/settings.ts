@@ -90,6 +90,7 @@ export interface AiProviderProfile {
 }
 
 export interface AiSettings {
+  privacyModeEnabled?: boolean;
   semanticOptimizationEnabled?: boolean;
   automaticAnalysisContractsEnabled?: boolean;
   semanticProfileId?: string | null;
@@ -147,6 +148,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     autoPullIntervalMs: 300_000,
   },
   ai: {
+    privacyModeEnabled: false,
     providerMode: "disabled",
     activeProfileId: "default",
     profiles: [

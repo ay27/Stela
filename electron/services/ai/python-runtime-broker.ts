@@ -1,3 +1,5 @@
+import type { PrivacySession } from "./privacy-session";
+import { privateQueryArtifact } from "../query-artifacts";
 /** Main-process broker between Agent tools and the app-owned renderer Worker. */
 
 import { randomUUID } from "node:crypto";
@@ -38,6 +40,7 @@ export type PythonJobQueryRunner = (input: {
 }) => Promise<QueryArtifactDescriptor>;
 
 interface PendingJob {
+  privacy?: PrivacySession;
   request: PythonExecutionRequest;
   vaultPath: string;
   sessionId: string;
@@ -65,7 +68,7 @@ type Broadcaster = (channel: IpcEventChannel, payload: unknown) => boolean;
 
 let broadcaster: Broadcaster | null = null;
 const pending = new Map<string, PendingJob>();
-const workspaces = new Map<string, { id: string; snapshot?: IPythonWorkspaceSnapshot; lost: boolean }>();
+const workspaces = new Map<string, { id: string; snapshot?: IPythonWorkspaceSnapshot; lost: boolean; privacy?: boolean }>();
 let onWorkspaceCleared: (vault: string, session: string) => void = () => {};
 export function setPythonWorkspaceClearListener(callback: typeof onWorkspaceCleared): void { onWorkspaceCleared = callback; }
 const keyFor = (vaultPath: string, sessionId: string): string => `${vaultPath}\0${sessionId}`;
@@ -128,6 +131,8 @@ function armTimer(jobId: string, job: PendingJob): void {
 }
 
 export async function executePython(input: {
+  privacy?: PrivacySession;
+  onPrivacyProgress?: (rows: number, total: number) => void;
   vaultPath: string;
   sessionId: string;
   code: string;
@@ -142,19 +147,32 @@ export async function executePython(input: {
   if (input.signal?.aborted) throw new Error("Python execution cancelled");
   const workspaceKey = keyFor(input.vaultPath, input.sessionId);
   let workspace = workspaces.get(workspaceKey);
+  if (workspace && Boolean(workspace.privacy) !== Boolean(input.privacy?.enabled)) {
+    await resetPythonWorkspace(input.vaultPath, input.sessionId); workspace = undefined;
+  }
+  if (input.privacy?.enabled) {
+    const privacy = input.privacy;
+    const originalRunQuery = input.runQuery;
+    const artifacts: Record<string, QueryArtifactDescriptor> = {};
+    for (const [alias, artifact] of Object.entries(input.artifacts)) artifacts[alias] = await privateQueryArtifact({ ...input, artifact, privacy, onProgress: input.onPrivacyProgress });
+    input = { ...input, artifacts, code: await privacy.maskText(input.code, "", input.signal),
+      analysisContext: await privacy.maskValue(input.analysisContext, "", input.signal) as typeof input.analysisContext,
+      runQuery: originalRunQuery ? async q => privateQueryArtifact({ ...input, artifact: await originalRunQuery(q), privacy, onProgress: input.onPrivacyProgress }) : undefined };
+    await privacy.flush();
+  }
   if (workspace?.lost) {
     workspaces.delete(workspaceKey);
     throw new Error("workspace_lost: prior variables and sources are gone. Rebuild explicitly in the next call.");
   }
   if (!workspace) {
-    workspace = { id: randomUUID(), lost: false };
+    workspace = { id: randomUUID(), lost: false, privacy: input.privacy?.enabled };
     workspaces.set(workspaceKey, workspace);
   }
   const jobId = randomUUID();
   const timeoutMs = Math.min(60_000, Math.max(1_000, input.timeoutMs ?? DEFAULT_TIMEOUT_MS));
   const inputs: PythonExecutionInput[] = Object.entries(input.artifacts).map(([alias, artifact]) => ({
     alias,
-    runId: artifact.runId,
+    runId: artifact.sourceRunId ?? artifact.runId,
     format: artifact.format,
     columns: artifact.columns,
     rowCount: artifact.rowCount,
@@ -181,6 +199,7 @@ export async function executePython(input: {
   return new Promise<PythonExecutionResult>((resolve, reject) => {
     const job: PendingJob = {
       request,
+      privacy: input.privacy,
       vaultPath: input.vaultPath,
       sessionId: input.sessionId,
       artifacts: new Map(Object.entries(input.artifacts)),
@@ -262,7 +281,7 @@ export async function queryForPythonJob(input: {
   armTimer(input.jobId, job);
   return {
     alias,
-    runId: artifact.runId,
+    runId: artifact.sourceRunId ?? artifact.runId,
     format: artifact.format,
     columns: artifact.columns,
     rowCount: artifact.rowCount,

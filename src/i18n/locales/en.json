@@ -194,7 +194,7 @@
   "ai.notice.keyCleared": "Saved API key cleared.",
   "ai.policy.title": "Privacy & Agent",
   "ai.policy.description": "These policies apply to every profile.",
-  "ai.privacy.title": "Privacy",
+  "ai.privacy.title": "Privacy mode",
   "ai.privacy.description": "Stela sends only capped, redacted context. Full result sets are never sent.",
   "ai.samples.label": "Send result samples",
   "ai.samples.description": "Allow sampled rows from the current result to enter the AI prompt.",
@@ -1299,5 +1299,8 @@
   "skills.library.sources": "Source notes",
   "skills.library.noSources": "No source notes are recorded for this skill.",
   "fileTree.emptyFolder": "Folder is empty.",
-  "agentDashboard.skillName": "Knowledge name"
+  "agentDashboard.skillName": "Knowledge name",
+  "ai.privacy.badge": "Privacy · Fast",
+  "ai.privacy.restored": "Sent to the model as a pseudonym; restored locally for display.",
+  "ai.privacy.hint": "Locally redact AI requests in this Vault. Python uses pseudonymized data. Applies to the next task. Detection may miss or misclassify values; identity-dependent analysis is limited. Saved conversations and mappings can sync with Git."
 }

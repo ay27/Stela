@@ -169,3 +169,5 @@ proposed → active → superseded
 | [0114](0114-pi-owned-context-compaction.md) | Pi owns context compaction scheduling and recovery (replaces compaction policy in 0113) | active |
 | [0115](0115-pi-runtime-observation-and-retry.md) | Reuse Pi runtime observation, usage and generation retry | active |
 | [0116](0116-analytics-connector-catalog.md) | Official analytics connectors and local file sources | active |
+
+| [0117](0117-local-ai-privacy-mode.md) | Local AI privacy boundary and conversation pseudonyms | active |

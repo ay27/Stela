@@ -1,3 +1,5 @@
+import { PrivacySession } from "./privacy-session";
+import { withPrivacy } from "./privacy-transport";
 /**
  * LLM transport via `@earendil-works/pi-ai`.
  *
@@ -441,6 +443,7 @@ export function createTransportForProfile(
   ai: AiSettings,
   apiKey: string,
   profileId?: string | null,
+  privacy = new PrivacySession(ai.privacyModeEnabled === true),
 ): {
   models: Models;
   model: Model<import("@earendil-works/pi-ai").Api>;
@@ -459,7 +462,7 @@ export function createTransportForProfile(
   }
 
   const credentials = createStelaCredentialStore(apiKey);
-  const models = createModels({ credentials });
+  const models = withPrivacy(createModels({ credentials }), privacy);
 
   if (profile.vendorId === CUSTOM_VENDOR_ID) {
     if (!profile.baseUrl.trim()) {
@@ -521,7 +524,8 @@ export async function callChatCompletions({
   sessionId?: string;
   onMessage?: (message: AssistantMessage) => void;
 }): Promise<string> {
-  const { models, model } = createTransportForProfile(settings, apiKey, profileId);
+  const privacy = new PrivacySession(settings.privacyModeEnabled === true);
+  const { models, model } = createTransportForProfile(settings, apiKey, profileId, privacy);
   const message = await models.completeSimple(
     model,
     {
@@ -551,7 +555,7 @@ export async function callChatCompletions({
   if (!content) {
     throw new AppError("ai_empty_response", "AI provider returned an empty response.");
   }
-  return content;
+  return privacy.enabled ? privacy.restoreOutput(content) : content;
 }
 
 export async function streamChatCompletions({
@@ -581,7 +585,8 @@ export async function streamChatCompletions({
     if (signal.aborted) {
       throw new AppError("ai_aborted", "AI request was aborted.");
     }
-    const { models, model } = createTransportForProfile(settings, apiKey, profileId);
+    const privacy = new PrivacySession(settings.privacyModeEnabled === true);
+  const { models, model } = createTransportForProfile(settings, apiKey, profileId, privacy);
     const stream = models.streamSimple(
       model,
       {
@@ -597,10 +602,14 @@ export async function streamChatCompletions({
         ...(sessionId ? { sessionId } : {}),
       },
     );
+    let privateText = "";
     for await (const event of stream) {
-      if (event.type === "text_delta" && event.delta) onDelta(event.delta);
+      if (event.type === "text_delta" && event.delta) {
+        if (privacy.enabled) privateText += event.delta; else onDelta(event.delta);
+      }
     }
     const message = await stream.result();
+    if (privacy.enabled && message.stopReason !== "error" && message.stopReason !== "aborted") onDelta(privacy.restore(privateText));
     onMessage?.(message);
     if (message.stopReason === "aborted") {
       throw new AppError("ai_aborted", message.errorMessage ?? "AI request was aborted.");

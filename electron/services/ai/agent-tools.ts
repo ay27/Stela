@@ -1,3 +1,5 @@
+import type { PrivacySession } from "./privacy-session";
+import { restorePrivateSql } from "./privacy-query";
 import { skillSourceSha256 } from "./agent-skills";
 import { reviewMaintenancePublication } from "./maintenance-publication";
 import type { SkillSourceNote } from "./skill-source-context";
@@ -378,6 +380,7 @@ const CANVAS_DOCUMENT_RULES = CANVAS_CARD_RULES +
  * proposal 事件、注册 resolver，用户 approve/reject 时 resolve 这个 Promise。
  */
 export interface AgentToolContext {
+  privacy?: PrivacySession;
   vaultPath: string;
   connectionName: string | null;
   connection: ConnectionEntry | null;
@@ -1309,8 +1312,12 @@ async function executeDataQuery(
   },
 ): Promise<DataQueryOutcome | { failure: string }> {
   const { name: connectionName, connection } = requireNamedConnection(ctx, input.requestedConnection);
-  const query = input.query;
   const connectorMeta = ctx.connector.listKinds().find((item) => item.kind === connection.kind);
+  let query = input.query;
+  if (ctx.privacy) {
+    if (query.language === "sql") query = { ...query, query: restorePrivateSql(query.query, ctx.privacy, ctx.connectionDialects?.[connectionName] ?? connectorMeta?.dialect) };
+    else query = ctx.privacy.restoreValue(query) as DataQueryRequest;
+  }
   const languages = connectorMeta?.queryLanguages ?? ["sql"];
   if (!languages.includes(query.language)) {
     return { failure: `Connection '${connectionName}' does not support ${query.language} queries.` };
@@ -2851,6 +2858,13 @@ export async function dispatchTool(
     if (outcome.ok) streak.delete(name);
     else streak.set(name, (streak.get(name) ?? 0) + 1);
   }
+  if (ctx.privacy?.enabled) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(outcome.text); } catch { parsed = outcome.text; }
+    const masked = await ctx.privacy.maskValue(parsed, "", ctx.signal);
+    outcome.text = typeof masked === "string" ? masked : JSON.stringify(masked);
+    await ctx.privacy.flush();
+  }
   return outcome;
 }
 
@@ -2859,8 +2873,9 @@ async function dispatchToolCall(
   rawArguments: string,
   ctx: AgentToolContext,
 ): Promise<ToolOutcome> {
-  const args = parseArgs(rawArguments);
+  let args = parseArgs(rawArguments);
   try {
+    if (ctx.privacy && !["execute_python", "run_query", "run_sql"].includes(name)) args = ctx.privacy.restoreValue(args) as Record<string, unknown>;
     switch (name as AgentToolName) {
       case "list_catalog":
         return await runListCatalog(args, ctx);

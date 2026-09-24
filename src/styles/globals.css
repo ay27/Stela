@@ -248,3 +248,10 @@
     padding-right: 138px;
   }
 }
+
+/* Actual privacy transformations, not guessed entity highlighting. */
+:root { --stela-privacy-color: #9b70c7; --stela-privacy-fill: #b591dc20; }
+.dark { --stela-privacy-color: #c2a0e8; --stela-privacy-fill: #b591dc28; }
+.stela-privacy-word { text-decoration: underline; text-decoration-color: var(--stela-privacy-color); text-decoration-thickness: 1px; text-underline-offset: 3px; border-radius: 2px; }
+.stela-privacy-word:hover, .stela-privacy-word:focus-visible { background: var(--stela-privacy-fill); }
+.stela-privacy-badge { display: inline-flex; font-size: 10px; color: var(--stela-privacy-color); border: 1px solid var(--stela-privacy-color); border-radius: 4px; padding: 1px 5px; white-space: nowrap; }

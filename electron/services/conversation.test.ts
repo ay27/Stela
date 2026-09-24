@@ -1,3 +1,5 @@
+import { configureQueryArtifactRoot } from "./query-artifacts";
+import { PrivacySession } from "./ai/privacy-session";
 import { pipelineAuthoringFixture } from "@shared/canvas-authoring.fixture";
 import { withAgentResourceId } from "@shared/agent-message";
 import assert from "node:assert/strict";
@@ -22,6 +24,7 @@ import type { IConversationSnapshot } from "@shared/conversation";
 async function main() {
   const root = await mkdtemp(join(tmpdir(), "stela-conversation-test-"));
   app.setPath("userData", root);
+  configureQueryArtifactRoot(join(root, "artifacts"));
   await app.whenReady();
   const vault = join(root, "vault"); await mkdir(vault);
   let modelCalls = 0; let phase = "final"; let step = 0; let savedId = "";
@@ -29,15 +32,18 @@ async function main() {
   const server = createServer(async (req, res) => {
     let body = ""; for await (const chunk of req) body += chunk;
     requests.push(JSON.parse(body)); modelCalls++;
-    const tool = step++ === 0 ? phase === "repair" ? { name: "run_query", arguments: JSON.stringify({ language: "sql", query: "SELECT 42 AS answer", connectionName: "fixture" }) }
+    const turnIndex = step++;
+    let tool = turnIndex === 0 ? phase === "repair" ? { name: "run_query", arguments: JSON.stringify({ language: "sql", query: "SELECT 42 AS answer", connectionName: "fixture" }) }
       : phase === "clarify" ? { name: "ask_user", arguments: JSON.stringify({ question: "Which period?", options: ["Last month", "This month"] }) }
       : phase === "canvas" ? { name: "create_analysis_canvas", arguments: JSON.stringify({ canvas: pipelineAuthoringFixture, sourceRuns: [] }) }
       : phase === "existing" ? { name: "read_conversation_result", arguments: JSON.stringify({ runId: savedId, limit: 10 }) } : null : null;
+    const privateToken = body.match(/STELA_PII_[a-f0-9]{24}_[a-f0-9]{24}/)?.[0];
+    if (phase === "privacy" && turnIndex < 2) tool = { name: "run_query", arguments: JSON.stringify({ language: "sql", query: turnIndex === 0 ? "SELECT privacy_fixture" : `SELECT privacy_fixture WHERE phone='${privateToken}'`, connectionName: "fixture" }) };
     res.writeHead(200, { "Content-Type": "text/event-stream" });
     const send = (delta: unknown, finish: string | null) => res.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", created: 1, model: "fixture", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`);
     send({ role: "assistant" }, null);
     if (tool) { send({ tool_calls: [{ index: 0, id: `call_${modelCalls}`, type: "function", function: tool }] }, null); send({}, "tool_calls"); }
-    else { send({ content: "Completed using the saved query evidence." }, null); send({}, "stop"); }
+    else { send({ content: phase === "privacy" ? `号码：${privateToken}` : "Completed using the saved query evidence." }, null); send({}, "stop"); }
     res.end("data: [DONE]\n\n");
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
@@ -80,7 +86,7 @@ async function main() {
     await writeFile(join(plugin, "plugin.json"), JSON.stringify({ id: "fixture", kind: "fixture", displayName: "Fixture", apiVersion: 1, entry: "index.cjs" }));
     await writeFile(join(plugin, "index.cjs"), `module.exports = { apiVersion: 1, create() { return {
       meta() { return { kind: 'fixture', displayName: 'Fixture', configSchema: {type:'object'}, defaultConfig: {}, subprocess:false }; },
-      async execute(config, sql) { if (sql.includes('slow')) await new Promise(r => setTimeout(r,150)); if (sql.includes('broken')) throw new Error('Unknown column broken'); if (/^UPDATE/i.test(sql)) return {kind:'mutation', affectedRows:1, elapsedMs:1}; return {kind:'query',columns:[{name:'answer',typeName:'INTEGER'}],rows:[[42]],elapsedMs:1}; },
+      async execute(config, sql) { if (sql.includes('privacy_fixture')) { if(sql.includes('STELA_PII_')) throw new Error('Unresolved privacy token reached connector'); return {kind:'query',columns:[{name:'customer_name',typeName:'VARCHAR'},{name:'phone',typeName:'VARCHAR'},{name:'amount',typeName:'DOUBLE'}],rows:[['张三','13812345678',12.3]],elapsedMs:1}; } if (sql.includes('slow')) await new Promise(r => setTimeout(r,150)); if (sql.includes('broken')) throw new Error('Unknown column broken'); if (/^UPDATE/i.test(sql)) return {kind:'mutation', affectedRows:1, elapsedMs:1}; return {kind:'query',columns:[{name:'answer',typeName:'INTEGER'}],rows:[[42]],elapsedMs:1}; },
       async listDatabases(){return ['db'];}, async listTables(){return ['t'];}, async test(){return {ok:true};}, async dispose(){}
     }; }};`);
     await writeFile(join(vault, ".stela/connections.json"), JSON.stringify({ entries: { fixture: { kind: "fixture", config: {} } } }));
@@ -111,6 +117,33 @@ async function main() {
     const profile = await loadDeviceProfile(); const defaults = getDefaultAppSettings();
     await patchAppSettings(vault, { ai: { providerMode: "openai-compatible", activeProfileId: defaults.ai.activeProfileId, profiles: [{ ...defaults.ai.profiles[0]!, baseUrl: `http://127.0.0.1:${port}/v1`, model: "fixture", reasoningEffort: "off", hasApiKey: true }], automaticSkillMaintenanceEnabled: false, agentMaxIterations: 5, agentWallClockMs: 10000 } });
     await saveApiKey(vault, profile.slug, defaults.ai.activeProfileId, "fixture-key");
+    // Full Main-owned path: input -> tool -> second query -> model -> display -> disk.
+    await patchAppSettings(vault, { ai: { privacyModeEnabled: true } });
+    let privateChat = await conversation.createTemporaryConversation(vault, "Private chat");
+    phase = "privacy"; step = 0;
+    const privateStart = requests.length;
+    await send(privateChat, "请查询手机号13812345678对应的客户");
+    privateChat = await waitFor(privateChat.path, done);
+    assert.equal(privateChat.document.turns.at(-1)!.status, "completed", JSON.stringify(privateChat.document.turns.at(-1)));
+    const privateRequests = JSON.stringify(requests.slice(privateStart));
+    assert(!privateRequests.includes('13812345678')); assert(!privateRequests.includes('张三'));
+    assert(!privateRequests.includes('"original"'));
+    const privateFinal = privateChat.document.turns.at(-1)!.events.slice().reverse().find(e => e.type === "final");
+    assert(privateFinal?.type === "final" && privateFinal.privacy?.enabled);
+    assert(privateFinal.privacy.annotations.some(a => a.original === '13812345678'));
+    assert.equal(privateChat.document.version, 3);
+    assert(privateChat.document.privacy?.entries.length);
+    assert.equal(conversation.publicConversationSnapshot(privateChat).document.privacy, undefined);
+    const persisted = JSON.parse(await readFile(privateChat.path, 'utf8'));
+    assert(new PrivacySession(false, { state: persisted.privacy, save: async () => {} }).restore(privateFinal.content).includes('13812345678'));
+    const namespace = privateChat.document.privacy.namespace;
+    privateChat = await conversation.promoteConversation(vault, privateChat.path, privateChat.etag, vault, 'Private saved');
+    assert.equal(privateChat.document.privacy!.namespace, namespace);
+    phase = "final"; step = 0;
+    await send(privateChat, "继续检查手机号13812345678"); privateChat = await waitFor(privateChat.path, done);
+    assert.equal(privateChat.document.turns.at(-1)!.status, 'completed');
+    assert.equal(privateChat.document.privacy!.namespace, namespace);
+    await patchAppSettings(vault, { ai: { privacyModeEnabled: false } });
     phase = "repair"; step = 0;
     await send(s, "SELECT broken FROM t"); s = await waitFor(s.path, done);
     assert.equal(s.document.turns.at(-1)!.status, "completed", JSON.stringify(s.document.turns.at(-1)));
@@ -258,7 +291,7 @@ async function main() {
     await assert.rejects(() => conversation.saveConversationDraft(vault, s.path, s.etag, "do not overwrite", null), /changed/);
     const linked = join(vault, "escape.stela.chat"); const outside = join(root, "outside.stela.chat"); await writeFile(outside, "outside"); await symlink(outside, linked);
     await assert.rejects(() => conversation.readConversation(vault, linked));
-    assert.ok(requests.length >= 6); console.log("Conversation integration: direct execution, deduplication, write gate, cancellation, automatic repair, saved-result follow-up, clarification, session persistence, conflict recovery, bounded-history independence and path confinement passed.");
+    assert.ok(requests.length >= 6); console.log("Conversation integration: direct execution, deduplication, write gate, cancellation, automatic repair, saved-result follow-up, clarification, session persistence, conflict recovery, bounded-history independence path confinement, privacy request capture, SQL binding, mapping persistence and display annotations passed.");
   } finally {
     await conversation.stopAllConversations(); await registry.setVault(null); metrics.__resetForTests(); store.close(); server.close();
     await rm(root, { recursive: true, force: true });

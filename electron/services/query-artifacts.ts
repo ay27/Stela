@@ -19,6 +19,7 @@ import type {
 } from "@shared/types";
 
 import { getLogger } from "./logger";
+import type { PrivacySession } from './ai/privacy-session';
 
 const log = getLogger("query-artifacts");
 
@@ -123,6 +124,8 @@ async function finishArtifact(
     columns: ColumnDef[];
     rowCount: number;
     physicalColumns?: string[];
+    sourceRunId?: string;
+    privacyMappingDigest?: string;
   },
 ): Promise<QueryArtifactDescriptor> {
   const stat = await fs.stat(target.tempPath);
@@ -146,6 +149,8 @@ async function finishArtifact(
     vaultKey: target.vaultKey,
     fileName: path.basename(target.finalPath),
     physicalColumns: input.physicalColumns,
+    sourceRunId: input.sourceRunId,
+    privacyMappingDigest: input.privacyMappingDigest,
   };
   await writeMetadata(target, meta);
   void cleanupQueryArtifacts().catch((err) => {
@@ -292,6 +297,77 @@ export async function readQueryArtifactChunk(input: {
     };
   } finally {
     await handle.close();
+  }
+}
+
+/** Build a separate, complete input before giving generated Python any bytes. */
+export async function privateQueryArtifact(input: {
+  vaultPath: string; sessionId: string; artifact: QueryArtifactDescriptor;
+  privacy: PrivacySession; signal?: AbortSignal; onProgress?: (rows: number, total: number) => void;
+}): Promise<QueryArtifactDescriptor> {
+  input.signal?.throwIfAborted();
+  if (!input.privacy.enabled) return input.artifact;
+  if (input.artifact.rowCount === 0) return { ...input.artifact, columns: await Promise.all(input.artifact.columns.map(async c => ({ ...c, name: await input.privacy.maskText(c.name) }))) };
+  const stored = await readStored(input.vaultPath, input.sessionId, input.artifact.runId);
+  if (!stored) throw new Error('Query artifact is missing; rerun the query.');
+  const sourceFingerprint = hash(JSON.stringify([stored.meta.createdAt, stored.meta.byteSize, stored.meta.columns, stored.meta.rowCount]));
+  const privateId = `${input.artifact.runId}-privacy-v1-${sourceFingerprint}-${input.privacy.state.namespace}`;
+  const cached = await resolveQueryArtifact(input.vaultPath, input.sessionId, privateId);
+  // A cached file is usable only with the mapping that created it.
+  if (cached && cached.privacyMappingDigest === hash(JSON.stringify(input.privacy.state))) return { ...cached, incomplete: input.artifact.incomplete };
+  const target = await createQueryArtifactTarget(input.vaultPath, input.sessionId, privateId, 'parquet');
+  const staging = `${target.tempPath}.jsonl`;
+  const { DuckDBInstance, JsonDuckDBValueConverter } = await import('@duckdb/node-api');
+  const instance = await DuckDBInstance.create(':memory:', { memory_limit: '256MB' });
+  const connection = await instance.connect();
+  const interrupt = () => connection.interrupt();
+  input.signal?.addEventListener('abort', interrupt, { once: true });
+  const file = await fs.open(staging, 'wx');
+  let rows = 0, bytes = 0;
+  try {
+    const reader = await connection.stream(stored.meta.format === 'parquet'
+      ? 'SELECT * FROM read_parquet(?)'
+      : "SELECT * FROM read_json_auto(?, format='newline_delimited', sample_size=-1)", [stored.filePath]);
+    if (reader.columnCount !== input.artifact.columns.length) throw new Error('Privacy input column count mismatch');
+    const types = reader.columnTypes().map(t => String(t));
+    const changed = new Set<number>();
+    let chunk;
+    while ((chunk = await reader.fetchChunk()) && chunk.rowCount > 0) {
+      for (const row of chunk.convertRows(JsonDuckDBValueConverter)) {
+        input.signal?.throwIfAborted();
+        const record: Record<string, unknown> = {};
+        for (let i = 0; i < row.length; i++) {
+          const original = row[i];
+          const masked = await input.privacy.maskValue(original, input.artifact.columns[i]!.name, input.signal);
+          if (JSON.stringify(original) !== JSON.stringify(masked)) changed.add(i);
+          record[`c${i}`] = masked;
+        }
+        const line = JSON.stringify(record) + '\n'; bytes += Buffer.byteLength(line);
+        if (bytes > ARTIFACT_MAX_BYTES) throw new Error('Sanitized query exceeds the artifact budget; reduce the query.');
+        await file.write(line); rows++;
+        if (rows % 256 === 0) input.onProgress?.(rows, input.artifact.rowCount);
+      }
+    }
+    await file.close();
+    if (rows !== input.artifact.rowCount) throw new Error('Privacy input row count mismatch');
+    const quote = (v: string) => "'" + v.replaceAll("'", "''") + "'";
+    const ident = (v: string) => '"' + v.replaceAll('"', '""') + '"';
+    const columns = await Promise.all(input.artifact.columns.map(async (c, i) => ({ ...c,
+      name: await input.privacy.maskText(c.name), typeName: changed.has(i) ? 'VARCHAR' : types[i]! })));
+    // Explicit types prevent a late pseudonym from becoming NULL through inference.
+    const schema = types.map((type, i) => `${quote(`c${i}`)}: ${quote(changed.has(i) ? 'VARCHAR' : type)}`).join(',');
+    const select = columns.map((c, i) => `${ident(`c${i}`)} AS ${ident(c.name)}`).join(',');
+    if (rows) await connection.run(`COPY (SELECT ${select} FROM read_json(${quote(staging)}, format='newline_delimited', columns={${schema}})) TO ${quote(target.tempPath)} (FORMAT PARQUET)`);
+    else await connection.run(`COPY (SELECT ${columns.map((c, i) => `CAST(NULL AS ${types[i]}) AS ${ident(c.name)}`).join(',')} WHERE false) TO ${quote(target.tempPath)} (FORMAT PARQUET)`);
+    input.signal?.throwIfAborted(); await input.privacy.flush();
+    const result = await finishArtifact(target, { mode: 'parquet-stream', columns, rowCount: rows, sourceRunId: input.artifact.runId, privacyMappingDigest: hash(JSON.stringify(input.privacy.state)) });
+    input.onProgress?.(rows, rows);
+    return { ...result, incomplete: input.artifact.incomplete };
+  } catch (e) {
+    await file.close().catch(() => {}); await discardQueryArtifactTarget(target); throw e;
+  } finally {
+    input.signal?.removeEventListener('abort', interrupt); connection.closeSync(); instance.closeSync();
+    await fs.rm(staging, { force: true });
   }
 }
 
