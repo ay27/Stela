@@ -13,7 +13,9 @@
  */
 import {
   MySQL,
+  MSSQL,
   PostgreSQL,
+  SQLite,
   StandardSQL,
   type SQLDialect,
 } from "@codemirror/lang-sql";
@@ -22,6 +24,7 @@ import {
 export function dialectFromKind(kind: string, displayName: string): string {
   const key = `${kind} ${displayName}`.toLowerCase();
   if (key.includes("starrocks")) return "StarRocks";
+  if (key.includes("doris")) return "Doris";
   if (key.includes("postgres")) return "PostgreSQL";
   if (key.includes("mysql")) return "MySQL";
   if (key.includes("sqlite")) return "SQLite";
@@ -47,8 +50,11 @@ export function resolveDialect(meta: DialectSource): string {
 export function lezerDialectFor(dialectName: string | null | undefined): SQLDialect {
   const key = (dialectName ?? "").toLowerCase();
   if (key.includes("postgres")) return PostgreSQL;
+  if (key.includes("duckdb")) return PostgreSQL;
+  if (key.includes("sqlite")) return SQLite;
+  if (key.includes("t-sql") || key.includes("sql server") || key.includes("mssql")) return MSSQL;
   // StarRocks 用 MySQL 协议、语法基本兼容 MySQL；MariaDB/TiDB 等同理。
-  if (key.includes("mysql") || key.includes("starrocks") || key.includes("maria") || key.includes("tidb")) {
+  if (key.includes("mysql") || key.includes("starrocks") || key.includes("doris") || key.includes("maria") || key.includes("tidb")) {
     return MySQL;
   }
   return StandardSQL;

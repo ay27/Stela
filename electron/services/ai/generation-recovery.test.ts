@@ -45,9 +45,16 @@ const harness = new AgentHarness({ model, models: withGenerationRecovery(models,
   tools: [{ name: "probe", label: "Probe", description: "Offline counter", parameters: Type.Object({}),
     execute: async () => { tools++; return { content: [{ type: "text", text: "evidence" }], details: {} }; } }],
 });
+const usageRows: Array<{ id: string; tokens: number }> = [];
+harness.subscribe(event => { if (event.type === "usage") usageRows.push({ id: event.row.id, tokens: event.row.usage.totalTokens }); });
 const result = await harness.prompt("Use probe once, then answer.");
 assert.equal(result.stopReason, "stop");
 assert.equal(calls, 3);
+assert.equal(usageRows.reduce((sum, row) => sum + row.tokens, 0), 6, "native usage includes all attempts exactly once");
+assert.equal(new Set(usageRows.map(row => row.id)).size, usageRows.length);
+assert.equal(harness.getSnapshot()?.operation, null);
+assert.equal(harness.getSnapshot()?.lastResult?.status, "completed");
+assert.equal(harness.getSnapshot()?.stats.usage.totalTokens, 6);
 assert.equal(tools, 1, "neither completed tools nor incomplete stream tools are replayed");
 assert.equal(result.usage.totalTokens, 4, "failed and successful generation attempts counted once");
 assert.equal(diagnostics.filter((e) => e.retry).length, 1);

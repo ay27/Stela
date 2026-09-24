@@ -64,6 +64,9 @@ const SECRET_KEYS = new Set([
   "accesskey",
   "access_key",
   "authorization",
+  "credentials",
+  "privatekey",
+  "clientsecret",
 ]);
 
 const REDACTED = "***redacted***";

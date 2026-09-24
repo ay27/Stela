@@ -10,6 +10,16 @@ const DEFAULT_PUBLIC_PLUGINS = [
   "connector-postgresql",
   "connector-mongodb",
   "connector-http-sample",
+  "connector-starrocks",
+  "connector-doris",
+  "connector-sqlite",
+  "connector-duckdb",
+  "connector-clickhouse",
+  "connector-trino",
+  "connector-sqlserver",
+  "connector-bigquery",
+  "connector-snowflake",
+  "connector-databricks",
 ];
 
 function parsePluginList(raw) {

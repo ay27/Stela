@@ -34,7 +34,7 @@
     "make:win": "npm run build && electron-builder --win",
     "make:linux": "npm run build && electron-builder --linux",
     "pretest": "tsx src/lib/composer-lifecycle.test.ts && tsx src/components/ai/reply-layout.test.ts && tsx src/lib/composer-sql.test.ts && tsx src/services/composer-resources.test.ts && tsx src/lib/agent-message.test.ts",
-    "test": "tsx scripts/roundtrip-check.ts && tsx scripts/demo-vault-check.ts && tsx src/i18n/i18n-keys.test.ts && tsx src/services/schema-dump.test.ts && tsx src/components/agent-dashboard-activity.test.ts && tsx src/components/agent-dashboard-trace.test.ts && tsx src/components/ai/agent-empty-state.test.ts && tsx src/components/ai/markdown-code-language.test.ts && tsx electron/shared/conversation-routing.test.ts && tsx electron/shared/ipc-schema.test.ts && tsx electron/shared/agent-message.test.ts && tsx electron/shared/mongodb-query.test.ts && tsx electron/shared/sql-facts.test.ts && tsx src/lib/fuzzy.test.ts && tsx electron/services/vault-fs.test.ts && tsx electron/services/vault-watcher.test.ts && tsx electron/services/git/command.test.ts && tsx electron/services/sync-orchestrator.test.ts && tsx electron/services/connections-store.test.ts && tsx electron/services/auto-updater.test.ts && tsx electron/services/recent-files-store.test.ts && tsx electron/services/query-artifacts.test.ts && tsx electron/services/ai/redaction.test.ts && tsx electron/services/ai/sql-symbols.test.ts && tsx electron/services/ai/sql-guard.test.ts && tsx electron/services/ai/execution-plan.test.ts && tsx electron/services/ai/analysis-efficiency.test.ts && tsx electron/services/ai/pi-upgrade.test.ts && tsx electron/services/ai/agent-history.test.ts && tsx electron/services/ai/agent-prompt.test.ts && tsx electron/services/ai/agent-skills.test.ts && tsx electron/services/ai/skill-source-context.test.ts && tsx electron/services/ai/skill-maintenance-queue.test.ts && tsx electron/services/ai/skill-maintenance.test.ts && tsx electron/services/ai/maintenance-publication.test.ts && tsx electron/services/ai/tool-repair.integration.test.ts && tsx electron/services/ai/agent-tools.test.ts && tsx electron/services/ai/python-runtime-broker.test.ts && tsx electron/services/ai/schema-context.test.ts && tsx electron/services/ai/inline-completion.test.ts && tsx electron/services/ai/inline-completion-transport.test.ts && tsx electron/services/ai/provider.test.ts && tsx electron/services/connectors/module-loader.test.ts && tsx src/editor/source-file-mode.test.ts && tsx src/editor/block-selection.test.ts && tsx src/editor/image-assets/file-name.test.ts && tsx src/editor/image-assets/path-resolver.test.ts && tsx src/editor/search/source-map.test.ts && tsx src/editor/search/locator.test.ts && tsx src/editor/find-in-file/find-controller.test.ts && tsx src/editor/runsql/sql-inline-completion-context.test.ts && tsx src/editor/runsql/sql-inline-completion-text.test.ts && tsx src/editor/runsql/sql-scope.test.ts && tsx src/editor/runsql/markdown-patch.test.ts && tsx src/editor/runsql/pending-runs.test.ts && tsx src/state/conversation.test.ts && tsx src/state/workspace.test.ts && tsx src/state/agent-history.test.ts && tsx src/state/sql-template-picker.test.ts && tsx src/services/agent.test.ts && tsx src/services/auto-git.test.ts && tsx src/services/settings-store.test.ts && tsx src/services/result-diff.test.ts && tsx src/services/export-note.test.ts && tsx src/services/result-loader.test.ts && tsx src/services/sql-templates.test.ts && tsx src/services/sql-templates-missing-dir.test.ts && npm run test:skill-maintenance && npm run test:semantic && npm run test:store",
+    "test": "tsx scripts/roundtrip-check.ts && tsx scripts/demo-vault-check.ts && tsx src/i18n/i18n-keys.test.ts && tsx src/services/schema-dump.test.ts && tsx src/components/agent-dashboard-activity.test.ts && tsx src/components/agent-dashboard-trace.test.ts && tsx src/components/ai/agent-empty-state.test.ts && tsx src/components/ai/markdown-code-language.test.ts && tsx electron/shared/conversation-routing.test.ts && tsx electron/shared/ipc-schema.test.ts && tsx electron/shared/agent-message.test.ts && tsx electron/shared/mongodb-query.test.ts && tsx electron/shared/sql-facts.test.ts && tsx src/lib/fuzzy.test.ts && tsx electron/services/vault-fs.test.ts && tsx electron/services/vault-watcher.test.ts && tsx electron/services/git/command.test.ts && tsx electron/services/sync-orchestrator.test.ts && tsx electron/services/connections-store.test.ts && tsx electron/services/auto-updater.test.ts && tsx electron/services/recent-files-store.test.ts && tsx electron/services/query-artifacts.test.ts && tsx electron/services/ai/redaction.test.ts && tsx electron/services/ai/sql-symbols.test.ts && tsx electron/services/ai/sql-guard.test.ts && tsx electron/services/ai/execution-plan.test.ts && tsx electron/services/ai/analysis-efficiency.test.ts && tsx electron/services/ai/pi-upgrade.test.ts && tsx electron/services/ai/agent-history.test.ts && tsx electron/services/ai/agent-prompt.test.ts && tsx electron/services/ai/agent-skills.test.ts && tsx electron/services/ai/skill-source-context.test.ts && tsx electron/services/ai/skill-maintenance-queue.test.ts && tsx electron/services/ai/skill-maintenance.test.ts && tsx electron/services/ai/maintenance-publication.test.ts && tsx electron/services/ai/tool-repair.integration.test.ts && tsx electron/services/ai/agent-tools.test.ts && tsx electron/services/ai/python-runtime-broker.test.ts && tsx electron/services/ai/schema-context.test.ts && tsx electron/services/ai/inline-completion.test.ts && tsx electron/services/ai/inline-completion-transport.test.ts && tsx electron/services/ai/provider.test.ts && tsx electron/services/connectors/module-loader.test.ts && tsx src/editor/source-file-mode.test.ts && tsx src/editor/block-selection.test.ts && tsx src/editor/image-assets/file-name.test.ts && tsx src/editor/image-assets/path-resolver.test.ts && tsx src/editor/search/source-map.test.ts && tsx src/editor/search/locator.test.ts && tsx src/editor/find-in-file/find-controller.test.ts && tsx src/editor/runsql/sql-inline-completion-context.test.ts && tsx src/editor/runsql/sql-inline-completion-text.test.ts && tsx src/editor/runsql/sql-scope.test.ts && tsx src/editor/runsql/markdown-patch.test.ts && tsx src/editor/runsql/pending-runs.test.ts && tsx src/state/conversation.test.ts && tsx src/state/workspace.test.ts && tsx src/state/agent-history.test.ts && tsx src/state/sql-template-picker.test.ts && tsx src/services/agent.test.ts && tsx src/services/auto-git.test.ts && tsx src/services/settings-store.test.ts && tsx src/services/result-diff.test.ts && tsx src/services/export-note.test.ts && tsx src/services/result-loader.test.ts && tsx src/services/sql-templates.test.ts && tsx src/services/sql-templates-missing-dir.test.ts && npm run test:skill-maintenance && npm run test:semantic && npm run test:store && npm run test:analytics-connectors",
     "test:semantic": "tsx electron/services/ai/semantic-execution.test.ts && tsx electron/services/ai/semantic-grants.test.ts && tsx electron/services/ai/generation-recovery.test.ts && tsx electron/services/ai/generation-lifecycle.test.ts && tsx src/state/agent-panel-lifecycle.test.ts",
     "test:python-workspace": "tsx src/services/python-runtime.test.ts && tsx scripts/eval/data-agent-bench/python-workspace.test.ts",
     "test:analysis-experiments": "node --import tsx src/components/ai/analysis-evidence.test.ts && node --import tsx scripts/eval/data-agent-bench/analysis-experiments.integration.test.ts",
@@ -43,6 +43,7 @@
     "test:charts": "tsx electron/shared/value-format.test.ts && tsx electron/shared/chart-spec.test.ts && tsx electron/shared/analysis-canvas.test.ts && tsx electron/services/analysis-canvas.test.ts && tsx src/components/charts/chart-option.test.ts && tsx src/components/charts/echarts-runtime.test.ts && tsx src/components/flow/flow-layout.test.ts && tsx src/services/export-analysis-canvas-charts.test.ts",
     "test:store": "npm run test:charts && node scripts/run-electron-tests.mjs",
     "test:connectors": "node scripts/test-connectors.mjs",
+    "test:analytics-connectors": "npm run build:plugins && node scripts/run-analytics-connectors-electron.mjs",
     "test:runsql-agent-rewrite": "tsx src/editor/runsql/agent-rewrite-targets.test.ts",
     "eval:retrieval": "tsx scripts/eval/run-retrieval.ts",
     "eval:completion": "tsx scripts/eval/run-completion.ts",
@@ -56,6 +57,7 @@
     "test:conversation": "tsx electron/shared/conversation-routing.test.ts && tsx src/state/conversation.test.ts && tsx src/components/ai/conversation-timeline.test.ts && tsx src/components/ai/chat-history.test.ts && node scripts/run-conversation-tests.mjs"
   },
   "dependencies": {
+    "@clickhouse/client": "^1.23.1",
     "@codemirror/autocomplete": "^6.20.1",
     "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-sql": "^6.10.0",
@@ -64,10 +66,13 @@
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.41.1",
     "@dagrejs/dagre": "^3.1.0",
+    "@databricks/sql": "^2.1.0",
+    "@duckdb/node-api": "^1.5.5-r.5",
     "@earendil-works/pi-agent-core": "0.87.0",
     "@earendil-works/pi-ai": "0.87.0",
     "@fsegurai/codemirror-theme-vscode-dark": "^6.2.6",
     "@fsegurai/codemirror-theme-vscode-light": "^6.2.6",
+    "@google-cloud/bigquery": "^9.1.0",
     "@lezer/highlight": "^1.2.3",
     "@milkdown/core": "^7.20.0",
     "@milkdown/crepe": "^7.20.0",
@@ -104,10 +109,12 @@
     "i18next": "^26.3.3",
     "lucide-react": "^0.453.0",
     "mermaid": "^11.14.0",
+    "mssql": "^12.7.2",
     "pyodide": "^314.0.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-i18next": "^17.0.8",
+    "snowflake-sdk": "^3.3.0",
     "sql-formatter": "^15.7.3",
     "tailwind-merge": "^2.5.4",
     "tailwindcss-animate": "^1.0.7",
@@ -120,10 +127,12 @@
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
     "@types/better-sqlite3": "^7.6.8",
+    "@types/mssql": "^12.3.0",
     "@types/node": "^22.9.0",
     "@types/pg": "^8.20.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@types/snowflake-sdk": "^1.6.24",
     "@vitejs/plugin-react": "^4.3.3",
     "autoprefixer": "^10.4.20",
     "electron": "^41.5.0",
@@ -139,6 +148,10 @@
     "typescript": "^5.6.3",
     "vite": "^5.4.11",
     "vite-plugin-static-copy": "^3.1.5"
+  },
+  "overrides": {
+    "toml": "^5.0.0",
+    "ip-address": "^10.7.2"
   },
   "build": {
     "appId": "com.stela.app",
@@ -194,10 +207,99 @@
           "plugin.json",
           "dist/**"
         ]
+      },
+      {
+        "from": "plugins/connector-mongodb",
+        "to": "plugins/connector-mongodb",
+        "filter": [
+          "plugin.json",
+          "dist/**"
+        ]
+      },
+      {
+        "from": "plugins/connector-starrocks",
+        "to": "plugins/connector-starrocks",
+        "filter": [
+          "plugin.json",
+          "dist/**"
+        ]
+      },
+      {
+        "from": "plugins/connector-doris",
+        "to": "plugins/connector-doris",
+        "filter": [
+          "plugin.json",
+          "dist/**"
+        ]
+      },
+      {
+        "from": "plugins/connector-sqlite",
+        "to": "plugins/connector-sqlite",
+        "filter": [
+          "plugin.json",
+          "dist/**"
+        ]
+      },
+      {
+        "from": "plugins/connector-duckdb",
+        "to": "plugins/connector-duckdb",
+        "filter": [
+          "plugin.json",
+          "dist/**"
+        ]
+      },
+      {
+        "from": "plugins/connector-clickhouse",
+        "to": "plugins/connector-clickhouse",
+        "filter": [
+          "plugin.json",
+          "dist/**"
+        ]
+      },
+      {
+        "from": "plugins/connector-trino",
+        "to": "plugins/connector-trino",
+        "filter": [
+          "plugin.json",
+          "dist/**"
+        ]
+      },
+      {
+        "from": "plugins/connector-sqlserver",
+        "to": "plugins/connector-sqlserver",
+        "filter": [
+          "plugin.json",
+          "dist/**"
+        ]
+      },
+      {
+        "from": "plugins/connector-bigquery",
+        "to": "plugins/connector-bigquery",
+        "filter": [
+          "plugin.json",
+          "dist/**"
+        ]
+      },
+      {
+        "from": "plugins/connector-snowflake",
+        "to": "plugins/connector-snowflake",
+        "filter": [
+          "plugin.json",
+          "dist/**"
+        ]
+      },
+      {
+        "from": "plugins/connector-databricks",
+        "to": "plugins/connector-databricks",
+        "filter": [
+          "plugin.json",
+          "dist/**"
+        ]
       }
     ],
     "asarUnpack": [
-      "**/node_modules/better-sqlite3/**"
+      "**/node_modules/better-sqlite3/**",
+      "**/node_modules/@duckdb/node-bindings*/**"
     ],
     "mac": {
       "category": "public.app-category.developer-tools",

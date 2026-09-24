@@ -41,6 +41,16 @@ const DEFAULT_BUNDLED_PLUGIN_IDS = [
   "connector-postgresql",
   "connector-mongodb",
   "connector-http-sample",
+  "connector-starrocks",
+  "connector-doris",
+  "connector-sqlite",
+  "connector-duckdb",
+  "connector-clickhouse",
+  "connector-trino",
+  "connector-sqlserver",
+  "connector-bigquery",
+  "connector-snowflake",
+  "connector-databricks",
 ];
 
 /** 打开 vault 时自动 seed 的官方 connector。 */

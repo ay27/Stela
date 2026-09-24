@@ -153,7 +153,7 @@ The renderer has **no Node privileges**. All desktop capabilities flow through a
 `electron/main/vault-context.ts` owns the current vault singleton. `setCurrentVault(path)` runs a fixed sequence:
 
 1. Seed legacy userData config if `.stela/` is missing
-2. Seed bundled connector plugins (MySQL, PostgreSQL, MongoDB, HTTP sample)
+2. Seed the default MySQL, PostgreSQL and MongoDB connectors; expose the other official connectors in the install catalog
 3. Ensure `.gitignore` covers SQLite and local-only files
 4. Shutdown old connector subprocesses; load new vault's plugin registry
 5. Open SQLite cache and incrementally import JSONL history
@@ -300,6 +300,16 @@ All database access goes through a **plugin registry** (`electron/services/conne
 | PostgreSQL | module | `plugins/connector-postgresql/` |
 | MongoDB | module | `plugins/connector-mongodb/` |
 | HTTP sample | module | `plugins/connector-http-sample/` |
+| StarRocks | module | `plugins/connector-starrocks/` (MySQL protocol, StarRocks dialect) |
+| Apache Doris | module | `plugins/connector-doris/` (MySQL protocol, Doris dialect) |
+| SQLite | module | `plugins/connector-sqlite/` (read-only local database) |
+| DuckDB / CSV / Parquet / JSON / JSONL | module | `plugins/connector-duckdb/` (local file) |
+| ClickHouse | module | `plugins/connector-clickhouse/` |
+| Trino | module | `plugins/connector-trino/` |
+| SQL Server | module | `plugins/connector-sqlserver/` |
+| BigQuery | module | `plugins/connector-bigquery/` |
+| Snowflake | module | `plugins/connector-snowflake/` |
+| Databricks SQL | module | `plugins/connector-databricks/` |
 
 Two plugin tracks coexist:
 
@@ -314,6 +324,14 @@ Registration:
 - Subprocess plugins: `{vault}/.stela/connector_plugins.json` with `exe_path`
 
 See [ADR-0005](./adr/0005-connector-plugin-dual-track.md).
+
+The additional official connectors are installed on demand from the bundled
+catalog. Local file connectors take an explicit absolute path; DuckDB exposes
+non-database files as a `data` view. BigQuery's service-account JSON is stored
+as the `credentials` secret (or it uses application default credentials), and
+its per-query `maximumBytesBilled` setting defaults to 1 GiB. Packaged native
+SQLite and DuckDB modules resolve from the app dependency tree, while connector
+entry bundles remain vault-local. See [ADR-0116](./adr/0116-analytics-connector-catalog.md).
 
 Connector API v2 added optional `queryArtifactFormats` metadata and
 `materializeQuery(config, sql, request)`. API v3 adds declared
@@ -815,7 +833,7 @@ bounded cursor context
 - Same-turn tool batches may run in parallel; stateful plan, Canvas, chart, note-edit, and RunSQL-rewrite tools are sequential ([ADR-0021](./adr/0021-parallel-agent-tools-except-propose-edit.md), [ADR-0088](./adr/0088-configurable-automatic-agent-edits.md))
 - Agent runs are stopped by model completion, errors, or explicit user cancellation; legacy iteration/time settings are ignored
 - Sessions use the Stela `pi-session.ts` adapter over native Pi `JsonlSessionRepo` by `sessionId` at `.stela/agent-history/<deviceSlug>/`. Main caches open local sessions; other-device sessions are read-only and fork to a new local session before a new prompt.
-- Compaction: proactive `shouldCompact` against `ai.contextWindow`, plus one overflow recovery compact + continue; the current plan is re-injected from the Session custom-entry projector, and `plan_updated` joins `context_usage` / `compaction` on `ai:agent-event`
+- Compaction: Pi owns default threshold scheduling at run checkpoints, summarization and bounded context-overflow recovery. Stela forwards native start/success events to `ai:agent-event`; it does not inject a synthetic continuation prompt or run a second compaction policy. Existing plan/checkpoint projectors and bounded evidence retrieval remain in place. See [ADR-0114](adr/0114-pi-owned-context-compaction.md).
 - Agent chat references are structured: note paths are listed for tool-driven `read_note`, while selected prose and RunSQL snippets are added to the current user turn with a bounded character budget
 
 ### Key files
@@ -955,7 +973,7 @@ docs/               # Architecture docs + product screenshots
 | Electron desktop app | Tauri/Rust backend |
 | Git + JSONL sync | COS object storage |
 | Search-first AI | RAG embeddings (onnxruntime, transformers.js) |
-| Bundled MySQL/PostgreSQL/MongoDB/HTTP connectors | Private connector plugins |
+| Public bundled connectors in the table above | Private connector plugins |
 | Wiki links + SQL index | MCP server child process |
 | Module + subprocess connector framework | Obsidian plugin runtime |
 
@@ -1079,3 +1097,9 @@ legacy Chat document and upgrades its outer version to 2. New journals use forma
 directly. Backups contain private conversation data and stay beside their source;
 they are not release assets. To downgrade an old conversation, restore its backup
 with Stela closed. A new version-2 Chat has no old-client equivalent.
+
+### Native Pi runtime observation and generation retry
+
+The Stela adapter consumes `lane.watch()` and `reduceLaneSnapshot()` for the main lane's transcript and lifecycle, translating native tool/message event names at its boundary. Agent and maintenance metrics consume native `usage` rows rather than assistant `message_end`, so compaction calls are counted; external strategy and closeout calls retain explicit accounting. Existing IPC and renderer models remain application-owned.
+
+`withGenerationRecovery` uses pi-ai `retryAssistantCall` for bounded exponential backoff and cancellation. The wrapper retains per-stream deadlines, partial-output isolation, diagnostics, HTTP status and Retry-After policy, and aggregates attempt usage once. Harness/provider retry loops remain disabled to avoid nested retries. See [ADR-0115](adr/0115-pi-runtime-observation-and-retry.md).

@@ -1,0 +1,1 @@
+{"id":"connector-duckdb","kind":"duckdb","displayName":"DuckDB / Local Files","apiVersion":4,"entry":"dist/index.cjs"}

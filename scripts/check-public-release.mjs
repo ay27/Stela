@@ -18,6 +18,16 @@ const ALLOWED_PLUGIN_DIRS = new Set([
   "connector-postgresql",
   "connector-mongodb",
   "connector-http-sample",
+  "connector-starrocks",
+  "connector-doris",
+  "connector-sqlite",
+  "connector-duckdb",
+  "connector-clickhouse",
+  "connector-trino",
+  "connector-sqlserver",
+  "connector-bigquery",
+  "connector-snowflake",
+  "connector-databricks",
 ]);
 
 const SKIP_DIRS = new Set([

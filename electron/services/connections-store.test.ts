@@ -109,6 +109,23 @@ async function testUpsertSplitsSecretIntoShard(): Promise<Check[]> {
   });
 }
 
+async function testCloudCredentialsStayLocal(): Promise<Check[]> {
+  return withTempVault(async (vaultPath) => {
+    const credentials = '{"private_key":"example"}';
+    await upsertConnection(vaultPath, SLUG, "BQ", {
+      kind: "bigquery",
+      config: { projectId: "demo", credentials },
+    });
+    const shared = await readSharedConfig(vaultPath);
+    const shard = await readShard(vaultPath, SLUG);
+    return [
+      expect("BigQuery project remains in shared config", shared.BQ?.config.projectId === "demo"),
+      expect("BigQuery credentials are absent from shared config", !("credentials" in (shared.BQ?.config ?? {}))),
+      expect("BigQuery credentials are stored in device shard", shard.BQ?.credentials === `__plain:${credentials}`),
+    ];
+  });
+}
+
 async function testLoadMergesSharedAndShard(): Promise<Check[]> {
   return withTempVault(async (vaultPath) => {
     await upsertConnection(vaultPath, SLUG, "SR", {
@@ -250,6 +267,7 @@ async function testRemoveDeletesFromSharedAndShard(): Promise<Check[]> {
 async function main(): Promise<void> {
   const checks = [
     ...(await testUpsertSplitsSecretIntoShard()),
+    ...(await testCloudCredentialsStayLocal()),
     ...(await testLoadMergesSharedAndShard()),
     ...(await testBlankSecretDoesNotOverwriteShard()),
     ...(await testLegacyInlineSecretMigratesToShard()),

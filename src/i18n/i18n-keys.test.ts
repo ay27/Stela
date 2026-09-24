@@ -24,6 +24,8 @@ const UI_FILES_WITHOUT_HARDCODED_CHINESE = [
   "src/components/settings/atoms.tsx",
   "src/components/settings/connector-form.tsx",
   "src/components/settings/connections-tab.tsx",
+  "src/components/settings/snowflake-connection-help.tsx",
+  "src/components/settings/databricks-connection-help.tsx",
   "src/components/settings/execution-tab.tsx",
   "src/components/settings/git-tab.tsx",
   "src/components/settings/ai-tab.tsx",

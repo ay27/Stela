@@ -166,3 +166,6 @@ proposed → active → superseded
 | [0111](0111-evidence-aware-agent-recovery.md) | Evidence-aware Agent recovery and delivery | active |
 | [0112](0112-maintenance-evidence-publication.md) | Independent evidence for automatic knowledge publication | active |
 | [0113](0113-pi-durable-session-upgrade.md) | Pi 0.87 durable sessions behind Stela conversation adapters | active |
+| [0114](0114-pi-owned-context-compaction.md) | Pi owns context compaction scheduling and recovery (replaces compaction policy in 0113) | active |
+| [0115](0115-pi-runtime-observation-and-retry.md) | Reuse Pi runtime observation, usage and generation retry | active |
+| [0116](0116-analytics-connector-catalog.md) | Official analytics connectors and local file sources | active |

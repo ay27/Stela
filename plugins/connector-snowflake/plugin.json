@@ -1,0 +1,1 @@
+{"id":"connector-snowflake","kind":"snowflake","displayName":"Snowflake","apiVersion":4,"entry":"dist/index.cjs"}

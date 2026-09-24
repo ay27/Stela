@@ -1,0 +1,1 @@
+{"id":"connector-clickhouse","kind":"clickhouse","displayName":"ClickHouse","apiVersion":4,"entry":"dist/index.cjs"}

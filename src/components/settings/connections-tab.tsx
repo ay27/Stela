@@ -15,6 +15,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -54,6 +55,10 @@ import {
   type DumpProgress,
 } from "@/services/schema-dump";
 import { useT } from "@/i18n/use-t";
+import { fetchBundledPlugins, usePluginsStore } from "@/services/plugins";
+import type { BundledPluginInfo } from "@shared/types";
+import { SnowflakeConnectionHelp } from "./snowflake-connection-help";
+import { DatabricksConnectionHelp } from "./databricks-connection-help";
 
 type ConfigEditMode = "form" | "json";
 
@@ -107,6 +112,9 @@ const SECRET_FIELD_NAMES = new Set([
   "accesskey",
   "access_key",
   "authorization",
+  "credentials",
+  "privatekey",
+  "clientsecret",
 ]);
 
 function isSecretFieldName(name: string): boolean {
@@ -188,8 +196,12 @@ export function ConnectionsTab() {
   const remove = useConnections((s) => s.remove);
 
   const [kinds, setKinds] = useState<ConnectorKindMeta[]>([]);
+  const [bundled, setBundled] = useState<BundledPluginInfo[]>([]);
   const [kindsLoading, setKindsLoading] = useState(false);
   const [kindsError, setKindsError] = useState<string | null>(null);
+  const [kindInstallError, setKindInstallError] = useState<string | null>(null);
+  const [installingKind, setInstallingKind] = useState<string | null>(null);
+  const kindChangeRequest = useRef(0);
 
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -206,9 +218,26 @@ export function ConnectionsTab() {
       .then((m) => setKinds(m))
       .catch((err) => setKindsError(errMessage(err)))
       .finally(() => setKindsLoading(false));
+    // 官方数据源即使尚未安装，也应能在新建连接时直接选择。
+    void fetchBundledPlugins()
+      .then(setBundled)
+      .catch((err) => setKindInstallError(errMessage(err)));
   }, [reload]);
 
   const entryNames = useMemo(() => Object.keys(entries).sort(), [entries]);
+  const kindOptions = useMemo(() => {
+    const installedKinds = new Set(kinds.map((kind) => kind.kind));
+    const installed = kinds.map((kind) => ({
+      value: kind.kind,
+      label: kind.subprocess
+        ? `${kind.displayName} · ${t("connections.kindSubprocessSuffix")}`
+        : kind.displayName,
+    }));
+    const available = bundled
+      .filter((plugin) => !installedKinds.has(plugin.kind))
+      .map((plugin) => ({ value: plugin.kind, label: plugin.displayName }));
+    return [...installed, ...available];
+  }, [kinds, bundled, t]);
 
   useEffect(() => {
     if (selected && entries[selected]) {
@@ -225,6 +254,7 @@ export function ConnectionsTab() {
       });
       setTestState({ status: "idle" });
       setSaveError(null);
+      setKindInstallError(null);
     }
   }, [selected, entries]);
 
@@ -249,6 +279,7 @@ export function ConnectionsTab() {
   }, [selected]);
 
   const startNew = useCallback(() => {
+    kindChangeRequest.current += 1;
     const defaultKind = kinds[0]?.kind ?? "";
     const defaultConfig = asConfigObject(kinds[0]?.defaultConfig);
     setCreating(true);
@@ -264,17 +295,46 @@ export function ConnectionsTab() {
     });
     setTestState({ status: "idle" });
     setSaveError(null);
+    setKindInstallError(null);
   }, [kinds]);
 
   const onKindChange = useCallback(
-    (k: string) => {
-      const meta = kinds.find((x) => x.kind === k);
+    async (k: string) => {
+      const request = ++kindChangeRequest.current;
+      setKindInstallError(null);
+      let availableKinds = kinds;
+      if (!availableKinds.some((kind) => kind.kind === k)) {
+        const plugin = bundled.find((item) => item.kind === k);
+        if (!plugin) return;
+        setInstallingKind(k);
+        try {
+          await usePluginsStore.getState().installBundled(plugin.id);
+          availableKinds = await electronConnectorRegistry.listKinds();
+          setKinds(availableKinds);
+          setBundled((items) => items.map((item) =>
+            item.id === plugin.id ? { ...item, installed: true } : item,
+          ));
+        } catch (err) {
+          if (request === kindChangeRequest.current) {
+            setKindInstallError(errMessage(err));
+          }
+          return;
+        } finally {
+          setInstallingKind(null);
+        }
+      }
+      if (request !== kindChangeRequest.current) return;
+      const meta = availableKinds.find((x) => x.kind === k);
+      if (!meta) {
+        setKindInstallError(t("connections.kindUnavailable", { kind: k }));
+        return;
+      }
       setDraft((d) => {
         // 切 kind：如果现有 config 看起来还是「空模板」（用户没填），用新 kind
         // 的 defaultConfig 替换，避免把 mysql 的 {host,port,user...} 残留带进
         // http connector。判定标准：当前 config 与上一 kind 的 defaultConfig
         // 完全一致（没动），或 config 为空对象。
-        const prevMeta = kinds.find((x) => x.kind === d.kind);
+        const prevMeta = availableKinds.find((x) => x.kind === d.kind);
         const prevDefault = asConfigObject(prevMeta?.defaultConfig);
         const looksUntouched =
           Object.keys(d.config).length === 0 ||
@@ -293,7 +353,7 @@ export function ConnectionsTab() {
       });
       setTestState({ status: "idle" });
     },
-    [kinds],
+    [kinds, bundled, t],
   );
 
   /**
@@ -549,6 +609,8 @@ export function ConnectionsTab() {
                     key={name}
                     type="button"
                     onClick={() => {
+                      kindChangeRequest.current += 1;
+                      setKindInstallError(null);
                       setCreating(false);
                       setSelected(name);
                     }}
@@ -635,21 +697,23 @@ export function ConnectionsTab() {
               <Field label={t("connections.field.kind")}>
                 <Select
                   value={draft.kind}
-                  onValueChange={onKindChange}
+                  onValueChange={(kind) => void onKindChange(kind)}
                   placeholder={t("connections.kindPlaceholder")}
-                  options={kinds.map((k) => {
-                    // 只展示对用户友好的名字；kind（http/mysql 等实现关键词）不外露。
-                    const labelText = k.subprocess
-                      ? `${k.displayName} · ${t("connections.kindSubprocessSuffix")}`
-                      : k.displayName;
-                    return {
-                      value: k.kind,
-                      label: labelText,
-                      labelText,
-                    };
-                  })}
+                  options={kindOptions}
+                  disabled={installingKind !== null}
                   className="w-full"
                 />
+                {installingKind ? (
+                  <p className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    {t("connections.kindInstalling")}
+                  </p>
+                ) : null}
+                {kindInstallError ? (
+                  <p className="mt-1 text-[11px] text-destructive">
+                    {t("connections.kindInstallFailed", { message: kindInstallError })}
+                  </p>
+                ) : null}
               </Field>
 
               <ConfigEditor
@@ -670,7 +734,7 @@ export function ConnectionsTab() {
                   fields={missingDeviceSecrets(
                     kinds.find((k) => k.kind === draft.kind)?.configSchema,
                     draft.config,
-                  )}
+                  ).filter((field) => !(draft.kind === "bigquery" && field === "credentials"))}
                 />
               ) : null}
 
@@ -729,7 +793,7 @@ export function ConnectionsTab() {
               <button
                 type="button"
                 onClick={() => void onTest()}
-                disabled={testState.status === "running"}
+                disabled={testState.status === "running" || installingKind !== null}
                 className="rounded-md border border-border px-2.5 py-1 text-xs hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {testState.status === "running"
@@ -738,7 +802,8 @@ export function ConnectionsTab() {
               </button>
               <button
                 type="submit"
-                className="rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
+                disabled={installingKind !== null}
+                className="rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {draft.originalName
                   ? t("connections.save.update")
@@ -830,6 +895,34 @@ function ConfigEditor({
   const t = useT();
   const meta = kinds.find((k) => k.kind === kind);
   const objectSchema = meta ? normalizeObjectSchema(meta.configSchema) : null;
+  if ((kind === "bigquery" || kind === "snowflake" || kind === "databricks") && objectSchema?.properties) {
+    const descriptions: Record<string, string> = kind === "bigquery" ? {
+      projectId: t("connections.bigquery.projectId"),
+      location: t("connections.bigquery.location"),
+      maximumBytesBilled: t("connections.bigquery.maximumBytesBilled"),
+      credentials: t("connections.bigquery.credentials"),
+    } : kind === "snowflake" ? {
+      account: t("connections.snowflake.account"),
+      username: t("connections.snowflake.username"),
+      password: t("connections.snowflake.password"),
+      warehouse: t("connections.snowflake.warehouse"),
+      database: t("connections.snowflake.database"),
+      schema: t("connections.snowflake.schema"),
+      role: t("connections.snowflake.role"),
+    } : {
+      host: t("connections.databricks.host"),
+      path: t("connections.databricks.path"),
+      token: t("connections.databricks.token"),
+      catalog: t("connections.databricks.catalog"),
+      schema: t("connections.databricks.schema"),
+    };
+    objectSchema.properties = Object.fromEntries(
+      Object.entries(objectSchema.properties).map(([name, field]) => [
+        name,
+        { ...field, description: descriptions[name] ?? field.description },
+      ]),
+    );
+  }
   const formAvailable = objectSchema !== null;
   // schema 不识别时强制 json
   const effectiveMode: "form" | "json" = formAvailable ? mode : "json";
@@ -862,6 +955,10 @@ function ConfigEditor({
           </ModeButton>
         </div>
       </div>
+
+      {kind === "bigquery" ? <BigQueryAuthHelp /> : null}
+      {kind === "snowflake" ? <SnowflakeConnectionHelp /> : null}
+      {kind === "databricks" ? <DatabricksConnectionHelp /> : null}
 
       {effectiveMode === "form" && objectSchema ? (
         <div className="rounded-md border border-border bg-background p-3">
@@ -897,6 +994,41 @@ function ConfigEditor({
           ) : null}
         </>
       )}
+    </div>
+  );
+}
+
+function BigQueryAuthHelp() {
+  const t = useT();
+  return (
+    <div className="stela-bigquery-auth-help mb-3 text-xs leading-relaxed text-muted-foreground">
+      <p>{t("connections.bigquery.auth.intro")}</p>
+      <details className="mt-1.5">
+        <summary className="cursor-pointer text-foreground hover:text-primary">
+          {t("connections.bigquery.auth.title")}
+        </summary>
+        <div className="mt-2 space-y-3 border-l border-border pl-3">
+          <div>
+            <p className="font-medium text-foreground">{t("connections.bigquery.auth.localTitle")}</p>
+            <p>{t("connections.bigquery.auth.localSteps")}</p>
+            <button type="button" className="mt-1 text-primary hover:underline" onClick={() => void window.stela.shell.openExternal("https://docs.cloud.google.com/bigquery/docs/authentication#client-libs")}>
+              {t("connections.bigquery.auth.localGuide")}
+            </button>
+          </div>
+          <div>
+            <p className="font-medium text-foreground">{t("connections.bigquery.auth.serviceTitle")}</p>
+            <p>{t("connections.bigquery.auth.serviceSteps")}</p>
+            <button type="button" className="mt-1 text-primary hover:underline" onClick={() => void window.stela.shell.openExternal("https://docs.cloud.google.com/iam/docs/keys-create-delete")}>
+              {t("connections.bigquery.auth.serviceGuide")}
+            </button>
+          </div>
+          <div>
+            <button type="button" className="text-primary hover:underline" onClick={() => void window.stela.shell.openExternal("https://docs.cloud.google.com/bigquery/docs/running-queries#required_permissions")}>
+              {t("connections.bigquery.auth.permissionsGuide")}
+            </button>
+          </div>
+        </div>
+      </details>
     </div>
   );
 }

@@ -1,0 +1,1 @@
+{"id":"connector-sqlserver","kind":"sqlserver","displayName":"SQL Server","apiVersion":4,"entry":"dist/index.cjs"}

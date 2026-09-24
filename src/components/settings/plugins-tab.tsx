@@ -11,11 +11,11 @@
  *   - 卸载：仅 subprocess 可用，会停掉子进程并从 manifest 移除
  *   - 查看日志：从 main 端 ring buffer 拉取最近若干行 stderr，提供刷新按钮
  *
- * 与 ConnectionsTab 解耦：本 tab 只管「安装哪些 connector kind」，连接（kind+config 实例）
- * 的 CRUD 仍在 Connections tab。
+ * 连接页可直接选用应用自带的数据源；此页管理已安装插件与第三方插件。
  */
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -55,7 +55,11 @@ const EMPTY_DRAFT: InstallDraft = {
   envText: "",
 };
 
-export function PluginsTab() {
+export function PluginsTab({
+  onInstallDialogOpenChange,
+}: {
+  onInstallDialogOpenChange: (open: boolean) => void;
+}) {
   const t = useT();
   const {
     items,
@@ -73,6 +77,11 @@ export function PluginsTab() {
   const [selectedKind, setSelectedKind] = useState<string | null>(null);
   const [installOpen, setInstallOpen] = useState(false);
   const [moduleOpen, setModuleOpen] = useState(false);
+
+  useLayoutEffect(() => {
+    onInstallDialogOpenChange(installOpen || moduleOpen);
+    return () => onInstallDialogOpenChange(false);
+  }, [installOpen, moduleOpen, onInstallDialogOpenChange]);
 
   const selected = useMemo(
     () => items.find((p) => p.kind === selectedKind) ?? null,
@@ -93,9 +102,9 @@ export function PluginsTab() {
   }, [items, selectedKind]);
 
   return (
-    <TabContainer>
-      <header className="mb-4 flex items-start justify-between gap-3">
-        <div>
+    <TabContainer className="flex h-full min-h-0 flex-col">
+      <header className="mb-4 flex flex-none flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <h3 className="text-sm font-semibold text-foreground">
             {t("plugins.title")}
           </h3>
@@ -103,7 +112,7 @@ export function PluginsTab() {
             {t("plugins.description")}
           </p>
         </div>
-        <div className="flex flex-none items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => void refresh()}
@@ -146,7 +155,7 @@ export function PluginsTab() {
         </div>
       ) : null}
 
-      <div className="flex min-h-[360px] gap-3">
+      <div className="flex min-h-0 flex-1 gap-3">
         <PluginList
           items={items}
           selected={selectedKind}
@@ -275,128 +284,130 @@ function ModuleInstallDialog({
   };
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-6"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+    <Dialog.Root
+      open
+      onOpenChange={(open) => !open && busy === null && onClose()}
     >
-      <div className="w-[560px] max-w-full rounded-lg border border-border bg-background p-4 shadow-xl">
-        <h4 className="mb-2 text-sm font-semibold text-foreground">
-          {t("plugins.moduleInstall.title")}
-        </h4>
-        <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-none" />
-          <span>
-            {t("plugins.moduleInstall.warning")}
-          </span>
-        </div>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-[60] bg-black/45 backdrop-blur-md" />
+        <Dialog.Content
+          aria-describedby={undefined}
+          className="fixed left-1/2 top-1/2 z-[61] flex max-h-[calc(100vh-3rem)] min-h-0 w-[560px] max-w-[calc(100vw-3rem)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-border bg-background p-4 shadow-xl"
+        >
+          <Dialog.Title className="mb-2 flex-none text-sm font-semibold text-foreground">
+            {t("plugins.moduleInstall.title")}
+          </Dialog.Title>
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-none" />
+              <span>{t("plugins.moduleInstall.warning")}</span>
+            </div>
 
-        <section className="mb-4">
-          <h5 className="mb-1.5 text-[12px] font-medium text-foreground">
-            {t("plugins.moduleInstall.bundled")}
-          </h5>
-          <div className="rounded-md border border-border">
-            {bundled === null ? (
-              <div className="flex items-center gap-1.5 px-3 py-3 text-[11px] text-muted-foreground">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />{" "}
-                {t("common.loading")}
-              </div>
-            ) : bundled.length === 0 ? (
-              <div className="px-3 py-3 text-[11px] text-muted-foreground">
-                {t("plugins.moduleInstall.noBundled")}
-              </div>
-            ) : (
-              <ul className="divide-y divide-border/60">
-                {bundled.map((b) => (
-                  <li
-                    key={b.id}
-                    className="flex items-center justify-between gap-3 px-3 py-2 text-[12px]"
-                  >
-                    <div className="min-w-0">
-                      <div className="truncate font-medium">
-                        {b.displayName}
-                      </div>
-                      <div className="truncate font-mono text-[10.5px] text-muted-foreground">
-                        {b.id}
-                      </div>
-                    </div>
-                    {b.installed ? (
-                      <span className="inline-flex flex-none items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10.5px] text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
-                        <CheckCircle2 className="h-3 w-3" />{" "}
-                        {t("plugins.moduleInstall.installed")}
-                      </span>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => void onInstallBundled(b.id)}
-                        disabled={busy !== null}
-                        className={cn(
-                          "inline-flex flex-none items-center gap-1 rounded-md bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground hover:opacity-90",
-                          busy !== null && "opacity-60",
-                        )}
+            <section className="mb-4">
+              <h5 className="mb-1.5 text-[12px] font-medium text-foreground">
+                {t("plugins.moduleInstall.bundled")}
+              </h5>
+              <div className="rounded-md border border-border">
+                {bundled === null ? (
+                  <div className="flex items-center gap-1.5 px-3 py-3 text-[11px] text-muted-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />{" "}
+                    {t("common.loading")}
+                  </div>
+                ) : bundled.length === 0 ? (
+                  <div className="px-3 py-3 text-[11px] text-muted-foreground">
+                    {t("plugins.moduleInstall.noBundled")}
+                  </div>
+                ) : (
+                  <ul className="divide-y divide-border/60">
+                    {bundled.map((b) => (
+                      <li
+                        key={b.id}
+                        className="flex items-center justify-between gap-3 px-3 py-2 text-[12px]"
                       >
-                        {busy === b.id ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
+                        <div className="min-w-0">
+                          <div className="truncate font-medium">
+                            {b.displayName}
+                          </div>
+                          <div className="truncate font-mono text-[10.5px] text-muted-foreground">
+                            {b.id}
+                          </div>
+                        </div>
+                        {b.installed ? (
+                          <span className="inline-flex flex-none items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10.5px] text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
+                            <CheckCircle2 className="h-3 w-3" />{" "}
+                            {t("plugins.moduleInstall.installed")}
+                          </span>
                         ) : (
-                          <Plus className="h-3 w-3" />
+                          <button
+                            type="button"
+                            onClick={() => void onInstallBundled(b.id)}
+                            disabled={busy !== null}
+                            className={cn(
+                              "inline-flex flex-none items-center gap-1 rounded-md bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground hover:opacity-90",
+                              busy !== null && "opacity-60",
+                            )}
+                          >
+                            {busy === b.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Plus className="h-3 w-3" />
+                            )}
+                            {t("plugins.moduleInstall.install")}
+                          </button>
                         )}
-                        {t("plugins.moduleInstall.install")}
-                      </button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </section>
+
+            <section className="mb-4">
+              <h5 className="mb-1.5 text-[12px] font-medium text-foreground">
+                {t("plugins.moduleInstall.local")}
+              </h5>
+              <p className="mb-2 text-[11px] text-muted-foreground">
+                {t("plugins.moduleInstall.localHint")}
+              </p>
+              <button
+                type="button"
+                onClick={() => void onPickDir()}
+                disabled={busy !== null}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-[11px] hover:bg-accent",
+                  busy !== null && "opacity-60",
+                )}
+              >
+                {busy === "__dir__" ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <FolderOpen className="h-3.5 w-3.5" />
+                )}
+                {t("plugins.moduleInstall.chooseDir")}
+              </button>
+            </section>
+
+            {error ? (
+              <div className="mb-3 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-none" />
+                <span>{error}</span>
+              </div>
+            ) : null}
           </div>
-        </section>
 
-        <section className="mb-4">
-          <h5 className="mb-1.5 text-[12px] font-medium text-foreground">
-            {t("plugins.moduleInstall.local")}
-          </h5>
-          <p className="mb-2 text-[11px] text-muted-foreground">
-            {t("plugins.moduleInstall.localHint")}
-          </p>
-          <button
-            type="button"
-            onClick={() => void onPickDir()}
-            disabled={busy !== null}
-            className={cn(
-              "inline-flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-[11px] hover:bg-accent",
-              busy !== null && "opacity-60",
-            )}
-          >
-            {busy === "__dir__" ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <FolderOpen className="h-3.5 w-3.5" />
-            )}
-            {t("plugins.moduleInstall.chooseDir")}
-          </button>
-        </section>
-
-        {error ? (
-          <div className="mb-3 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-none" />
-            <span>{error}</span>
+          <div className="flex flex-none items-center justify-end border-t border-border pt-3">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={busy !== null}
+              className="rounded-md border border-border bg-background px-3 py-1.5 text-[11px] hover:bg-accent"
+            >
+              {t("plugins.moduleInstall.close")}
+            </button>
           </div>
-        ) : null}
-
-        <div className="flex items-center justify-end">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy !== null}
-            className="rounded-md border border-border bg-background px-3 py-1.5 text-[11px] hover:bg-accent"
-          >
-            {t("plugins.moduleInstall.close")}
-          </button>
-        </div>
-      </div>
-    </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
@@ -414,14 +425,14 @@ function PluginList({
   const t = useT();
   if (loading && items.length === 0) {
     return (
-      <aside className="flex w-56 flex-none items-center justify-center rounded-md border border-border bg-card/40 text-[11px] text-muted-foreground">
+      <aside className="flex min-h-0 w-56 flex-none items-center justify-center rounded-md border border-border bg-card/40 text-[11px] text-muted-foreground">
         <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
         {t("common.loading")}
       </aside>
     );
   }
   return (
-    <aside className="w-56 flex-none overflow-auto rounded-md border border-border bg-card/40">
+    <aside className="min-h-0 w-56 flex-none overflow-y-auto rounded-md border border-border bg-card/40">
       <ul className="divide-y divide-border/60">
         {items.map((p) => {
           const active = p.kind === selected;
@@ -495,7 +506,7 @@ function PluginDetail({
     );
   }
   return (
-    <div className="flex flex-1 flex-col overflow-hidden rounded-md border border-border bg-card/40">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-md border border-border bg-card/40">
       <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -520,7 +531,7 @@ function PluginDetail({
         )}
       </header>
 
-      <div className="flex-1 overflow-auto px-4 py-3">
+      <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
         {plugin.source === "subprocess" ? (
           <SubprocessDetail
             plugin={plugin}
@@ -546,7 +557,9 @@ function BuiltinDetail({ plugin }: { plugin: PluginInfo }) {
       <dd>{t("plugins.source.builtin")}</dd>
       <dt className="text-muted-foreground">{t("plugins.field.kind")}</dt>
       <dd className="font-mono">{plugin.kind}</dd>
-      <dt className="text-muted-foreground">{t("plugins.field.description")}</dt>
+      <dt className="text-muted-foreground">
+        {t("plugins.field.description")}
+      </dt>
       <dd className="text-muted-foreground">{plugin.displayName}</dd>
     </dl>
   );
@@ -558,9 +571,13 @@ function ModuleDetail({ plugin }: { plugin: PluginInfo }) {
   const directory = plugin.dir?.replace(/\\/g, "/").replace(/\/+$/, "");
   const vault = vaultPath?.replace(/\\/g, "/").replace(/\/+$/, "");
   // Keep local usernames and parent directories out of the settings display.
-  const displayDirectory = !directory ? "—"
-    : vault && directory.startsWith(`${vault}/`) ? directory.slice(vault.length + 1)
-      : directory === vault ? "." : directory.split("/").at(-1);
+  const displayDirectory = !directory
+    ? "—"
+    : vault && directory.startsWith(`${vault}/`)
+      ? directory.slice(vault.length + 1)
+      : directory === vault
+        ? "."
+        : directory.split("/").at(-1);
   return (
     <div className="space-y-4">
       {plugin.loadError ? (
@@ -571,9 +588,7 @@ function ModuleDetail({ plugin }: { plugin: PluginInfo }) {
       ) : (
         <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-none" />
-          <span>
-            {t("plugins.moduleWarning")}
-          </span>
+          <span>{t("plugins.moduleWarning")}</span>
         </div>
       )}
       <dl className="grid grid-cols-[110px_1fr] gap-y-2 text-[12px]">
@@ -581,9 +596,13 @@ function ModuleDetail({ plugin }: { plugin: PluginInfo }) {
         <dd>{t("plugins.source.module")}</dd>
         <dt className="text-muted-foreground">{t("plugins.field.kind")}</dt>
         <dd className="font-mono">{plugin.kind}</dd>
-        <dt className="text-muted-foreground">{t("plugins.field.description")}</dt>
+        <dt className="text-muted-foreground">
+          {t("plugins.field.description")}
+        </dt>
         <dd className="text-muted-foreground">{plugin.displayName}</dd>
-        <dt className="text-muted-foreground">{t("plugins.field.installDir")}</dt>
+        <dt className="text-muted-foreground">
+          {t("plugins.field.installDir")}
+        </dt>
         <dd className="break-all font-mono text-[11px]">{displayDirectory}</dd>
         <dt className="text-muted-foreground">{t("plugins.field.status")}</dt>
         <dd>
@@ -691,9 +710,7 @@ function SubprocessDetail({
             "whitespace-pre-wrap break-words",
           )}
         >
-          {logs.length > 0
-            ? logs.join("\n")
-            : t("plugins.stderr.empty")}
+          {logs.length > 0 ? logs.join("\n") : t("plugins.stderr.empty")}
         </pre>
       </section>
     </div>
@@ -844,8 +861,7 @@ function UninstallButton({
   const [error, setError] = useState<string | null>(null);
   const click = async () => {
     if (busy) return;
-    if (!window.confirm(t("plugins.uninstall.confirm", { kind })))
-      return;
+    if (!window.confirm(t("plugins.uninstall.confirm", { kind }))) return;
     setBusy(true);
     setError(null);
     try {
@@ -962,111 +978,109 @@ function InstallDialog({
   };
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-6"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <form
-        onSubmit={onConfirm}
-        className="w-[520px] max-w-full rounded-lg border border-border bg-background p-4 shadow-xl"
-      >
-        <h4 className="mb-3 text-sm font-semibold text-foreground">
-          {t("plugins.install.title")}
-        </h4>
-        <p className="mb-3 text-[11px] text-muted-foreground">
-          {t("plugins.install.description")}
-        </p>
-
-        <label className="mb-3 block">
-          <span className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            {t("plugins.install.exePath")}
-          </span>
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              value={draft.exePath}
-              onChange={(e) =>
-                setDraft((d) => ({ ...d, exePath: e.target.value }))
-              }
-              placeholder="/Users/.../my-connector"
-              className="w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[12px] focus:border-primary focus:outline-none"
-            />
-            <button
-              type="button"
-              onClick={() => void onPickExe()}
-              className="inline-flex flex-none items-center gap-1 rounded-md border border-border bg-background px-2 py-1.5 text-[11px] hover:bg-accent"
-            >
-              <FolderOpen className="h-3.5 w-3.5" />
-              {t("plugins.install.browse")}
-            </button>
-          </div>
-        </label>
-
-        <label className="mb-3 block">
-          <span className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            {t("plugins.install.args")}
-          </span>
-          <input
-            type="text"
-            value={draft.argsText}
-            onChange={(e) =>
-              setDraft((d) => ({ ...d, argsText: e.target.value }))
-            }
-            placeholder="--stdio --verbose"
-            className="w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[12px] focus:border-primary focus:outline-none"
-          />
-        </label>
-
-        <label className="mb-4 block">
-          <span className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            {t("plugins.install.env")}
-          </span>
-          <textarea
-            value={draft.envText}
-            onChange={(e) =>
-              setDraft((d) => ({ ...d, envText: e.target.value }))
-            }
-            rows={3}
-            placeholder="LOG_LEVEL=info&#10;HTTP_PROXY=http://127.0.0.1:7890"
-            className="w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[12px] focus:border-primary focus:outline-none"
-            spellCheck={false}
-          />
-        </label>
-
-        {error ? (
-          <div className="mb-3 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-none" />
-            <span>{error}</span>
-          </div>
-        ) : null}
-
-        <div className="flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="rounded-md border border-border bg-background px-3 py-1.5 text-[11px] hover:bg-accent"
+    <Dialog.Root open onOpenChange={(open) => !open && !busy && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-[60] bg-black/45 backdrop-blur-md" />
+        <Dialog.Content asChild>
+          <form
+            onSubmit={onConfirm}
+            className="fixed left-1/2 top-1/2 z-[61] max-h-[calc(100vh-3rem)] w-[520px] max-w-[calc(100vw-3rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-border bg-background p-4 shadow-xl"
           >
-            {t("plugins.install.cancel")}
-          </button>
-          <button
-            type="submit"
-            disabled={busy}
-            className={cn(
-              "inline-flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-[11px] font-medium text-primary-foreground hover:opacity-90",
-              busy && "opacity-60",
-            )}
-          >
-            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-            {t("plugins.moduleInstall.install")}
-          </button>
-        </div>
-      </form>
-    </div>
+            <Dialog.Title className="mb-3 text-sm font-semibold text-foreground">
+              {t("plugins.install.title")}
+            </Dialog.Title>
+            <Dialog.Description className="mb-3 text-[11px] text-muted-foreground">
+              {t("plugins.install.description")}
+            </Dialog.Description>
+
+            <label className="mb-3 block">
+              <span className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                {t("plugins.install.exePath")}
+              </span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={draft.exePath}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, exePath: e.target.value }))
+                  }
+                  placeholder="/Users/.../my-connector"
+                  className="w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[12px] focus:border-primary focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => void onPickExe()}
+                  className="inline-flex flex-none items-center gap-1 rounded-md border border-border bg-background px-2 py-1.5 text-[11px] hover:bg-accent"
+                >
+                  <FolderOpen className="h-3.5 w-3.5" />
+                  {t("plugins.install.browse")}
+                </button>
+              </div>
+            </label>
+
+            <label className="mb-3 block">
+              <span className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                {t("plugins.install.args")}
+              </span>
+              <input
+                type="text"
+                value={draft.argsText}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, argsText: e.target.value }))
+                }
+                placeholder="--stdio --verbose"
+                className="w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[12px] focus:border-primary focus:outline-none"
+              />
+            </label>
+
+            <label className="mb-4 block">
+              <span className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                {t("plugins.install.env")}
+              </span>
+              <textarea
+                value={draft.envText}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, envText: e.target.value }))
+                }
+                rows={3}
+                placeholder="LOG_LEVEL=info&#10;HTTP_PROXY=http://127.0.0.1:7890"
+                className="w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[12px] focus:border-primary focus:outline-none"
+                spellCheck={false}
+              />
+            </label>
+
+            {error ? (
+              <div className="mb-3 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-none" />
+                <span>{error}</span>
+              </div>
+            ) : null}
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={busy}
+                className="rounded-md border border-border bg-background px-3 py-1.5 text-[11px] hover:bg-accent"
+              >
+                {t("plugins.install.cancel")}
+              </button>
+              <button
+                type="submit"
+                disabled={busy}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-[11px] font-medium text-primary-foreground hover:opacity-90",
+                  busy && "opacity-60",
+                )}
+              >
+                {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                {t("plugins.moduleInstall.install")}
+              </button>
+            </div>
+          </form>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 

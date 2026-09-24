@@ -1,7 +1,7 @@
 /** Adapt Pi lanes to Stela's existing run lifecycle, without replaying tools. */
 import {
-  AgentHarness as NativeHarness, BACKGROUND_CONTEXT as context, DEFAULT_COMPACTION_SETTINGS,
-  getOrThrow, type AgentHarnessOptions, type AgentTool, type AgentMessage,
+  AgentHarness as NativeHarness, BACKGROUND_CONTEXT as context,
+  getOrThrow, reduceLaneSnapshot, type LaneSnapshot, type AgentHarnessOptions, type AgentTool, type AgentMessage,
   type HarnessEvent, type HookMap, type HookHandler, type AgentLane,
 } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage, TextContent, ImageContent } from '@earendil-works/pi-ai';
@@ -21,6 +21,7 @@ export class AgentHarness {
   private listeners = new Set<(event: Event) => void | Promise<void>>();
   private hooks: ((harness: NativeHarness) => () => void)[] = [];
   private cancelled = false;
+  private snapshot?: LaneSnapshot;
   private eventsDone: Promise<void> = Promise.resolve();
   constructor(private readonly options: IOptions) {}
   private initialize() {
@@ -34,7 +35,6 @@ export class AgentHarness {
           const value = Reflect.get(target, key); return typeof value === 'function' ? value.bind(target) : value;
         } }),
         retry: { enabled: false, maxRetries: 0, baseDelayMs: 0 },
-        compaction: { ...DEFAULT_COMPACTION_SETTINGS, enabled: false },
         streamOptions: { ...options.streamOptions, maxRetries: 0 },
         entryProjectors: session.options.entryProjectors,
         tools: tools.map(tool => ({ ...tool, replay: 'never',
@@ -66,14 +66,20 @@ export class AgentHarness {
         void this.eventsDone.catch(() => {});
       };
       harness.hooks.on('before_request', async () => { await this.eventsDone; return undefined; });
-      for (const type of ['turn_start', 'turn_end', 'message_start', 'message_end'] as const)
-        harness.events.on(type, event => deliver(event));
-      harness.events.on('message_update', event => deliver({ ...event, assistantMessageEvent: event.event }));
-      harness.events.on('tool_start', event => deliver({ ...event, type: 'tool_execution_start' }));
-      harness.events.on('tool_end', event => deliver({ ...event, type: 'tool_execution_end' }));
+      const watch = await lane.watch(context);
+      this.snapshot = watch.snapshot;
+      watch.start(event => {
+        // Reduce synchronously; queued consumers observe committed native state.
+        if (this.snapshot) reduceLaneSnapshot(this.snapshot, event);
+        if (event.type === 'message_update') deliver({ ...event, assistantMessageEvent: event.event });
+        else if (event.type === 'tool_start') deliver({ ...event, type: 'tool_execution_start' });
+        else if (event.type === 'tool_end') deliver({ ...event, type: 'tool_execution_end' });
+        else deliver(event);
+      });
       return { harness, lane };
     })();
   }
+  getSnapshot(): LaneSnapshot | undefined { return this.snapshot ? structuredClone(this.snapshot) : undefined; }
   subscribe(listener: (event: Event) => void | Promise<void>) {
     this.listeners.add(listener); return () => { this.listeners.delete(listener); };
   }
@@ -104,7 +110,7 @@ export class AgentHarness {
     const message: AgentMessage = { role: 'user', content: typeof prompt === 'string' ? [{ type: 'text', text: prompt }] : prompt, timestamp: Date.now() };
     const result = getOrThrow(await lane.prompt(message, context));
     await this.eventsDone;
-    const last = (await lane.findEntries({ type: 'message', order: 'newestFirst' }, context))
+    const last = [...(this.snapshot?.transcript ?? [])].reverse()
       .find(entry => entry.type === 'message' && entry.message.role === 'assistant');
     if (!last || last.type !== 'message' || last.message.role !== 'assistant') throw new Error('Agent finished without an assistant response');
     if (result.status === 'failed') return { ...last.message, stopReason: 'error', errorMessage: result.error?.message ?? 'Agent failed' };

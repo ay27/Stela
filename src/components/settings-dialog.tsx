@@ -58,12 +58,12 @@ interface TabSpec {
   id: string;
   labelKey: string;
   icon: React.ComponentType<{ className?: string }>;
-  render: () => JSX.Element;
+  render: (onNestedDialogOpenChange: (open: boolean) => void) => JSX.Element;
 }
 
 const TABS: TabSpec[] = [
   { id: "connections", labelKey: "settings.tabs.connections", icon: Database, render: () => <ConnectionsTab /> },
-  { id: "plugins", labelKey: "settings.tabs.plugins", icon: Plug, render: () => <PluginsTab /> },
+  { id: "plugins", labelKey: "settings.tabs.plugins", icon: Plug, render: (onNestedDialogOpenChange) => <PluginsTab onInstallDialogOpenChange={onNestedDialogOpenChange} /> },
   { id: "git", labelKey: "settings.tabs.git", icon: GitBranch, render: () => <GitTab /> },
   { id: "ai", labelKey: "settings.tabs.ai", icon: Bot, render: () => <AiTab /> },
   { id: "execution", labelKey: "settings.tabs.execution", icon: Play, render: () => <ExecutionTab /> },
@@ -79,19 +79,25 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const t = useT();
   const settingsTab = useDialogs((s) => s.settingsTab);
   const [tab, setTab] = useState(settingsTab ?? "connections");
+  const [nestedDialogOpen, setNestedDialogOpen] = useState(false);
 
   useEffect(() => {
     if (open) setTab(settingsTab ?? "connections");
+    else setNestedDialogOpen(false);
   }, [open, settingsTab]);
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+        <Dialog.Overlay className={cn(
+          "fixed inset-0 z-40 bg-black/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+          nestedDialogOpen && "pointer-events-none !animate-none !opacity-0",
+        )} />
         <Dialog.Content
           className={cn(
             "fixed left-1/2 top-1/2 z-50 flex h-[80vh] w-[920px] max-w-[95vw] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-2xl",
             "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+            nestedDialogOpen && "pointer-events-none !animate-none !opacity-0",
           )}
         >
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
@@ -152,7 +158,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                   value={tabSpec.id}
                   className="h-full overflow-auto focus:outline-none"
                 >
-                  {tabSpec.render()}
+                  {tabSpec.render(setNestedDialogOpen)}
                 </Tabs.Content>
               ))}
             </div>

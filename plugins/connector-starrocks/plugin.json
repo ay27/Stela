@@ -1,0 +1,7 @@
+{
+  "id": "connector-starrocks",
+  "kind": "starrocks",
+  "displayName": "StarRocks",
+  "apiVersion": 4,
+  "entry": "dist/index.cjs"
+}

@@ -72,7 +72,9 @@ async function save(snapshot: IConversationSnapshot, vault: string): Promise<ICo
   const document = { ...snapshot.document, updatedAt: Date.now() };
   const content = JSON.stringify(document, null, 2) + "\n";
   const isTemporary = await temporary(vault, snapshot.path);
-  if (!isTemporary || document.turns.length || document.draft.trim() || document.draftMessage?.resources.length) {
+  // Once a temporary session exists on disk, even an empty draft must be
+  // persisted so the returned etag continues to describe the actual file.
+  if (raw !== null || !isTemporary || document.turns.length || document.draft.trim() || document.draftMessage?.resources.length) {
     await atomicWriteFile(snapshot.path, content);
     unwritten.delete(snapshot.path);
   }

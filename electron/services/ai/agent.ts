@@ -7,18 +7,15 @@ import { analysisToolSummary, readAnalysisSnapshot } from "../../shared/analysis
  * Harness agent via `@earendil-works/pi-agent-core` AgentHarness.
  *
  * Keeps Stela IPC event shapes, proposal gates, and in-memory sessions.
- * Compacts proactively near context budget and once on provider overflow.
+ * Pi owns automatic compaction scheduling and context-overflow recovery.
  */
 
 import {
-  DEFAULT_COMPACTION_SETTINGS,
   estimateContextTokens,
-  shouldCompact,
   formatSkillsForSystemPrompt,
   type AgentMessage,
 } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { isContextOverflow } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 
 import type {
@@ -118,8 +115,6 @@ const TOOL_RESULT_SUMMARY_CHARS = 480;
 const AGENT_PROGRESS_EMIT_INTERVAL_MS = 80;
 const AGENT_PROGRESS_MAX_CHARS = 6_000;
 const EXECUTION_PLAN_ENTRY = "execution_plan";
-const OVERFLOW_CONTINUE_PROMPT =
-  "The previous request exceeded the model context window. Continue from the compacted history and finish the user's last request.";
 const SKILL_PROMPT_LIMIT = 8;
 const SKILL_MAINTENANCE_PROMPT = `You are Stela's internal experience-maintenance agent.
 The application retrieved source excerpts and observed tool outcomes. File identity does not establish business truth. You have one decision: call save_skill exactly once for one durable rule, or make no tool call and give a one-sentence reason. Conversation explains intent; only verified evidence and source documents prove facts. Source documents may be excerpts: never infer absence or universal rules from omitted material. A query snapshot does not prove a permanent business rule. If evidence is insufficient, do not save. Never copy result rows, absolute counts, snapshots, private data, narration, or one-off SQL. Automatic creation supports only sql-dialect, metric-definition, business-glossary, and data-lineage; never create analysis-runbook.
@@ -612,6 +607,7 @@ export async function runSkillMaintenance(options: {
     let thinkingChars = 0;
     let saveStartedAt = 0;
     unsubscribe = maintenanceHarness.subscribe((event) => {
+      if (event.type === "usage" && agentMetrics.isOpen()) agentMetrics.addUsage(metricRunId, event.row.usage);
       if (event.type === "tool_execution_start") saveStartedAt = Date.now();
       if (event.type === "tool_execution_end" && !event.isError && (actions.length > 0 || candidateRejected)) {
         stoppedAfterSave = true;
@@ -624,7 +620,6 @@ export async function runSkillMaintenance(options: {
         thinkingChars += event.message.content.reduce((sum, block) => sum + (block.type === "thinking" ? block.thinking.length : 0), 0);
       }
       if (event.type === "message_end" && event.message.role === "assistant" && agentMetrics.isOpen()) {
-        agentMetrics.addUsage(metricRunId, event.message.usage);
         agentMetrics.addEvent(metricRunId, { type: "assistant_message", payload: event.message });
       }
     });
@@ -933,16 +928,6 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         contextWindow,
         estimated,
       });
-    };
-
-    const compactOnce = async () => {
-      if (!harness) return;
-      emit({ type: "compaction", runId, phase: "started" });
-      await harness.compact(
-        "Preserve the current execution plan, completed evidence, the active step, every blocked acceptance condition, and the latest strategy-review checkpoint.",
-      );
-      emit({ type: "compaction", runId, phase: "completed" });
-      await emitUsage(true);
     };
 
     const harnessThinkingLevel = reasoning.effective;
@@ -1284,6 +1269,21 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       return undefined;
     });
     const unsubscribe = harness.subscribe(async (event) => {
+      if (event.type === "usage") {
+        if (agentMetrics.isOpen()) agentMetrics.addUsage(metricRunId, event.row.usage);
+        return;
+      }
+      if (event.type === "compaction_start") {
+        emit({ type: "compaction", runId, phase: "started" });
+        return;
+      }
+      if (event.type === "compaction_end") {
+        if (event.status === "completed") {
+          emit({ type: "compaction", runId, phase: "completed" });
+          await emitUsage(true);
+        }
+        return;
+      }
       if (event.type === "turn_start") {
         clearProgressTimer();
         progressContent = "";
@@ -1410,7 +1410,6 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         completeProgress(event.message);
         if (agentMetrics.isOpen()) {
           const now = Date.now();
-          agentMetrics.addUsage(metricRunId, event.message.usage);
           agentMetrics.addEvent(metricRunId, {
             type: "assistant_message",
             name: `step:${harnessStepIndex}`,
@@ -1425,11 +1424,6 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
 
     try {
       await emitUsage(true);
-      const before = await session.buildContext();
-      if (shouldCompact(estimateContextTokens(before.messages).tokens, contextWindow, DEFAULT_COMPACTION_SETTINGS)) {
-        await compactOnce();
-      }
-
       const userContent = buildUserContent(request, {
         connection,
         dialect,
@@ -1461,44 +1455,12 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       if (options.conversationContext) {
         await session.appendMessage({ role: "user", content: [{ type: "text", text: options.conversationContext }], timestamp: Date.now() });
       }
-      let result = await harness.prompt(userContent);
+      const result = await harness.prompt(userContent);
       await emitUsage(false);
 
       if (signal.aborted || result.stopReason === "aborted") {
         emit({ type: "cancelled", runId });
         return;
-      }
-
-      if (isContextOverflow(result, contextWindow)) {
-        try {
-          await compactOnce();
-          result = await harness.prompt(OVERFLOW_CONTINUE_PROMPT);
-          await emitUsage(false);
-        } catch (err) {
-          if (signal.aborted) {
-            emit({ type: "cancelled", runId });
-            return;
-          }
-          emit({
-            type: "error",
-            runId,
-            message: err instanceof Error ? err.message : String(err),
-          });
-          return;
-        }
-
-        if (signal.aborted || result.stopReason === "aborted") {
-          emit({ type: "cancelled", runId });
-          return;
-        }
-        if (isContextOverflow(result, contextWindow)) {
-          emit({
-            type: "error",
-            runId,
-            message: "Context still overflows after compaction.",
-          });
-          return;
-        }
       }
 
       if (result.stopReason === "error") {

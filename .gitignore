@@ -26,6 +26,16 @@ plugins/*
 !plugins/connector-postgresql/
 !plugins/connector-mongodb/
 !plugins/connector-http-sample/
+!plugins/connector-starrocks/
+!plugins/connector-doris/
+!plugins/connector-sqlite/
+!plugins/connector-duckdb/
+!plugins/connector-clickhouse/
+!plugins/connector-trino/
+!plugins/connector-sqlserver/
+!plugins/connector-bigquery/
+!plugins/connector-snowflake/
+!plugins/connector-databricks/
 
 # Internal-only tooling / release gate extensions (never commit)
 scripts/internal/

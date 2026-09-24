@@ -1,4 +1,4 @@
-import { createAssistantMessageEventStream, type AssistantMessage, type Models } from "@earendil-works/pi-ai";
+import { retryAssistantCall, createAssistantMessageEventStream, type AssistantMessage, type Models } from "@earendil-works/pi-ai";
 import { setTimeout as delay } from "node:timers/promises";
 import { redactForPrompt } from "./redaction";
 import { randomUUID } from "node:crypto";
@@ -82,14 +82,21 @@ export function withGenerationRecovery(models: Models, options: {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
       let final: AssistantMessage | undefined;
       let recoveryStarted = false;
-      for (let attempt = 1; attempt <= Math.max(1, Math.min(3, options.maxAttempts ?? 3)); attempt++) {
+      let attempt = 0;
+      let retryAfterMs = 0;
+      const terminalAttempt = new Error("Terminal generation attempt");
+      const policy = { enabled: true, maxRetries: Math.max(0, Math.min(3, options.maxAttempts ?? 3) - 1),
+        baseDelayMs: options.retryDelayMs ?? 500, maxAgentDelayMs: 10_000 };
+      const produce = async (): Promise<AssistantMessage> => {
+        attempt++;
+
         const started = Date.now();
         let firstEventMs: number | undefined;
         let status: number | undefined;
         let statusSource: IGenerationDiagnostic["statusSource"];
         let requestId: string | undefined;
         let receivedPartial = false;
-        let retryAfterMs = 0;
+        retryAfterMs = 0;
         let lastEventMs: number | undefined;
         let maxDeltaGapMs = 0;
         let deltaCount = 0;
@@ -177,10 +184,24 @@ export function withGenerationRecovery(models: Models, options: {
           requestId: requestId ? redactForPrompt(requestId).slice(0, 128) : undefined,
           receivedPartial, error: final.errorMessage ? redactForPrompt(final.errorMessage).slice(0, 1000) : undefined,
           retry, usage: final.usage }); } catch { /* diagnostics cannot affect inference */ }
-        if (!retry) break;
-        if (!recoveryStarted) { arm(options.recoveryWindowMs ?? 180_000, "recovery_deadline"); recoveryStarted = true; }
-        try { await delay(Math.max(retryAfterMs || 0, (options.retryDelayMs ?? 500) * attempt), undefined, { signal }); }
-        catch { final = { ...final, content: [], stopReason: "aborted", errorMessage: "Generation cancelled during recovery" }; break; }
+        // Application deadlines and Retry-After limits can veto retry. The
+        // upstream helper owns the loop/backoff, not a second Harness retry.
+        if (final.stopReason === "error" && !retry) throw terminalAttempt;
+        // Structured HTTP status may identify a transient failure whose text is
+        // just "busy". Preserve the original diagnostic/response for consumers.
+        return retry ? { ...final, errorMessage: `Network error: ${final.errorMessage ?? "Transient provider failure"}` } : final;
+      };
+      try {
+        const recovered = await retryAssistantCall(produce, policy, signal, {
+          onRetryScheduled: async (_attempt, delayMs) => {
+            if (!recoveryStarted) { arm(options.recoveryWindowMs ?? 180_000, "recovery_deadline"); recoveryStarted = true; }
+            // Pi supplies exponential backoff; honor a longer bounded server delay.
+            if (retryAfterMs > delayMs) await delay(retryAfterMs - delayMs, undefined, { signal });
+          },
+        });
+        if (recovered.stopReason === "aborted" && final) final = { ...final, stopReason: "aborted" };
+      } catch (error) {
+        if (error !== terminalAttempt && !signal.aborted) throw error;
       }
       if (!final) throw new Error("Generation did not produce a terminal message");
       if (signal.aborted) {

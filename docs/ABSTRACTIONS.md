@@ -369,6 +369,11 @@ Persistence:
 - Definitions: `{vault}/.stela/connections.json` (Git-synced)
 - Secrets: `{vault}/.stela/secrets/secrets_{deviceSlug}.json` (safeStorage-wrapped, per-device)
 
+Official connector credentials use top-level secret field names recognized by
+the store (`password`, `token`, `credentials`, `privateKey`, `clientSecret`, and
+the existing API-key aliases). BigQuery's optional `credentials` field contains
+service-account JSON; leaving it blank uses application default credentials.
+
 Renderer state: `src/state/connections.ts` (Zustand cache keyed by connection name).
 
 ### IConnectorRegistry (renderer contract)

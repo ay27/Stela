@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Type } from '@earendil-works/pi-ai';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -94,7 +95,128 @@ try {
   assert.ok(JSON.stringify(await compactSession.buildContext()).includes('continued'), 'summary is projected into the next context');
   assert.equal((await compactHarness.prompt('Continue after compaction')).stopReason, 'stop');
 
+  // Native threshold scheduling must work without Stela calling compact().
+  const autoStorage = await JsonlSessionStorage.create(env, path.join(root, 'automatic.jsonl'), { sessionId: 'automatic', cwd: root });
+  const autoSession = new Session(autoStorage);
+  for (let turn = 0; turn < 6; turn++) {
+    await autoSession.appendMessage({ role: 'user', content: 'Verified SQL evidence '.repeat(2000), timestamp: turn });
+    await autoSession.appendMessage({ role: 'assistant', api: model.api, provider: model.provider, model: model.id, timestamp: turn,
+      content: [{ type: 'text', text: 'Verified conclusion' }], stopReason: 'stop',
+      usage: { input: 35000, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 35001, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+  }
+  const autoHarness = new AgentHarness({ session: autoSession, models, model: { ...model, contextWindow: 48000 } });
+  const compactions: string[] = [];
+  const autoUsage: number[] = [];
+  const beforeAutoCalls = calls;
+  autoHarness.subscribe(async event => {
+    if (event.type === 'usage') autoUsage.push(event.row.usage.totalTokens);
+    if (event.type === 'compaction_start') compactions.push(`start:${event.reason}`);
+    if (event.type === 'compaction_end') {
+      compactions.push(`end:${event.status}`);
+      await autoSession.appendCustomEntry('ui_event', { compaction: event.status });
+    }
+  });
+  assert.equal((await autoHarness.prompt('Continue the analysis')).stopReason, 'stop');
+  assert.deepEqual(compactions, ['start:threshold', 'end:completed']);
+  assert.ok(autoUsage.length >= 2, 'summary and normal generation both report native usage');
+  assert.equal(autoUsage.reduce((sum, value) => sum + value, 0), (calls - beforeAutoCalls) * 2);
+  assert.equal(autoHarness.getSnapshot()?.operation, null);
+  assert.equal(autoHarness.getSnapshot()?.lastResult?.status, 'completed');
+  const autoReopened = await JsonlSessionStorage.open(env, path.join(root, 'automatic.jsonl'));
+  assert.ok((await autoReopened.getEntries()).some(entry => entry.type === 'compaction'));
+  assert.ok((await autoReopened.getEntries()).some(entry => entry.type === 'custom' && entry.customType === 'ui_event'));
+  await autoStorage.native.close(BACKGROUND_CONTEXT);
+  await autoReopened.native.close(BACKGROUND_CONTEXT);
+
+  // Provider overflow is recovered inside the same native run, without a synthetic user turn.
+  const overflowSession = new Session();
+  for (let turn = 0; turn < 4; turn++) {
+    await overflowSession.appendMessage({ role: 'user', content: 'Prior evidence '.repeat(6000), timestamp: turn });
+    await overflowSession.appendMessage({ role: 'assistant', api: model.api, provider: model.provider, model: model.id, timestamp: turn,
+      content: [{ type: 'text', text: 'Prior conclusion' }], stopReason: 'stop',
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+  }
+  const overflowModels = createModels();
+  let overflowCalls = 0;
+  overflowModels.streamSimple = (m, input, options) => {
+    if (++overflowCalls !== 1) return models.streamSimple(m, input, options);
+    const message: AssistantMessage = { role: 'assistant', api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(),
+      content: [], stopReason: 'error', errorMessage: 'maximum context length exceeded',
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+    const stream = createAssistantMessageEventStream();
+    stream.push({ type: 'error', reason: 'error', error: message }); stream.end(message); return stream;
+  };
+  const overflowHarness = new AgentHarness({ session: overflowSession, models: overflowModels, model });
+  const overflowEvents: string[] = [];
+  overflowHarness.subscribe(event => { if (event.type === 'compaction_start') overflowEvents.push(event.reason); });
+  assert.equal((await overflowHarness.prompt('Finish using the existing evidence')).stopReason, 'stop');
+  assert.deepEqual(overflowEvents, ['overflow']);
+  assert.ok(overflowCalls >= 3, 'failed generation, native summary and resumed generation');
+  assert.ok(!JSON.stringify(await overflowSession.getBranch()).includes('The previous request exceeded'));
+
+  const toolSession = new Session();
+  for (let turn = 0; turn < 3; turn++) {
+    await toolSession.appendMessage({ role: 'user', content: 'Earlier query context '.repeat(500), timestamp: turn });
+    await toolSession.appendMessage({ role: 'assistant', api: model.api, provider: model.provider, model: model.id, timestamp: turn,
+      content: [{ type: 'text', text: 'Earlier conclusion' }], stopReason: 'stop',
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+  }
+  const toolModels = createModels();
+  let requestedTool = false;
+  let executions = 0;
+  toolModels.streamSimple = (m, input, options) => {
+    if (requestedTool) return models.streamSimple(m, input, options);
+    requestedTool = true;
+    const message: AssistantMessage = { role: 'assistant', api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(),
+      content: [{ type: 'toolCall', id: 'query-once', name: 'read_evidence', arguments: {} }], stopReason: 'toolUse',
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+    const stream = createAssistantMessageEventStream();
+    stream.push({ type: 'start', partial: message }); stream.push({ type: 'done', reason: 'toolUse', message }); stream.end(message); return stream;
+  };
+  const toolHarness = new AgentHarness({ session: toolSession, models: toolModels, model: { ...model, contextWindow: 48000 },
+    tools: [{ name: 'read_evidence', label: 'Read evidence', description: 'Read evidence once', parameters: Type.Object({}),
+      execute: async () => { executions++; return { content: [{ type: 'text' as const, text: 'Evidence rows '.repeat(16000) }], details: {} }; } }],
+  });
+  const toolOrder: string[] = [];
+  toolHarness.subscribe(event => {
+    if (event.type === 'tool_execution_end') toolOrder.push('tool');
+    if (event.type === 'compaction_end' && event.status === 'completed') toolOrder.push('compact');
+  });
+  assert.equal((await toolHarness.prompt('Analyze the evidence')).stopReason, 'stop');
+  assert.equal(executions, 1, 'automatic compaction must not replay tools');
+  assert.deepEqual(toolOrder, ['tool', 'compact'], 'native scheduling compacts within a tool run');
+
+  // Cancelling a native summary must stop the run and never report successful compaction.
+  const cancelSession = new Session();
+  for (const entry of await toolSession.getBranch()) {
+    if (entry.type === 'message') await cancelSession.appendMessage(entry.message);
+  }
+  await cancelSession.appendMessage({ role: 'user', content: 'More evidence '.repeat(16000), timestamp: Date.now() });
+  const cancelModels = createModels();
+  let summaryStarted = false;
+  const cancelEvents: string[] = [];
+  cancelModels.streamSimple = (_m, _input, options) => {
+    assert.ok(summaryStarted, 'cancellation targets native compaction');
+    assert.ok(options?.signal);
+    const stream = createAssistantMessageEventStream();
+    const message: AssistantMessage = { role: 'assistant', api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(),
+      content: [], stopReason: 'aborted',
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+    options.signal.addEventListener('abort', () => {
+      stream.push({ type: 'error', reason: 'aborted', error: message }); stream.end(message);
+    }, { once: true });
+    queueMicrotask(() => { void cancelHarness.abort(); });
+    return stream;
+  };
+  const cancelHarness = new AgentHarness({ session: cancelSession, models: cancelModels, model: { ...model, contextWindow: 48000 } });
+  cancelHarness.subscribe(event => {
+    if (event.type === 'compaction_start') summaryStarted = true;
+    if (event.type === 'compaction_end') cancelEvents.push(event.status);
+  });
+  assert.equal((await cancelHarness.prompt('Continue')).stopReason, 'aborted');
+  assert.ok(!cancelEvents.includes('completed'));
+
   await storage.native.close(BACKGROUND_CONTEXT);
   await reopened.native.close(BACKGROUND_CONTEXT);
-  console.log('Pi migration: read-only v3 import, continued conversation, backup, v4 reopen, UI writes, atomic embedded publication passed.');
+  console.log('Pi migration and native compaction: threshold, overflow, tool continuation without replay, cancellation and persistence passed.');
 } finally { await fs.rm(root, { recursive: true, force: true }); }

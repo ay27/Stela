@@ -1,0 +1,7 @@
+{
+  "id": "connector-sqlite",
+  "kind": "sqlite",
+  "displayName": "SQLite",
+  "apiVersion": 4,
+  "entry": "dist/index.cjs"
+}

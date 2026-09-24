@@ -1,6 +1,7 @@
 import { pipelineAuthoringFixture } from "@shared/canvas-authoring.fixture";
 import { withAgentResourceId } from "@shared/agent-message";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { app } from "electron";
 import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -55,6 +56,25 @@ async function main() {
   const send = async (s: IConversationSnapshot, input: string) => conversation.submitConversation(vault, { locale: "zh", path: s.path, etag: s.etag, input, connectionName: "fixture", requestId: randomUUID() }, publish);
   const done = (s: IConversationSnapshot) => s.document.turns.at(-1)?.status !== "running";
   try {
+    // Only never-written empty sessions may skip persistence. Clearing an
+    // existing draft must update both the file and its revision.
+    let draftOnly = await conversation.createTemporaryConversation(vault);
+    draftOnly = await conversation.saveConversationDraft(vault, draftOnly.path, draftOnly.etag, "", "fixture");
+    await assert.rejects(() => readFile(draftOnly.path), /ENOENT/);
+    draftOnly = await conversation.saveConversationDraft(vault, draftOnly.path, draftOnly.etag, "first draft", "fixture");
+    draftOnly = await conversation.saveConversationDraft(vault, draftOnly.path, draftOnly.etag, "", "fixture");
+    const clearedDraft = await readFile(draftOnly.path, "utf8");
+    assert.equal(JSON.parse(clearedDraft).draft, "", "clearing a saved temporary draft must reach disk");
+    assert.equal(draftOnly.etag, createHash("sha256").update(clearedDraft).digest("hex"));
+    draftOnly = await conversation.saveConversationDraft(vault, draftOnly.path, draftOnly.etag, "next draft", "fixture");
+    const reopenedDraft = await conversation.readConversation(vault, draftOnly.path);
+    assert.equal(reopenedDraft.document.draft, "next draft");
+    assert.equal(reopenedDraft.etag, draftOnly.etag);
+    const externalDraft = JSON.stringify({ ...draftOnly.document, draft: "external draft" });
+    await writeFile(draftOnly.path, externalDraft);
+    await assert.rejects(() => conversation.saveConversationDraft(vault, draftOnly.path, draftOnly.etag, "local draft", "fixture"), /changed on disk/);
+    assert.equal(await readFile(draftOnly.path, "utf8"), externalDraft);
+
     await metrics.open(vault);
     const plugin = join(vault, ".stela/plugins/fixture"); await mkdir(plugin, { recursive: true });
     await writeFile(join(plugin, "plugin.json"), JSON.stringify({ id: "fixture", kind: "fixture", displayName: "Fixture", apiVersion: 1, entry: "index.cjs" }));

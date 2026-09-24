@@ -1,0 +1,1 @@
+{"id":"connector-databricks","kind":"databricks","displayName":"Databricks SQL","apiVersion":4,"entry":"dist/index.cjs"}

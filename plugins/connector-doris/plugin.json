@@ -1,0 +1,1 @@
+{"id":"connector-doris","kind":"doris","displayName":"Apache Doris","apiVersion":4,"entry":"dist/index.cjs"}

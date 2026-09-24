@@ -1,0 +1,1 @@
+{"id":"connector-trino","kind":"trino","displayName":"Trino","apiVersion":4,"entry":"dist/index.cjs"}
