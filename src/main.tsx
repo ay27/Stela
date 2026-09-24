@@ -1,6 +1,7 @@
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./styles/globals.css";
+import "./styles/workbench.css";
 import { installMilkdownRaceSuppressor } from "./lib/suppress-milkdown-race";
 
 const root = document.getElementById("root");

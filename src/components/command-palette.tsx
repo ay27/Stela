@@ -122,7 +122,7 @@ export function CommandPalette({ open, onOpenChange, handlers }: Props) {
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <Dialog.Content
-          className="fixed left-1/2 top-[18vh] z-50 w-[640px] max-w-[92vw] -translate-x-1/2 overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-2xl"
+          className="stela-workbench-dialog fixed left-1/2 top-[18vh] z-50 w-[640px] max-w-[92vw] -translate-x-1/2 overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-2xl"
           aria-describedby={undefined}
         >
           <Dialog.Title className="sr-only">

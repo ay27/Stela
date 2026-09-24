@@ -1,0 +1,164 @@
+/* Opaque, quiet chrome around the existing dense document and data surfaces. */
+.stela-workbench-tabs,
+.stela-sidebar-titlebar,
+.stela-chat-controls-side {
+  background: hsl(var(--sidebar));
+}
+
+.stela-workbench-tabs { padding-right: 6px; gap: 2px; }
+.stela-workbench-tab.is-active,
+.stela-chat-tab.is-active {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  box-shadow: 0 1px 3px hsl(var(--foreground) / .06);
+  font-weight: 600;
+}
+.stela-chrome-action {
+  height: 28px;
+  align-self: center;
+  border-radius: 8px;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.stela-chrome-action:hover { background: hsl(var(--sidebar-hover)); }
+.stela-chrome-action:focus-visible,
+.stela-sidebar-mode:focus-visible,
+.stela-filetree-row:focus-visible,
+.stela-workbench-status button:focus-visible {
+  outline: 1px solid hsl(var(--foreground) / .35);
+  outline-offset: -2px;
+}
+
+.stela-workbench-sidebar,
+.stela-workbench-agent { border-color: hsl(var(--border) / .65); }
+.stela-sidebar-modes { padding-top: 2px; padding-bottom: 2px; }
+.stela-sidebar-mode {
+  position: relative;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.stela-sidebar-mode[aria-pressed="true"] {
+  background: transparent;
+  color: hsl(var(--foreground));
+}
+.stela-sidebar-mode[aria-pressed="true"]::after,
+.stela-section-tab[aria-pressed="true"]::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 16px;
+  height: 2px;
+  border-radius: 2px;
+  background: hsl(var(--foreground) / .45);
+}
+.stela-filetree { padding: 4px 6px; }
+.stela-filetree-row { transition: background-color 120ms ease, color 120ms ease; }
+.stela-filetree-toolbar input { transition: border-color 120ms ease, box-shadow 120ms ease; }
+.stela-filetree-toolbar input:focus {
+  box-shadow: 0 0 0 2px hsl(var(--foreground) / .06);
+}
+.stela-document-toolbar { background: hsl(var(--background)); }
+.stela-workbench-status { background: hsl(var(--sidebar)); }
+
+.stela-chat-controls-side {
+  min-height: 40px;
+  border-bottom: 0;
+  padding-inline: 6px;
+}
+.stela-chat-controls-side [role="tablist"] { gap: 4px; padding-block: 4px; }
+.stela-chat-tab { transition: background-color 120ms ease, box-shadow 120ms ease; }
+.stela-chat-tab:not(.is-active):hover { background: hsl(var(--sidebar-hover) / .6); }
+.stela-workbench-agent .stela-conversation > header {
+  background: hsl(var(--background));
+  border-color: hsl(var(--border) / .5);
+  min-height: 36px;
+}
+.stela-workbench-agent .stela-composer-region { padding-inline: 12px; }
+
+.stela-settings-dialog { border-radius: 16px; border-color: hsl(var(--border) / .8); }
+.stela-settings-nav { overflow-y: auto; }
+
+/* Never delay direct manipulation or force motion on users who disable it. */
+@media (prefers-reduced-motion: reduce) {
+  .stela-workbench-tab,
+  .stela-chat-tab,
+  .stela-chrome-action,
+  .stela-sidebar-mode,
+  .stela-filetree-row,
+  .stela-filetree-toolbar input,
+  .stela-workbench-status button,
+  .stela-settings-nav button,
+  .stela-workbench-sidebar,
+  .stela-workbench-agent,
+  .stela-agent-composer { transition: none; }
+}
+
+/* Mode switches are flat navigation; document tabs retain a white page surface. */
+.stela-section-tabs { display: flex; gap: 4px; padding: 6px 8px; }
+.stela-section-tab {
+  position: relative;
+  border-radius: 7px;
+  padding: 5px 10px;
+  color: hsl(var(--muted-foreground));
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.stela-section-tab:hover { background: hsl(var(--muted)); }
+.stela-section-tab[aria-pressed="true"] {
+  background: transparent;
+  color: hsl(var(--foreground));
+  font-weight: 600;
+}
+.stela-workbench-dialog { border-radius: 16px; border-color: hsl(var(--border) / .8); }
+.stela-canvas-card {
+  border-radius: 12px;
+  border-color: hsl(var(--border) / .75);
+  box-shadow: 0 2px 6px hsl(var(--foreground) / .025);
+}
+.stela-canvas-toolbar { flex-wrap: wrap; }
+.stela-canvas-toolbar button {
+  border-radius: 8px;
+  border-color: hsl(var(--border) / .8);
+  background: hsl(var(--background));
+}
+.stela-canvas-toolbar button:hover { background: hsl(var(--muted)); }
+@media (prefers-reduced-motion: reduce) {
+  .stela-section-tab { transition: none; }
+}
+
+/* Query grids use the same fill-only selection as document text. */
+.stela-result-table { outline: none; }
+.stela-result-table:focus-visible:not(:has(td[data-selected="true"])) { outline: 1px solid hsl(var(--foreground) / .2); outline-offset: -2px; }
+.stela-result-table table th {
+  background: hsl(var(--muted) / .45);
+  color: hsl(var(--muted-foreground));
+}
+.stela-result-table table :is(th, td) { border-color: hsl(var(--border) / .6); }
+.stela-result-table table tbody tr:not(:has(td[data-selected="true"])):hover { background: hsl(var(--muted) / .25); }
+.stela-result-table table td[data-row] { user-select: none; cursor: cell; }
+.stela-result-table table td[data-row]:not([data-selected="true"]):hover { background: hsl(var(--foreground) / .025); }
+.stela-result-table table td[data-selected="true"] {
+  background: var(--selection-background);
+}
+.stela-result-table table td[data-copied="true"] {
+  background: var(--selection-background);
+}
+.stela-result-copy[data-copied="true"] {
+  color: hsl(var(--foreground));
+  border-color: hsl(var(--border));
+  background: hsl(var(--background));
+}
+.stela-result-table ::selection { background: var(--selection-background); }
+.stela-result-table .stela-result-copy {
+  width: max-content;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 4px;
+  white-space: nowrap;
+  line-height: 16px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+  box-shadow: 0 1px 3px hsl(var(--foreground) / .06);
+}
+.stela-result-table .stela-result-copy:hover { background: hsl(var(--muted)); }
+
+.milkdown .ProseMirror .stela-result-table ::selection { background: var(--selection-background); }

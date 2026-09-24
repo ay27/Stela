@@ -322,14 +322,14 @@ export function AppShell() {
   useHotkeys(bindings);
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
+    <div className="stela-workbench flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
       <WindowsTitleBar />
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <aside
           data-sidebar-aside
           style={sidebarCollapsed ? { width: 0 } : { width: sidebarWidth }}
           className={cn(
-            "relative flex h-full flex-none flex-col border-r border-border bg-sidebar text-sidebar-foreground transition-[width] duration-150",
+            "stela-workbench-sidebar relative flex h-full flex-none flex-col border-r border-border bg-sidebar text-sidebar-foreground transition-[width] duration-150",
             sidebarCollapsed && "overflow-hidden border-r-0",
           )}
         >

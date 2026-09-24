@@ -28,7 +28,7 @@ export function AgentSidebar() {
       data-agent-aside
       style={collapsed ? { width: 0 } : { width }}
       className={cn(
-        "relative flex h-full flex-none flex-col border-l border-border bg-background text-foreground transition-[width] duration-150",
+        "stela-workbench-agent relative flex h-full flex-none flex-col border-l border-border bg-background text-foreground transition-[width] duration-150",
         collapsed && "min-w-0 overflow-hidden border-l-0",
       )}
     >

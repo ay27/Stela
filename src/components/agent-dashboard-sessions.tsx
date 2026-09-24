@@ -409,7 +409,7 @@ function TraceDetails({ item }: { item: AgentTraceItem }) {
         </div>
         <TraceHeaderMetrics item={item} />
       </div>
-      <div className="flex border-b border-border px-2">{tabs.map((candidate) => <button key={candidate.id} type="button" onClick={() => setTab(candidate.id)} className={cn("border-b-2 px-2 py-2 text-[10px]", tab === candidate.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground")}>{candidate.label}</button>)}</div>
+      <div className="stela-section-tabs">{tabs.map((candidate) => <button key={candidate.id} type="button" onClick={() => setTab(candidate.id)} aria-pressed={tab === candidate.id} className="stela-section-tab text-[11px]">{candidate.label}</button>)}</div>
       <div className="min-h-0 flex-1 overflow-auto p-4">
         {tab === "input" ? item.kind === "model" ? <ModelInput value={item.payload} /> : <DataDetails value={item.payload} />
           : tab === "output" ? item.kind === "model" ? <ModelOutput item={item} /> : <DataDetails value={item.result} />

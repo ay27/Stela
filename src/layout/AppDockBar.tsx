@@ -36,11 +36,11 @@ function basename(p: string): string {
 
 /** 文字高度竖线，不顶满 Dock 上下边 */
 function DockSep() {
-  return <span className="mx-1 h-3 w-px flex-none self-center bg-border" aria-hidden />;
+  return <span className="mx-0.5 h-3 w-px flex-none self-center bg-border/40" aria-hidden />;
 }
 
 const dockItem =
-  "inline-flex flex-none items-center gap-1 rounded-sm px-2 hover:bg-accent hover:text-foreground";
+  "inline-flex h-6 flex-none items-center gap-1.5 rounded-md px-2 transition-colors hover:bg-accent hover:text-foreground";
 
 function updateAvailable(status: UpdaterStatus | null): boolean {
   return status?.state === "available" || status?.state === "downloaded";
@@ -63,7 +63,7 @@ export function AppDockBar() {
     active?.kind === "file" && active.path ? active.path : null;
 
   return (
-    <div className="box-border flex h-8 flex-none items-center border-t border-border bg-muted/30 text-[12px] font-medium text-muted-foreground px-1.5">
+    <div className="stela-workbench-status box-border flex h-7 flex-none items-center border-t border-border/50 bg-sidebar text-[11px] text-muted-foreground px-1.5">
       {/* 左侧控制组：宽度跟内容走，禁止 overflow 裁切 */}
       <div className="flex h-full flex-none items-center overflow-visible">
         <SidebarToggleButton

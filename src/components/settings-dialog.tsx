@@ -95,12 +95,12 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
         )} />
         <Dialog.Content
           className={cn(
-            "fixed left-1/2 top-1/2 z-50 flex h-[80vh] w-[920px] max-w-[95vw] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-2xl",
+            "stela-settings-dialog fixed left-1/2 top-1/2 z-50 flex h-[80vh] w-[920px] max-w-[95vw] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-2xl",
             "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
             nestedDialogOpen && "pointer-events-none !animate-none !opacity-0",
           )}
         >
-          <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <div className="flex items-center justify-between border-b border-border/60 px-5 py-4">
             <div className="flex items-center gap-2">
               <SettingsIcon className="h-4 w-4 text-muted-foreground" />
               <div>
@@ -131,7 +131,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           >
             <Tabs.List
               aria-label={t("settings.sectionsAria")}
-              className="flex w-44 flex-none flex-col border-r border-border bg-muted/20 p-2"
+              className="stela-settings-nav flex w-48 flex-none flex-col gap-1 border-r border-border/50 bg-sidebar p-3"
             >
               {TABS.map((tabSpec) => {
                 const Icon = tabSpec.icon;
@@ -140,9 +140,9 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                     key={tabSpec.id}
                     value={tabSpec.id}
                     className={cn(
-                      "flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm",
+                      "flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] transition-colors",
                       "text-muted-foreground hover:bg-accent hover:text-foreground",
-                      "data-[state=active]:bg-accent data-[state=active]:text-foreground data-[state=active]:font-medium",
+                      "data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:font-medium",
                     )}
                   >
                     <Icon className="h-4 w-4" />

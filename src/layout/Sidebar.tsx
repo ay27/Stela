@@ -31,13 +31,13 @@ export function Sidebar() {
       {/*
        * SidebarTopChrome：frameless 拖拽区；mac 另留红绿灯安全区。
        */}
-      <div className="stela-app-drag stela-titlebar-safe-left flex h-9 flex-none items-center border-b border-border">
+      <div className="stela-app-drag stela-titlebar-safe-left stela-sidebar-titlebar flex h-10 flex-none items-center">
         <TitlebarNavButtons />
       </div>
 
       {vaultPath ? (
-        <div className="flex h-8 flex-none items-center border-b border-border px-2">
-          <div className="flex min-w-0 flex-1">
+        <div className="stela-sidebar-modes flex h-9 flex-none items-center px-2">
+          <div className="flex min-w-0 flex-1 gap-1">
             <ModeButton
               label={t("sidebar.files")}
               icon={<FolderTree className="h-3.5 w-3.5" />}
@@ -110,11 +110,12 @@ function ModeButton({
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={active}
       title={hint ? `${label} (${hint})` : label}
       className={cn(
-        "flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md px-2 text-[12px]",
+        "stela-sidebar-mode flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md px-2 text-[12px]",
         active
-          ? "bg-sidebar-hover text-foreground font-medium"
+          ? "text-foreground font-medium"
           : "text-muted-foreground hover:bg-sidebar-hover/60",
       )}
     >

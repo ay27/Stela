@@ -29,7 +29,7 @@ export function Section({
     <section className="mb-6">
       <h3 className="text-sm font-semibold text-foreground">{title}</h3>
       {description ? (
-        <p className="mt-0.5 text-[11px] text-muted-foreground">{description}</p>
+        <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{description}</p>
       ) : null}
       <div className="mt-3 space-y-3">{children}</div>
     </section>
@@ -50,14 +50,14 @@ export function Row({
   return (
     <div
       className={cn(
-        "flex items-start justify-between gap-4 rounded-md border border-border/60 bg-card/40 px-3 py-2.5",
+        "flex items-start justify-between gap-4 rounded-lg bg-muted/40 px-3.5 py-3",
         disabled && "opacity-60",
       )}
     >
       <div className="min-w-0 flex-1">
         <div className="text-[13px] font-medium text-foreground">{label}</div>
         {description ? (
-          <div className="mt-0.5 text-[11px] text-muted-foreground">
+          <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
             {description}
           </div>
         ) : null}

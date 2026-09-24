@@ -1171,7 +1171,6 @@ export class CodeBlockNodeView implements NodeView {
 
   private renderHeader(node: ProseNode) {
     const language = (node.attrs.language as string) || "plain";
-    const attrs = node.attrs as RunSqlAttrs;
     const isRunsql = language === RUNSQL_LANGUAGE;
     const isMermaid = language === MERMAID_LANGUAGE;
     if (isRunsql) {
@@ -1182,7 +1181,6 @@ export class CodeBlockNodeView implements NodeView {
       this.headerEl.innerHTML = `
         <span class="stela-cb__icon">${DATABASE_ICON_HTML}</span>
         <span class="stela-cb__title">Run SQL</span>
-        ${attrs.blockId ? `<span class="stela-cb__id">${escapeHtml(attrs.blockId)}</span>` : ""}
         <button type="button" class="stela-cb__ai stela-cb__ai-rewrite" title="${escapeHtml(i18n.t("ai.runsql.rewriteSql"))}">${AI_ICON_HTML}${escapeHtml(i18n.t("ai.runsql.rewriteShort"))}</button>
         <button type="button" class="stela-cb__ai stela-cb__ai-ask" title="${escapeHtml(i18n.t("ai.runsql.askSql"))}">${AI_ICON_HTML}${escapeHtml(i18n.t("ai.runsql.askShort"))}</button>
         <button type="button" class="stela-cb__format" title="格式化 SQL (${escapeHtml(formatHint)})" aria-label="格式化 SQL">${FORMAT_ICON_HTML}<span class="stela-cb__format-kbd" aria-hidden="true">${escapeHtml(formatHint)}</span></button>

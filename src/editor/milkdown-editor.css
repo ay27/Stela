@@ -406,9 +406,9 @@
   flex-shrink: 0;
 }
 
-/* 选中态：用 accent，不再走 Crepe 的 selected 灰块 */
+/* Text and query cell selections share the same selection color. */
 .milkdown .ProseMirror *::selection {
-  background: hsl(var(--primary) / 0.18);
+  background: var(--selection-background);
 }
 .milkdown .ProseMirror.ProseMirror-hideselection *::selection {
   background: transparent;
@@ -817,28 +817,35 @@
 
 /* ============================================================================
  * 4) RunSQL / 通用 code block NodeView
- *    （主体在 codeblock-nodeview.ts 里给的 class，沿用，仅改圆角和 hover 色）
+ *    文档中的分析单元：统一工具栏、代码与结果表面。
  * ========================================================================== */
 
 .stela-cb {
-  border: 1px solid hsl(var(--border));
-  border-radius: var(--radius);
+  border: 1px solid hsl(var(--border) / 0.8);
+  border-radius: 12px;
   overflow: hidden;
-  margin: 10px 0;
-  background: hsl(var(--muted) / 0.45);
+  margin: 16px 0;
+  background: hsl(var(--background));
+  box-shadow: 0 2px 6px hsl(var(--foreground) / 0.025);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
-/* 所有 code block（runsql / mermaid / plain）共用同一条紧凑 header：
-   垂直 padding 收到 3px，按钮也压扁，整条高度 ~24px，统一且省空间。 */
+/* Editing code activates the cell. Selecting results or using its toolbar does not. */
+.stela-cb:has(> .stela-cb__cm .cm-editor.cm-focused) {
+  box-shadow: 0 2px 8px hsl(var(--foreground) / 0.045), 0 6px 16px hsl(var(--foreground) / 0.025);
+}
+
+/* Cell toolbars stay neutral at rest; hover and keyboard focus reveal actions. */
 .stela-cb__header {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 6px 3px 10px;
+  min-height: 34px;
+  padding: 4px 8px 4px 12px;
   font-size: 11px;
   color: hsl(var(--muted-foreground));
-  background: hsl(var(--muted) / 0.85);
-  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--muted) / 0.35);
+  border-bottom: 1px solid hsl(var(--border) / 0.45);
   user-select: none;
 }
 
@@ -858,15 +865,7 @@
   letter-spacing: 0.02em;
 }
 
-.stela-cb__id {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: hsl(var(--background));
-  border: 1px solid hsl(var(--border));
-  color: hsl(var(--muted-foreground));
-}
+
 
 /* 贴 shadcn `outline` variant：中性底 + 边框，hover 进 accent；图标继承前景色。
    `.milkdown` 前缀拉高特异性，防 common/* 里出现通用 button 规则。 */
@@ -879,12 +878,12 @@
   font-size: 11px;
   font-weight: 500;
   line-height: 1;
-  padding: 2px 8px;
-  border-radius: 5px;
-  border: 1px solid hsl(var(--border));
-  background-color: hsl(var(--background));
+  padding: 5px 8px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background-color: transparent;
   background-image: none;
-  color: hsl(var(--foreground));
+  color: hsl(var(--muted-foreground));
   cursor: pointer;
   transition:
     background-color 120ms ease,
@@ -897,14 +896,14 @@
   /* play triangle 视觉重心偏左，轻微右挪让图形+文本看起来是一个整体 */
   transform: translateX(0.5px);
   fill: currentColor;
-  color: hsl(var(--primary));
+  color: inherit;
 }
 
 .milkdown .stela-cb__run:hover:not([disabled]):not([data-state="running"]),
 .stela-cb__run:hover:not([disabled]):not([data-state="running"]) {
-  background-color: hsl(var(--accent));
-  border-color: hsl(var(--border));
-  color: hsl(var(--accent-foreground));
+  background-color: hsl(var(--primary) / 0.16);
+  border-color: hsl(var(--primary) / 0.20);
+  color: hsl(var(--primary));
 }
 
 .milkdown .stela-cb__run:active:not([disabled]):not([data-state="running"]),
@@ -954,10 +953,10 @@
   font-size: 11px;
   font-weight: 500;
   line-height: 1;
-  padding: 2px 7px;
-  border-radius: 5px;
-  border: 1px solid hsl(var(--border));
-  background-color: hsl(var(--background));
+  padding: 5px 7px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background-color: transparent;
   color: hsl(var(--muted-foreground));
   cursor: pointer;
   user-select: none;
@@ -1013,10 +1012,10 @@
   font-size: 11px;
   font-weight: 500;
   line-height: 1;
-  padding: 2px 7px;
-  border-radius: 5px;
-  border: 1px solid hsl(var(--border));
-  background: hsl(var(--background));
+  padding: 5px 7px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
   color: hsl(var(--muted-foreground));
   cursor: pointer;
 }
@@ -1512,10 +1511,10 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 2px 6px 2px 4px;
+  padding: 4px 8px 4px 6px;
   font-size: 11px;
   color: hsl(var(--muted-foreground));
-  background: hsl(var(--muted) / 0.6);
+  background: hsl(var(--muted) / 0.25);
   user-select: none;
   flex: 0 0 auto;
 }
@@ -1588,7 +1587,7 @@
   padding: 4px 8px;
   border-width: 0 1px 1px 0;
   border-style: solid;
-  border-color: hsl(var(--border));
+  border-color: hsl(var(--border) / 0.6);
 }
 
 /* Keep edge-cell geometry identical to the other cells. The block frame or
@@ -1601,119 +1600,65 @@
   border-right-color: transparent;
 }
 
-/* 底部版本栏：倒置 TabBar —— active tab 顶边与上方表格同色衔接 */
+/* Result history stays secondary to the data: a small underline marks the active run. */
 .stela-cb__run-tabs {
   display: flex;
-  align-items: stretch;
-  gap: 0;
-  padding: 0;
-  min-height: 26px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  min-height: 28px;
   border-top: 1px solid hsl(var(--border));
-  background: hsl(var(--muted) / 0.5);
+  background: hsl(var(--muted) / 0.25);
   font-size: 11px;
   user-select: none;
 }
-
-/* 对比按钮：默认紧凑控件；激活时融入版本栏，与选中 tab 同款底条提示 */
-.stela-cb__run-tabs .stela-cb__run-tabs-compare {
-  flex: 0 0 auto;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.stela-cb__run-tabs .stela-cb__run-tabs-compare:not(.stela-cb__run-tabs-compare--active) {
-  align-self: center;
-  margin: 0 6px;
-}
-
-.stela-cb__run-tabs .stela-cb__run-tabs-compare--active {
-  position: relative;
-  align-self: stretch;
-  margin-top: -1px;
-  padding: 0 10px;
-  border: none;
-  border-right: 1px solid hsl(var(--border));
-  border-top: 1px solid hsl(var(--background));
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font-weight: 500;
-}
-
-.stela-cb__run-tabs .stela-cb__run-tabs-compare--active::after {
-  content: "";
-  position: absolute;
-  inset-inline: 0;
-  bottom: 0;
-  height: 2px;
-  background: hsl(var(--primary));
-}
-
-.stela-cb__run-tabs .stela-cb__run-tabs-compare--active:hover:enabled {
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-}
-
 .stela-cb__run-tabs-list {
   display: flex;
   flex: 1 1 auto;
   min-width: 0;
-  gap: 0;
+  gap: 4px;
 }
-
-.stela-cb__run-tabs .stela-cb__run-tab {
+.stela-cb__run-tabs .stela-cb__run-tab,
+.stela-cb__run-tabs .stela-cb__run-tabs-compare {
   position: relative;
-  flex: 1 1 0;
-  min-width: 40px;
+  min-height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  padding: 0 6px;
+  padding: 0 8px;
   border: none;
-  border-left: 1px solid hsl(var(--border));
-  border-radius: 0;
+  border-radius: 3px;
   background: transparent;
   color: hsl(var(--muted-foreground));
   cursor: pointer;
+  white-space: nowrap;
 }
-
-.stela-cb__run-tabs .stela-cb__run-tab:hover:enabled {
-  background: hsl(var(--accent));
-  color: hsl(var(--foreground));
-}
-
-.stela-cb__run-tabs .stela-cb__run-tab:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* 选中态：与表格同色背景 + 底部主色指示条（无浅蓝底） */
+.stela-cb__run-tabs .stela-cb__run-tab { flex: 1 1 0; min-width: 40px; }
+.stela-cb__run-tabs .stela-cb__run-tabs-compare { flex: 0 0 auto; }
+.stela-cb__run-tabs button:hover:enabled { background: hsl(var(--muted)); }
+.stela-cb__run-tabs button:disabled { opacity: 0.5; cursor: not-allowed; }
 .stela-cb__run-tabs .stela-cb__run-tab--active,
-.stela-cb__run-tabs .stela-cb__run-tab--selected {
-  margin-top: -1px;
-  border-top: 1px solid hsl(var(--background));
-  background: hsl(var(--background));
+.stela-cb__run-tabs .stela-cb__run-tab--selected,
+.stela-cb__run-tabs .stela-cb__run-tabs-compare--active {
+  background: transparent;
   color: hsl(var(--foreground));
+  font-weight: 500;
 }
+.stela-cb__run-tabs .stela-cb__run-tab--err { color: hsl(var(--destructive)); }
 
 .stela-cb__run-tabs .stela-cb__run-tab--active::after,
-.stela-cb__run-tabs .stela-cb__run-tab--selected::after {
+.stela-cb__run-tabs .stela-cb__run-tab--selected::after,
+.stela-cb__run-tabs .stela-cb__run-tabs-compare--active::after {
   content: "";
   position: absolute;
-  inset-inline: 0;
   bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 24px;
   height: 2px;
-  background: hsl(var(--primary));
-}
-
-.stela-cb__run-tabs .stela-cb__run-tab--active:hover:enabled,
-.stela-cb__run-tabs .stela-cb__run-tab--selected:hover:enabled {
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-}
-
-.stela-cb__run-tabs .stela-cb__run-tab--err {
-  color: hsl(var(--destructive));
+  border-radius: 2px;
+  background: hsl(var(--primary) / 0.75);
 }
 
 /* tab 内「最新」小标 */
@@ -1755,11 +1700,9 @@
 
 .stela-cb__run-tabs-more > button {
   height: 100%;
-  min-height: 26px;
-  border-radius: 0;
-  border-top: none;
-  border-bottom: none;
-  border-right: none;
+  min-height: 24px;
+  border-radius: 6px;
+  border: none;
 }
 
 .stela-cb__result-hint {
@@ -2475,4 +2418,30 @@
 .stela-milkdown-host[data-find-bar-open="true"] .stela-cm-search-hit--active {
   animation: none !important;
   opacity: 1 !important;
+}
+
+/* Let syntax highlighting carry the code; remove the IDE-like gutter strip.
+   Keep selection, caret, diagnostics, line metrics and result-table geometry. */
+.milkdown .stela-cb__cm .cm-editor { background: hsl(var(--background)); }
+.milkdown .stela-cb__cm .cm-editor .cm-gutters {
+  background: transparent;
+  color: hsl(var(--muted-foreground) / 0.75);
+  border-right: none;
+}
+.milkdown .stela-cb__cm .cm-editor .cm-activeLine,
+.milkdown .stela-cb__cm .cm-editor .cm-activeLineGutter { background: transparent; }
+.milkdown .stela-cb__cm .cm-editor.cm-focused .cm-activeLine {
+  background: hsl(var(--primary) / 0.045);
+}
+.milkdown .stela-cb__cm .cm-editor.cm-focused .cm-activeLineGutter {
+  color: hsl(var(--primary));
+}
+.milkdown .stela-cb__header button:focus-visible,
+.milkdown .stela-cb__run-tabs button:focus-visible {
+  outline: 2px solid hsl(var(--primary) / 0.5);
+  outline-offset: -2px;
+}
+.milkdown .ProseMirror > :first-child { margin-top: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .stela-cb { transition: none; }
 }

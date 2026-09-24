@@ -4,23 +4,23 @@
   width: 100%;
   min-width: 0;
   border: 1px solid hsl(var(--border));
-  border-radius: 12px;
+  border-radius: 14px;
   background: hsl(var(--background));
   color: hsl(var(--foreground));
   font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
-  box-shadow: 0 2px 8px hsl(var(--foreground) / 0.025);
+  box-shadow: 0 2px 4px hsl(var(--foreground) / 0.025), 0 8px 24px hsl(var(--foreground) / 0.035);
   transition: border-color 120ms, box-shadow 120ms;
 }
 .stela-agent-composer:focus-within {
   border-color: hsl(var(--primary) / .4);
-  box-shadow: 0 0 0 2px hsl(var(--primary) / .07);
+  box-shadow: 0 0 0 3px hsl(var(--primary) / .07), 0 6px 20px hsl(var(--foreground) / .035);
 }
 .stela-composer-editing { padding: 12px 12px 4px; cursor: text; }
 .stela-composer-footer { display: flex; align-items: center; gap: 4px; padding: 4px 8px 8px; }
 .stela-composer-action {
   display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px; flex: none;
-  border: 0; border-radius: 6px;
+  border: 0; border-radius: 8px;
   color: hsl(var(--muted-foreground)); background: transparent;
 }
 .stela-composer-action:hover { color: hsl(var(--foreground)); background: hsl(var(--muted) / .6); }

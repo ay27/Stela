@@ -292,7 +292,7 @@ function ModuleInstallDialog({
         <Dialog.Overlay className="fixed inset-0 z-[60] bg-black/45 backdrop-blur-md" />
         <Dialog.Content
           aria-describedby={undefined}
-          className="fixed left-1/2 top-1/2 z-[61] flex max-h-[calc(100vh-3rem)] min-h-0 w-[560px] max-w-[calc(100vw-3rem)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-border bg-background p-4 shadow-xl"
+          className="stela-workbench-dialog fixed left-1/2 top-1/2 z-[61] flex max-h-[calc(100vh-3rem)] min-h-0 w-[560px] max-w-[calc(100vw-3rem)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-border bg-background p-4 shadow-xl"
         >
           <Dialog.Title className="mb-2 flex-none text-sm font-semibold text-foreground">
             {t("plugins.moduleInstall.title")}
@@ -984,7 +984,7 @@ function InstallDialog({
         <Dialog.Content asChild>
           <form
             onSubmit={onConfirm}
-            className="fixed left-1/2 top-1/2 z-[61] max-h-[calc(100vh-3rem)] w-[520px] max-w-[calc(100vw-3rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-border bg-background p-4 shadow-xl"
+            className="stela-workbench-dialog fixed left-1/2 top-1/2 z-[61] max-h-[calc(100vh-3rem)] w-[520px] max-w-[calc(100vw-3rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-border bg-background p-4 shadow-xl"
           >
             <Dialog.Title className="mb-3 text-sm font-semibold text-foreground">
               {t("plugins.install.title")}

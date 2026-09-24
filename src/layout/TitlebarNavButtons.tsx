@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/state/workspace";
 
 const btnClass =
-  "inline-flex h-6 w-6 flex-none items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40";
+  "inline-flex h-7 w-7 flex-none items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40";
 
 export function TitlebarNavButtons() {
   const t = useT();

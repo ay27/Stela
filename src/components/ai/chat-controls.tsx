@@ -60,11 +60,11 @@ export function ChatControls({ path, side = false }: { path?: string; side?: boo
   });
   const select = (action: () => Promise<unknown>) => { if (history.current) history.current.open = false; perform(action); };
   const items = chatHistoryItems(workspace.recent, legacy, workspace.vault).filter(item => `${item.title} ${item.directory ?? ""}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
-  return <div className="stela-chat-controls relative flex min-w-0 flex-none flex-wrap items-center border-b border-border text-xs">
+  return <div className={`stela-chat-controls ${side ? "stela-chat-controls-side" : ""} relative flex min-w-0 flex-none flex-wrap items-center border-b border-border/50 text-xs`}>
     {side && <div ref={tabs} role="tablist" aria-label={t("chat.tabs")} className="relative flex min-w-0 flex-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {workspace.sidePaths.map(tabPath => {
         const label = chatTabTitle(snapshots[tabPath], tabPath);
-        return <div key={tabPath} className={`group flex h-9 min-w-0 max-w-40 shrink-0 items-center border-b-2 ${tabPath === path ? "border-primary bg-muted/40" : "border-transparent"}`}>
+        return <div key={tabPath} className={`stela-chat-tab group flex h-8 min-w-0 max-w-40 shrink-0 items-center rounded-lg ${tabPath === path ? "is-active bg-background" : ""}`}>
           <button role="tab" aria-selected={tabPath === path} tabIndex={tabPath === path ? 0 : -1} title={label}
             onClick={() => workspace.move(tabPath, "side")}
             onKeyDown={event => {

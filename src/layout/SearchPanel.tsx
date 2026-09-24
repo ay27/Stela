@@ -34,17 +34,15 @@ export function SearchPanel({ vaultPath }: Props) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-1 border-b border-border px-2.5 pt-2">
+      <div className="stela-section-tabs items-center">
         {(["text", "sql"] as const).map((m) => (
           <button
             key={m}
             type="button"
             onClick={() => setMode(m)}
+            aria-pressed={mode === m}
             className={cn(
-              "rounded-t-md px-2.5 py-1 text-[11px] font-medium",
-              mode === m
-                ? "border-b-2 border-primary text-foreground"
-                : "text-muted-foreground hover:text-foreground",
+              "stela-section-tab text-[11px] font-medium",
             )}
           >
             {m === "text" ? t("search.mode.text") : t("search.mode.sql")}

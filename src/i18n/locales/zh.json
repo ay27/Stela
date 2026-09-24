@@ -1218,6 +1218,8 @@
   "resultDiff.cellStatus.changed": "已修改",
   "resultDiff.cellStatus.added": "已新增",
   "resultDiff.cellStatus.removed": "已删除",
+  "resultTable.keyboardHint": "查询结果：拖拽选择单元格区域，Shift 扩展选区，⌘/Ctrl+C 复制。",
+  "resultTable.copyFailed": "复制失败，请重试。",
   "resultTable.empty": "暂无数据",
   "resultTable.nullValue": "NULL",
   "resultTable.base64Preview": "base64 {{count}} 字符",

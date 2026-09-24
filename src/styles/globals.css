@@ -16,8 +16,9 @@
     --accent: 220 14% 96%;
     --accent-foreground: 222 15% 15%;
 
-    --primary: 214 100% 52%;
+    --primary: 218 84% 53%;
     --primary-foreground: 0 0% 100%;
+    --selection-background: hsl(var(--primary) / 0.18);
 
     --secondary: 220 14% 96%;
     --secondary-foreground: 222 15% 15%;
@@ -27,11 +28,11 @@
 
     --border: 220 13% 91%;
     --input: 220 13% 91%;
-    --ring: 214 100% 52%;
+    --ring: 218 84% 53%;
 
-    --sidebar: 220 16% 98%;
+    --sidebar: 220 18% 96.5%;
     --sidebar-foreground: 222 15% 20%;
-    --sidebar-hover: 220 14% 92%;
+    --sidebar-hover: 220 16% 92%;
 
     --radius: 0.5rem;
 
@@ -64,6 +65,7 @@
 
     --primary: 210 100% 60%;
     --primary-foreground: 0 0% 100%;
+    --selection-background: hsl(var(--primary) / 0.18);
 
     --secondary: 222 16% 16%;
     --secondary-foreground: 220 14% 92%;

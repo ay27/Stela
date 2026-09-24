@@ -1218,6 +1218,8 @@
   "resultDiff.cellStatus.changed": "changed",
   "resultDiff.cellStatus.added": "added",
   "resultDiff.cellStatus.removed": "removed",
+  "resultTable.keyboardHint": "Query results: drag to select cells, use Shift to extend the selection, and Cmd/Ctrl+C to copy.",
+  "resultTable.copyFailed": "Copy failed. Please try again.",
   "resultTable.empty": "No data",
   "resultTable.nullValue": "NULL",
   "resultTable.base64Preview": "base64 {{count}} chars",

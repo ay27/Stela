@@ -494,7 +494,7 @@ export function FileTree({ rootPath }: { rootPath: string }) {
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>
-        <div className="h-full" onContextMenuCapture={handleContextMenuCapture}>
+        <div className="stela-filetree h-full" onContextMenuCapture={handleContextMenuCapture}>
           <DirSubtree
             dirPath={rootPath}
             depth={0}
@@ -858,13 +858,13 @@ function TreeRow({
           onDoubleClick={onDoubleClick}
           data-filetree-row={node.path}
           className={cn(
-                "relative flex w-full items-center gap-1.5 rounded-sm px-1.5 py-[3px] text-[13px] text-left",
+                "stela-filetree-row relative flex w-full items-center gap-1.5 rounded-md px-1.5 py-[3px] text-[13px] text-left",
                 "hover:bg-sidebar-hover",
                 // 选中（点击过但非当前 active tab）：浅色背景，区别于 active 的 primary
                 isSelected && !isActive && "bg-sidebar-hover",
-                // 当前打开的文件：填色 + primary 文字色 + 左侧 2px accent bar
+                // 当前打开的文件：内缩圆角选中态，与侧栏导航保持一致。
                 isActive &&
-                  "bg-primary/10 text-primary font-medium before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-4 before:w-[2px] before:rounded-r before:bg-primary",
+                  "bg-primary/10 text-primary font-medium",
                 isDropHere && "ring-1 ring-primary/50",
           )}
           style={{ paddingLeft: 6 + depth * 14 }}
@@ -1098,7 +1098,7 @@ function FileTreeToolbar({ rootPath }: { rootPath: string }) {
   }, [rootPath]);
 
   return (
-    <div className="flex items-center gap-1 border-b border-border px-2 py-1">
+    <div className="stela-filetree-toolbar flex items-center gap-1 px-2 py-1.5">
       <ToolButton
         icon={<Crosshair className="h-3.5 w-3.5" />}
         label={t("fileTree.locateCurrent")}
@@ -1123,7 +1123,7 @@ function FileTreeToolbar({ rootPath }: { rootPath: string }) {
           placeholder={t("fileTree.filterPlaceholder")}
           spellCheck={false}
           className={cn(
-            "w-full min-w-0 rounded-sm border border-border bg-background px-1.5 py-px text-[12px]",
+            "w-full min-w-0 rounded-md border border-border/60 bg-background/80 px-2 py-1 text-[12px]",
             "placeholder:text-muted-foreground focus:border-primary/50 focus:outline-none",
             filter ? "pr-5" : "",
           )}

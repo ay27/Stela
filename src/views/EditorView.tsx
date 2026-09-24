@@ -321,7 +321,7 @@ export function EditorView({ tabId, path }: { tabId: string; path: string }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="flex h-8 flex-none items-center justify-between gap-3 border-b border-border px-3 text-xs text-muted-foreground">
+      <div className="stela-document-toolbar flex h-9 flex-none items-center justify-between gap-3 border-b border-border/50 px-3 text-xs text-muted-foreground">
         <div className="flex min-w-0 flex-1 items-center gap-1">
           <div className="min-w-0 flex-1 truncate font-mono" title={path}>
             {path}

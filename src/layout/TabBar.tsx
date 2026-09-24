@@ -128,7 +128,7 @@ export function TabBar() {
   return (
     <div
       className={cn(
-        "stela-app-drag stela-titlebar-safe-right flex h-9 flex-none items-stretch border-b border-border bg-muted/60",
+        "stela-workbench-tabs stela-app-drag stela-titlebar-safe-right flex h-10 flex-none items-stretch",
         sidebarCollapsed && "stela-titlebar-safe-left",
       )}
     >
@@ -151,19 +151,11 @@ export function TabBar() {
        * 系统当成"拖窗起手"，点击 / drag-reorder / 横滚都失灵。
        */}
       <div
-        className="stela-app-no-drag stela-tabbar-scroll flex min-w-0 flex-1 items-stretch overflow-x-auto"
+        className="stela-app-no-drag stela-tabbar-scroll flex min-w-0 flex-1 items-stretch gap-1 overflow-x-auto px-1.5 py-1"
         onWheel={onWheelScroll}
       >
         {tabs.map((tab, idx) => {
           const active = tab.id === activeId;
-          const prev = tabs[idx - 1];
-          const next = tabs[idx + 1];
-
-          // 仅在「两个非激活 tab 相邻」时画竖线，避免激活 tab 两侧的线与激活边框打架
-          const showLeftDivider =
-            idx > 0 && !active && prev && prev.id !== activeId;
-          const showRightDivider =
-            idx < tabs.length - 1 && !active && next && next.id !== activeId;
 
           return (
             <TabItem
@@ -171,8 +163,6 @@ export function TabBar() {
               tab={tab}
               idx={idx}
               active={active}
-              showLeftDivider={!!showLeftDivider}
-              showRightDivider={!!showRightDivider}
               isLast={idx === tabs.length - 1}
               closedCount={closedCount}
               dragging={draggingId === tab.id}
@@ -201,7 +191,7 @@ export function TabBar() {
         onClick={() => void createSqlConversation()}
         title={`${t("conversation.new")} (${formatHotkey("Mod+Shift+N")})`}
         aria-label={t("conversation.new")}
-        className="stela-app-no-drag flex w-8 flex-none items-center justify-center border-l border-border text-muted-foreground hover:bg-background/50 hover:text-foreground"
+        className="stela-chrome-action stela-app-no-drag flex w-8 flex-none items-center justify-center text-muted-foreground hover:bg-background/50 hover:text-foreground"
       >
         <MessageSquarePlus className="h-3.5 w-3.5" />
       </button>
@@ -214,7 +204,7 @@ export function TabBar() {
           agentPanelCollapsed ? t("tab.agentOpen") : t("tab.agentCollapse")
         }
         className={cn(
-          "stela-app-no-drag flex w-8 flex-none items-center justify-center border-l border-border hover:bg-background/50",
+          "stela-chrome-action stela-app-no-drag flex w-8 flex-none items-center justify-center hover:bg-background/50",
           agentPanelCollapsed
             ? "text-muted-foreground hover:text-foreground"
             : "text-primary",
@@ -241,8 +231,6 @@ interface TabItemProps {
   tab: Tab;
   idx: number;
   active: boolean;
-  showLeftDivider: boolean;
-  showRightDivider: boolean;
   isLast: boolean;
   closedCount: number;
   dragging: boolean;
@@ -258,8 +246,6 @@ function TabItemImpl({
   tab,
   idx,
   active,
-  showLeftDivider,
-  showRightDivider,
   isLast,
   closedCount,
   dragging,
@@ -312,12 +298,10 @@ function TabItemImpl({
           }}
           className={cn(
             // shrink-0：tab 多时不被压缩到不可读的窄度，超出由父容器横向滚动
-            "group relative flex min-w-[120px] max-w-[220px] shrink-0 cursor-pointer select-none items-center gap-2 px-3 text-[12px] transition-colors",
+            "stela-workbench-tab group relative flex min-w-[120px] max-w-[220px] shrink-0 cursor-pointer select-none items-center gap-2 rounded-lg px-3 text-[12px] transition-colors",
             active
-              ? "bg-background text-foreground"
+              ? "is-active bg-background text-foreground font-medium"
               : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
-            showLeftDivider && "border-l border-border",
-            showRightDivider && "border-r border-border",
             dragging && "opacity-40",
           )}
           title={
@@ -326,12 +310,6 @@ function TabItemImpl({
               : (tab.path ?? tab.title)
           }
         >
-          <span
-            className={cn(
-              "pointer-events-none absolute inset-x-0 bottom-0 h-[2px]",
-              active ? "bg-primary" : "bg-transparent",
-            )}
-          />
           {dropTarget ? (
             <span className="pointer-events-none absolute inset-y-0 left-0 w-[2px] bg-primary" />
           ) : null}
@@ -361,7 +339,8 @@ function TabItemImpl({
             className={cn(
               "flex-1 truncate",
               // ephemeral：标题斜体，对比度略降，强化"还没承诺打开"的语义
-              isEphemeral && "italic text-muted-foreground/90",
+              isEphemeral && "italic",
+              isEphemeral && !active && "text-muted-foreground/90",
             )}
           >
             {tab.title}
@@ -506,7 +485,7 @@ function OverflowMenu({
         <button
           type="button"
           title={t("tab.allTabs", { count: tabs.length })}
-          className="stela-app-no-drag flex w-8 flex-none items-center justify-center border-l border-border text-muted-foreground hover:bg-background/50 hover:text-foreground"
+          className="stela-chrome-action stela-app-no-drag flex w-8 flex-none items-center justify-center text-muted-foreground hover:bg-background/50 hover:text-foreground"
         >
           <ChevronDown className="h-3.5 w-3.5" />
         </button>
