@@ -24,6 +24,10 @@ export function usePrivacyRestore() {
   return (text: string) => restorePrivacyText(text, privacy?.annotations ?? []);
 }
 export function pendingPrivacyText(text: string): string {
+  // A short code can grow beyond three digits; wait for its delimiter while
+  // streaming. Final messages bypass this helper and restore immediately.
+  const compact = /(?<![A-Za-z0-9_])(?:P|PI|PII|PII_[0-9A-F]*)$/.exec(text);
+  if (compact) return text.slice(0, compact.index);
   const start = text.lastIndexOf('STELA_PII_');
   return start >= 0 && /^STELA_PII_[a-f0-9_]*$/.test(text.slice(start)) && text.length - start < 59 ? text.slice(0, start) : text;
 }

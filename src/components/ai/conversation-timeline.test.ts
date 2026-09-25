@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { conversationResults, conversationTimeline } from "./conversation-timeline";
 import type { ConversationTurn } from "@shared/conversation";
 import type { RunRecord } from "@shared/types";
+import { restorePrivacyText } from '@shared/ai-privacy';
 const run = (runId: string, direct = false): RunRecord => ({ runId, blockId: direct ? "turn" : "agent:turn", sql: "SELECT 1", status: "ok", message: null, startedAt: 1, elapsedMs: 1, rowCount: 1, connectionName: "demo", notePath: "chat.stela.chat" });
 const turn: ConversationTurn = { id: "turn", input: "SELECT 1", connectionName: "demo", startedAt: 1, status: "running", runs: [run("direct", true), run("query-1"), run("query-2")], responses: [], events: [] };
 const results = conversationResults(turn, [
@@ -19,4 +20,20 @@ turn.responses.push({ runId: "turn", callId: "question", approve: true, answer: 
 assert.equal(conversationTimeline(turn).find(e => e.kind === "proposal")?.resolution, "approved");
 turn.responses = []; turn.status = "interrupted";
 assert.equal(conversationTimeline(turn).find(e => e.kind === "proposal")?.resolution, "expired");
+const privacy = { enabled: true, annotations: [{ token: 'PII_4CF', original: '1001DESIGN' }] };
+turn.events.push(
+  { type: 'final', runId: turn.id, content: '## PII_4CF 数据分布', privacy },
+  { type: 'skill_maintenance_started', runId: turn.id, privacy: { enabled: true, annotations: [] } },
+  { type: 'skill_maintenance', runId: turn.id, outcome: 'unchanged', actions: [], summary: 'No changes', privacy: { enabled: true, annotations: [] } },
+);
+const final = conversationTimeline(turn).find(entry => entry.kind === 'final');
+assert(final?.kind === 'final');
+assert.deepEqual(final.privacy, privacy, 'post-reply metadata must not erase final restoration annotations');
+assert.equal(restorePrivacyText(final.content, final.privacy!.annotations), '## 1001DESIGN 数据分布');
+turn.events.push(
+  { type: 'tool_call', runId: turn.id, call: { callId: 'private-query', name: 'run_query', arguments: { sql: "select * from t where project='PII_4CF'" } }, privacy },
+  { type: 'tool_result', runId: turn.id, callId: 'private-query', ok: true, summary: 'PII_ABC', privacy: { enabled: true, annotations: [{ token: 'PII_ABC', original: 'a name' }] } },
+);
+const tool = conversationTimeline(turn).find(entry => entry.kind === 'tool' && entry.callId === 'private-query');
+assert.deepEqual(tool?.privacy?.annotations, [...privacy.annotations, { token: 'PII_ABC', original: 'a name' }], 'tool results keep both argument and result annotations');
 console.log("Conversation timeline: direct failure placement, repeated SQL tool results, and question lifecycle passed.");

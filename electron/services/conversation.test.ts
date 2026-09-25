@@ -1,3 +1,4 @@
+import { PRIVACY_TOKEN_SOURCE } from '../shared/ai-privacy';
 import { configureQueryArtifactRoot } from "./query-artifacts";
 import { PrivacySession } from "./ai/privacy-session";
 import { pipelineAuthoringFixture } from "@shared/canvas-authoring.fixture";
@@ -37,12 +38,25 @@ async function main() {
       : phase === "clarify" ? { name: "ask_user", arguments: JSON.stringify({ question: "Which period?", options: ["Last month", "This month"] }) }
       : phase === "canvas" ? { name: "create_analysis_canvas", arguments: JSON.stringify({ canvas: pipelineAuthoringFixture, sourceRuns: [] }) }
       : phase === "existing" ? { name: "read_conversation_result", arguments: JSON.stringify({ runId: savedId, limit: 10 }) } : null : null;
-    const privateToken = body.match(/STELA_PII_[a-f0-9]{24}_[a-f0-9]{24}/)?.[0];
+    const privateToken = body.match(new RegExp(PRIVACY_TOKEN_SOURCE))?.[0];
     if (phase === "privacy" && turnIndex < 2) tool = { name: "run_query", arguments: JSON.stringify({ language: "sql", query: turnIndex === 0 ? "SELECT privacy_fixture" : `SELECT privacy_fixture WHERE phone='${privateToken}'`, connectionName: "fixture" }) };
+    if (phase === 'privacy_release' && turnIndex === 0) tool = { name: 'run_query', arguments: JSON.stringify({ language: 'sql', query: 'SELECT privacy_fixture', connectionName: 'fixture' }) };
+    if (phase === 'privacy_release' && turnIndex === 1) {
+      const messages = JSON.parse(body).messages as Array<{ role: string; content: string }>;
+      const lastTool = messages.filter(m => m.role === 'tool').at(-1)!;
+      tool = { name: 'request_column_access', arguments: JSON.stringify({ runId: JSON.parse(lastTool.content).runId, reason: '需要原始手机号进行核对' }) };
+    }
+    let batchTools: Array<{ name: string; arguments: string }> | undefined;
+    if (phase === 'privacy_batch' && turnIndex === 0) batchTools = Array.from({ length: 3 }, () => ({ name: 'run_query', arguments: JSON.stringify({ language: 'sql', query: 'SELECT privacy_fixture', connectionName: 'fixture' }) }));
+    if (phase === 'privacy_batch' && turnIndex === 1) {
+      const messages = JSON.parse(body).messages as Array<{ role: string; content: string }>;
+      batchTools = messages.filter(m => m.role === 'tool').slice(-3).map((message, i) => ({ name: 'request_column_access', arguments: JSON.stringify({ runId: JSON.parse(message.content).runId, reason: `核对第 ${i + 1} 份数据` }) }));
+    }
     res.writeHead(200, { "Content-Type": "text/event-stream" });
     const send = (delta: unknown, finish: string | null) => res.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", created: 1, model: "fixture", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`);
     send({ role: "assistant" }, null);
-    if (tool) { send({ tool_calls: [{ index: 0, id: `call_${modelCalls}`, type: "function", function: tool }] }, null); send({}, "tool_calls"); }
+    if (batchTools) { send({ tool_calls: batchTools.map((item, index) => ({ index, id: `batch_${modelCalls}_${index}`, type: 'function', function: item })) }, null); send({}, 'tool_calls'); }
+    else if (tool) { send({ tool_calls: [{ index: 0, id: `call_${modelCalls}`, type: "function", function: tool }] }, null); send({}, "tool_calls"); }
     else { send({ content: phase === "privacy" ? `号码：${privateToken}` : "Completed using the saved query evidence." }, null); send({}, "stop"); }
     res.end("data: [DONE]\n\n");
   });
@@ -86,7 +100,7 @@ async function main() {
     await writeFile(join(plugin, "plugin.json"), JSON.stringify({ id: "fixture", kind: "fixture", displayName: "Fixture", apiVersion: 1, entry: "index.cjs" }));
     await writeFile(join(plugin, "index.cjs"), `module.exports = { apiVersion: 1, create() { return {
       meta() { return { kind: 'fixture', displayName: 'Fixture', configSchema: {type:'object'}, defaultConfig: {}, subprocess:false }; },
-      async execute(config, sql) { if (sql.includes('privacy_fixture')) { if(sql.includes('STELA_PII_')) throw new Error('Unresolved privacy token reached connector'); return {kind:'query',columns:[{name:'customer_name',typeName:'VARCHAR'},{name:'phone',typeName:'VARCHAR'},{name:'amount',typeName:'DOUBLE'}],rows:[['张三','13812345678',12.3]],elapsedMs:1}; } if (sql.includes('slow')) await new Promise(r => setTimeout(r,150)); if (sql.includes('broken')) throw new Error('Unknown column broken'); if (/^UPDATE/i.test(sql)) return {kind:'mutation', affectedRows:1, elapsedMs:1}; return {kind:'query',columns:[{name:'answer',typeName:'INTEGER'}],rows:[[42]],elapsedMs:1}; },
+      async execute(config, sql) { if (sql.includes('privacy_fixture')) { if(new RegExp(${JSON.stringify(PRIVACY_TOKEN_SOURCE)}).test(sql)) throw new Error('Unresolved privacy token reached connector'); return {kind:'query',columns:[{name:'customer_name',typeName:'VARCHAR'},{name:'phone',typeName:'VARCHAR'},{name:'amount',typeName:'DOUBLE'}],rows:[['张三','13812345678',12.3]],elapsedMs:1}; } if (sql.includes('slow')) await new Promise(r => setTimeout(r,150)); if (sql.includes('broken')) throw new Error('Unknown column broken'); if (/^UPDATE/i.test(sql)) return {kind:'mutation', affectedRows:1, elapsedMs:1}; return {kind:'query',columns:[{name:'answer',typeName:'INTEGER'}],rows:[[42]],elapsedMs:1}; },
       async listDatabases(){return ['db'];}, async listTables(){return ['t'];}, async test(){return {ok:true};}, async dispose(){}
     }; }};`);
     await writeFile(join(vault, ".stela/connections.json"), JSON.stringify({ entries: { fixture: { kind: "fixture", config: {} } } }));
@@ -143,6 +157,46 @@ async function main() {
     await send(privateChat, "继续检查手机号13812345678"); privateChat = await waitFor(privateChat.path, done);
     assert.equal(privateChat.document.turns.at(-1)!.status, 'completed');
     assert.equal(privateChat.document.privacy!.namespace, namespace);
+    // Real proposal response -> Main grant -> provider projection -> next-task expiry.
+    phase = 'privacy_release'; step = 0;
+    const releaseStart = requests.length;
+    await send(privateChat, '请核对原始手机号');
+    privateChat = await waitFor(privateChat.path, value => value.document.turns.at(-1)!.events.some(event => event.type === 'proposal' && event.kind === 'privacy_release'));
+    const releaseTurn = privateChat.document.turns.at(-1)!;
+    const releaseEvent = releaseTurn.events.find(event => event.type === 'proposal' && event.kind === 'privacy_release');
+    assert(releaseEvent?.type === 'proposal');
+    assert.equal(releaseEvent.approvalMode, 'manual');
+    const phoneOption = releaseEvent.payload.privacyRelease!.options.find(option => option.column === 1 && option.path.length === 0)!;
+    assert.equal(phoneOption.samples[0], '13812345678', 'preview stays local for the user');
+    await conversation.respondConversation(vault, privateChat.path, { runId: releaseTurn.id, callId: releaseEvent.callId, approve: true, answer: JSON.stringify([phoneOption.id]) });
+    privateChat = await waitFor(privateChat.path, done);
+    assert.equal(privateChat.document.turns.at(-1)!.status, 'completed');
+    const releasedRequests = JSON.stringify(requests.slice(releaseStart));
+    assert(releasedRequests.includes('13812345678'));
+    assert(!releasedRequests.includes('张三'), 'another column remains masked in the real provider request');
+    const expiryStart = requests.length;
+    phase = 'final'; step = 0;
+    await send(privateChat, '继续'); privateChat = await waitFor(privateChat.path, done);
+    assert(!JSON.stringify(requests.slice(expiryStart)).includes('13812345678'), 'saved tool history does not carry task authority forward');
+    for (const allow of [true, false]) {
+      phase = 'privacy_batch'; step = 0;
+      const start = requests.length;
+      await send(privateChat, '请一次性核对三份数据');
+      privateChat = await waitFor(privateChat.path, value => value.document.turns.at(-1)!.events.some(event => event.type === 'proposal' && event.kind === 'privacy_release'));
+      const turn = privateChat.document.turns.at(-1)!;
+      const event = turn.events.find(event => event.type === 'proposal' && event.kind === 'privacy_release');
+      assert(event?.type === 'proposal');
+      assert.equal(event.payload.privacyRelease!.sources!.length, 3, 'real assistant tool batch is collected before sequential dispatch');
+      assert(!JSON.stringify(requests.slice(start)).includes('13812345678'), 'no release before the decision');
+      await conversation.respondConversation(vault, privateChat.path, { runId: turn.id, callId: event.callId, approve: allow, answer: allow ? JSON.stringify(event.payload.privacyRelease!.options.map(option => option.id)) : undefined });
+      privateChat = await waitFor(privateChat.path, done);
+      const completed = privateChat.document.turns.at(-1)!;
+      assert.equal(completed.status, 'completed', JSON.stringify(completed));
+      assert.equal(completed.events.filter(e => e.type === 'proposal' && e.kind === 'privacy_release').length, 1, 'three requests must produce exactly one proposal');
+      const payloads = JSON.stringify(requests.slice(start));
+      assert.equal(payloads.includes('13812345678'), allow);
+      assert.equal(payloads.includes('张三'), allow);
+    }
     await patchAppSettings(vault, { ai: { privacyModeEnabled: false } });
     phase = "repair"; step = 0;
     await send(s, "SELECT broken FROM t"); s = await waitFor(s.path, done);

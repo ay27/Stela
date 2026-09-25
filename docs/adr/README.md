@@ -170,4 +170,8 @@ proposed → active → superseded
 | [0115](0115-pi-runtime-observation-and-retry.md) | Reuse Pi runtime observation, usage and generation retry | active |
 | [0116](0116-analytics-connector-catalog.md) | Official analytics connectors and local file sources | active |
 
-| [0117](0117-local-ai-privacy-mode.md) | Local AI privacy boundary and conversation pseudonyms | active |
+| [0117](0117-local-ai-privacy-mode.md) | Local AI privacy boundary and conversation pseudonyms | superseded by 0118 |
+| [0118](0118-data-masking-and-task-scoped-release.md) | Data masking with task-scoped column release | active |
+| [0119](0119-batched-privacy-release.md) | Batch privacy release decisions per assistant step | active |
+| [0120](0120-compact-conversation-pseudonyms.md) | Compact random conversation pseudonyms | active |
+| [0121](0121-count-evidence-and-prose-masking.md) | Count expression evidence and numeric prose boundaries | active |

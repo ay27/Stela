@@ -311,7 +311,7 @@ export async function privateQueryArtifact(input: {
   const stored = await readStored(input.vaultPath, input.sessionId, input.artifact.runId);
   if (!stored) throw new Error('Query artifact is missing; rerun the query.');
   const sourceFingerprint = hash(JSON.stringify([stored.meta.createdAt, stored.meta.byteSize, stored.meta.columns, stored.meta.rowCount]));
-  const privateId = `${input.artifact.runId}-privacy-v1-${sourceFingerprint}-${input.privacy.state.namespace}`;
+  const privateId = `${input.artifact.runId}-privacy-v2-${sourceFingerprint}-${input.privacy.workspaceKey}`;
   const cached = await resolveQueryArtifact(input.vaultPath, input.sessionId, privateId);
   // A cached file is usable only with the mapping that created it.
   if (cached && cached.privacyMappingDigest === hash(JSON.stringify(input.privacy.state))) return { ...cached, incomplete: input.artifact.incomplete };
@@ -338,7 +338,7 @@ export async function privateQueryArtifact(input: {
         const record: Record<string, unknown> = {};
         for (let i = 0; i < row.length; i++) {
           const original = row[i];
-          const masked = await input.privacy.maskValue(original, input.artifact.columns[i]!.name, input.signal);
+          const masked = await input.privacy.maskData(original, input.artifact.columns[i]!.name, input.signal, input.artifact.runId, i, [], true);
           if (JSON.stringify(original) !== JSON.stringify(masked)) changed.add(i);
           record[`c${i}`] = masked;
         }

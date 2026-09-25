@@ -53,7 +53,7 @@ export function createSemanticAgent(input: {
     complete: async (system, user, maxTokens, signal) => {
       if (semanticGrantEpoch(input.vault) !== epoch) throw new Error("Semantic authorization revoked");
       const apiKey = await loadApiKey(input.vault, input.slug, profile.id);
-      const transport = createTransportForProfile(input.settings, apiKey, profile.id, input.privacy);
+      const transport = createTransportForProfile(input.settings, apiKey, profile.id, input.privacy?.derivedView());
       if (Buffer.byteLength(system + user, "utf8") + maxTokens > transport.model.contextWindow) throw new Error("Semantic batch exceeds model context; split the input");
       const answer = await transport.models.completeSimple(transport.model, {
         systemPrompt: system, messages: [{ role: "user", content: user, timestamp: Date.now() }],

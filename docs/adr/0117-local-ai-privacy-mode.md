@@ -2,7 +2,8 @@
 type: ADR
 id: "0117"
 title: "Local AI privacy boundary and conversation pseudonyms"
-status: active
+status: superseded
+superseded_by: "0118"
 date: 2026-09-24
 ---
 

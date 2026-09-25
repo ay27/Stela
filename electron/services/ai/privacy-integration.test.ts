@@ -1,3 +1,4 @@
+import { PRIVACY_TOKEN_SOURCE } from '../../shared/ai-privacy';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -22,7 +23,7 @@ globalThis.fetch = async (_url, init) => {
   assert(!body.includes('13812345678'), 'real phone crossed HTTP boundary');
   assert(!body.includes('alice@example.com'), 'real email crossed HTTP boundary');
   assert(!body.includes('"original"'), 'mapping crossed HTTP boundary');
-  const token = body.match(/STELA_PII_[a-f0-9]{24}_[a-f0-9]{24}/)?.[0] ?? 'ok';
+  const token = body.match(new RegExp(PRIVACY_TOKEN_SOURCE))?.[0] ?? 'ok';
   return new Response([
     { id: 'test', object: 'chat.completion.chunk', created: 0, model: 'fixture', choices: [{ index: 0, delta: { role: 'assistant', content: token }, finish_reason: null }] },
     { id: 'test', object: 'chat.completion.chunk', created: 0, model: 'fixture', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
@@ -44,6 +45,35 @@ try {
   await streamChatCompletions({ settings, apiKey: 'local-test-key', profileId: 'default', system: 'Return the phone.', user: '电话13812345678', signal: new AbortController().signal, onDelta: text => { completion += text; } });
   assert.equal(completion, '13812345678');
   assert(bodies.length >= 7, 'foreground, compaction, continuation and standalone calls were captured');
+  const task = privacy.forkTask();
+  const source = { runId: 'approved-source', columns: [{ name: 'product', typeName: 'VARCHAR' }, { name: 'other_source_value', typeName: 'VARCHAR' }], rows: [['天穹沙发', '天穹沙发']], rowCount: 1 };
+  task.registerSource(source);
+  const release = task.releaseRequest(source.runId);
+  assert(task.approveRelease(release, '["0"]'));
+  const masked = await task.toolOutput('release-call', 'request_column_access', JSON.stringify(source));
+  const releasedTransport = createTransportForProfile(settings, 'local-test-key', undefined, task);
+  const history = { messages: [
+    { role: 'assistant' as const, content: [{ type: 'toolCall' as const, id: 'release-call', name: 'request_column_access', arguments: { runId: source.runId, reason: 'classify furniture' } }], api: model.api, provider: model.provider, model: model.id, timestamp: 0, stopReason: 'toolUse' as const,
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } },
+    { role: 'toolResult' as const, toolCallId: 'release-call', toolName: 'request_column_access', content: [{ type: 'text' as const, text: masked }], isError: false, timestamp: 0 },
+  ] };
+  for (const method of ['complete', 'completeSimple'] as const) {
+    await releasedTransport.models[method](releasedTransport.model, history);
+    const body = JSON.parse(bodies.at(-1)!);
+    const content = body.messages.find((m: { role: string }) => m.role === 'tool').content;
+    const result = JSON.parse(content);
+    assert.equal(result.rows[0][0], '天穹沙发');
+    assert.notEqual(result.rows[0][1], '天穹沙发', 'HTTP projection releases only selected column');
+  }
+  const nextTask = privacy.forkTask();
+  const nextTransport = createTransportForProfile(settings, 'local-test-key', undefined, nextTask);
+  await nextTransport.models.completeSimple(nextTransport.model, history);
+  assert(!bodies.at(-1)!.includes('天穹沙发'), 'replayed durable history loses previous task release authority');
+  task.closeTask();
+  const beforeExpired = bodies.length;
+  assert.equal((await releasedTransport.models.completeSimple(releasedTransport.model, history)).stopReason, 'error');
+  assert.equal(bodies.length, beforeExpired, 'expired task cannot reach HTTP');
+
 } finally { globalThis.fetch = savedFetch; }
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'stela-private-broker-'));
@@ -74,8 +104,17 @@ try {
   const chunk = await readPythonRuntimeInput({ jobId: safe.jobId, alias: dynamic.alias, offset: 0, length: 10000 });
   assert(Buffer.from(chunk.data).subarray(0, 4).equals(Buffer.from('PAR1')), 'dynamic query also uses sanitized Parquet');
   finish(safe); await second;
-  const third = executePython({ vaultPath: root, sessionId: 'session', code: 'result=1', artifacts: {} });
-  const disabled = await waitRequest(3); assert.notEqual(disabled.workspaceId, safe.workspaceId); finish(disabled); await third;
+  privacy.registerSource({ ...source, rows: [['13812345678']] });
+  assert(privacy.approveRelease(privacy.releaseRequest(source.runId), '["0"]'));
+  const third = executePython({ vaultPath: root, sessionId: 'session', privacy, code: 'result=1', artifacts: { customers: source } });
+  const granted = await waitRequest(3); assert.notEqual(granted.workspaceId, safe.workspaceId, 'grant revision rebuilds Python'); finish(granted); await third;
+  const nextPrivacy = privacy.forkTask();
+  const fourth = executePython({ vaultPath: root, sessionId: 'session', privacy: nextPrivacy, code: 'result=1', artifacts: { customers: source }, runQuery: async () => { throw new Error('database error containing 13812345678'); } });
+  const next = await waitRequest(4); assert.notEqual(next.workspaceId, granted.workspaceId, 'next task cannot reuse approved variables');
+  await assert.rejects(queryForPythonJob({ jobId: next.jobId, connectionName: 'test', request: '{}' }), error => error instanceof Error && !error.message.includes('13812345678'));
+  finish(next); await fourth;
+  const fifth = executePython({ vaultPath: root, sessionId: 'session', code: 'result=1', artifacts: {} });
+  const disabled = await waitRequest(5); assert.notEqual(disabled.workspaceId, next.workspaceId); finish(disabled); await fifth;
   await resetPythonWorkspace(root, 'session');
 } finally { setPythonRuntimeBroadcaster(null); await rm(root, { recursive: true, force: true }); }
 console.log(`privacy integration: ${bodies.length} real provider payloads, Pi compaction, completion and Python mode changes passed`);

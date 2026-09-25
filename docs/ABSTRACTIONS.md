@@ -100,6 +100,14 @@ excluded from implicit `AgentWorkspaceContext`, whose public contract remains
 
 Privacy-enabled conversations write format version 3 and may contain
 `IPrivacySessionState`: a versioned namespace and exact original/token entries.
+Mapping version 2 accepts compact `PII_[0-9A-F]{3,11}` and legacy long tokens;
+version 1 stays readable and upgrades when adding a new identity (ADR-0120).
+Codes are unique within a conversation, not globally.
+Per-entry display annotations accumulate when metadata events update a reply;
+an empty maintenance-event annotation list must not erase the reply mapping.
+ADR-0121 preserves proven COUNT/binary CASE SUM cells, including integer strings,
+by projection ordinal. Free-prose replacement excludes learned decimals and
+short integers; query-cell masking and source-scoped grants remain separate.
 This is Main-owned local state, never an LLM message. The dictionary follows the
 same storage and Git lifecycle as the conversation. Older documents remain
 readable; writing the first privacy mapping upgrades the version. Old clients
@@ -115,7 +123,25 @@ and copy displayed originals without markup. Unknown tokens are not guessed.
 defaults false. `QueryArtifactDescriptor.sourceRunId` retains evidence identity
 when Python consumes a sanitized artifact; `privacyMappingDigest` prevents
 reusing an artifact with another dictionary. Neither grants access outside the
-active Python job. Sensitive numeric columns become text when pseudonymized.
+active Python job. Unknown numeric cells become text when pseudonymized; only narrowly proven
+COUNT results retain numeric types automatically. JSON values are recursively
+masked (changed structured cells become JSON text in Python's Parquet inputs).
+
+`IPrivacyReleaseRequest` optionally includes grouped `sources` and per-option
+`sourceRunId` (ADR-0119); absence means a legacy single-source request. Completed
+assistant messages establish a batch before sequential execution. One explicit
+option-ID answer (up to 20,000 characters) applies selected/all/reject to that
+batch only. Later calls in the batch reuse the decision.
+`IPrivacyReleaseRequest` carries Main-generated result identity, recipients and
+bounded local preview options. Each option names a column ordinal and JSON path
+segments (`*` matches array elements). `privacy_release` uses the existing typed
+proposal response's `answer` as a JSON array of exact option IDs; bare approval
+has no authority. A `PrivacySession.forkTask()` shares only identity storage,
+with private source/grant/projection registries. `closeTask()` expires them.
+`request_column_access` returns masked durable content; the transport projects
+selected originals only for an exact host-registered tool call. Python source
+reuse accepts `{alias, runId}` for registered result artifacts. Cache identity
+includes the task and grant revision. See ADR-0118.
 
 Both conversation surfaces render assistant prose and SQL results inline, without
 outer cards. Each user turn is followed by one muted divider before any SQL result, tool

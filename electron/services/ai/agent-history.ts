@@ -1,3 +1,4 @@
+import { PRIVACY_TOKEN_SOURCE } from '../../shared/ai-privacy';
 import { privacyHistory } from "./privacy-history";
 import { PrivacySession } from "./privacy-session";
 import { randomUUID } from "node:crypto";
@@ -219,7 +220,7 @@ function asAgentEvent(value: unknown): AgentEvent | null {
     case "proposal": {
       const payload = asRecord(event.payload);
       return typeof event.callId === "string" &&
-        (event.kind === "edit_note" || event.kind === "runsql_rewrite" || event.kind === "mutation_sql" || event.kind === "question") &&
+        (event.kind === "edit_note" || event.kind === "runsql_rewrite" || event.kind === "mutation_sql" || event.kind === "question" || event.kind === "privacy_release") &&
         (event.approvalMode === undefined ||
           event.approvalMode === "manual" || event.approvalMode === "automatic") &&
         isProposalPayload(payload)
@@ -557,7 +558,7 @@ export async function forkAgentHistorySession(
       replacements.set(entry.token, token);
     }
     const entries = raw.split("\n").filter(Boolean).map(line => JSON.parse(line));
-    const rewrite = (v: unknown): unknown => typeof v === "string" ? v.replace(/STELA_PII_[a-f0-9]{24}_[a-f0-9]{24}/g, token => replacements.get(token) ?? sourceMap.restore(token)) : Array.isArray(v) ? v.map(rewrite) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k,x]) => [k,rewrite(x)])) : v;
+    const rewrite = (v: unknown): unknown => typeof v === "string" ? v.replace(new RegExp(PRIVACY_TOKEN_SOURCE, 'g'), token => replacements.get(token) ?? sourceMap.restore(token)) : Array.isArray(v) ? v.map(rewrite) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k,x]) => [k,rewrite(x)])) : v;
     raw = entries.map(e => JSON.stringify(rewrite(e))).join("\n") + "\n";
     await destinationMap.flush();
   }

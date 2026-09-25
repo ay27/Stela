@@ -17,12 +17,15 @@ try {
     rows: [['张三', '13812345678', 12.5], ['张三', '13812345678', 7.5], ['李四', '13912345678', 30], [null, null, 4]] });
   assert(source);
   const privacy = new PrivacySession(true);
+  privacy.registerSource({ ...source, rows: [['张三', '13812345678', 12.5]] });
+  const release = privacy.releaseRequest(source.runId);
+  assert(privacy.approveRelease(release, JSON.stringify(release.options.filter(o => o.column === 2).map(o => o.id))));
   const masked = await privateQueryArtifact({ vaultPath: root, sessionId: 'private', artifact: source, privacy });
   const result = await pool.execute({ vaultPath: root, sessionId: 'private', artifacts: { orders: masked }, code: `
 df = to_df('orders')
 groups = df.groupby('customer_name').amount.sum().sort_values().tolist()
 print(df.to_json(force_ascii=False))
-result = {'groups': groups, 'total': float(df.amount.sum()), 'rows': len(df), 'null_names': int(df.customer_name.isna().sum()), 'same_identity': bool(df.phone.iloc[0] == df.phone.iloc[1]), 'masked': bool(df.phone.iloc[0].startswith('STELA_PII_'))}
+result = {'groups': groups, 'total': float(df.amount.sum()), 'rows': len(df), 'null_names': int(df.customer_name.isna().sum()), 'same_identity': bool(df.phone.iloc[0] == df.phone.iloc[1]), 'masked': bool(df.phone.iloc[0].startswith('PII_'))}
 ` });
   assert.equal(result.ok, true, result.error);
   assert.deepEqual(result.value, { kind: 'scalar', value: { groups: [20, 30], total: 54, rows: 4, null_names: 1, same_identity: true, masked: true } });

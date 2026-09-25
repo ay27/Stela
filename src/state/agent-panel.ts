@@ -270,7 +270,16 @@ function toolCallEntry(call: AgentToolCallInfo): AgentTimelineEntry {
 
 export function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTimelineEntry[] {
   const next = applyEventCore(timeline, event);
-  return event.privacy ? next.map(entry => timeline.includes(entry) ? entry : { ...entry, privacy: event.privacy }) : next;
+  const privacy = event.privacy;
+  if (!privacy) return next;
+  return next.map(entry => {
+    if (timeline.includes(entry)) return entry;
+    // Metadata events (e.g. skill maintenance) update the same reply without
+    // repeating its annotations. Tool results also must retain argument maps.
+    const previous = entry.privacy ?? timeline.find(value => value.id === entry.id)?.privacy;
+    const annotations = new Map([...(previous?.annotations ?? []), ...privacy.annotations].map(value => [value.token, value]));
+    return { ...entry, privacy: { enabled: privacy.enabled, annotations: [...annotations.values()] } };
+  });
 }
 
 function applyEventCore(timeline: AgentTimelineEntry[], event: AgentEvent): AgentTimelineEntry[] {
@@ -368,7 +377,8 @@ function applyEventCore(timeline: AgentTimelineEntry[], event: AgentEvent): Agen
       return timeline.map((entry) =>
         entry.kind === "tool" && entry.callId === event.callId
           ? { ...entry, result: { ok: event.ok, summary: event.summary } }
-          : entry,
+          : entry.kind === 'proposal' && entry.proposalKind === 'privacy_release' && entry.callId === event.callId && entry.resolution === 'pending'
+            ? { ...entry, resolution: 'expired' as const } : entry,
       );
     case "proposal":
       return [

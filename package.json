@@ -56,7 +56,7 @@
     "test:result-table": "node scripts/run-result-table-tests.mjs",
     "test:chat-controls": "node scripts/run-chat-controls-tests.mjs",
     "test:conversation": "tsx electron/shared/conversation-routing.test.ts && tsx src/state/conversation.test.ts && tsx src/components/ai/conversation-timeline.test.ts && tsx src/components/ai/chat-history.test.ts && node scripts/run-conversation-tests.mjs",
-    "test:privacy": "tsx electron/services/ai/privacy.test.ts && tsx electron/services/ai/privacy-integration.test.ts && tsx src/components/ai/privacy-presentation.test.tsx",
+    "test:privacy": "tsx electron/services/ai/privacy.test.ts && tsx electron/services/ai/privacy-counts.test.ts && tsx electron/services/ai/privacy-release.test.ts && tsx electron/services/ai/privacy-integration.test.ts && tsx src/components/ai/privacy-presentation.test.tsx",
     "test:privacy-ui": "node scripts/run-privacy-ui-tests.mjs",
     "test:privacy-python": "tsx scripts/eval/data-agent-bench/privacy-python.test.ts"
   },
@@ -298,16 +298,6 @@
         "filter": [
           "plugin.json",
           "dist/**"
-        ]
-      },
-      {
-        "from": "vendor/argus-redact",
-        "to": "vendor/argus-redact",
-        "filter": [
-          "*.mjs",
-          "*.wasm",
-          "LICENSE",
-          "README.md"
         ]
       }
     ],

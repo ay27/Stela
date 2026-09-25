@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { PrivacySession } from './privacy-session';
+import { privacyHistory } from './privacy-history';
 
 import type { AgentRunRequest } from "@shared/types";
 
@@ -247,6 +249,23 @@ try {
 
   const remoteHistory = await loadAgentHistory(vaultPath, { sessionId: "remote_1", deviceSlug: "desktop" });
   assert.equal(remoteHistory.runs[0]?.finishedAt, null);
+
+  // Compact identities survive persisted history and are remapped on a fork;
+  // the batched local approval card remains visible when history is reloaded.
+  const privateStorage = await openLocalAgentSessionStorage(vaultPath, 'desktop', 'private');
+  const privateMap = new PrivacySession(true, await privacyHistory(vaultPath, 'desktop', 'private'));
+  const token = privateMap.importIdentity('private name', 'text');
+  await privateMap.flush();
+  await appendAgentHistoryStarted(privateStorage, { runId: 'private-run', sessionId: 'private', prompt: token });
+  await appendAgentHistoryEvent(privateStorage, { type: 'proposal', runId: 'private-run', callId: 'access', kind: 'privacy_release', approvalMode: 'manual', payload: {
+    description: '', privacyRelease: { sourceRunId: 'source', recipients: ['test'], sources: [{ sourceRunId: 'source', reason: 'classify' }], options: [{ id: '0:0', sourceRunId: 'source', column: 0, path: [], label: 'name', samples: ['private name'] }] },
+  } });
+  const privateFork = await forkAgentHistorySession(vaultPath, 'laptop', { sessionId: 'private', deviceSlug: 'desktop' });
+  const forkMapState = (await privacyHistory(vaultPath, 'laptop', privateFork.sessionId)).state!;
+  assert.notEqual(forkMapState.namespace, privateMap.state.namespace);
+  const privateForkHistory = await loadAgentHistory(vaultPath, privateFork);
+  assert.equal(new PrivacySession(false, { state: forkMapState, save: async () => {} }).restore(privateForkHistory.runs[0]!.request.prompt), 'private name');
+  assert(privateForkHistory.runs[0]!.events.some(event => event.type === 'proposal' && event.kind === 'privacy_release'));
 
   for (let index = 0; index <= 20; index++) {
     const sessionId = `limit_${String(index).padStart(2, "0")}`;

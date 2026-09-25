@@ -195,7 +195,7 @@
   "ai.policy.title": "Privacy & Agent",
   "ai.policy.description": "These policies apply to every profile.",
   "ai.privacy.title": "Privacy mode",
-  "ai.privacy.description": "Stela sends only capped, redacted context. Full result sets are never sent.",
+  "ai.privacy.description": "AI receives context according to your permissions. Privacy mode lets you control which original data fields may be sent.",
   "ai.samples.label": "Send result samples",
   "ai.samples.description": "Allow sampled rows from the current result to enter the AI prompt.",
   "ai.maxRows.label": "Sample rows",
@@ -1300,7 +1300,16 @@
   "skills.library.noSources": "No source notes are recorded for this skill.",
   "fileTree.emptyFolder": "Folder is empty.",
   "agentDashboard.skillName": "Knowledge name",
-  "ai.privacy.badge": "Privacy · Fast",
+  "ai.privacy.badge": "Privacy mode",
   "ai.privacy.restored": "Sent to the model as a pseudonym; restored locally for display.",
-  "ai.privacy.hint": "Locally redact AI requests in this Vault. Python uses pseudonymized data. Applies to the next task. Detection may miss or misclassify values; identity-dependent analysis is limited. Saved conversations and mappings can sync with Git."
+  "ai.privacy.hint": "Mask query text and unknown numeric cells locally, including JSON. Python uses masked inputs; selected source columns or JSON paths can be released to the displayed models for this task after approval. Prose and schema metadata are not covered by full cell masking. Saved conversations and mappings can sync with Git.",
+  "ai.privacy.releaseTitle": "Allow access to original data",
+  "ai.privacy.releaseWarning": "Selected original values may be sent to the models below, including Python semantic analysis. Applies only to the results on this card and this task. No fields are selected by default. Sent data cannot be recalled. Other fields stay masked. Numeric fields are withheld when their purpose is unknown, not necessarily sensitive.",
+  "ai.privacy.wholeColumn": "Entire column (all JSON paths)",
+  "ai.privacy.noSamples": "No non-null preview values",
+  "ai.privacy.releaseSelected": "Allow selected fields",
+  "ai.privacy.releaseAll": "Allow all",
+  "ai.privacy.rejectAll": "Reject all",
+  "ai.privacy.keepMasked": "Keep masked",
+  "ai.privacy.releaseFailed": "Could not submit the decision. Please retry."
 }

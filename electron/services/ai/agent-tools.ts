@@ -381,6 +381,8 @@ const CANVAS_DOCUMENT_RULES = CANVAS_CARD_RULES +
  */
 export interface AgentToolContext {
   privacy?: PrivacySession;
+  privacyToolCallId?: string;
+  privacyDerivedResult?: boolean;
   vaultPath: string;
   connectionName: string | null;
   connection: ConnectionEntry | null;
@@ -467,6 +469,25 @@ export function createAgentTools(options: {
 }): AgentTool[] {
   const { ctx, requestProposal } = options;
   const tools: AgentTool[] = [
+    ...(ctx.privacy?.enabled ? [{
+      name: "request_column_access", label: "Request column access",
+      description: "Ask the user to release selected columns or JSON paths from one exact result runId for this task. Submit all known release requests together in the same assistant step (up to 16 results); the host combines them into one decision. Use when masked text prevents semantic analysis or unknown numeric cells prevent arithmetic. Approval sends originals to the configured models. Do not infer meanings from pseudonyms. The user selects fields; no selection means no release. Returns a bounded preview; reuse the exact runId in execute_python.sources for full data. New queries require separate approval.",
+      parameters: Type.Object({ runId: Type.String(), reason: Type.String({ minLength: 1, maxLength: 1000 }) }),
+      executionMode: "sequential" as const,
+      execute: async (callId: string, raw: unknown) => {
+        const { runId, reason } = raw as { runId: string; reason: string };
+        const privacy = ctx.privacy!;
+        const approved = await privacy.requestRelease(callId, runId, reason, release => requestProposal(callId, { kind: "privacy_release", payload: { description: release.sources?.length === 1 ? reason : '', privacyRelease: release } }));
+        ctx.signal?.throwIfAborted();
+        const source = privacy.source(runId)!;
+        const preview = boundedPreview(source.rows, source.rowCount, false, MODEL_SAMPLE_ROWS, MODEL_PREVIEW_MAX_BYTES);
+        const body = approved ? { runId, approved: true, columns: source.columns, rows: preview.rows, rowCount: source.rowCount,
+          previewTruncated: preview.truncated || source.rowCount > preview.rows.length,
+          instruction: "Only selected fields are released, for this task. For full Python input use sources: [{alias: 'data', runId}]. Approval rebuilds the Python workspace; redeclare sources and variables." }
+          : { runId, approved: false, instruction: "No fields were released. Continue with masked data or explain the limitation; do not retry the same request." };
+        return { content: [{ type: "text" as const, text: await privacy.toolOutput(callId, 'request_column_access', JSON.stringify(body), ctx.signal) }], details: {} };
+      },
+    }] : []),
     ...(ctx.conversationRunIds ? [{
       name: "read_conversation_result", label: "Read saved result",
       description: "Read a saved SQL result from this conversation without executing SQL again. Saved rows may be capped; do not infer full-data totals from a preview.",
@@ -482,7 +503,10 @@ export function createAgentTools(options: {
           tables: extractSqlSymbols(result.run.sql).tables, columns: result.columns, rowCount: result.total,
           truncated: true, incomplete: true, sourceRunIds: [],
           summary: { columns: result.columns, rowCount: result.total, rows: preview.rows, previewTruncated: true, previewTruncatedBy: ["saved-rows"] } });
-        return { content: [{ type: "text" as const, text: JSON.stringify({ ...result, rows: preview.rows, pageTruncated: preview.truncated }) }], details: {} };
+        ctx.privacy?.registerSource({ runId: params.runId, columns: result.columns, rows: preview.rows,
+          rowCount: result.total, sql: result.run.sql, connectionName: result.run.connectionName });
+        const text = JSON.stringify({ ...result, runId: params.runId, rows: preview.rows, pageTruncated: preview.truncated });
+        return { content: [{ type: "text" as const, text: ctx.privacy ? await ctx.privacy.toolOutput(_id, 'read_conversation_result', text, ctx.signal) : text }], details: {} };
       },
     }] : []),
     {
@@ -576,6 +600,7 @@ export function createAgentTools(options: {
       parameters: Type.Object({
         reset: Type.Optional(Type.Boolean()),
         sources: Type.Optional(Type.Array(Type.Union([
+          Type.Object({ alias: Type.String(), runId: Type.String({ description: "Exact result already read in this privacy task; reuses approved columns without rerunning SQL." }) }, { additionalProperties: false }),
           Type.Object({
             alias: Type.String(),
             language: Type.Literal("sql"),
@@ -882,6 +907,7 @@ async function runTool(
   (baseCtx.run.repairBudget ??= new ToolRepairBudget()).dispatched.add(toolCallId);
   const outcome = await dispatchTool(name, JSON.stringify(params ?? {}), {
     ...baseCtx,
+    privacyToolCallId: toolCallId,
     requestProposal: (proposal) => requestProposal(toolCallId, proposal),
   });
   if (!outcome.ok) {
@@ -1468,6 +1494,8 @@ async function executeDataQuery(
     rowCount: totalRowCount,
     queryLanguage: query.language,
   });
+  if (result.kind === "query") ctx.privacy?.registerSource({ runId, connectionName, columns: result.columns,
+    rows: result.rows, rowCount: totalRowCount ?? result.rows.length, sql: query.language === "sql" ? query.query : undefined });
   return {
     runId,
     connectionName,
@@ -1623,6 +1651,7 @@ async function runExecutePython(
     return fail(`sources supports at most ${PYTHON_SOURCE_MAX_ITEMS} queries per execution.`);
   }
   const aliases = new Set<string>();
+  const reused: Array<{ alias: string; runId: string }> = [];
   const sources: Array<{
     alias: string;
     connectionName?: string;
@@ -1640,6 +1669,12 @@ async function runExecutePython(
     }
     if (aliases.has(alias)) return fail(`sources[${index}].alias '${alias}' is duplicated.`);
     aliases.add(alias);
+    if (typeof source.runId === 'string') {
+      if (Object.keys(source).some(key => key !== 'alias' && key !== 'runId')) return fail('A saved source accepts only alias and runId.');
+      if (!ctx.privacy?.source(source.runId)) return fail('Saved source is not available in this privacy task. Read or rerun it first.');
+      reused.push({ alias, runId: source.runId });
+      continue;
+    }
     if (source.language !== "sql" && source.language !== "mongodb") {
       return fail(`sources[${index}].language must be sql or mongodb.`);
     }
@@ -1688,6 +1723,13 @@ async function runExecutePython(
   const artifacts: Record<string, QueryArtifactDescriptor> = {};
   const limitedAtCap: string[] = [];
   let sourceBytes = 0;
+  for (const source of reused) {
+    const artifact = await ctx.queryArtifacts.resolve(ctx.vaultPath, ctx.run.sessionId, source.runId);
+    if (!artifact) return fail('Complete saved artifact is unavailable. Rerun the query and request permission for the new result.');
+    sourceBytes += artifact.byteSize;
+    if (sourceBytes > PYTHON_QUERY_MAX_BYTES) return fail('Saved sources exceed the Python data budget.');
+    artifacts[source.alias] = artifact; sourceRunIds.push(source.runId);
+  }
   for (let index = 0; index < sources.length; index += 1) {
     const source = sources[index]!;
     let executed: DataQueryOutcome | { failure: string };
@@ -1785,6 +1827,7 @@ async function runExecutePython(
     },
     signal: ctx.signal,
   });
+  ctx.privacyDerivedResult = true;
   if (result.analysis && ctx.aiSettings.automaticAnalysisContractsEnabled) ctx.run.analysis = result.analysis;
   if (!result.ok) {
     const error = result.error ?? "Python execution failed.";
@@ -2859,11 +2902,7 @@ export async function dispatchTool(
     else streak.set(name, (streak.get(name) ?? 0) + 1);
   }
   if (ctx.privacy?.enabled) {
-    let parsed: unknown;
-    try { parsed = JSON.parse(outcome.text); } catch { parsed = outcome.text; }
-    const masked = await ctx.privacy.maskValue(parsed, "", ctx.signal);
-    outcome.text = typeof masked === "string" ? masked : JSON.stringify(masked);
-    await ctx.privacy.flush();
+    outcome.text = await ctx.privacy.toolOutput(ctx.privacyToolCallId ?? '', name, outcome.text, ctx.signal, ctx.privacyDerivedResult === true);
   }
   return outcome;
 }

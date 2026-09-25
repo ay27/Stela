@@ -856,38 +856,65 @@ bounded cursor context
 
 ### Optional local AI privacy mode
 
-ADR-0117 adds a Vault AI setting, `privacyModeEnabled` (default false). Each
-task snapshots it. A pinned argus-redact fast WASM package runs in a Main-owned
-Worker, without network or Python dependencies. All four Models generation
-methods share a privacy transport, including Pi compaction, semantic batches,
-completion, retries and maintenance. Credentials retain irreversible redaction.
+ADR-0119 batches all available `request_column_access` calls in a completed assistant message before sequential dispatch. One manual card groups up to 16 requested result sources; selected/all/reject actions authorize only its explicit option IDs. Subsequent calls reuse that decision, including rejection. Later steps require a new decision.
 
-Main owns a random conversation dictionary. Version-3 Chat documents embed it
-in `privacy`; temporary Chat remains local, saved Chat follows Git. Legacy Agent
-history stores a neighboring `.privacy.json`; importing or forking preserves or
-rekeys identities respectively. Maps permit restoration to anyone with Vault
-access. Renderer snapshots omit the complete dictionary and receive bounded
-per-event display annotations instead. Local display restoration is never model
-history. Disabling privacy permits plaintext on subsequent tasks and retains old
-maps for viewing; enabling cannot undo previously sent information.
+ADR-0120 issues conversation-scoped random `PII_` codes: three uppercase hex digits initially, then four/five as each space is exhausted. A sparse random permutation prevents collisions without allocating a full code space. Format-2 mappings accept legacy long entries; new allocations upgrade format 1 without rewriting existing identities. SQL, history forks and local presentation share whole-token matching.
 
-Before generated Python runs, complete JSONL/Parquet artifacts are scanned into
-separate sanitized Parquet inputs. Dynamic queries use the same path. Mapping
-and schema fingerprints constrain cache reuse; original execution IDs preserve
-provenance. Switching privacy state rebuilds the Python workspace. Identity text
-operations are limited; unchanged numeric data and NULLs retain their types.
-Query token restoration happens only inside Main, with SQL literal escaping and
-the normal SQL guards. No mapping or restore helper enters Python.
+ADR-0118 retains the Vault setting `privacyModeEnabled` (default false, snapshotted
+per task) and replaces entity recognition with local data masking. No detector,
+Python installation or model download is needed. All query text cells and unknown
+numeric cells are masked. Nulls/booleans remain. ADR-0121 uses the existing local
+SQL parser to recognize aligned COUNT projections and binary CASE SUM counters,
+including VARCHAR results and WHERE/GROUP BY queries. Unproven expressions fail
+closed. Aliases, phone-like lengths and
+uniqueness do not authorize plaintext. Other numeric columns require user release
+for arithmetic. JSON strings are parsed and recursively masked; malformed JSON
+is masked whole. Arrays and object structure remain, and non-structural-looking
+keys are masked. Identifier-shaped dynamic keys remain a documented limitation.
 
-Detection/size/persistence failures stop transmission rather than falling back
-to plaintext. A single detection segment is bounded to 128 KiB; maps are bounded
-to 64 MiB, and existing complete-artifact limits still apply. Fast is a Chinese
-and English PII minimization aid, not an anonymity guarantee. Novel, encoded or
-derived values may escape recognition. Non-text model payloads are rejected.
+Main owns random conversation identities and a separate ephemeral task scope.
+Version-3 Chat documents embed the map in `privacy`; temporary Chat stays local,
+saved Chat follows Git. Legacy history uses `.privacy.json`. Renderer snapshots
+omit the complete map and receive only per-event restoration annotations.
+Disabling privacy permits plaintext on subsequent tasks; enabling cannot recall
+previously sent data. Maps are reversible by anyone with Vault access.
 
-The shipped WASM and glue are checksum-pinned public upstream artifacts;
-`vendor/argus-redact/README.md` records their provenance and rebuild recipe.
-Electron packages them as resources, so first use needs no download.
+The Agent calls `request_column_access(runId, reason)` only when data semantics
+are needed. Main generates local previews and exact column/path choices from a
+registered result. The dedicated `privacy_release` proposal is always manual,
+defaults to no selected fields, names the configured foreground/semantic models,
+and expires after five minutes. Its typed answer carries selected option IDs.
+Cancellation, refusal, invalid IDs and task expiry release nothing. Grants bind
+to the exact result run ID and column ordinal plus optional JSON path; a new
+query never inherits permission, even with identical SQL or identical values.
+
+Durable tool results stay masked. Main registers exact tool-call ID/name/payload
+projections and restores only selected cells at the model transport boundary.
+The model cannot create that authority by editing JSON. Task completion destroys
+these projections and permissions. Maintenance has an independent transport and
+permission scope sharing only identities. All four model methods, compaction,
+completion and retries remain behind the privacy boundary. Free prose uses
+known-value replacement and local contact patterns. Learned decimals and integers
+shorter than seven digits are not globally replaced in prose; longer integers
+match only whole numbers. This avoids corrupting protocol versions and number
+fragments, but is not a guarantee for short numeric IDs in user prose. Arbitrary names in prompts,
+schema metadata or transformed model prose are outside the full-cell guarantee.
+Credentials remain irreversibly redacted; non-text inputs fail closed.
+
+Complete Python source artifacts are sanitized before any bytes reach the Worker,
+including dynamic queries. `execute_python.sources[{alias, runId}]` reuses a
+registered exact result after permission; other sources still run fresh queries.
+Grant revisions invalidate artifact caches and rebuild the workspace. Task end
+clears it again. JSON with changed leaves is represented as JSON text in Parquet.
+Numeric pseudonyms become strings. Python has no dictionary or restore helper.
+Derived Python output and semantic batches may use released originals because
+all source input crossed this boundary. Database errors returned into Python are
+generic in privacy mode to avoid a raw error-message side channel.
+
+Mapping state is bounded to 64 MiB; task source previews and release projections
+are each bounded to 16 MiB. Existing full-artifact budgets still apply. Failures
+stop transmission rather than fall back to plaintext. This is minimization, not
+anonymity or protection against deliberately encoding data as metadata or counts.
 
 `*.stela.chat` files are authoritative, versioned Vault conversation documents.
 They store drafts, immutable submitted inputs, ordered Agent events, proposal

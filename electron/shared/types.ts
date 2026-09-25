@@ -1102,6 +1102,8 @@ export interface AgentProposalPayload {
   newContent?: string;
   /** `runsql_rewrite` kind: renderer-owned ephemeral RunSQL target. */
   targetId?: string;
+  /** Main-generated source-scoped local preview; never a model input. */
+  privacyRelease?: import("./ai-privacy").IPrivacyReleaseRequest;
   /** `question` kind：要问用户的具体问题。 */
   question?: string;
   /** `question` kind：可点选的候选答案；用户也可以自由输入。 */
@@ -1209,7 +1211,7 @@ export type AgentEvent = (
  * 前两种是「同意 / 拒绝」的安全闸门，`question` 复用同一条阻塞通道来获取信息——
  * 与其让 agent 在字段含义上猜，不如让它停下来问（见 ADR-0027）。
  */
-export type AgentProposalKind = "edit_note" | "mutation_sql" | "runsql_rewrite" | "question";
+export type AgentProposalKind = "edit_note" | "mutation_sql" | "runsql_rewrite" | "question" | "privacy_release";
 
 export interface AgentProposalResponse {
   runId: string;

@@ -68,7 +68,7 @@ type Broadcaster = (channel: IpcEventChannel, payload: unknown) => boolean;
 
 let broadcaster: Broadcaster | null = null;
 const pending = new Map<string, PendingJob>();
-const workspaces = new Map<string, { id: string; snapshot?: IPythonWorkspaceSnapshot; lost: boolean; privacy?: boolean }>();
+const workspaces = new Map<string, { id: string; snapshot?: IPythonWorkspaceSnapshot; lost: boolean; privacy?: boolean; privacyScope?: string }>();
 let onWorkspaceCleared: (vault: string, session: string) => void = () => {};
 export function setPythonWorkspaceClearListener(callback: typeof onWorkspaceCleared): void { onWorkspaceCleared = callback; }
 const keyFor = (vaultPath: string, sessionId: string): string => `${vaultPath}\0${sessionId}`;
@@ -147,7 +147,7 @@ export async function executePython(input: {
   if (input.signal?.aborted) throw new Error("Python execution cancelled");
   const workspaceKey = keyFor(input.vaultPath, input.sessionId);
   let workspace = workspaces.get(workspaceKey);
-  if (workspace && Boolean(workspace.privacy) !== Boolean(input.privacy?.enabled)) {
+  if (workspace && (Boolean(workspace.privacy) !== Boolean(input.privacy?.enabled) || (input.privacy?.enabled && workspace.privacyScope !== input.privacy.workspaceKey))) {
     await resetPythonWorkspace(input.vaultPath, input.sessionId); workspace = undefined;
   }
   if (input.privacy?.enabled) {
@@ -155,7 +155,7 @@ export async function executePython(input: {
     const originalRunQuery = input.runQuery;
     const artifacts: Record<string, QueryArtifactDescriptor> = {};
     for (const [alias, artifact] of Object.entries(input.artifacts)) artifacts[alias] = await privateQueryArtifact({ ...input, artifact, privacy, onProgress: input.onPrivacyProgress });
-    input = { ...input, artifacts, code: await privacy.maskText(input.code, "", input.signal),
+    input = { ...input, artifacts, code: privacy.hasGrants ? input.code : await privacy.maskText(input.code, "code", input.signal),
       analysisContext: await privacy.maskValue(input.analysisContext, "", input.signal) as typeof input.analysisContext,
       runQuery: originalRunQuery ? async q => privateQueryArtifact({ ...input, artifact: await originalRunQuery(q), privacy, onProgress: input.onPrivacyProgress }) : undefined };
     await privacy.flush();
@@ -165,7 +165,7 @@ export async function executePython(input: {
     throw new Error("workspace_lost: prior variables and sources are gone. Rebuild explicitly in the next call.");
   }
   if (!workspace) {
-    workspace = { id: randomUUID(), lost: false, privacy: input.privacy?.enabled };
+    workspace = { id: randomUUID(), lost: false, privacy: input.privacy?.enabled, privacyScope: input.privacy?.workspaceKey };
     workspaces.set(workspaceKey, workspace);
   }
   const jobId = randomUUID();
@@ -263,10 +263,13 @@ export async function queryForPythonJob(input: {
   // Issuing a query is progress, so the inactivity timer resets before the wait
   // as well as after it; otherwise one slow database kills the whole job.
   armTimer(input.jobId, job);
-  const artifact = await job.runQuery({
-    connectionName: input.connectionName,
-    request: input.request,
-  });
+  let artifact: QueryArtifactDescriptor;
+  try {
+    artifact = await job.runQuery({ connectionName: input.connectionName, request: input.request });
+  } catch (error) {
+    if (job.privacy?.enabled) throw new Error('Private query failed. Inspect the local query error and retry with a valid query.');
+    throw error;
+  }
   if (!pending.has(input.jobId)) throw new Error("Python runtime job is no longer active");
   job.queryBytes += artifact.byteSize;
   if (job.queryBytes > MAX_QUERY_BYTES_PER_JOB) {

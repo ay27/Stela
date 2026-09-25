@@ -195,7 +195,7 @@
   "ai.policy.title": "隐私与 Agent",
   "ai.policy.description": "这些策略对所有配置档生效。",
   "ai.privacy.title": "隐私模式",
-  "ai.privacy.description": "Stela 只发送截断且脱敏后的上下文，不会发送完整结果集。",
+  "ai.privacy.description": "AI 按当前权限接收分析上下文。启用隐私模式后，可按字段控制原始数据的放行。",
   "ai.samples.label": "发送结果样本",
   "ai.samples.description": "允许当前结果的采样行进入 AI prompt。",
   "ai.maxRows.label": "样本行数",
@@ -1300,7 +1300,16 @@
   "skills.library.noSources": "此知识未记录来源笔记。",
   "fileTree.emptyFolder": "文件夹为空。",
   "agentDashboard.skillName": "知识名称",
-  "ai.privacy.badge": "隐私模式 · Fast",
+  "ai.privacy.badge": "隐私模式",
   "ai.privacy.restored": "此内容发送给模型时已脱敏，当前已在本地还原。",
-  "ai.privacy.hint": "当前 Vault 的 AI 请求使用本地 Fast 脱敏；Python 使用脱敏数据。下次任务生效。可能存在漏检、误检，依赖身份原文的分析会受限。保存的会话及映射可随 Git 同步。"
+  "ai.privacy.hint": "本地遮蔽查询文本与用途未确认的数值，包括 JSON 内容。Python 使用脱敏数据；经确认后，可向界面列出的模型放行当前任务中指定来源的列或 JSON 路径。自由文本和 schema 元数据不在全量遮蔽范围内。保存的会话及映射可随 Git 同步。",
+  "ai.privacy.releaseTitle": "允许访问原始数据",
+  "ai.privacy.releaseWarning": "选中的原始值可能发送给下方模型，包括 Python 中的语义分析。仅对本卡片列出的结果和当前任务生效，默认不选中任何字段。已发送的数据无法撤回，其他字段继续遮蔽。数值列可能只是用途未确认，并不一定属于敏感信息。",
+  "ai.privacy.wholeColumn": "整列（包含全部 JSON 路径）",
+  "ai.privacy.noSamples": "暂无非空预览值",
+  "ai.privacy.releaseSelected": "放行选中字段",
+  "ai.privacy.releaseAll": "全部通过",
+  "ai.privacy.rejectAll": "全部拒绝",
+  "ai.privacy.keepMasked": "继续遮蔽",
+  "ai.privacy.releaseFailed": "提交失败，请重试。"
 }

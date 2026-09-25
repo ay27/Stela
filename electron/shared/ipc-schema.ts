@@ -531,8 +531,8 @@ export const IPC_SCHEMAS: Record<IpcChannel, z.ZodType<unknown>> = {
     runId: stringMin1.max(128),
     callId: stringMin1.max(256),
     approve: z.boolean(),
-    /** `question` kind 的自由文本答案；approve=false 时忽略。 */
-    answer: z.string().max(4_000).optional(),
+    /** Question text or explicit privacy option IDs; ignored when approve=false. */
+    answer: z.string().max(20_000).optional(),
   }),
   [IPC.AI_PYTHON_RUNTIME_READ_INPUT]: z
     .object({

@@ -285,11 +285,17 @@ function makeRequestProposal(
   return (proposal) => {
     const approvalMode = proposalApprovalMode(autoApplyEdits, proposal.kind);
     return new Promise<boolean | string>((resolve) => {
+      if (signal.aborted) { resolve(false); return; }
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const onAbort = () => {
+        if (timer) clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
         pending.delete(callId);
         resolve(false);
       };
+      if (proposal.kind === 'privacy_release') timer = setTimeout(onAbort, 5 * 60 * 1000);
       pending.set(callId, (outcome) => {
+        if (timer) clearTimeout(timer);
         signal.removeEventListener("abort", onAbort);
         resolve(outcome);
       });
@@ -837,7 +843,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
     await appendAgentHistoryStarted(historyStorage, request);
     const settings = await settingsStore.loadAppSettings(vaultPath);
     if (options.privacyModeEnabled !== undefined) settings.ai.privacyModeEnabled = options.privacyModeEnabled;
-    privacy = openPrivacySession(`${vaultPath}\0${request.sessionId}`, settings.ai.privacyModeEnabled === true, options.privacyPersistence ?? await privacyHistory(vaultPath, slug, request.sessionId!));
+    privacy = openPrivacySession(`${vaultPath}\0${request.sessionId}`, settings.ai.privacyModeEnabled === true, options.privacyPersistence ?? await privacyHistory(vaultPath, slug, request.sessionId!)).forkTask();
     const inputMessage = request.message ?? { version: 1 as const, segments: [{ kind: "text" as const, text: request.prompt }], resources: [] };
     const privacyInput = privacy.enabled ? { ...inputMessage, segments: await Promise.all(inputMessage.segments.map(async segment => segment.kind === "text" ? { ...segment, text: await privacy!.maskText(redactForPrompt(segment.text), "", signal) } : segment)) } : undefined;
     await privacy.flush();
@@ -847,6 +853,8 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       return;
     }
     const profile = getActiveProfile(settings.ai, request.profileId);
+    const semanticProfile = getActiveProfile(settings.ai, settings.ai.semanticProfileId ?? profile.id);
+    privacy.setRecipients([profile, semanticProfile].map(p => `${p.name} / ${p.model} (${p.baseUrl || p.vendorId})`));
     if (agentMetrics.isOpen()) {
       agentMetrics.startRun({
         runId: metricRunId,
@@ -892,6 +900,8 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       async (skill) => await resolveSkillFreshness(skill) === "fresh",
     );
     const { models, model, reasoning } = createTransportForProfile(settings.ai, apiKey, profile.id, privacy);
+    const maintenancePrivacy = privacy.forkTask();
+    const maintenanceModels = createTransportForProfile(settings.ai, apiKey, profile.id, maintenancePrivacy).models;
     const semantic = createSemanticAgent({
       privacy, vault: vaultPath, session: request.sessionId!, slug, settings: settings.ai, profile, signal,
       chinese: request.locale === "zh",
@@ -908,7 +918,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       onUsage: (usage) => { if (agentMetrics.isOpen()) agentMetrics.addUsage(metricRunId, usage); },
     });
     const contextWindow = model.contextWindow;
-    const systemPrompt = buildSystemPrompt() + (privacy.enabled ? "\nPrivacy mode is enabled. STELA_PII tokens represent identities; keep tokens exact. Python inputs are pseudonymized. Never infer real spelling, phone prefixes or locations from tokens. Use full tokens as quoted SQL values when filtering; the host resolves them locally. Do not encode or split identities to bypass privacy.\n" : "");
+    const systemPrompt = buildSystemPrompt() + (privacy.enabled ? "\nPrivacy mode is enabled. PII_ hexadecimal tokens (and legacy STELA_PII tokens) represent masked data, including unknown numeric cells; keep tokens exact. Query text and unknown numbers are masked by default, JSON recursively. Nulls, booleans and proven COUNT and binary CASE SUM results remain usable. Call request_column_access with the exact result runId and a concrete reason when original text semantics or numeric arithmetic is necessary. Submit all known access requests in the same assistant step so the user can decide once for the batch. The user selects columns/JSON paths. A new query gets no inherited permission. Reuse approved data via execute_python.sources [{alias, runId}]. Approval resets Python variables, so redeclare sources. Python receives only masked or explicitly released inputs. Grants expire after this task. Never infer real spelling, phone prefixes or locations from tokens. Use full tokens as quoted SQL values when filtering; the host resolves them locally. Do not encode or split identities to bypass privacy.\n" : "");
     const skillMetadata = formatSkillsForSystemPrompt(promptSkills.map((item) => item.skill));
     if (agentMetrics.isOpen()) {
       agentMetrics.addEvent(metricRunId, { type: "system_prompt", payload: systemPrompt });
@@ -1021,14 +1031,14 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
               if (!settings.ai.automaticSkillMaintenanceEnabled) return;
               if (skill.metadata.category === "analysis-runbook" && skill.metadata.sources.length === 0) return;
               const jobOptions = {
-                privacy,
+                privacy: maintenancePrivacy,
                 vaultPath,
                 request,
                 conversation: conversationForMaintenance((await session!.buildContext()).messages),
                 evidence: maintenanceEvidence.slice(-24),
                 generatedNotePaths: new Set(generatedNotePaths),
                 observedColumns: [...new Set([...analysisRuns.values()].flatMap(run => run.columns.map(column => column.name)))],
-                models,
+                models: maintenanceModels,
                 model,
                 skills,
                 connection,
@@ -1128,7 +1138,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
       }
       try {
         const reviewed = await runStrategyReview({
-          models,
+          models: maintenanceModels,
           model,
           reasoningEffort: harnessThinkingLevel,
           signal,
@@ -1424,6 +1434,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
         return;
       }
       if (event.type === "message_end" && event.message.role === "assistant") {
+        privacy?.planReleaseRequests(event.message.content);
         completeProgress(event.message);
         if (agentMetrics.isOpen()) {
           const now = Date.now();
@@ -1542,14 +1553,14 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           agentMetrics.addEvent(maintenanceMetricRunId, { type: "enqueued" });
         }
         const jobOptions = {
-          privacy,
+          privacy: maintenancePrivacy,
           vaultPath,
           request,
           conversation: conversationForMaintenance(context.messages),
           evidence: maintenanceEvidence.slice(-24),
           generatedNotePaths: new Set(generatedNotePaths),
           observedColumns: [...new Set([...analysisRuns.values()].flatMap(run => run.columns.map(column => column.name)))],
-          models,
+          models: maintenanceModels,
           model,
           skills,
           connection,
@@ -1634,6 +1645,10 @@ export async function runAgent(options: RunAgentOptions): Promise<SkillMaintenan
           err: err instanceof Error ? err.message : String(err),
         });
       }
+    }
+    if (privacy?.enabled) {
+      privacy.closeTask();
+      await resetPythonWorkspace(vaultPath, request.sessionId!).catch(error => log.warn('Privacy workspace cleanup failed', { error: String(error) }));
     }
     signal.removeEventListener("abort", onAbort);
     activeProposals.delete(runId);

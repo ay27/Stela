@@ -1,3 +1,4 @@
+import { PrivacyReleaseCard } from "./privacy-release-card";
 import { PrivacyPresentation, PrivacyBadge, PrivacyText, pendingPrivacyText } from "./privacy-presentation";
 import type { IPrivacyDisplay } from "@shared/ai-privacy";
 import { replyExecutionEntries, splitAgentReplies } from "./reply-layout";
@@ -600,6 +601,7 @@ function ProposalCard({
 }) {
   const t = useT();
   const resolved = entry.resolution !== "pending";
+  if (entry.proposalKind === "privacy_release") return <PrivacyReleaseCard entry={entry} onRespond={onRespond} />;
   if (entry.proposalKind === "question") {
     return <QuestionCard entry={entry} onRespond={onRespond} />;
   }
