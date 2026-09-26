@@ -1,5 +1,15 @@
 import { applyEvent, type AgentTimelineEntry } from "@/state/agent-panel";
 import type { ConversationTurn } from "@shared/conversation";
+import type { IPrivacyResultDisplay } from '@shared/ai-privacy';
+
+/** Only explicit host observations; never infer protection from matching values. */
+export function conversationResultPrivacy(turn: ConversationTurn): Map<string, IPrivacyResultDisplay> {
+  const results = new Map<string, IPrivacyResultDisplay>();
+  for (const event of turn.events) if (event.type === 'tool_result') {
+    for (const result of event.privacy?.results ?? []) results.set(result.runId, result);
+  }
+  return results;
+}
 
 /** Project durable events through the same reducer used by the Agent panel. */
 export function conversationTimeline(turn: ConversationTurn): AgentTimelineEntry[] {

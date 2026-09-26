@@ -113,6 +113,11 @@ same storage and Git lifecycle as the conversation. Older documents remain
 readable; writing the first privacy mapping upgrades the version. Old clients
 must not write version-3 documents. Renderer snapshots omit this field.
 
+`IPrivacyDisplay.results` optionally carries `IPrivacyResultDisplay` observations
+(ADR-0122): result run ID, column ordinal and masked/partial/released state.
+Observations contain no original values, apply to the prepared tool preview,
+and never authorize release. Missing metadata means unknown, not protected.
+
 `IPrivacyDisplay` on Agent events carries the task's actual mode and the
 `IPrivacyAnnotation` entries needed for that event only. `privacyInput` projects
 submitted text while preserving resource references. Renderers parse Markdown

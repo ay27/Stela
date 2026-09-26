@@ -175,3 +175,4 @@ proposed → active → superseded
 | [0119](0119-batched-privacy-release.md) | Batch privacy release decisions per assistant step | active |
 | [0120](0120-compact-conversation-pseudonyms.md) | Compact random conversation pseudonyms | active |
 | [0121](0121-count-evidence-and-prose-masking.md) | Count expression evidence and numeric prose boundaries | active |
+| [0122](0122-result-privacy-display-provenance.md) | Source-scoped privacy annotations for result tables | active |

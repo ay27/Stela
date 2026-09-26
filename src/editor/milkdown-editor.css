@@ -1538,9 +1538,9 @@
 }
 
 .stela-cb__result-summary {
-  /* 不再 flex-grow：让左侧翻页组紧贴 toggle，summary 靠 margin-left:auto 推到右端 */
+  /* Shared compact summary; actions stay at the right edge. */
   min-width: 0;
-  max-width: 60%;
+  max-width: 100%;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1573,7 +1573,7 @@
 
 /* Embedded query results are not editable ProseMirror tables. Keep their
    geometry independent of its table rules and Crepe's blanket padding reset. */
-.stela-cb .stela-cb__result-body table {
+:is(.stela-cb, .stela-cb__result) .stela-cb__result-body table {
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
@@ -1582,7 +1582,7 @@
   line-height: 16px;
 }
 
-.stela-cb .stela-cb__result-body table :is(th, td) {
+:is(.stela-cb, .stela-cb__result) .stela-cb__result-body table :is(th, td) {
   vertical-align: middle;
   padding: 4px 8px;
   border-width: 0 1px 1px 0;
@@ -1592,11 +1592,11 @@
 
 /* Keep edge-cell geometry identical to the other cells. The block frame or
    history tabs draws the visible outside edge instead of a second grid line. */
-.stela-cb .stela-cb__result-body table > tbody > tr:last-child > td {
+:is(.stela-cb, .stela-cb__result) .stela-cb__result-body table > tbody > tr:last-child > td {
   border-bottom-color: transparent;
 }
 
-.stela-cb .stela-cb__result-body table tr > :last-child {
+:is(.stela-cb, .stela-cb__result) .stela-cb__result-body table tr > :last-child {
   border-right-color: transparent;
 }
 

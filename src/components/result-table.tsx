@@ -20,6 +20,7 @@ import type { ColumnDef } from "@/contracts";
 import { i18n } from "@/i18n";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
+import type { IPrivacyResultDisplay } from '@shared/ai-privacy';
 
 export interface ResultTableProps {
   columns: ColumnDef[];
@@ -27,6 +28,7 @@ export interface ResultTableProps {
   /** 行号起点（当前页第一行的全局索引，1-based 展示会 +1） */
   rowOffset?: number;
   emptyMessage?: string;
+  privacyColumns?: IPrivacyResultDisplay['columns'];
 }
 
 const COLUMN_WIDTH = 160;
@@ -115,6 +117,7 @@ export function ResultTable({
   rows,
   rowOffset = 0,
   emptyMessage,
+  privacyColumns,
 }: ResultTableProps) {
   const t = useT();
   const resolvedEmpty = emptyMessage ?? t("resultTable.empty");
@@ -392,7 +395,10 @@ export function ResultTable({
                 style={{ width: COLUMN_WIDTH, minWidth: COLUMN_WIDTH }}
                 title={col.typeName ? `${col.name} : ${col.typeName}` : col.name}
               >
-                <span className="block truncate">{col.name}</span>
+                <span className={cn('block truncate', privacyColumns?.some(item => item.column === colIdx && item.state !== 'released') && 'stela-privacy-word')}
+                  data-privacy-state={privacyColumns?.find(item => item.column === colIdx)?.state}
+                  title={privacyColumns?.find(item => item.column === colIdx) ? t(`ai.privacy.column.${privacyColumns.find(item => item.column === colIdx)!.state}`) : undefined}
+                  tabIndex={privacyColumns?.some(item => item.column === colIdx) ? 0 : undefined}>{col.name}</span>
               </th>
             ))}
           </tr>

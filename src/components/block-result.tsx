@@ -9,18 +9,19 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from 'react-dom';
 import {
-  ChevronDown,
   ChevronRight,
   AlertCircle,
   CheckCircle2,
   ChevronLeft,
   ChevronsLeft,
   ChevronsRight,
-  Download,
+  MoreHorizontal,
   Sparkles,
 } from "lucide-react";
 
+import type { IPrivacyResultDisplay } from "@shared/ai-privacy";
 import type { ColumnDef, RunRecord } from "@/contracts";
 import { ResultTable } from "@/components/result-table";
 import {
@@ -95,6 +96,11 @@ export interface BlockResultProps {
   onToggle: () => void;
   /** 执行失败时从 result-bar 发起 AI 改写 */
   onAiFix?: () => void;
+  run?: RunRecord;
+  privacy?: IPrivacyResultDisplay;
+  /** Chat has no inline SQL editor above the result. */
+  showSqlAction?: boolean;
+  onReuseSql?: (sql: string) => void;
 }
 
 interface FetchedState {
@@ -130,8 +136,13 @@ export function BlockResult({
   onViewStateChange,
   onToggle,
   onAiFix,
+  run,
+  privacy,
+  showSqlAction = false,
+  onReuseSql,
 }: BlockResultProps) {
   const t = useT();
+  const [showSql, setShowSql] = useState(false);
   const [state, setState] = useState<FetchedState | null>(null);
   const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
   const [exporting, setExporting] = useState<null | "csv" | "excel" | "json">(
@@ -155,7 +166,7 @@ export function BlockResult({
   }, [exportedFile]);
   // 浏览模式下实际查看的 run：activeRunId 优先，否则最新
   const effectiveRunId = viewState.activeRunId ?? runId;
-  const activeRun = runs.find((r) => r.runId === effectiveRunId) ?? null;
+  const activeRun = runs.find((r) => r.runId === effectiveRunId) ?? (run?.runId === effectiveRunId ? run : null);
   const viewingHistory = effectiveRunId !== null && effectiveRunId !== runId;
 
   const patchViewState = useCallback(
@@ -366,6 +377,7 @@ export function BlockResult({
     state,
     failedLabel: t("runTabs.failed"),
     activeRun: viewingHistory ? activeRun : null,
+    record: activeRun,
     t,
   });
 
@@ -518,25 +530,12 @@ export function BlockResult({
     [runId, patchViewState],
   );
 
-  const showPartControls = showPager && !inCompare;
+  const showPartControls = showPager && !inCompare && state.total > DEFAULT_PAGE_SIZE;
   const diff = diffState?.diff ?? null;
 
   return (
     <div className="stela-cb__result">
       <div className="stela-cb__result-bar">
-        <button
-          type="button"
-          className="stela-cb__result-toggle"
-          onClick={onToggle}
-          title={expanded ? t("blockResult.collapse") : t("blockResult.expand")}
-        >
-          {expanded ? (
-            <ChevronDown className="h-3 w-3" />
-          ) : (
-            <ChevronRight className="h-3 w-3" />
-          )}
-        </button>
-
         {/* 比对模式：行匹配 key 列选择（run 选择走底部版本栏勾选） */}
         {expanded && inCompare && diff ? (
           <KeyColumnSelect
@@ -546,45 +545,6 @@ export function BlockResult({
           />
         ) : null}
 
-        {/* 部分（单 run 内）：分页 + 导出，比对模式隐藏 */}
-        {showPartControls && state ? (
-          <div className="flex items-center gap-2 border-l border-border pl-2">
-            <Pagination
-              pageIndex={state.pageIndex}
-              pageSize={state.pageSize}
-              total={state.total}
-              loading={state.loading}
-              onGoto={gotoPage}
-              onChangePageSize={changePageSize}
-            />
-            {showExport ? (
-              <div className="flex items-center gap-1 border-l border-border pl-2 text-[11px]">
-                <Download className="h-3 w-3 text-muted-foreground" />
-                <ExportBtn
-                  label="CSV"
-                  title={t("blockResult.exportCsv")}
-                  disabled={!!exporting}
-                  loading={exporting === "csv"}
-                  onClick={() => exportAllRows("csv")}
-                />
-                <ExportBtn
-                  label="Excel"
-                  title={t("blockResult.exportExcel")}
-                  disabled={!!exporting}
-                  loading={exporting === "excel"}
-                  onClick={() => exportAllRows("excel")}
-                />
-                <ExportBtn
-                  label="JSON"
-                  title={t("blockResult.exportJson")}
-                  disabled={!!exporting}
-                  loading={exporting === "json"}
-                  onClick={() => exportAllRows("json")}
-                />
-              </div>
-            ) : null}
-          </div>
-        ) : null}
         {runState === "error" && errorMessage && onAiFix ? (
           <button
             type="button"
@@ -598,15 +558,28 @@ export function BlockResult({
         ) : null}
         <span
           className={cn("stela-cb__result-summary", summary.tone)}
-          style={{
-            marginLeft:
-              runState === "error" && errorMessage && onAiFix ? undefined : "auto",
-          }}
+
         >
           {summary.icon}
           {inCompare ? renderDiffSummaryText(diffState, t) : summary.text}
         </span>
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {showSqlAction && run?.sql && <button type="button" className="rounded px-1.5 py-1 hover:bg-accent" aria-expanded={showSql} onClick={() => setShowSql(value => !value)}>SQL</button>}
+          <ResultMenu label={t('blockResult.more')}>
+            {run?.sql && showSqlAction && <>
+              <button type="button" onClick={() => window.stela.shell.writeClipboardText(run.sql)}>{t('conversation.copySql')}</button>
+              {onReuseSql && <button type="button" onClick={() => onReuseSql(run.sql)}>{t('conversation.reuse')}</button>}
+            </>}
+            {showExport && !inCompare && <>
+              <ExportBtn label="CSV" title={t('blockResult.exportCsv')} disabled={!!exporting} loading={exporting === 'csv'} onClick={() => void exportAllRows('csv')} />
+              <ExportBtn label="Excel" title={t('blockResult.exportExcel')} disabled={!!exporting} loading={exporting === 'excel'} onClick={() => void exportAllRows('excel')} />
+              <ExportBtn label="JSON" title={t('blockResult.exportJson')} disabled={!!exporting} loading={exporting === 'json'} onClick={() => void exportAllRows('json')} />
+            </>}
+            <button type="button" onClick={onToggle}>{expanded ? t('blockResult.collapse') : t('blockResult.expand')}</button>
+          </ResultMenu>
+        </div>
       </div>
+      {showSqlAction && showSql && run?.sql && <pre className="m-0 overflow-auto whitespace-pre-wrap border-t border-border bg-muted/20 p-3 text-xs">{run.sql}</pre>}
       {expanded ? (
         <div className="stela-cb__result-panel">
           <div className="stela-cb__result-body">
@@ -634,9 +607,13 @@ export function BlockResult({
                 columns={state.schema}
                 rows={state.rows}
                 rowOffset={state.pageIndex * state.pageSize}
+                privacyColumns={privacy?.runId === effectiveRunId ? privacy.columns : undefined}
               />
             )}
           </div>
+          {showPartControls && state && <div className="stela-result-pagination flex justify-end border-t border-border px-2 py-1.5">
+            <Pagination pageIndex={state.pageIndex} pageSize={state.pageSize} total={state.total} loading={state.loading} onGoto={gotoPage} onChangePageSize={changePageSize} />
+          </div>}
           {showRunTabs ? (
             <RunTabs
               tabs={tabItems}
@@ -679,6 +656,34 @@ export function BlockResult({
       ) : null}
     </div>
   );
+}
+
+function ResultMenu({ label, children }: { label: string; children: React.ReactNode }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{ top: number; right: number } | null>(null);
+  useEffect(() => {
+    if (!position) return;
+    menu.current?.querySelector('button')?.focus();
+    const close = (event: PointerEvent | KeyboardEvent) => {
+      if (event instanceof KeyboardEvent ? event.key === 'Escape' : event.target instanceof Node && !ref.current?.contains(event.target) && !menu.current?.contains(event.target)) {
+        setPosition(null);
+        if (event instanceof KeyboardEvent) ref.current?.focus();
+      }
+    };
+    const reposition = () => setPosition(null);
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', close);
+    window.addEventListener('resize', reposition);
+    return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', close); window.removeEventListener('resize', reposition); };
+  }, [position]);
+  return <>
+    <button ref={ref} type="button" aria-label={label} title={label} aria-expanded={!!position} className="stela-result-menu rounded p-1 hover:bg-accent"
+      onClick={() => { const rect = ref.current!.getBoundingClientRect(); setPosition(position ? null : { top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 260)), right: Math.max(8, window.innerWidth - rect.right) }); }}><MoreHorizontal className="h-4 w-4" /></button>
+    {position && createPortal(<div ref={menu} aria-label={label} style={position}
+      className="stela-result-actions fixed z-[160] max-h-[min(16rem,calc(100vh-1rem))] min-w-40 overflow-auto rounded-md border border-border bg-popover p-1 text-xs text-popover-foreground shadow-md [&>button]:block [&>button]:w-full [&>button]:rounded [&>button]:px-2 [&>button]:py-1.5 [&>button]:text-left [&>button:hover]:bg-accent"
+      onClick={event => { if (event.target instanceof Element && event.target.closest('button')) { setPosition(null); ref.current?.focus(); } }}>{children}</div>, document.body)}
+  </>;
 }
 
 function renderDiffSummaryText(
@@ -775,13 +780,13 @@ function ExportBtn({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "inline-flex h-5 items-center rounded border border-border bg-background px-1.5",
+        "flex w-full items-center rounded px-2 py-1.5 text-left",
         "text-[11px] text-muted-foreground transition-colors",
         "hover:enabled:bg-accent hover:enabled:text-foreground",
         "disabled:cursor-not-allowed disabled:opacity-50",
       )}
     >
-      {loading ? t("blockResult.exporting") : label}
+      {loading ? t("blockResult.exporting") : `${t("blockResult.export")} ${label}`}
     </button>
   );
 }
@@ -810,7 +815,7 @@ function Pagination({
 
   return (
     <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
-      <PagerBtn
+      {totalPages > 1 && <><PagerBtn
         disabled={atFirst || loading}
         onClick={() => onGoto(0)}
         title={t("blockResult.page.first")}
@@ -841,6 +846,7 @@ function Pagination({
       >
         <ChevronsRight className="h-3 w-3" />
       </PagerBtn>
+      </>}
       <MiniSelect<string>
         value={String(pageSize)}
         onChange={(v) => onChangePageSize(Number(v))}
@@ -891,6 +897,7 @@ interface SummaryArgs {
   failedLabel?: string;
   /** 浏览历史 run 时传入对应 RunRecord；非 null 即在摘要前加「历史 ·」前缀 */
   activeRun?: RunRecord | null;
+  record?: RunRecord | null;
   t: ReturnType<typeof useT>;
 }
 
@@ -907,6 +914,7 @@ function renderSummary({
   state,
   failedLabel,
   activeRun,
+  record,
   t,
 }: SummaryArgs): { text: string; tone: string; icon: React.ReactNode } {
   if (runState === "running") {
@@ -923,6 +931,7 @@ function renderSummary({
     return { text: t("blockResult.summary.notRun"), tone: "is-empty", icon: null };
   }
   const parts: string[] = [];
+  if (record?.connectionName) parts.push(record.connectionName);
   // 浏览历史 run：摘要来自该 run 自身记录，加「历史 ·」前缀
   if (activeRun) {
     parts.push(t("blockResult.summary.history"));
@@ -938,6 +947,7 @@ function renderSummary({
   }
   if (detail?.runDate) parts.push(detail.runDate);
   if (detail?.elapsed) parts.push(detail.elapsed);
+  else if (record) parts.push(`${record.elapsedMs} ms`);
   if (state && state.schema !== null) {
     parts.push(t("blockResult.summary.rows", { count: state.total }));
     parts.push(t("blockResult.summary.cols", { count: state.schema.length }));

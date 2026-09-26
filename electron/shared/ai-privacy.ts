@@ -8,7 +8,11 @@ export const privacyStateSchema = z.object({
 }).strict().refine(state => state.version === 2 || state.entries.every(entry => entry.token.startsWith('STELA_PII_')), 'Legacy maps require legacy tokens');
 export type IPrivacySessionState = z.infer<typeof privacyStateSchema>;
 export interface IPrivacyAnnotation { token: string; original: string }
-export interface IPrivacyDisplay { enabled: boolean; annotations: IPrivacyAnnotation[] }
+export interface IPrivacyResultDisplay {
+  runId: string;
+  columns: Array<{ column: number; state: 'masked' | 'partial' | 'released' }>;
+}
+export interface IPrivacyDisplay { enabled: boolean; annotations: IPrivacyAnnotation[]; results?: IPrivacyResultDisplay[] }
 
 /** Local presentation only; never use this projection as model context. */
 export function restorePrivacyText(text: string, annotations: readonly IPrivacyAnnotation[]): string {

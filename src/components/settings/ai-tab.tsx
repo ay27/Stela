@@ -398,7 +398,7 @@ export function AiTab() {
         </Row>
       </Section>
 
-      <Section title={t("ai.privacy.title")} description={t("ai.privacy.hint")}>
+      <Section title={`${t("ai.privacy.title")} · Experimental`} description={t("ai.privacy.experimentalDescription")}>
         <Row label={t("ai.privacy.title")}>
           <Toggle checked={settings.privacyModeEnabled === true} onChange={(checked) => void patch({ ai: { privacyModeEnabled: checked } })} />
         </Row>

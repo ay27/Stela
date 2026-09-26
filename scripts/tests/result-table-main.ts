@@ -87,7 +87,35 @@ async function main() {
     win.setContentSize(760,420); await settle();
     await evaluate(`cell(0,0).click()`); await settle();
     await writeFile("out/tests/result-table/preview.png", (await win.webContents.capturePage()).toPNG());
+    win.setContentSize(900, 920);
+    await evaluate(`window.mountCompact()`); await settle();
+    await evaluate(`new Promise(resolve => setTimeout(resolve, 150))`);
+    check(await evaluate(`!document.querySelector('#chat-result .stela-result-pagination') && !document.querySelector('#runsql-result .stela-result-pagination')`), 'Single-page Chat and RunSQL hide pagination');
+    check(await evaluate(`document.querySelector('#chat-result .stela-cb__result-summary').textContent === document.querySelector('#runsql-result .stela-cb__result-summary').textContent`), 'Both surfaces share the same result summary');
+    check(await evaluate(`getComputedStyle(document.querySelector('#chat-result th')).padding === getComputedStyle(document.querySelector('#runsql-result th')).padding`), 'Both surfaces use the same table geometry');
+    check(await evaluate(`Math.abs(document.querySelector('#chat-result table').getBoundingClientRect().width - document.querySelector('#runsql-result table').getBoundingClientRect().width) <= 2`), 'Chat and RunSQL tables fill their result container consistently');
+    check(await evaluate(`!document.querySelector('#chat-result .stela-privacy-word') && document.querySelectorAll('#private-result th .stela-privacy-word').length === 2`), 'Only masked/partial headers are underlined; direct and released columns are not');
+    check(await evaluate(`document.querySelector('#private-result [data-privacy-state=partial]').title.includes('JSON') && document.querySelector('#private-result [data-privacy-state=released]').title.includes('放行')`), 'Partial JSON and release explanations are distinct');
+    check(await evaluate(`document.querySelector('#private-result tbody').textContent.includes('张三')`), 'Local result rows retain originals');
+    await evaluate(`document.querySelector('#chat-result button').click()`); await settle();
+    check(await evaluate(`document.querySelector('#chat-result pre').textContent === 'select 123'`), 'Chat SQL disclosure');
+    await evaluate(`document.querySelector('#chat-result .stela-result-menu').click()`); await settle();
+    check(await evaluate(`!!document.querySelector('.stela-result-actions') && !document.querySelector('#chat-result .stela-result-actions')`), 'Menu portal escapes editor clipping');
+    await evaluate(`Array.from(document.querySelectorAll('.stela-result-actions button')).find(button => button.textContent.includes('CSV')).click()`); await settle();
+    check(await evaluate(`window.exported.name.endsWith('.csv') && window.exported.content.includes('123')`), 'Overflow export uses original complete data');
+    await evaluate(`document.querySelector('#chat-result .stela-result-menu').click()`); await settle();
+    await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}))`); await settle();
+    check(await evaluate(`!document.querySelector('.stela-result-actions')`), 'Escape dismisses actions');
+    await evaluate(`document.querySelectorAll('#paged-result .stela-result-pagination button')[2].click()`); await settle();
+    check(await evaluate(`document.querySelector('#paged-result tbody tr td').textContent === '11'`), 'Shared footer navigates to the next page');
+    await evaluate(`document.querySelector('#history').click()`); await settle();
+    check(await evaluate(`!document.querySelector('#private-result .stela-privacy-word')`), 'History cannot inherit another run privacy markers');
+    await evaluate(`document.querySelector('#history').click()`); await settle();
+    await writeFile('out/tests/result-table/compact-light.png', (await win.webContents.capturePage()).toPNG());
+    await evaluate(`document.documentElement.classList.add('dark')`); await settle();
+    await writeFile('out/tests/result-table/compact-dark.png', (await win.webContents.capturePage()).toPNG());
     console.log("Result table: selection, navigation, full-value copy, failure, drag ranges, TSV copy, pagination, 28px rows and scrollbar passed.");
+    console.log('Shared compact results: single-page controls, SQL disclosure, export, privacy provenance and history isolation passed.');
   } finally { win.destroy(); await rm(temporary, { recursive:true, force:true, maxRetries: 5, retryDelay: 100 }); }
   app.exit(0);
 }

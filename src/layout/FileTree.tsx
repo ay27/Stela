@@ -38,6 +38,7 @@ import {
   useState,
 } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   ChevronDown,
   ChevronRight,
@@ -52,6 +53,7 @@ import {
   FolderPlus,
   NotebookPen,
   Pencil,
+  Plus,
   RefreshCw,
   Trash2,
   X as XIcon,
@@ -78,6 +80,7 @@ import { cn } from "@/lib/utils";
 import { formatHotkey } from "@/lib/hotkeys";
 import { useT } from "@/i18n/use-t";
 import { scheduleAutoGit } from "@/services/auto-git";
+import { pickParentDir } from "@/services/note-actions";
 
 type DraftAction =
   | { kind: "newNote"; parentPath: string }
@@ -271,20 +274,19 @@ export function FileTree({ rootPath }: { rootPath: string }) {
     };
   }, [activeTabId, revealToken, rootPath, ensureExpanded]);
 
-  const startNewNote = useCallback(
-    async (parentPath: string) => {
+  const startDraft = useCallback(
+    async (kind: "newNote" | "newDir", parentPath: string) => {
+      useFileTree.getState().setFilter("");
+      for (const ancestor of ancestorDirsUnder(rootPath, parentPath)) {
+        await ensureExpanded(ancestor);
+      }
       await ensureExpanded(parentPath);
-      setDraft({ kind: "newNote", parentPath });
+      setDraft({ kind, parentPath });
     },
-    [ensureExpanded],
+    [ensureExpanded, rootPath],
   );
-  const startNewDir = useCallback(
-    async (parentPath: string) => {
-      await ensureExpanded(parentPath);
-      setDraft({ kind: "newDir", parentPath });
-    },
-    [ensureExpanded],
-  );
+  const startNewNote = (parentPath: string) => startDraft("newNote", parentPath);
+  const startNewDir = (parentPath: string) => startDraft("newDir", parentPath);
   const createAnalysisCanvas = useCallback(async (parentPath: string) => {
     const file = await window.stela.canvas.create(parentPath, "Untitled Analysis");
     scheduleAutoGit("canvas-create");
@@ -310,11 +312,8 @@ export function FileTree({ rootPath }: { rootPath: string }) {
     ) {
       return;
     }
-    void (async () => {
-      await ensureExpanded(draftReq.parentPath);
-      setDraft(draftReq);
-    })();
-  }, [pendingDraft, rootPath, ensureExpanded]);
+    void startDraft(draftReq.kind, draftReq.parentPath);
+  }, [pendingDraft, rootPath, startDraft]);
 
   const commitDraft = useCallback(
     async (input: string) => {
@@ -476,7 +475,11 @@ export function FileTree({ rootPath }: { rootPath: string }) {
     const target = (event.target as HTMLElement).closest<HTMLElement>(
       "[data-filetree-path]",
     );
-    if (!target?.dataset.filetreePath) return;
+    if (!target?.dataset.filetreePath) {
+      setContextTarget(null);
+      useFileTree.getState().setSelected(rootPath);
+      return;
+    }
     useFileTree.getState().setSelected(target.dataset.filetreePath);
     setContextTarget({
       path: target.dataset.filetreePath,
@@ -490,6 +493,7 @@ export function FileTree({ rootPath }: { rootPath: string }) {
     name: basename(rootPath),
     isDir: true,
   };
+  const creationParent = target.isDir ? target.path : dirname(target.path);
 
   return (
     <ContextMenu.Root>
@@ -526,31 +530,30 @@ export function FileTree({ rootPath }: { rootPath: string }) {
           className="z-[60] min-w-[180px] overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
           onCloseAutoFocus={(event) => event.preventDefault()}
         >
-          {target.isDir ? (
-            <>
-              <CtxItem
-                icon={<NotebookPen className="h-3.5 w-3.5" />}
-                label={t("fileTree.newNote")}
-                hotkey="Mod+N"
-                onSelect={() => startNewNote(target.path)}
-              />
-              <CtxItem
-                icon={<FolderPlus className="h-3.5 w-3.5" />}
-                label={t("fileTree.newFolder")}
-                onSelect={() => startNewDir(target.path)}
-              />
-              <CtxItem
-                icon={<ChartNoAxesCombined className="h-3.5 w-3.5" />}
-                label={t("fileTree.newAnalysisCanvas")}
-                onSelect={() => void createAnalysisCanvas(target.path)}
-              />
-              <CtxItem icon={<ChartNoAxesCombined className="h-3.5 w-3.5" />}
-                label={t("conversation.new")}
-                onSelect={() => void createSqlConversation(target.path)}
-              />
-              <ContextMenu.Separator className="my-1 h-px bg-border" />
-            </>
-          ) : null}
+          <ContextMenu.Label className="max-w-[280px] truncate px-2 py-1 text-[11px] text-muted-foreground" title={creationParent}>
+            {t("fileTree.createIn", { path: creationParent === rootPath ? basename(rootPath) : creationParent.slice(rootPath.length + 1) })}
+          </ContextMenu.Label>
+          <CtxItem
+            icon={<NotebookPen className="h-3.5 w-3.5" />}
+            label={t("fileTree.newNote")}
+            hotkey="Mod+N"
+            onSelect={() => startNewNote(creationParent)}
+          />
+          <CtxItem
+            icon={<FolderPlus className="h-3.5 w-3.5" />}
+            label={t("fileTree.newFolder")}
+            onSelect={() => startNewDir(creationParent)}
+          />
+          <CtxItem
+            icon={<ChartNoAxesCombined className="h-3.5 w-3.5" />}
+            label={t("fileTree.newAnalysisCanvas")}
+            onSelect={() => void createAnalysisCanvas(creationParent)}
+          />
+          <CtxItem icon={<ChartNoAxesCombined className="h-3.5 w-3.5" />}
+            label={t("conversation.new")}
+            onSelect={() => void createSqlConversation(creationParent)}
+          />
+          <ContextMenu.Separator className="my-1 h-px bg-border" />
           <CtxItem
             icon={<ExternalLink className="h-3.5 w-3.5" />}
             label={revealMenuLabel(t)}
@@ -1023,7 +1026,8 @@ function InlineNameInput({
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.focus();
+    el.focus({ preventScroll: true });
+    el.scrollIntoView({ block: "nearest" });
     if (autoSelectStem) {
       const dot = initial.lastIndexOf(".");
       if (dot > 0) {
@@ -1086,6 +1090,8 @@ function FileTreeToolbar({ rootPath }: { rootPath: string }) {
   const setFilter = useFileTree((s) => s.setFilter);
   const collapseAll = useFileTree((s) => s.collapseAll);
   const revealActive = useWorkspace((s) => s.revealActiveFile);
+  const [creationParent, setCreationParent] = useState(rootPath);
+  const creating = useRef(false);
 
   const refresh = useCallback(async () => {
     const store = useFileTree.getState();
@@ -1115,6 +1121,29 @@ function FileTreeToolbar({ rootPath }: { rootPath: string }) {
         label={t("common.refresh")}
         onClick={() => void refresh()}
       />
+      <DropdownMenu.Root onOpenChange={open => { if (open) { creating.current = false; setCreationParent(pickParentDir(rootPath) ?? rootPath); } }}>
+        <DropdownMenu.Trigger asChild>
+          <button type="button" title={t("fileTree.new")} aria-label={t("fileTree.new")}
+            className="stela-filetree-new flex shrink-0 items-center gap-0.5 rounded-sm p-1 text-xs text-muted-foreground hover:bg-sidebar-hover hover:text-foreground">
+            <Plus className="h-3.5 w-3.5" /><span>{t("fileTree.new")}</span>
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content align="start" sideOffset={4}
+            onCloseAutoFocus={event => { if (creating.current) event.preventDefault(); }}
+            className="z-[60] min-w-[180px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
+            <DropdownMenu.Label className="max-w-[280px] truncate px-2 py-1 text-[11px] text-muted-foreground" title={creationParent}>
+              {t("fileTree.createIn", { path: creationParent === rootPath ? basename(rootPath) : creationParent.slice(rootPath.length + 1) })}
+            </DropdownMenu.Label>
+            {(["newNote", "newDir"] as const).map(kind => <DropdownMenu.Item key={kind}
+              onSelect={() => { creating.current = true; useFileTree.getState().requestDraft({ kind, parentPath: creationParent }); }}
+              className="flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground">
+              {kind === "newNote" ? <NotebookPen className="h-3.5 w-3.5" /> : <FolderPlus className="h-3.5 w-3.5" />}
+              {t(kind === "newNote" ? "fileTree.newNote" : "fileTree.newFolder")}
+            </DropdownMenu.Item>)}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
       <div className="relative ml-1 min-w-0 flex-1">
         <input
           type="text"

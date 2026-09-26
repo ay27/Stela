@@ -667,6 +667,8 @@
   "fileTree.importPartialFailed": "导入完成，但有以下失败：\n{{failures}}",
   "fileTree.emptyFilter": "没有匹配的文件。",
   "fileTree.newNote": "新建笔记",
+  "fileTree.new": "新建",
+  "fileTree.createIn": "创建于：{{path}}",
   "fileTree.newFolder": "新建子目录",
   "fileTree.newAnalysisCanvas": "新建分析画布",
   "analysisCanvas.label": "分析画布",
@@ -1311,5 +1313,11 @@
   "ai.privacy.releaseAll": "全部通过",
   "ai.privacy.rejectAll": "全部拒绝",
   "ai.privacy.keepMasked": "继续遮蔽",
-  "ai.privacy.releaseFailed": "提交失败，请重试。"
+  "ai.privacy.releaseFailed": "提交失败，请重试。",
+  "blockResult.more": "结果操作",
+  "blockResult.export": "导出",
+  "ai.privacy.experimentalDescription": "Experimental · 实验性功能。在本地遮蔽查询文本和用途未确认的数值（包括 JSON），再准备模型输入；明确的计数保持可用。可手动放行当前任务的指定列，Python 遵循相同权限。本地表格显示原值，紫色下划线表示已观察到的脱敏。自由文本、schema 元数据等覆盖尚不完整，不保证匿名。保存的会话包含可逆映射，可能随 Git 同步。",
+  "ai.privacy.column.masked": "该列在准备的模型输入预览中已脱敏；本表显示本地原值。",
+  "ai.privacy.column.partial": "模型输入预览中的部分值或 JSON 内容已脱敏，其余内容可能保持原样或已经放行；本表显示原值。",
+  "ai.privacy.column.released": "已对当前任务放行，原始值可能发送给模型。"
 }

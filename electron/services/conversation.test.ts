@@ -145,10 +145,14 @@ async function main() {
     const privateFinal = privateChat.document.turns.at(-1)!.events.slice().reverse().find(e => e.type === "final");
     assert(privateFinal?.type === "final" && privateFinal.privacy?.enabled);
     assert(privateFinal.privacy.annotations.some(a => a.original === '13812345678'));
+    const resultObservations = privateChat.document.turns.at(-1)!.events.flatMap(event => event.privacy?.results ?? []);
+    assert(resultObservations.some(result => result.columns.some(column => column.column === 1 && column.state === 'masked')), 'real model-prepared results carry column masking evidence');
+    assert(!privateRequests.includes('"state":"masked"'), 'display observations never enter model context');
     assert.equal(privateChat.document.version, 3);
     assert(privateChat.document.privacy?.entries.length);
     assert.equal(conversation.publicConversationSnapshot(privateChat).document.privacy, undefined);
     const persisted = JSON.parse(await readFile(privateChat.path, 'utf8'));
+    assert(persisted.turns.at(-1).events.some((event: { privacy?: { results?: unknown[] } }) => event.privacy?.results?.length), 'column observations survive Chat persistence');
     assert(new PrivacySession(false, { state: persisted.privacy, save: async () => {} }).restore(privateFinal.content).includes('13812345678'));
     const namespace = privateChat.document.privacy.namespace;
     privateChat = await conversation.promoteConversation(vault, privateChat.path, privateChat.etag, vault, 'Private saved');
@@ -174,6 +178,9 @@ async function main() {
     const releasedRequests = JSON.stringify(requests.slice(releaseStart));
     assert(releasedRequests.includes('13812345678'));
     assert(!releasedRequests.includes('张三'), 'another column remains masked in the real provider request');
+    const releaseObservation = privateChat.document.turns.at(-1)!.events.flatMap(event => event.privacy?.results ?? []).at(-1)!;
+    assert.equal(releaseObservation.columns.find(column => column.column === 1)?.state, 'released');
+    assert.equal(releaseObservation.columns.find(column => column.column === 0)?.state, 'masked');
     const expiryStart = requests.length;
     phase = 'final'; step = 0;
     await send(privateChat, '继续'); privateChat = await waitFor(privateChat.path, done);

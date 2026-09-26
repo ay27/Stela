@@ -667,6 +667,8 @@
   "fileTree.importPartialFailed": "Import finished, but some files failed:\n{{failures}}",
   "fileTree.emptyFilter": "No matching files.",
   "fileTree.newNote": "New note",
+  "fileTree.new": "New",
+  "fileTree.createIn": "Create in: {{path}}",
   "fileTree.newFolder": "New folder",
   "fileTree.newAnalysisCanvas": "New Analysis Canvas",
   "analysisCanvas.label": "Analysis Canvas",
@@ -1311,5 +1313,11 @@
   "ai.privacy.releaseAll": "Allow all",
   "ai.privacy.rejectAll": "Reject all",
   "ai.privacy.keepMasked": "Keep masked",
-  "ai.privacy.releaseFailed": "Could not submit the decision. Please retry."
+  "ai.privacy.releaseFailed": "Could not submit the decision. Please retry.",
+  "blockResult.more": "Result actions",
+  "blockResult.export": "Export",
+  "ai.privacy.experimentalDescription": "Experimental · Masks query text and unknown numeric values locally before preparing model inputs, including JSON. Proven counts remain available. You can explicitly release selected columns for the current task; Python follows the same permissions. Local tables show original values, with purple underlines indicating observed masking. Coverage is incomplete for free text and schema metadata; this is not an anonymity guarantee. Saved conversations contain reversible mappings and may sync with Git.",
+  "ai.privacy.column.masked": "Masked in the prepared model preview. This table shows local original values.",
+  "ai.privacy.column.partial": "Some values or JSON content were masked in the model preview. Other content may be unchanged or explicitly released. This table shows originals.",
+  "ai.privacy.column.released": "Released for this task. Original values may be sent to the model."
 }

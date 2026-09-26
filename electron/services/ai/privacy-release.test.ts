@@ -16,6 +16,10 @@ task.registerSource(source);
 task.registerSource({ ...source, runId: 'products-2' });
 const body = JSON.stringify(source);
 const masked = await task.toolOutput('query-1', 'run_query', body);
+assert.deepEqual(task.display({ type: 'tool_result', callId: 'query-1' }).results, [{ runId: source.runId, columns: [
+  { column: 0, state: 'masked' }, { column: 1, state: 'masked' }, { column: 2, state: 'masked' }, { column: 3, state: 'partial' },
+] }]);
+assert.equal(task.display({ type: 'tool_call', callId: 'query-1' }).results, undefined, 'only prepared tool results provide observations');
 assert(!masked.includes('星河办公椅') && !masked.includes('13812345678'));
 assert(!masked.includes('天穹沙发') && !masked.includes('13912345678') && !masked.includes('张三'));
 assert(!masked.includes('never-release-me'));
@@ -39,6 +43,9 @@ const selections = release.options.filter(o => (o.column === 0 && !o.path.length
 assert.equal(selections.length, 2);
 assert(task.approveRelease(release, JSON.stringify(selections)));
 const grantPayload = await task.toolOutput('grant-1', 'request_column_access', body);
+assert.deepEqual(task.display({ type: 'tool_result', callId: 'grant-1' }).results?.[0]?.columns, [
+  { column: 0, state: 'released' }, { column: 1, state: 'masked' }, { column: 2, state: 'masked' }, { column: 3, state: 'partial' },
+], 'repeated values in different columns do not share display authority');
 const asContext = (callId: string, toolName: string, text: string) => ({ messages: [{ role: 'toolResult', toolCallId: callId, toolName, content: [{ type: 'text', text }] }] });
 const projection = await task.context(asContext('grant-1', 'request_column_access', grantPayload));
 const data = JSON.parse(projection.messages[0]!.content[0]!.text) as typeof source;

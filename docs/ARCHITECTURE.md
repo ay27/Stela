@@ -856,6 +856,15 @@ bounded cursor context
 
 ### Optional local AI privacy mode
 
+ADR-0122 adds Main-generated result-column display observations on tool-result
+events. Chat projects the latest observation for each exact run into the shared
+BlockResult/ResultTable. Purple header underlines indicate masked/partial preview
+values; released columns are not marked protected. Local originals and exports
+remain unchanged. Direct SQL and legacy results without observations stay
+unmarked. Chat and RunSQL share compact summary/action controls, overflow export
+actions and pagination only when needed; Chat additionally discloses its SQL.
+The settings panel labels privacy Experimental and explains coverage limits.
+
 ADR-0119 batches all available `request_column_access` calls in a completed assistant message before sequential dispatch. One manual card groups up to 16 requested result sources; selected/all/reject actions authorize only its explicit option IDs. Subsequent calls reuse that decision, including rejection. Later steps require a new decision.
 
 ADR-0120 issues conversation-scoped random `PII_` codes: three uppercase hex digits initially, then four/five as each space is exhausted. A sparse random permutation prevents collisions without allocating a full code space. Format-2 mappings accept legacy long entries; new allocations upgrade format 1 without rewriting existing identities. SQL, history forks and local presentation share whole-token matching.

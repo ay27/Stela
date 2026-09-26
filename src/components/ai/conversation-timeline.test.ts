@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { conversationResults, conversationTimeline } from "./conversation-timeline";
+import { conversationResults, conversationTimeline, conversationResultPrivacy } from "./conversation-timeline";
 import type { ConversationTurn } from "@shared/conversation";
 import type { RunRecord } from "@shared/types";
 import { restorePrivacyText } from '@shared/ai-privacy';
@@ -36,4 +36,9 @@ turn.events.push(
 );
 const tool = conversationTimeline(turn).find(entry => entry.kind === 'tool' && entry.callId === 'private-query');
 assert.deepEqual(tool?.privacy?.annotations, [...privacy.annotations, { token: 'PII_ABC', original: 'a name' }], 'tool results keep both argument and result annotations');
+assert.equal(conversationResultPrivacy(turn).size, 0, 'legacy and direct results have no inferred marker');
+turn.events.push({ type: 'tool_result', runId: turn.id, callId: 'masked', ok: true, summary: '', privacy: { enabled: true, annotations: [], results: [{ runId: 'source', columns: [{ column: 0, state: 'masked' }] }, { runId: 'other', columns: [{ column: 0, state: 'masked' }] }] } });
+turn.events.push({ type: 'tool_result', runId: turn.id, callId: 'release', ok: true, summary: '', privacy: { enabled: true, annotations: [], results: [{ runId: 'source', columns: [{ column: 0, state: 'released' }] }] } });
+assert.equal(conversationResultPrivacy(turn).get('source')!.columns[0]!.state, 'released');
+assert.equal(conversationResultPrivacy(turn).get('other')!.columns[0]!.state, 'masked');
 console.log("Conversation timeline: direct failure placement, repeated SQL tool results, and question lifecycle passed.");

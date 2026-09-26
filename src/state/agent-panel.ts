@@ -278,7 +278,7 @@ export function applyEvent(timeline: AgentTimelineEntry[], event: AgentEvent): A
     // repeating its annotations. Tool results also must retain argument maps.
     const previous = entry.privacy ?? timeline.find(value => value.id === entry.id)?.privacy;
     const annotations = new Map([...(previous?.annotations ?? []), ...privacy.annotations].map(value => [value.token, value]));
-    return { ...entry, privacy: { enabled: privacy.enabled, annotations: [...annotations.values()] } };
+    return { ...entry, privacy: { ...privacy, annotations: [...annotations.values()] } };
   });
 }
 

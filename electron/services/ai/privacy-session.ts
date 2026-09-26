@@ -1,5 +1,5 @@
 import { randomBytes, randomInt } from 'node:crypto';
-import { privacyStateSchema, PRIVACY_TOKEN_SOURCE, type IPrivacySessionState, type IPrivacyDisplay } from '../../shared/ai-privacy';
+import { privacyStateSchema, PRIVACY_TOKEN_SOURCE, type IPrivacySessionState, type IPrivacyDisplay, type IPrivacyResultDisplay } from '../../shared/ai-privacy';
 import { countColumns, parseJsonContainer, releaseOptions, secretLabel, selectionAllows, structuralKey, type IPrivacySource, type IPrivacySelection, type IPrivacyReleaseRequest } from './privacy-policy';
 import { redactForPrompt } from './redaction';
 
@@ -27,6 +27,7 @@ export class PrivacySession {
   private numericCounts = new Map<string, Set<number>>();
   private grants = new Map<string, IPrivacySelection[]>();
   private outputs = new Map<string, { name: string; masked: string; projected: string }>();
+  private resultDisplays = new Map<string, IPrivacyResultDisplay[]>();
   private outputBytes = 0;
   private sourceBytes = 0;
   private recipients: string[] = [];
@@ -84,7 +85,7 @@ export class PrivacySession {
   setRecipients(recipients: string[]): void { this.recipients = [...new Set(recipients)]; }
   get workspaceKey(): string { return `${this.taskId}:${this.grantRevision}`; }
   get hasGrants(): boolean { return this.grants.size > 0; }
-  closeTask(): void { this.active = false; this.releaseBatch = undefined; this.sources.clear(); this.numericCounts.clear(); this.grants.clear(); this.outputs.clear(); }
+  closeTask(): void { this.active = false; this.releaseBatch = undefined; this.sources.clear(); this.numericCounts.clear(); this.grants.clear(); this.outputs.clear(); this.resultDisplays.clear(); }
   /** Only the host semantic adapter for sanitized Python input may use this view. */
   derivedView(): PrivacySession {
     const view = new PrivacySession(this.enabled, undefined, this.identity);
@@ -280,6 +281,7 @@ export class PrivacySession {
     else {
       const result = await this.maskValue(value, '', signal, '', true);
       projected = typeof result === 'string' ? (typeof value === 'string' ? masked : result) : JSON.stringify(result);
+      if (callId) this.resultDisplays.set(callId, this.describeResults(value, result));
     }
     if (callId && this.active && masked !== projected) {
       this.outputBytes += Buffer.byteLength(projected);
@@ -287,6 +289,36 @@ export class PrivacySession {
       this.outputs.set(callId, { name, masked, projected });
     }
     await this.flush(); return masked;
+  }
+  private describeResults(raw: unknown, projected: unknown, sourceRunId = ''): IPrivacyResultDisplay[] {
+    if (!raw || !projected || typeof raw !== 'object' || typeof projected !== 'object') return [];
+    if (Array.isArray(raw)) return raw.flatMap((value, i) => this.describeResults(value, (projected as unknown[])[i], sourceRunId));
+    const original = raw as Record<string, unknown>, model = projected as Record<string, unknown>;
+    const runId = typeof original.runId === 'string' ? original.runId : sourceRunId;
+    const result: IPrivacyResultDisplay[] = [];
+    if (this.sources.has(runId) && Array.isArray(original.columns)) {
+      const rows = original.rows ?? original.sampleRows, safeRows = model.rows ?? model.sampleRows;
+      if (Array.isArray(rows) && Array.isArray(safeRows)) {
+        const columns: IPrivacyResultDisplay['columns'] = [];
+        original.columns.forEach((_col, column) => {
+          let masked = false, clear = false, structured = false;
+          rows.forEach((row: unknown, i: number) => {
+            if (!Array.isArray(row) || row[column] == null) return;
+            const value: unknown = row[column], safe = safeRows[i]?.[column];
+            if (JSON.stringify(value) !== JSON.stringify(safe)) masked = true;
+            else clear = true;
+            const parsed = parseJsonContainer(value);
+            if (parsed && typeof parsed === 'object') structured = true;
+          });
+          const granted = this.grants.get(runId)?.some(selection => selection.column === column);
+          if (masked) columns.push({ column, state: clear || structured || granted ? 'partial' : 'masked' });
+          else if (granted) columns.push({ column, state: 'released' });
+        });
+        result.push({ runId, columns });
+      }
+    }
+    for (const [key, child] of Object.entries(original)) if (!['rows', 'sampleRows', 'columns'].includes(key)) result.push(...this.describeResults(child, model[key], runId));
+    return result;
   }
   async flush(): Promise<void> {
     this.identity.writes = this.identity.writes.then(async () => {
@@ -301,7 +333,9 @@ export class PrivacySession {
   display(value: unknown): IPrivacyDisplay {
     const text = typeof value === 'string' ? value : JSON.stringify(value);
     const tokens = [...new Set(text.match(new RegExp(PRIVACY_TOKEN_SOURCE, 'g')) ?? [])];
-    return { enabled: this.enabled, annotations: tokens.flatMap(token => {
+    const callId = value && typeof value === 'object' && 'type' in value && value.type === 'tool_result' && 'callId' in value && typeof value.callId === 'string' ? value.callId : undefined;
+    const results = callId ? this.resultDisplays.get(callId) : undefined;
+    return { enabled: this.enabled, ...(results?.length ? { results } : {}), annotations: tokens.flatMap(token => {
       const e = this.identity.byToken.get(token); return e ? [{ token, original: e.original }] : [];
     }) };
   }

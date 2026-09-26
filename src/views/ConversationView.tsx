@@ -3,12 +3,12 @@ import { ChatControls } from "@/components/ai/chat-controls";
 import { useChatWorkspace } from "@/state/chat-workspace";
 import { useLayout } from "@/state/layout";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Bot, Loader2, RotateCcw, Copy, Pencil, ChevronRight } from "lucide-react";
+import { Bot, Loader2, RotateCcw } from "lucide-react";
 import { useConversation } from "@/state/conversation";
 import { useConnections } from "@/state/connections";
 import { useWorkspace } from "@/state/workspace";
 import { AgentTimelineContent, AgentThinkingStatus, AgentComposerActions, AgentPanelEmptyState, QuestionCard, TimelineItem, openAgentResource } from "@/components/ai/agent-panel";
-import { conversationTimeline, conversationResults } from "@/components/ai/conversation-timeline";
+import { conversationTimeline, conversationResults, conversationResultPrivacy } from "@/components/ai/conversation-timeline";
 import { ConversationNavigation } from "@/components/ai/conversation-navigation";
 import { AiPromptInput } from "@/components/ai/ai-prompt-input";
 import { agentComposerStateToMessage, emptyAgentComposerState } from "@/lib/agent-composer";
@@ -18,32 +18,20 @@ import { ContextUsageIndicator } from "@/components/ai/context-usage-indicator";
 import { ConnectionPicker } from "@/components/connection-picker";
 import { firstConnectionName } from "@/services/connections";
 import { BlockResult } from "@/components/block-result";
+import type { IPrivacyResultDisplay } from "@shared/ai-privacy";
 import type { RunRecord } from "@shared/types";
 import type { ConversationTurn } from "@shared/conversation";
 import { useT } from "@/i18n/use-t";
 
 type Respond = (runId: string, callId: string, approve: boolean, answer?: string) => Promise<void>;
 
-function SqlResult({ run, reuse, number }: { run: RunRecord; reuse: (text: string) => void; number?: number }) {
-  const t = useT();
+function SqlResult({ run, reuse, privacy }: { run: RunRecord; reuse: (text: string) => void; privacy?: IPrivacyResultDisplay }) {
   const [expanded, setExpanded] = useState(true);
-  const [showSql, setShowSql] = useState(false);
-  return (
-    <div className="stela-assistant-output stela-conversation-result min-w-0 py-1">
-      <div className="mb-1 text-sm font-medium">{t("agent.reply.queryResult")}{number ? ` ${number}` : ""}</div>
-      <div className="flex items-center gap-1 pb-2 text-[11px] text-muted-foreground">
-        <button type="button" aria-expanded={showSql} onClick={() => setShowSql(!showSql)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left hover:text-foreground">
-          <ChevronRight className={`h-3 w-3 transition-transform ${showSql ? "rotate-90" : ""}`} />
-          <span>{t("agent.reply.viewSql")}</span><span className="truncate opacity-60">· {run.connectionName}</span>
-        </button>
-        <button title={t("conversation.copySql")} aria-label={t("conversation.copySql")} className="rounded p-1 hover:bg-muted hover:text-foreground" onClick={() => void navigator.clipboard.writeText(run.sql)}><Copy className="h-3 w-3" /></button>
-        <button title={t("conversation.reuse")} aria-label={t("conversation.reuse")} className="rounded p-1 hover:bg-muted hover:text-foreground" onClick={() => reuse(run.sql)}><Pencil className="h-3 w-3" /></button>
-      </div>
-      {showSql && <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-muted/30 p-3 mb-2 text-xs leading-5">{run.sql}</pre>}
-      <BlockResult runId={run.status === "ok" ? run.runId : null} blockId={run.blockId} detail={null} runState={run.status === "running" ? "running" : run.status === "err" ? "error" : "idle"} errorMessage={run.message} expanded={expanded} onToggle={() => setExpanded(value => !value)} />
-      {run.status === "ok" && run.message && <div className="py-2 text-sm leading-6">{run.message}</div>}
-    </div>
-  );
+  return <div className="stela-assistant-output stela-conversation-result min-w-0">
+    <BlockResult run={run} privacy={privacy} showSqlAction onReuseSql={reuse} runId={run.status === 'ok' ? run.runId : null} blockId={null} detail={null}
+      runState={run.status === 'running' ? 'running' : run.status === 'err' ? 'error' : 'idle'} errorMessage={run.message} expanded={expanded} onToggle={() => setExpanded(value => !value)} />
+    {run.status === 'ok' && run.message && <div className="py-2 text-sm leading-6">{run.message}</div>}
+  </div>;
 }
 
 const Turn = memo(function Turn({ turn, reuse, onRespond }: { turn: ConversationTurn; reuse: (text: string) => void; onRespond: Respond }) {
@@ -51,6 +39,7 @@ const Turn = memo(function Turn({ turn, reuse, onRespond }: { turn: Conversation
   const timeline = useMemo(() => conversationTimeline(turn), [turn]);
   const privateInput = turn.events.find(e => e.type === "started" && e.privacyInput);
   const results = useMemo(() => conversationResults(turn, timeline), [turn, timeline]);
+  const resultPrivacy = useMemo(() => conversationResultPrivacy(turn), [turn]);
   const final = timeline.findLast(entry => entry.kind === "final");
   // The final answer already owns its Markdown tables. Otherwise promote just the
   // latest successful result; exploratory runs remain available in the disclosure.
@@ -58,7 +47,7 @@ const Turn = memo(function Turn({ turn, reuse, onRespond }: { turn: Conversation
     ? turn.runs.findLast(run => run.status === "ok") : undefined;
   const extraRuns = [...results.before, ...results.after].filter(run => run.runId !== primary?.runId);
   const detailsResult = (run: RunRecord) => run.runId === primary?.runId ? null : renderResult(run);
-  const renderResult = (run: RunRecord) => <SqlResult key={run.runId} run={run} reuse={reuse} number={turn.runs.length > 1 ? turn.runs.findIndex(item => item.runId === run.runId) + 1 : undefined} />;
+  const renderResult = (run: RunRecord) => <SqlResult key={run.runId} run={run} reuse={reuse} privacy={resultPrivacy.get(run.runId)} />;
   return (
     <article data-conversation-turn={turn.id} tabIndex={-1} className="stela-conversation-turn outline-none">
       <TimelineItem entry={{ kind: "user", id: turn.id, privacy: privateInput?.privacy, message: privateInput?.privacyInput ?? turn.message ?? { version: 1, segments: [{ kind: "text", text: turn.input }], resources: [] } }} onRespond={onRespond} />

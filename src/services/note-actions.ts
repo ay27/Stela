@@ -28,22 +28,17 @@ function dirname(p: string): string {
  * 计算"在哪个目录新建笔记"。返回的路径必然落在 `vaultPath` 内（包括 vault
  * 根本身）。`vaultPath` 为空（未打开 vault）时返回 null。
  */
-function pickParentDir(vaultPath: string | null): string | null {
+export function pickParentDir(vaultPath: string | null): string | null {
   if (!vaultPath) return null;
   const ft = useFileTree.getState();
   const sel = ft.selectedPath;
   if (sel && (sel === vaultPath || sel.startsWith(`${vaultPath}/`))) {
     // 目录还是文件？目录直接用，文件取父目录
-    const children = ft.children[sel];
-    if (children !== undefined) {
-      // children 在 store 里说明它被 listDir 过 → 必然是目录
+    const parent = dirname(sel);
+    if (sel === vaultPath || ft.children[sel] !== undefined ||
+      ft.children[parent]?.some(node => node.path === sel && node.isDir)) {
       return sel;
     }
-    // 不在 store 里：可能是文件，也可能是没展开过的目录。用 / 切片粗判：
-    // 若它本身 = vaultPath 或它在 children[parent] 里被标 isDir，可以更精确，
-    // 但代价不值——退化到 dirname() 即可：目录的父目录仍在 vault 内，
-    // 行为最坏退一级，符合"宁可保守"的语义。
-    const parent = dirname(sel);
     return parent;
   }
 
@@ -51,7 +46,7 @@ function pickParentDir(vaultPath: string | null): string | null {
   const active = ws.activeTabId
     ? ws.tabs.find((t) => t.id === ws.activeTabId)
     : null;
-  if (active?.kind === "file" && active.path) {
+  if (active?.kind === "file" && active.path?.startsWith(`${vaultPath}/`)) {
     return dirname(active.path);
   }
   return vaultPath;
